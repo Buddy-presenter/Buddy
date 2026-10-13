@@ -110,7 +110,9 @@ def create_app(
 
     @router.get("/ready", response_model=ReadyResponse, tags=["operations"])
     async def ready(request: Request) -> ReadyResponse | JSONResponse:
-        results = await check_dependencies(dependencies, config.readiness_timeout)
+        results = (
+            await check_dependencies(dependencies, config.readiness_timeout) if started else []
+        )
         if not started or any(result.status == "unavailable" for result in results):
             details = [
                 ErrorDetail(location=result.name, code="dependency_unavailable")

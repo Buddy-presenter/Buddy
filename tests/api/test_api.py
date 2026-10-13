@@ -37,7 +37,6 @@ def test_readiness_is_not_reported_before_startup():
     assert response.status_code == 503
     assert response.json()["error"]["details"] == [
         {"location": "application", "code": "not_started"},
-        {"location": "database", "code": "dependency_unavailable"},
     ]
 
 
@@ -48,6 +47,24 @@ def test_no_unconfigured_dependency_is_claimed_healthy():
         assert response.json()["error"]["details"] == [
             {"location": "database", "code": "dependency_unavailable"}
         ]
+
+
+def test_readiness_does_not_reopen_database_after_shutdown(monkeypatch):
+    application = app()
+    with TestClient(application):
+        pass
+    calls = []
+
+    async def probe(_probe):
+        calls.append(True)
+
+    monkeypatch.setattr(DatabaseProbe, "check", probe)
+    response = TestClient(application).get("/api/v1/ready")
+    assert response.status_code == 503
+    assert not calls
+    assert response.json()["error"]["details"] == [
+        {"location": "application", "code": "not_started"}
+    ]
 
 
 def test_dependency_failure_and_recovery_redacts_details(monkeypatch):
