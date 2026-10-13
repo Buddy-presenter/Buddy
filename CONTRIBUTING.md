@@ -17,7 +17,7 @@ dependent work in a later wave. Do not treat an unmerged PR as completed work on
    calls and production credentials out of tests.
 5. Push the issue branch and open a PR targeting main, with `Closes #<issue>` and a
    concise description of behavior, validation, and limitations.
-6. Assign the PR to **Lahhamix** and request his review for HusseinMoukalled's work; then
+6. Assign the PR to **Lahhamix** and request **Lahhamix** and **yasminahanna** as reviewers; then
    verify the status workflow sets **Waiting for review**. Submitted feedback sets
    **Reviewed**; a later review request returns to **Waiting for review**. Leave the issue
    open until the PR merges, then verify the Project completion workflow sets **Done**.
