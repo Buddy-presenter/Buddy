@@ -1,0 +1,17 @@
+/* Use Qt's native palette so light/dark modes and OS text scaling remain usable. */
+QWidget { font-size: 14px; }
+QWidget#sidebar { background-color: palette(alternate-base); }
+QLabel#brand { font-size: 30px; font-weight: 700; }
+QLabel#pageTitle { font-size: 28px; font-weight: 600; }
+QLabel#stateTitle { font-size: 18px; font-weight: 600; }
+QWidget#statePanel {
+    background-color: palette(alternate-base);
+    border: 1px solid palette(mid);
+    border-radius: 10px;
+}
+QListWidget { background: transparent; border: none; padding-top: 24px; }
+QListWidget::item { padding: 12px 8px; margin-bottom: 6px; border-radius: 6px; }
+QListWidget::item:selected { background: palette(highlight); color: palette(highlighted-text); }
+QPushButton { padding: 10px 18px; }
+QPushButton:focus, QLineEdit:focus, QListWidget:focus { border: 2px solid palette(highlight); }
+QLineEdit { padding: 10px; }
