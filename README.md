@@ -2,6 +2,8 @@
 
 A context-aware presenter companion with a Python/PySide6 desktop shell and a separate
 API foundation. Authentication, deck processing, and live presentation are separate issues.
+The API's [PostgreSQL persistence guide](docs/database.md) covers durable records,
+explicit migrations and optional local Docker/native server setup.
 
 ## Desktop development
 

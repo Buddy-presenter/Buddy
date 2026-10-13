@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 
 from buddy_api.app import create_app
 from buddy_api.config import Environment, Settings
+from buddy_api.persistence.database import DatabaseProbe
+from buddy_api.persistence.settings import DatabaseSettings
 
 
 def app(**kwargs):
@@ -15,7 +17,7 @@ def app(**kwargs):
     )
 
 
-@pytest.mark.parametrize("path", ["/api/v1/health", "/api/v1/ready", "/api/v1/version", "/health"])
+@pytest.mark.parametrize("path", ["/api/v1/health", "/api/v1/version", "/health"])
 def test_live_service_contract_and_request_ids(path):
     with TestClient(app()) as client:
         response = client.get(path, headers={"X-Request-ID": "untrusted-input"})
@@ -34,18 +36,45 @@ def test_readiness_is_not_reported_before_startup():
     response = TestClient(app()).get("/api/v1/ready")
     assert response.status_code == 503
     assert response.json()["error"]["details"] == [
-        {"location": "application", "code": "not_started"}
+        {"location": "application", "code": "not_started"},
     ]
 
 
 def test_no_unconfigured_dependency_is_claimed_healthy():
     with TestClient(app()) as client:
-        assert client.get("/api/v1/ready").json()["data"]["dependencies"] == []
+        response = client.get("/api/v1/ready")
+        assert response.status_code == 503
+        assert response.json()["error"]["details"] == [
+            {"location": "database", "code": "dependency_unavailable"}
+        ]
 
 
-def test_dependency_failure_and_recovery_redacts_details():
+def test_readiness_does_not_reopen_database_after_shutdown(monkeypatch):
+    application = app()
+    with TestClient(application):
+        pass
+    calls = []
+
+    async def probe(_probe):
+        calls.append(True)
+
+    monkeypatch.setattr(DatabaseProbe, "check", probe)
+    response = TestClient(application).get("/api/v1/ready")
+    assert response.status_code == 503
+    assert not calls
+    assert response.json()["error"]["details"] == [
+        {"location": "application", "code": "not_started"}
+    ]
+
+
+def test_dependency_failure_and_recovery_redacts_details(monkeypatch):
+    async def healthy_database(_probe):
+        pass
+
+    monkeypatch.setattr(DatabaseProbe, "check", healthy_database)
+
     class Probe:
-        name = "database"
+        name = "upstream"
         failing = True
 
         async def check(self):
@@ -57,10 +86,11 @@ def test_dependency_failure_and_recovery_redacts_details():
         response = client.get("/api/v1/ready")
         assert response.status_code == 503
         assert "secret" not in response.text
-        assert response.json()["error"]["details"][0]["location"] == "database"
+        assert response.json()["error"]["details"][0]["location"] == "upstream"
         probe.failing = False
         assert client.get("/api/v1/ready").json()["data"]["dependencies"] == [
-            {"name": "database", "status": "ready"}
+            {"name": "database", "status": "ready"},
+            {"name": "upstream", "status": "ready"},
         ]
 
 
@@ -161,7 +191,14 @@ def test_unknown_and_http_errors_are_redacted(caplog):
 
 
 def test_production_docs_are_disabled():
-    with TestClient(create_app(Settings(Environment.PRODUCTION, ("testserver",)))) as client:
+    settings = Settings(
+        Environment.PRODUCTION,
+        ("testserver",),
+        database=DatabaseSettings(
+            "postgresql://buddy:synthetic@localhost/buddy?sslmode=verify-full", production=True
+        ),
+    )
+    with TestClient(create_app(settings)) as client:
         for path in ["/docs", "/openapi.json"]:
             assert client.get(path).status_code == 404
 
