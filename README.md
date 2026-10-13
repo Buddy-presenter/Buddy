@@ -88,7 +88,9 @@ For a review screenshot: `python scripts/smoke_desktop.py --screenshot build/she
 The smoke check uses an isolated settings profile and closes automatically.
 Tests use local HTTP fixtures and isolated preferences; they need no provider credentials,
 backend deployment, microphone, or paid service. CI runs checks, tests, wheel building,
-wheel installation, and shell startup on Windows and macOS.
+wheel installation, and shell startup on Windows and macOS. Windows uses the native Qt
+platform; macOS uses the offscreen platform. Leave `QT_QPA_PLATFORM` unset when running
+the documented native desktop tests locally.
 
 Installer signing/notarization and deployment pipelines belong to #38. This issue builds
 an installable Python wheel and source archive, not a signed desktop installer.

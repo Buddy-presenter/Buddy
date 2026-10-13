@@ -14,12 +14,15 @@ def make_window(qtbot, tmp_path, api_url="http://127.0.0.1:8000", **kwargs):
     return window
 
 
-def test_keyboard_navigation_and_minimum_size(qtbot, tmp_path):
+def test_keyboard_navigation_and_minimum_size(qtbot, qapp, tmp_path):
     window = make_window(qtbot, tmp_path)
     window.resize(800, 600)
     window.activateWindow()
     qtbot.waitUntil(window.isActiveWindow)
     window.navigation.setFocus()
+    # Activation/focus properties may update before native shortcut events are delivered.
+    # Drain pending Qt events before injecting keys, including on the Windows platform.
+    qapp.processEvents()
     qtbot.keyClick(window.navigation, Qt.Key.Key_Down)
     assert window.pages.currentIndex() == 1
     qtbot.keyClick(window, Qt.Key.Key_4, modifier=Qt.KeyboardModifier.AltModifier)
