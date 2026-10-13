@@ -15,6 +15,7 @@ async function check({draft=false, state='open', merged=false, events=[], review
         assert.doesNotMatch(q, /updateIssue|addAssignees|removeAssignees|addProjectV2Item|deleteProject|closeIssue|reopenIssue/);
         assert.deepEqual(Object.keys(v).sort(), ['field','item','project','status']);
         assert.equal(v.field, 'f');
+        assert.equal(v.item, 'item');
         mutations.push(v.status);return {};
       }
       if(q.includes('fields(first:100)')) return {user:{projectV2:{id:'p',fields:{pageInfo,nodes:[{id:'f',name:'Status',options:[{id:'progress',name:'In Progress'},{id:'waiting',name:'Waiting for review'},{id:'reviewed',name:'Reviewed'},{id:'done',name:'Done'}]}]}}}};
@@ -71,5 +72,8 @@ async function check({draft=false, state='open', merged=false, events=[], review
  await check({links:[]},null);
  // Do not undo Done even when somebody has manually reopened an issue.
  await check({itemPages:[[{...issueItem,fieldValueByName:{optionId:'done'}}]]},null);
- console.log('29 mocked integration scenarios passed; writes restricted to Status');
+ // Even explicit closing links to an already-closed issue cannot affect it.
+ const closedItem={...issueItem,id:'completed-item',content:{...issueItem.content,id:'completed',number:1,state:'CLOSED'},fieldValueByName:{optionId:'done'}};
+ await check({links:[{id:'completed',state:'CLOSED',repository:{nameWithOwner:'HusseinMoukalled/Buddy'}},{id:'issue',state:'OPEN',repository:{nameWithOwner:'HusseinMoukalled/Buddy'}}],itemPages:[[closedItem,issueItem]]},'progress');
+ console.log('30 mocked integration scenarios passed; writes restricted to linked open Status');
 })().catch(e=>{console.error(e);process.exitCode=1});
