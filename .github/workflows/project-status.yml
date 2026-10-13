@@ -5,8 +5,11 @@ on:
   pull_request_review:
     types: [submitted, dismissed]
   workflow_dispatch:
-  schedule:
-    - cron: '*/15 * * * *'
+    inputs:
+      pr_number:
+        description: 'PR number to reconcile (only its directly linked open issues)'
+        required: true
+        type: number
 permissions:
   contents: read
 concurrency:
@@ -75,14 +78,16 @@ jobs:
                 } } ${page}
               } } }
             }`, {id:project.id}, d => d.node.items);
-            const open = await github.paginate(github.rest.pulls.list, {
-              owner, repo, state:"open", per_page:100
+            const trigger = context.payload.pull_request?.number ||
+              Number(context.payload.inputs?.pr_number);
+            if (!Number.isSafeInteger(trigger) || trigger < 1)
+              throw new Error("An explicit PR number is required.");
+            const {data: prState} = await github.rest.pulls.get({
+              owner, repo, pull_number:trigger
             });
-            const trigger = context.payload.pull_request?.number;
-            if (trigger && !open.some(p => p.number === trigger)) {
-              const {data} = await github.rest.pulls.get({owner,repo,pull_number:trigger});
-              if (!data.merged) open.push(data);
-            }
+            // This run never scans or updates unrelated PRs.
+            if (prState.merged) return;
+            const open = [prState];
             const desired = new Map();
             for (const pr of open) {
               // Only PRs into the default branch can provide closing links.
@@ -151,6 +156,8 @@ jobs:
                   statusName(item.fieldValueByName?.optionId));
                 continue;
               }
+              // Completed cards are protected, even if an issue was manually reopened.
+              if (statusName(item.fieldValueByName?.optionId) === "Done") continue;
               const status = desired.get(issue.id);
               if (!status) continue;
               if (status === item.fieldValueByName?.optionId) {
