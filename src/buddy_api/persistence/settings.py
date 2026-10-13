@@ -48,7 +48,8 @@ class DatabaseSettings:
             remote = url.host not in {"localhost", "127.0.0.1", "::1"}
             if (self.production or remote) and mode != "verify-full":
                 raise DatabaseConfigurationError(
-                    "Production/remote databases require sslmode=verify-full and a trusted certificate."
+                    "Production/remote databases require sslmode=verify-full "
+                    "and a trusted certificate."
                 )
             return url.set(drivername="postgresql+asyncpg", query={})
         except DatabaseConfigurationError:
