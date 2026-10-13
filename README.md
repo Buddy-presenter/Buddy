@@ -1,5 +1,7 @@
 # Buddy
 
+![Buddy's planned agentic architecture: live presentation flow above preflight testing, with proposed Jev decisions, safety checks, state feedback, and QA correction loops.](docs/assets/buddy-agentic-architecture.png)
+
 A context-aware presenter companion with a Python/PySide6 desktop shell and a separate
 API foundation. Authentication, deck processing, and live presentation are separate issues.
 
