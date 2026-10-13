@@ -104,6 +104,9 @@ fail conservatively; new endpoints/model names/optional properties and descripti
 are allowed. The first introduction has no older API baseline. A detected incompatible
 change must introduce a new API version, not merely regenerate the snapshot. The checker
 is deliberately conservative and is not a complete semantic OpenAPI compatibility engine.
+Documentation filtering applies to schema/operation annotations, not identifiers in
+named maps: fields/models named `title`, `description`, or `x-*` still have their
+contracts checked. Literal defaults are contract values, not documentation.
 
 Tests exercise real ASGI lifecycle and failure contracts. The smoke script starts the
 actual Uvicorn server on a prebound ephemeral socket, exercises real HTTP and the existing

@@ -24,22 +24,113 @@ def generate_schema() -> dict[str, Any]:
 def breaking_changes(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
     """Allow additions to named maps, but conservatively reject existing contract changes."""
     failures: list[str] = []
-    maps = {"paths", "schemas", "properties", "responses", "content"}
+    map_entries = {
+        "schema_map": "schema",
+        "response_map": "response",
+        "media_map": "media_type",
+        "header_map": "header",
+    }
+    metadata_contexts = {
+        "schema",
+        "path_item",
+        "operation",
+        "response",
+        "media_type",
+        "parameter",
+        "request_body",
+        "header",
+    }
 
-    def compare(old: Any, new: Any, path: str, *, allow_additions: bool = False) -> None:
+    def child_context(context: str, key: str) -> str:
+        # Named-map keys are identifiers, even when they match annotation keywords.
+        if context in map_entries:
+            return map_entries[context]
+        if context == "schema":
+            if key in {
+                "properties",
+                "patternProperties",
+                "$defs",
+                "definitions",
+                "dependentSchemas",
+            }:
+                return "schema_map"
+            if key in {
+                "items",
+                "additionalProperties",
+                "contains",
+                "not",
+                "if",
+                "then",
+                "else",
+                "propertyNames",
+                "unevaluatedProperties",
+                "unevaluatedItems",
+            }:
+                return "schema"
+            if key in {"allOf", "anyOf", "oneOf", "prefixItems"}:
+                return "schema_list"
+        if context == "path_item" and key in {
+            "get",
+            "put",
+            "post",
+            "delete",
+            "options",
+            "head",
+            "patch",
+            "trace",
+        }:
+            return "operation"
+        if context in {"path_item", "operation"} and key == "parameters":
+            return "parameter_list"
+        if context == "operation":
+            if key == "responses":
+                return "response_map"
+            if key == "requestBody":
+                return "request_body"
+        if context in {"response", "request_body", "parameter", "header"} and key == "content":
+            return "media_map"
+        if context == "response" and key == "headers":
+            return "header_map"
+        if context in {"media_type", "parameter", "header"} and key == "schema":
+            return "schema"
+        # Literal default/enum values and unknown structures are compared conservatively.
+        return "value"
+
+    def compare(
+        old: Any, new: Any, path: str, *, context: str, allow_additions: bool = False
+    ) -> None:
+        def annotation(key: str) -> bool:
+            return context in metadata_contexts and (
+                key in DOCUMENTATION_KEYS or key.startswith("x-")
+            )
+
         if isinstance(old, dict) and isinstance(new, dict):
             for key, value in old.items():
-                if key in DOCUMENTATION_KEYS or key.startswith("x-"):
+                if annotation(key):
                     continue
                 if key not in new:
                     failures.append(f"Removed {path}/{key}")
                 else:
-                    additions = key in maps or (path == "/paths")
-                    compare(value, new[key], f"{path}/{key}", allow_additions=additions)
+                    child = child_context(context, key)
+                    compare(
+                        value,
+                        new[key],
+                        f"{path}/{key}",
+                        context=child,
+                        allow_additions=child in map_entries,
+                    )
             if not allow_additions:
                 for key in new.keys() - old.keys():
-                    if key not in DOCUMENTATION_KEYS and not key.startswith("x-"):
+                    if not annotation(key):
                         failures.append(f"Changed contract at {path}/{key}")
+        elif (
+            isinstance(old, list)
+            and isinstance(new, list)
+            and context in {"schema_list", "parameter_list"}
+            and len(old) == len(new)
+        ):
+            for index, (value, current) in enumerate(zip(old, new, strict=True)):
+                compare(value, current, f"{path}/{index}", context=context.removesuffix("_list"))
         elif old != new:
             failures.append(f"Changed contract at {path}")
 
@@ -48,11 +139,14 @@ def breaking_changes(before: dict[str, Any], after: dict[str, Any]) -> list[str]
         if current is None:
             failures.append(f"Removed endpoint {path}")
         else:
-            compare(operations, current, f"/paths/{path}", allow_additions=True)
+            compare(
+                operations, current, f"/paths/{path}", context="path_item", allow_additions=True
+            )
     compare(
         before.get("components", {}).get("schemas", {}),
         after.get("components", {}).get("schemas", {}),
         "/components/schemas",
+        context="schema_map",
         allow_additions=True,
     )
     return failures
