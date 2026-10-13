@@ -68,7 +68,7 @@ jobs:
             const reviewed = option("Reviewed");
             const items = await pages(`query($id:ID!,$cursor:String) {
               node(id:$id) { ... on ProjectV2 { items(first:100,after:$cursor) {
-                nodes { id isArchived content { ... on Issue {
+                nodes { id isArchived content { __typename ... on Issue {
                   id number state repository { nameWithOwner }
                 } } fieldValueByName(name:"Status") {
                   ... on ProjectV2ItemFieldSingleSelectValue { optionId }
@@ -143,8 +143,8 @@ jobs:
             let updated = 0;
             for (const item of items) {
               const issue = item.content;
-              if (item.isArchived || !issue ||
-                  issue.repository.nameWithOwner !== owner + "/" + repo) continue;
+              if (item.isArchived || issue?.__typename !== "Issue" ||
+                  issue.repository?.nameWithOwner !== owner + "/" + repo) continue;
               const statusName = id => field.options.find(o => o.id === id)?.name || "Unset";
               if (issue.state !== "OPEN") {
                 core.info("Closed issue #" + issue.number + " Project status: " +

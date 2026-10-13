@@ -4,7 +4,7 @@ const yaml = fs.readFileSync('.github/workflows/project-status.yml', 'utf8').rep
 const script = yaml.split('          script: |\n')[1].split('\n').map(l => l.slice(12)).join('\n');
 const execute = new (Object.getPrototypeOf(async function() {}).constructor)('github', 'context', 'core', script);
 const pageInfo = {hasNextPage:false};
-async function check({draft=false, state='open', merged=false, events=[], reviews=[], closedIssue=false, archived=false, requests=null}, expected) {
+async function check({draft=false, state='open', merged=false, events=[], reviews=[], closedIssue=false, archived=false, requests=null, itemPages=null}, expected) {
   const mutations = [];
   const pr = {number:55, draft, state, merged, base:{ref:'main'},user:{login:'author'}};
   const github = {rest:{pulls:{list:'list', get:async()=>({data:pr}), listReviews:'reviews'}},
@@ -12,7 +12,11 @@ async function check({draft=false, state='open', merged=false, events=[], review
     graphql:async(q,v)=>{
       if(q.startsWith('mutation')) {mutations.push(v.status);return {};}
       if(q.includes('fields(first:100)')) return {user:{projectV2:{id:'p',fields:{pageInfo,nodes:[{id:'f',name:'Status',options:[{id:'progress',name:'In Progress'},{id:'waiting',name:'Waiting for review'},{id:'reviewed',name:'Reviewed'}]}]}}}};
-      if(q.includes('items(first:100')) return {node:{items:{pageInfo,nodes:[{id:'item',isArchived:archived,content:{id:'issue',number:46,state:closedIssue?'CLOSED':'OPEN',repository:{nameWithOwner:'HusseinMoukalled/Buddy'}},fieldValueByName:{optionId:'backlog'}}]}}};
+      if(q.includes('items(first:100')) {
+        const index = v.cursor === null ? 0 : Number(v.cursor);
+        const batches = itemPages ?? [[{id:'item',isArchived:archived,content:{__typename:'Issue',id:'issue',number:46,state:closedIssue?'CLOSED':'OPEN',repository:{nameWithOwner:'HusseinMoukalled/Buddy'}},fieldValueByName:{optionId:'backlog'}}]];
+        return {node:{items:{pageInfo:{hasNextPage:index + 1 < batches.length,endCursor:String(index + 1)},nodes:batches[index]}}};
+      }
       if(q.includes('closingIssuesReferences')) return {repository:{pullRequest:{closingIssuesReferences:{pageInfo,nodes:[{id:'issue',state:closedIssue?'CLOSED':'OPEN',repository:{nameWithOwner:'HusseinMoukalled/Buddy'}}]}}}};
       if(q.includes('reviewRequests(first:100')) return {repository:{pullRequest:{reviewRequests:{pageInfo,nodes:requests ?? (events.some(e=>e.__typename==='ReviewRequestedEvent')?[{requestedReviewer:{__typename:'User'}}]:[])}}}};
       if(q.includes('timelineItems')) return {repository:{pullRequest:{timelineItems:{pageInfo,nodes:events}}}};
@@ -48,5 +52,14 @@ async function check({draft=false, state='open', merged=false, events=[], review
  await check({events:[request,{...request,createdAt:'2026-10-13T12:00:00Z'}],reviews:[review('APPROVED')],requests:[]},'reviewed');
  await check({events:[request],reviews:[review('COMMENTED')],requests:[]},'reviewed');
  await check({events:[request,{...request,createdAt:'2026-10-13T12:00:00Z'}],reviews:[review('APPROVED')],requests:[{requestedReviewer:{__typename:'Team'}}]},'waiting');
- console.log('22 mocked integration scenarios passed');
+ // Unsupported/hidden cards must not prevent later linked issues from updating.
+ const issueItem={id:'item',content:{__typename:'Issue',id:'issue',number:46,state:'OPEN',repository:{nameWithOwner:'HusseinMoukalled/Buddy'}},fieldValueByName:{optionId:'backlog'}};
+ const prItem={id:'pr-card',content:{__typename:'PullRequest'}};
+ const draftItem={id:'draft-card',content:{__typename:'DraftIssue'}};
+ await check({itemPages:[[prItem,issueItem]]},'progress');
+ await check({itemPages:[[draftItem,issueItem]]},'progress');
+ await check({itemPages:[[prItem,draftItem],[issueItem]],events:[request]},'waiting');
+ await check({itemPages:[[{id:'hidden',content:null},{id:'redacted',content:{}},issueItem]]},'progress');
+ await check({itemPages:[[{...issueItem,id:'archived',isArchived:true},{...issueItem,id:'foreign',content:{...issueItem.content,repository:{nameWithOwner:'elsewhere/repo'}}},issueItem]]},'progress');
+ console.log('27 mocked integration scenarios passed');
 })().catch(e=>{console.error(e);process.exitCode=1});
