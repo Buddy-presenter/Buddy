@@ -104,6 +104,42 @@ def test_routing_errors_have_consistent_contracts(method, path, code):
     assert response.json()["request_id"] == response.headers["x-request-id"]
 
 
+@pytest.mark.parametrize("path", ["/health", "/api/v1/health"])
+def test_method_not_allowed_preserves_supported_methods(path):
+    with TestClient(app()) as client:
+        response = client.post(path)
+    assert response.status_code == 405
+    assert "GET" in {method.strip() for method in response.headers["allow"].split(",")}
+    assert response.json()["error"]["code"] == "method_not_allowed"
+
+
+def test_http_error_preserves_protocol_headers_and_redacts_body():
+    application = app()
+
+    @application.get("/busy")
+    async def busy():
+        raise HTTPException(
+            status_code=503,
+            detail="private-secret",
+            headers={
+                "Retry-After": "10",
+                "X-Request-ID": "untrusted-id",
+                "Cache-Control": "public",
+                "X-Content-Type-Options": "untrusted-value",
+            },
+        )
+
+    with TestClient(application) as client:
+        response = client.get("/busy")
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "10"
+    assert "private-secret" not in response.text
+    assert response.json()["error"]["message"] == "Request rejected."
+    assert str(UUID(response.headers["x-request-id"])) == response.json()["request_id"]
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
 def test_unknown_and_http_errors_are_redacted(caplog):
     application = app()
 

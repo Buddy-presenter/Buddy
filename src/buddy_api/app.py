@@ -80,7 +80,7 @@ def create_app(
         body = ErrorResponse(
             error=ErrorData(code=code, message=message), request_id=request_id(request)
         )
-        return JSONResponse(body.model_dump(), status_code=exc.status_code)
+        return JSONResponse(body.model_dump(), status_code=exc.status_code, headers=exc.headers)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
