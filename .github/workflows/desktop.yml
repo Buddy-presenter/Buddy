@@ -85,8 +85,8 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: python -m pip install -e ".[api,dev]"
-      - name: Real PostgreSQL isolation, restart, migration and failure checks
-        run: python -m pytest tests/api/test_database.py --strict-markers
+      - name: Real PostgreSQL checks without the desktop Qt plugin
+        run: python -m pytest -p no:pytest-qt tests/api/test_database.py --strict-markers
       - run: python -m build
       - name: Install wheel and verify packaged migrations against actual PostgreSQL
         shell: bash
