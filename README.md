@@ -1,7 +1,7 @@
 # Buddy
 
-A context-aware presenter companion. This first increment provides the Python/PySide6
-desktop shell; authentication, deck processing, and live presentation are separate issues.
+A context-aware presenter companion with a Python/PySide6 desktop shell and a separate
+API foundation. Authentication, deck processing, and live presentation are separate issues.
 
 ## Desktop development
 
@@ -29,8 +29,8 @@ namespace without the unused WebEngine/add-on downloads. Runtime and direct deve
 dependencies are version-pinned in `pyproject.toml`.
 
 Home checks a **real** configured backend when requested. It does not invent successful
-responses or start a backend. Until issue #2 supplies the service, connection errors are
-expected and recoverable. Library and Present explain their availability; there are no
+responses or start a backend. Start [the API service](docs/api/README.md) in another
+terminal to use the connection check. Library and Present explain their availability; there are no
 fake decks, sessions, or sign-in flows.
 
 ## Configuration
@@ -51,10 +51,10 @@ retain window geometry. On Windows, Qt stores these under the current user's reg
 preferences for `Buddy/BuddyDesktop`; on macOS, it uses the user's preferences system.
 No deck, transcript, or credentials are persisted by this shell.
 
-The initial adapter contract is `GET <base-url>/health`, returning HTTP 200 with
+The compatibility adapter contract is `GET <base-url>/health`, returning HTTP 200 with
 `Content-Type: application/json` and `{"status":"ok"}` (or `"healthy"`). Redirects,
 unhealthy/malformed results, and responses larger than 64 KiB are rejected. This contract
-should be maintained or explicitly coordinated with the API foundation in issue #2.
+is implemented by the API foundation. Versioned endpoints use `/api/v1` and typed envelopes.
 Checks are manual, one at a time, on a background worker. While a check is active,
 navigation stays available; backend changes are disabled to avoid stale results.
 
