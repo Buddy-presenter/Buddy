@@ -1,29 +1,39 @@
 """Start the real ASGI server on an isolated socket and verify HTTP and desktop integration."""
 
+import argparse
 import json
 import socket
 import sys
 import time
 from threading import Thread
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 import uvicorn
 
 from buddy_api.app import create_app
 from buddy_api.config import Environment, Settings
+from buddy_api.persistence.settings import DatabaseSettings
 from buddy_desktop.config import AppConfig
 from buddy_desktop.services import HealthService
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--database",
+        action="store_true",
+        help="Use BUDDY_DATABASE_URL and require real database readiness.",
+    )
+    args = parser.parse_args()
+    database = DatabaseSettings.from_environment() if args.database else None
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         listener.listen(8)
         port = listener.getsockname()[1]
         service = uvicorn.Server(
             uvicorn.Config(
-                create_app(Settings(Environment.TEST)),
+                create_app(Settings(Environment.TEST, database=database)),
                 access_log=False,
                 log_level="warning",
                 proxy_headers=False,
@@ -40,10 +50,26 @@ def main() -> int:
                 time.sleep(0.02)
             base_url = f"http://127.0.0.1:{port}"
             assert HealthService(AppConfig(base_url, 2)).check().status == "ok"
-            for path in ["/api/v1/health", "/api/v1/ready", "/api/v1/version"]:
+            for path in ["/api/v1/health", "/api/v1/version"]:
                 with urlopen(base_url + path, timeout=2) as response:
                     payload = json.load(response)
                     assert payload["request_id"] == response.headers["X-Request-ID"]
+            if database is not None:
+                with urlopen(base_url + "/api/v1/ready", timeout=5) as response:
+                    assert json.load(response)["data"]["dependencies"] == [
+                        {"name": "database", "status": "ready"}
+                    ]
+            else:
+                try:
+                    urlopen(base_url + "/api/v1/ready", timeout=2).close()
+                    raise AssertionError("Unconfigured database must fail readiness.")
+                except HTTPError as response:
+                    assert response.code == 503
+                    payload = json.load(response)
+                    assert payload["request_id"] == response.headers["X-Request-ID"]
+                    assert payload["error"]["details"] == [
+                        {"location": "database", "code": "dependency_unavailable"}
+                    ]
             print("Real API HTTP startup, readiness and desktop health integration passed.")
         except (AssertionError, RuntimeError, URLError, OSError, ValueError) as exc:
             print(f"API smoke check failed: {type(exc).__name__}", file=sys.stderr)

@@ -24,6 +24,7 @@ from buddy_api.contracts import (
     VersionResponse,
 )
 from buddy_api.middleware import RequestContextMiddleware
+from buddy_api.persistence.database import Database, DatabaseProbe
 from buddy_api.readiness import DependencyProbe, check_dependencies, validate_probes
 
 ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
@@ -45,7 +46,8 @@ def create_app(
     settings: Settings | None = None, *, probes: Sequence[DependencyProbe] = ()
 ) -> FastAPI:
     config = settings if settings is not None else Settings.from_environment()
-    dependencies = tuple(probes)
+    database = Database(config.database) if config.database is not None else None
+    dependencies = (DatabaseProbe(database), *probes)
     validate_probes(dependencies)
     started = False
 
@@ -57,6 +59,8 @@ def create_app(
             yield
         finally:
             started = False
+            if database is not None:
+                await database.close()
 
     app = FastAPI(
         title="Buddy API",
@@ -68,6 +72,7 @@ def create_app(
         openapi_url="/openapi.json" if config.environment is not Environment.PRODUCTION else None,
     )
     app.add_middleware(RequestContextMiddleware, allowed_hosts=config.allowed_hosts)
+    app.state.database = database
 
     @app.exception_handler(HTTPException)
     async def http_error(request: Request, exc: HTTPException) -> JSONResponse:
@@ -105,7 +110,9 @@ def create_app(
 
     @router.get("/ready", response_model=ReadyResponse, tags=["operations"])
     async def ready(request: Request) -> ReadyResponse | JSONResponse:
-        results = await check_dependencies(dependencies, config.readiness_timeout)
+        results = (
+            await check_dependencies(dependencies, config.readiness_timeout) if started else []
+        )
         if not started or any(result.status == "unavailable" for result in results):
             details = [
                 ErrorDetail(location=result.name, code="dependency_unavailable")

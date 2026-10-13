@@ -2,6 +2,8 @@
 
 A context-aware presenter companion with a Python/PySide6 desktop shell and a separate
 API foundation. Authentication, deck processing, and live presentation are separate issues.
+The API's [PostgreSQL persistence guide](docs/database.md) covers durable records,
+explicit migrations and optional local Docker/native server setup.
 
 ## Desktop development
 
@@ -72,6 +74,9 @@ See [the desktop architecture](docs/desktop-shell.md) for extension boundaries a
 [the contribution workflow](CONTRIBUTING.md) before beginning another issue.
 
 ## Verification
+
+See [local quality commands](docs/local-quality.md) for clean-checkout setup and consistent
+desktop/API format, lint, and type checks. Run `python scripts/quality.py all check` before a PR.
 
 Run from the repository root, using the virtual environment's Python:
 

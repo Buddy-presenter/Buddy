@@ -5,8 +5,10 @@ import math
 import os
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
+
+from buddy_api.persistence.settings import DatabaseConfigurationError, DatabaseSettings
 
 
 class ConfigurationError(ValueError):
@@ -37,6 +39,7 @@ class Settings:
     bind_host: str = "127.0.0.1"
     port: int = 8000
     readiness_timeout: float = 2.0
+    database: DatabaseSettings | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.environment, Environment):
@@ -51,6 +54,12 @@ class Settings:
             raise ConfigurationError("BUDDY_PORT must be an integer from 1 to 65535.")
         if not math.isfinite(self.readiness_timeout) or not 0.1 <= self.readiness_timeout <= 30:
             raise ConfigurationError("BUDDY_READINESS_TIMEOUT_SECONDS must be from 0.1 to 30.")
+        if self.environment is Environment.PRODUCTION and (
+            self.database is None or not self.database.production
+        ):
+            raise ConfigurationError(
+                "Production requires a verified production BUDDY_DATABASE_URL."
+            )
 
     @classmethod
     def from_environment(cls, environ: Mapping[str, str] | None = None) -> "Settings":
@@ -74,4 +83,16 @@ class Settings:
             raise ConfigurationError(
                 "API port and readiness timeout must be valid numbers."
             ) from exc
-        return cls(environment, hosts, values.get("BUDDY_BIND_HOST", "127.0.0.1"), port, timeout)
+        try:
+            database = (
+                DatabaseSettings.from_environment(
+                    values, production=environment is Environment.PRODUCTION
+                )
+                if values.get("BUDDY_DATABASE_URL")
+                else None
+            )
+        except DatabaseConfigurationError as exc:
+            raise ConfigurationError(str(exc)) from None
+        return cls(
+            environment, hosts, values.get("BUDDY_BIND_HOST", "127.0.0.1"), port, timeout, database
+        )

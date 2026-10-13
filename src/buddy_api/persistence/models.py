@@ -1,0 +1,111 @@
+"""Durable records and database-enforced account/deck consistency."""
+
+from datetime import datetime
+from typing import Any
+from uuid import UUID, uuid4
+
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    MetaData,
+    String,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+class Base(DeclarativeBase):
+    metadata = MetaData(
+        naming_convention={
+            "ix": "ix_%(table_name)s_%(column_0_name)s",
+            "uq": "uq_%(table_name)s_%(column_0_name)s",
+            "ck": "ck_%(table_name)s_%(constraint_name)s",
+            "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+            "pk": "pk_%(table_name)s",
+        }
+    )
+
+
+class User(Base):
+    __tablename__ = "users"
+    __table_args__ = (CheckConstraint("length(subject) > 0", name="subject_nonempty"),)
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    subject: Mapped[str] = mapped_column(String(255), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class OwnedRecord(Base):
+    __abstract__ = True
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    owner_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Deck(OwnedRecord):
+    __tablename__ = "decks"
+    __table_args__ = (
+        UniqueConstraint("id", "owner_id"),
+        CheckConstraint("length(title) > 0", name="title_nonempty"),
+    )
+    title: Mapped[str] = mapped_column(String(256))
+    source_key: Mapped[str | None] = mapped_column(String(1024))
+
+
+class ProcessingJob(OwnedRecord):
+    __tablename__ = "processing_jobs"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["deck_id", "owner_id"], ["decks.id", "decks.owner_id"], ondelete="RESTRICT"
+        ),
+        UniqueConstraint("id", "deck_id", "owner_id"),
+        CheckConstraint("status IN ('pending','running','succeeded','failed')", name="status"),
+        CheckConstraint("attempts >= 0", name="attempts_nonnegative"),
+    )
+    deck_id: Mapped[UUID] = mapped_column(index=True)
+    status: Mapped[str] = mapped_column(String(16), server_default="pending")
+    attempts: Mapped[int] = mapped_column(server_default="0")
+
+
+class AnalysisVersion(OwnedRecord):
+    __tablename__ = "analysis_versions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["deck_id", "owner_id"], ["decks.id", "decks.owner_id"], ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["job_id", "deck_id", "owner_id"],
+            ["processing_jobs.id", "processing_jobs.deck_id", "processing_jobs.owner_id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("id", "deck_id", "owner_id"),
+        UniqueConstraint("deck_id", "version"),
+        CheckConstraint("version > 0", name="version_positive"),
+    )
+    deck_id: Mapped[UUID] = mapped_column(index=True)
+    job_id: Mapped[UUID | None] = mapped_column()
+    version: Mapped[int] = mapped_column()
+    graph: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
+
+class PresentationSession(OwnedRecord):
+    __tablename__ = "presentation_sessions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["deck_id", "owner_id"], ["decks.id", "decks.owner_id"], ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["analysis_version_id", "deck_id", "owner_id"],
+            ["analysis_versions.id", "analysis_versions.deck_id", "analysis_versions.owner_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("status IN ('created','active','ended')", name="status"),
+        CheckConstraint("state_version >= 0", name="state_version_nonnegative"),
+    )
+    deck_id: Mapped[UUID] = mapped_column(index=True)
+    analysis_version_id: Mapped[UUID] = mapped_column(index=True)
+    status: Mapped[str] = mapped_column(String(16), server_default="created")
+    state_version: Mapped[int] = mapped_column(server_default="0")
