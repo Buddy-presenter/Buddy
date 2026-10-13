@@ -1,0 +1,150 @@
+name: Sync issue Project status
+on:
+  pull_request:
+    types: [opened, reopened, edited, review_requested, review_request_removed, converted_to_draft, ready_for_review, closed, synchronize]
+  pull_request_review:
+    types: [submitted, dismissed]
+  workflow_dispatch:
+  schedule:
+    - cron: '*/15 * * * *'
+permissions:
+  contents: read
+concurrency:
+  group: buddy-project-status
+  cancel-in-progress: false
+jobs:
+  sync:
+    if: >-
+      github.repository == 'HusseinMoukalled/Buddy' &&
+      (github.event_name != 'pull_request' && github.event_name != 'pull_request_review' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check Project credential
+        env:
+          PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+        run: |
+          if [ -z "$PROJECT_TOKEN" ]; then
+            echo "::error::Add the PROJECT_TOKEN Actions secret with Projects read/write and repository Issues/Pull requests read access."
+            exit 1
+          fi
+      # No checkout, execution of PR code, or interpolation of PR text.
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          github-token: ${{ secrets.PROJECT_TOKEN }}
+          script: |
+            const owner = "HusseinMoukalled";
+            const repo = "Buddy";
+            async function pages(query, variables, select) {
+              const result = [];
+              let cursor = null;
+              do {
+                const connection = select(await github.graphql(query, {...variables, cursor}));
+                result.push(...connection.nodes.filter(Boolean));
+                cursor = connection.pageInfo.hasNextPage ? connection.pageInfo.endCursor : null;
+              } while (cursor);
+              return result;
+            }
+            const page = "pageInfo { hasNextPage endCursor }";
+            const projectResult = await github.graphql(`query {
+              user(login:"HusseinMoukalled") { projectV2(number:2) {
+                id fields(first:100) { nodes { ... on ProjectV2SingleSelectField {
+                  id name options { id name }
+                } } pageInfo { hasNextPage } }
+              } }
+            }`);
+            const project = projectResult.user?.projectV2;
+            if (!project) throw new Error("Project 2 is unavailable to PROJECT_TOKEN.");
+            if (project.fields.pageInfo.hasNextPage) throw new Error("Too many project fields.");
+            const field = project.fields.nodes.find(f => f.name === "Status");
+            const option = name => {
+              const value = field?.options.find(o => o.name === name);
+              if (!value) throw new Error("Missing project status: " + name);
+              return value.id;
+            };
+            const progress = option("In Progress");
+            const waiting = option("Waiting for review");
+            const reviewed = option("Reviewed");
+            const items = await pages(`query($id:ID!,$cursor:String) {
+              node(id:$id) { ... on ProjectV2 { items(first:100,after:$cursor) {
+                nodes { id isArchived content { ... on Issue {
+                  id number state repository { nameWithOwner }
+                } } fieldValueByName(name:"Status") {
+                  ... on ProjectV2ItemFieldSingleSelectValue { optionId }
+                } } ${page}
+              } } }
+            }`, {id:project.id}, d => d.node.items);
+            const open = await github.paginate(github.rest.pulls.list, {
+              owner, repo, state:"open", per_page:100
+            });
+            const trigger = context.payload.pull_request?.number;
+            if (trigger && !open.some(p => p.number === trigger)) {
+              const {data} = await github.rest.pulls.get({owner,repo,pull_number:trigger});
+              if (!data.merged) open.push(data);
+            }
+            const desired = new Map();
+            for (const pr of open) {
+              // Only PRs into the default branch can provide closing links.
+              if (pr.base.ref !== context.payload.repository.default_branch) continue;
+              const issues = await pages(`query($number:Int!,$cursor:String) {
+                repository(owner:"HusseinMoukalled",name:"Buddy") {
+                  pullRequest(number:$number) { closingIssuesReferences(first:100,after:$cursor) {
+                    nodes { id state repository { nameWithOwner } } ${page}
+                  } }
+                }
+              }`, {number:pr.number}, d => d.repository.pullRequest.closingIssuesReferences);
+              let status = progress;
+              if (pr.state === "open" && !pr.draft) {
+                const events = await pages(`query($number:Int!,$cursor:String) {
+                  repository(owner:"HusseinMoukalled",name:"Buddy") {
+                    pullRequest(number:$number) { timelineItems(first:100,after:$cursor,
+                      itemTypes:[REVIEW_REQUESTED_EVENT,CONVERT_TO_DRAFT_EVENT]) {
+                      nodes { __typename ... on ReviewRequestedEvent { createdAt }
+                        ... on ConvertToDraftEvent { createdAt } } ${page}
+                    } }
+                  }
+                }`, {number:pr.number}, d => d.repository.pullRequest.timelineItems);
+                const lastDraft = events.filter(e => e.__typename === "ConvertToDraftEvent")
+                  .map(e => e.createdAt).sort().at(-1) || "";
+                const lastRequest = events.filter(e => e.__typename === "ReviewRequestedEvent")
+                  .map(e => e.createdAt).sort().at(-1) || "";
+                const reviews = await github.paginate(github.rest.pulls.listReviews,
+                  {owner,repo,pull_number:pr.number,per_page:100});
+                const lastReview = reviews.filter(r =>
+                  r.user && r.user.login !== pr.user?.login &&
+                  ["APPROVED", "CHANGES_REQUESTED", "COMMENTED"].includes(r.state) &&
+                  r.submitted_at > lastDraft)
+                  .map(r => r.submitted_at).sort().at(-1) || "";
+                // Reviewed records submitted feedback, not permission to merge.
+                // A later request begins another review cycle. Dismissed reviews
+                // and the PR author's own reviews cannot mark work Reviewed.
+                if (lastRequest > lastDraft) status = waiting;
+                if (lastReview && lastReview >= lastRequest) status = reviewed;
+              }
+              for (const issue of issues) {
+                if (issue.state !== "OPEN" || issue.repository.nameWithOwner !== owner + "/" + repo) continue;
+                // With multiple PRs: implementation, then pending review, then reviewed.
+                const previous = desired.get(issue.id);
+                const rank = value => [progress, waiting, reviewed].indexOf(value);
+                if (!previous || rank(status) < rank(previous)) desired.set(issue.id, status);
+              }
+            }
+            let updated = 0;
+            for (const item of items) {
+              const issue = item.content;
+              if (item.isArchived || !issue || issue.state !== "OPEN" ||
+                  issue.repository.nameWithOwner !== owner + "/" + repo) continue;
+              const status = desired.get(issue.id);
+              if (!status || status === item.fieldValueByName?.optionId) continue;
+              // Never assign Done or close issues: built-in Project workflows own completion.
+              await github.graphql(`mutation($project:ID!,$item:ID!,$field:ID!,$status:String!) {
+                updateProjectV2ItemFieldValue(input:{projectId:$project,itemId:$item,
+                  fieldId:$field,value:{singleSelectOptionId:$status}}) {
+                  projectV2Item { id }
+                }
+              }`, {project:project.id,item:item.id,field:field.id,status});
+              core.info("Updated issue #" + issue.number);
+              updated++;
+            }
+            core.info("Project statuses updated: " + updated);
