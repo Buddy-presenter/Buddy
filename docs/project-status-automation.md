@@ -7,8 +7,7 @@ Link an issue with `Closes #57` or the PR Development sidebar; plain mentions do
 - Review requested: Waiting for review.
 - Another person's submitted approval, requested changes, or comment review: Reviewed.
 - A later review request: Waiting for review again.
-- Removing the final outstanding person/team request: In Progress if no feedback exists;
-  otherwise Reviewed. Remaining requests and later re-requests still wait for feedback.
+- Removing the last outstanding person/team request: In Progress if no feedback has been submitted, otherwise Reviewed. Removing only one request keeps the cycle waiting when another remains outstanding.
 - Reviewed describes feedback, not merge eligibility. Branch protection still enforces approval and CI.
 - Existing item-closed/PR-merged Project workflows own Done. This automation never closes an issue.
 
