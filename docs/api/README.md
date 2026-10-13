@@ -2,7 +2,8 @@
 
 The API is a separate server process used by the native desktop client and future
 processing workers. It is not a browser frontend. This increment has only operational
-endpoints; it does not implement accounts, database records, decks or presentation sessions.
+endpoints. [PostgreSQL persistence](../database.md) supplies internal durable records;
+account, deck and presentation workflows remain separate issues.
 
 ## Start locally
 
@@ -40,10 +41,13 @@ import the desktop UI. Signed installers/service distribution remain separate re
 | `BUDDY_BIND_HOST` | Default `127.0.0.1`. Exposing another interface is an explicit deployment choice. |
 | `BUDDY_PORT` | Default `8000`; integer 1–65535. |
 | `BUDDY_READINESS_TIMEOUT_SECONDS` | Default `2`; finite 0.1–30 seconds per asynchronous dependency probe. |
+| `BUDDY_DATABASE_URL` | PostgreSQL connection secret. Required for production; absent development/test database fails readiness with 503. See the database guide for verified TLS and explicit migrations. |
+| `BUDDY_DATABASE_SCHEMA` | Default `public`; operator-created lowercase schema identifier. |
+| `BUDDY_DATABASE_TIMEOUT_SECONDS` | Default `3`; finite 0.1–30 seconds. |
 
-No credentials or provider/database secrets are needed by this issue. Future services
-read secrets through their own validated environment/secret-management adapters, never
-through a bundled file or desktop configuration. Errors never echo configured values.
+Database credentials come from the backend environment/secret manager, never a bundled
+file or desktop configuration. Liveness can run without a database in development;
+readiness requires a reachable, explicitly migrated database. Errors never echo configured values.
 
 Production requires a TLS ingress and private deployment configuration owned by #27/#26;
 setting `production` is not evidence that authentication, quotas or other release controls
@@ -80,10 +84,9 @@ names. A probe performs a real, bounded read-only dependency check, returns norm
 success, and raises on failure. Checks run concurrently; failures/timeouts fail readiness
 while liveness stays available. Actual dependency messages are never exposed.
 
-There is deliberately no database/storage/provider adapter in this increment. Readiness
-reports an empty dependency list and **does not claim those absent services are healthy**.
-Issue #3 must connect the real database probe and lifecycle/persistence boundaries;
-subsequent processing/storage features register theirs. Startup/shutdown state prevents
+The PostgreSQL adapter checks connectivity, current revision and required tables without
+reading private rows or applying migrations. Storage/provider features register their own
+adapters when implemented. Startup/shutdown state prevents
 readiness before startup or after shutdown. Adapters must remain cancellable and must
 not swallow cancellation or block the event loop with synchronous network work.
 

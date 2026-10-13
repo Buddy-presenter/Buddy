@@ -51,3 +51,4 @@ files = ["src/buddy_desktop", "src/buddy_api"]
 testpaths = ["tests"]
 qt_api = "pyside6"
 addopts = "-ra"
+markers = ["postgres: real PostgreSQL integration using isolated disposable test schemas"]
