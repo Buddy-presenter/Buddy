@@ -5,11 +5,13 @@ of done. Use the GitHub Project's **Waves** view and its Sprint/Wave fields for 
 The Issues tab is a list, not the execution order; issue-body sprint metadata can be stale.
 
 - Work only on issues assigned to HusseinMoukalled unless the user directs otherwise.
+  Never reassign implementation issues or change another contributor's issue without
+  the user's explicit instruction. PR assignment and issue assignment are separate.
 - Finish and peer-review earlier-wave prerequisites before dependent later-wave work.
 - Each issue has its own branch, starting from current main. Use the exact issue title,
   replacing spaces with hyphens because Git forbids spaces in ref names. Preserve wording
   and capitalization; explicitly explain any additional normalization Git requires.
-- Open one PR per issue targeting main, assign the PR to **Lahhamix**, and request both
+- Open one PR per issue targeting main, assign the PR to **Lahhamix** and **yasminahanna**, and request both
   **Lahhamix** and **yasminahanna** as reviewers. Keep the implementation issue assigned
   to HusseinMoukalled.
 - Do not push implementation directly to main. Merge only after teammate approval,
