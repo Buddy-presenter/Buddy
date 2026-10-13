@@ -11,19 +11,25 @@ requires-python = ">=3.12,<3.15"
 dependencies = ["PySide6-Essentials==6.12.0"]
 
 [project.optional-dependencies]
+api = ["fastapi==0.143.0", "uvicorn==0.54.0", "pydantic==2.14.1", "starlette==1.8.0"]
 dev = [
   "build==1.6.1",
   "mypy==2.4.0",
   "pytest==9.1.1",
   "pytest-qt==4.5.0",
   "ruff==0.17.0",
+  "httpx==0.28.1",
 ]
+
+[project.scripts]
+buddy-api = "buddy_api.cli:main"
+buddy-api-schema = "buddy_api.schema:main"
 
 [project.gui-scripts]
 buddy = "buddy_desktop.app:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/buddy_desktop"]
+packages = ["src/buddy_desktop", "src/buddy_api"]
 
 [tool.ruff]
 target-version = "py312"
@@ -35,7 +41,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["src/buddy_desktop"]
+files = ["src/buddy_desktop", "src/buddy_api"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

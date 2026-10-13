@@ -1,0 +1,141 @@
+import asyncio
+from uuid import UUID
+
+import pytest
+from fastapi import HTTPException
+from fastapi.testclient import TestClient
+
+from buddy_api.app import create_app
+from buddy_api.config import Environment, Settings
+
+
+def app(**kwargs):
+    return create_app(
+        Settings(Environment.TEST, ("testserver", "localhost", "127.0.0.1")), **kwargs
+    )
+
+
+@pytest.mark.parametrize("path", ["/api/v1/health", "/api/v1/ready", "/api/v1/version", "/health"])
+def test_live_service_contract_and_request_ids(path):
+    with TestClient(app()) as client:
+        response = client.get(path, headers={"X-Request-ID": "untrusted-input"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert str(UUID(payload["request_id"])) == response.headers["x-request-id"]
+    assert payload["request_id"] != "untrusted-input"
+    assert response.headers["cache-control"] == "no-store"
+    if path != "/health":
+        assert set(payload) == {"data", "request_id"}
+    else:
+        assert payload["status"] == "ok"
+
+
+def test_readiness_is_not_reported_before_startup():
+    response = TestClient(app()).get("/api/v1/ready")
+    assert response.status_code == 503
+    assert response.json()["error"]["details"] == [
+        {"location": "application", "code": "not_started"}
+    ]
+
+
+def test_no_unconfigured_dependency_is_claimed_healthy():
+    with TestClient(app()) as client:
+        assert client.get("/api/v1/ready").json()["data"]["dependencies"] == []
+
+
+def test_dependency_failure_and_recovery_redacts_details():
+    class Probe:
+        name = "database"
+        failing = True
+
+        async def check(self):
+            if self.failing:
+                raise ConnectionError("postgres://user:secret@private-db")
+
+    probe = Probe()
+    with TestClient(app(probes=[probe])) as client:
+        response = client.get("/api/v1/ready")
+        assert response.status_code == 503
+        assert "secret" not in response.text
+        assert response.json()["error"]["details"][0]["location"] == "database"
+        probe.failing = False
+        assert client.get("/api/v1/ready").json()["data"]["dependencies"] == [
+            {"name": "database", "status": "ready"}
+        ]
+
+
+def test_probe_timeout_does_not_break_liveness():
+    class SlowProbe:
+        name = "storage"
+
+        async def check(self):
+            await asyncio.sleep(60)
+
+    application = create_app(
+        Settings(Environment.TEST, ("testserver",), readiness_timeout=0.1), probes=[SlowProbe()]
+    )
+    with TestClient(application) as client:
+        assert client.get("/api/v1/ready").status_code == 503
+        assert client.get("/api/v1/health").status_code == 200
+
+
+@pytest.mark.parametrize("host", ["evil.example", "localhost:999999", "user@localhost"])
+def test_invalid_host_is_rejected_with_common_error_contract(host):
+    with TestClient(app()) as client:
+        response = client.get("/api/v1/health", headers={"Host": host})
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_host"
+    assert response.json()["request_id"] == response.headers["x-request-id"]
+
+
+def test_validation_errors_do_not_echo_submitted_values():
+    with TestClient(app()) as client:
+        response = client.get("/api/v1/version", params={"api_version": "private-secret"})
+    assert response.status_code == 422
+    assert "private-secret" not in response.text
+    assert response.json()["error"]["details"][0]["location"] == "query.api_version"
+
+
+@pytest.mark.parametrize("method,path,code", [("GET", "/missing", 404), ("POST", "/health", 405)])
+def test_routing_errors_have_consistent_contracts(method, path, code):
+    with TestClient(app()) as client:
+        response = client.request(method, path)
+    assert response.status_code == code
+    assert response.json()["request_id"] == response.headers["x-request-id"]
+
+
+def test_unknown_and_http_errors_are_redacted(caplog):
+    application = app()
+
+    @application.get("/unexpected")
+    async def unexpected():
+        raise ValueError("private-secret")
+
+    @application.get("/denied")
+    async def denied():
+        raise HTTPException(status_code=403, detail="private-secret")
+
+    with TestClient(application, raise_server_exceptions=False) as client:
+        for path, status in [("/unexpected", 500), ("/denied", 403)]:
+            response = client.get(path)
+            assert response.status_code == status
+            assert response.json()["request_id"] == response.headers["x-request-id"]
+            assert "private-secret" not in response.text
+    assert "private-secret" not in caplog.text
+
+
+def test_production_docs_are_disabled():
+    with TestClient(create_app(Settings(Environment.PRODUCTION, ("testserver",)))) as client:
+        for path in ["/docs", "/openapi.json"]:
+            assert client.get(path).status_code == 404
+
+
+def test_duplicate_probe_names_fail_at_startup():
+    class Probe:
+        name = "database"
+
+        async def check(self):
+            pass
+
+    with pytest.raises(ValueError, match="unique"):
+        app(probes=[Probe(), Probe()])
