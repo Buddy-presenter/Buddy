@@ -11,6 +11,8 @@ This workflow has one write capability: update the Status field of an existing i
 - Closed issues, archived/non-issue cards, foreign issues, and Done cards are never changed.
 - A merged PR does not trigger a status write here. GitHub's Item closed → Done workflow owns completion.
 
+Event, submitted-review and manual runs use the same concurrency group for the explicit PR number. Different PRs have independent groups, so an update to PR C cannot replace PR B's pending update. Within one PR, the running job is preserved and newer pending events may coalesce; each run fetches the current PR/review state rather than applying an old event payload.
+
 There is no scheduled scan of other PRs. Manual recovery requires a specific PR number. Removing this broad reconciliation is intentional: an unrelated PR event must not alter somebody else's work. Use one implementation PR per issue; coordinate multi-PR work manually.
 
 ## Strict boundaries
