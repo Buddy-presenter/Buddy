@@ -16,7 +16,7 @@ dependent work in a later wave. Do not treat an unmerged PR as completed work on
    calls and production credentials out of tests.
 5. Push the issue branch and open a PR targeting main, with `Closes #<issue>` and a
    concise description of behavior, validation, and limitations.
-6. Request review from **Lahhamix** for HusseinMoukalled's implementation work and set
+6. Assign the PR to **Lahhamix** and request his review for HusseinMoukalled's work; then
    tell the user to set Project Status to **Waiting for review**. Leave the issue open
    until the PR merges; then tell the user to set **Done**.
 7. Respond to review and keep CI passing. Main requires a teammate approval and CI;

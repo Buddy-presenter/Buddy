@@ -9,7 +9,8 @@ The Issues tab is a list, not the execution order; issue-body sprint metadata ca
 - Each issue has its own branch, starting from current main. Use the exact issue title,
   replacing spaces with hyphens because Git forbids spaces in ref names. Preserve wording
   and capitalization; explicitly explain any additional normalization Git requires.
-- Open one PR per issue targeting main and request **Lahhamix** as reviewer.
+- Open one PR per issue targeting main, assign the PR to **Lahhamix**, and request him
+  as reviewer. Keep the implementation issue assigned to HusseinMoukalled.
 - Do not push implementation directly to main. Merge only after teammate approval,
   required checks passing on the current head, and the user's instruction to merge.
 - For requested changes, fix the existing branch/PR and request Lahhamix's review again.
