@@ -116,11 +116,21 @@ jobs:
                   ["APPROVED", "CHANGES_REQUESTED", "COMMENTED"].includes(r.state) &&
                   r.submitted_at > lastDraft)
                   .map(r => r.submitted_at).sort().at(-1) || "";
+                const requests = await pages(`query($number:Int!,$cursor:String) {
+                  repository(owner:"HusseinMoukalled",name:"Buddy") {
+                    pullRequest(number:$number) { reviewRequests(first:100,after:$cursor) {
+                      nodes { requestedReviewer { __typename } } ${page}
+                    } }
+                  }
+                }`, {number:pr.number}, d => d.repository.pullRequest.reviewRequests);
+                // Current requests include both people and teams; historical request
+                // events alone cannot keep a canceled cycle waiting indefinitely.
                 // Reviewed records submitted feedback, not permission to merge.
                 // A later request begins another review cycle. Dismissed reviews
                 // and the PR author's own reviews cannot mark work Reviewed.
-                if (lastRequest > lastDraft) status = waiting;
-                if (lastReview && lastReview >= lastRequest) status = reviewed;
+                if (lastReview) status = reviewed;
+                if (requests.length && lastRequest > lastDraft &&
+                    (!lastReview || lastRequest > lastReview)) status = waiting;
               }
               for (const issue of issues) {
                 if (issue.state !== "OPEN" || issue.repository.nameWithOwner !== owner + "/" + repo) continue;
