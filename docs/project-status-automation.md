@@ -1,26 +1,30 @@
 # Project status automation
+This workflow has one write capability: update the Status field of an existing issue in Buddy Project #2.
 
-Project #2 uses Backlog, In Progress, Waiting for review, Reviewed, and Done.
-Link an issue with `Closes #57` or the PR Development sidebar; plain mentions do not count.
+## Rules
+- Only process the explicit PR from the event (or the required manual pr_number input).
+- Use GitHub's closing-issue links, not text mentions or issue-to-issue references.
+- Linked open PR without a review cycle, or draft: In Progress.
+- Current requested review after the last feedback: Waiting for review.
+- Submitted teammate feedback: Reviewed (approval, requested changes, or comment review).
+- Cancel the last request: In Progress without feedback, otherwise Reviewed.
+- Closed issues, archived/non-issue cards, foreign issues, and Done cards are never changed.
+- A merged PR does not trigger a status write here. GitHub's Item closed → Done workflow owns completion.
 
-- No review cycle or draft: In Progress.
-- Review requested: Waiting for review.
-- Another person's submitted approval, requested changes, or comment review: Reviewed.
-- A later review request: Waiting for review again.
-- Removing the last outstanding person/team request: In Progress if no feedback has been submitted, otherwise Reviewed. Removing only one request keeps the cycle waiting when another remains outstanding.
-- Reviewed describes feedback, not merge eligibility. Branch protection still enforces approval and CI.
-- Existing item-closed/PR-merged Project workflows own Done. This automation never closes an issue.
+There is no scheduled scan of other PRs. Manual recovery requires a specific PR number. Removing this broad reconciliation is intentional: an unrelated PR event must not alter somebody else's work. Use one implementation PR per issue; coordinate multi-PR work manually.
 
-The workflow reads current PR/review history, paginates API responses, and reconciles every 15 minutes (GitHub schedules may be delayed). Multiple active PRs use In Progress before Waiting for review before Reviewed. Draft conversion starts a new review cycle. Closed/archived issues are excluded. An unmerged closed PR is reconciled to In Progress on its close event.
+## Strict boundaries
+No assignee changes, issue reopen/close calls, labels, comments, Sprint/Wave edits, new Project items, deletion, or merge operations. Only updateProjectV2ItemFieldValue for the Status field is allowed. Read errors fail without guessing. Repository instructions and deliberate human edits are separate from this script.
 
-Repository secret `PROJECT_TOKEN`: Hussein's classic PAT with `project` scope. Public Buddy repository reads need no repo scope. Set an expiration and rotate the repository secret before it expires. Never commit the token.
+## Project settings
+Keep Item closed → Done and Pull request merged → Done enabled.
+Keep Auto-close issue (Done card → close issue) disabled.
+Disable the competing Pull request linked to issue → In Progress rule: it does not have this script's closed-issue/Done safeguards. Newly added items should default to Backlog.
+Do not enable other built-in rules that overwrite these review statuses.
 
-Same-repository PR events run the inline pinned github-script action without checking out or executing PR source. Fork PR jobs skip because secrets are unavailable; the scheduled/manual reconciliation on main covers them. Repository collaborators who can edit workflows are trusted with repository secrets. PR text is never interpolated into shell or JavaScript source.
+## Credentials and checks
+Repository PROJECT_TOKEN (classic project scope) is required. It reads this public repository and writes Project Status only. Same-repository PR events run pinned inline code without checkout; fork events skip. To reconcile a fork PR after merge of this fix, manually dispatch with its PR number.
+Run node scripts/test_project_status.cjs. Tests cover review transitions, canceled requests, closed/Done guards, plain mentions, mixed/paginated cards, and the restricted write API.
 
-After merge, `workflow_dispatch` can reconcile immediately; otherwise events/schedule apply. Before merge, same-repository PR events allow live validation using this PR. This workflow is not a required CI gate; missing/expired token fails visibly in its own run. Run `node scripts/test_project_status.cjs` for mocked API regression checks.
-
-Run logs report the reconciled status for linked open issues and the observed status for
-closed issues. These are the same Project items across the Issues and Waves views;
-Sprint/Wave fields are untouched. No local Project token is needed to trigger repository
-events or dispatch the workflow. Start-of-work updates without a linked PR still need
-Project write access or a manual board update.
+## Investigation
+The audited main script from merged PR #58 had no assignment or issue-state writes. Issue #2's reopening at 2026-10-13 15:58 UTC predates #58's workflow creation and merge. The reviewed #59 assignment event records Lahhamix as actor. These observations do not prove every reported incident has the same cause; they do rule out those changes being performed by this script's mutation.
