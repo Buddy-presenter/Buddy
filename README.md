@@ -73,6 +73,9 @@ See [the desktop architecture](docs/desktop-shell.md) for extension boundaries a
 
 ## Verification
 
+See [local quality commands](docs/local-quality.md) for clean-checkout setup and consistent
+desktop/API format, lint, and type checks. Run `python scripts/quality.py all check` before a PR.
+
 Run from the repository root, using the virtual environment's Python:
 
 ```sh
