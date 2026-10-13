@@ -14,9 +14,13 @@ The Issues tab is a list, not the execution order; issue-body sprint metadata ca
 - Do not push implementation directly to main. Merge only after teammate approval,
   required checks passing on the current head, and the user's instruction to merge.
 - For requested changes, fix the existing branch/PR and request Lahhamix's review again.
-- The user manages Project statuses while Project-write access is unavailable. Tell them
-  to set **In Progress** when work starts, **Waiting for review** when the PR is ready,
-  and **Done** after merging. Issue open/closed state and Project status are separate.
+- Use the Project status workflow for linked PR/review transitions and verify its logs.
+  Requesting review sets **Waiting for review**; submitted feedback sets **Reviewed**,
+  which does not imply approval. A re-request starts a new review cycle. Existing Project
+  completion workflows own **Done** after merge. Issue state and Project status are separate.
+  For work without a linked PR, set **In Progress** through available Project write access;
+  ask the user to update only when that access is unavailable. See
+  `docs/project-status-automation.md` for scope and credential setup.
 - Keep real integrations, typed boundaries, recoverable failures, tests appropriate to
   the change, and reviewable documentation. Record unavailable prerequisite code rather
   than treating a Done card or closed issue as proof that it was implemented.

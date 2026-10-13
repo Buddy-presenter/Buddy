@@ -4,9 +4,9 @@ const yaml = fs.readFileSync('.github/workflows/project-status.yml', 'utf8').rep
 const script = yaml.split('          script: |\n')[1].split('\n').map(l => l.slice(12)).join('\n');
 const execute = new (Object.getPrototypeOf(async function() {}).constructor)('github', 'context', 'core', script);
 const pageInfo = {hasNextPage:false};
-async function check({draft=false, state='open', merged=false, events=[], reviews=[], closedIssue=false, archived=false}, expected) {
+async function check({draft=false, state='open', merged=false, events=[], reviews=[], closedIssue=false, archived=false, requestedReviewers=[{login:'h'}], requestedTeams=[]}, expected) {
   const mutations = [];
-  const pr = {number:55, draft, state, merged, base:{ref:'main'},user:{login:'author'}};
+  const pr = {number:55, draft, state, merged, base:{ref:'main'},user:{login:'author'},requested_reviewers:requestedReviewers,requested_teams:requestedTeams};
   const github = {rest:{pulls:{list:'list', get:async()=>({data:pr}), listReviews:'reviews'}},
     paginate:async(endpoint)=>endpoint==='reviews'?reviews:state==='open'?[pr]:[],
     graphql:async(q,v)=>{
@@ -38,5 +38,15 @@ async function check({draft=false, state='open', merged=false, events=[], review
  await check({state:'closed',merged:true},null);
  await check({closedIssue:true},null);
  await check({archived:true},null);
- console.log('15 mocked integration scenarios passed');
+ // Historical requests must not keep a canceled review cycle waiting.
+ const removed={__typename:'ReviewRequestRemovedEvent',createdAt:'2026-10-13T10:30:00Z'};
+ const rerequest={...request,createdAt:'2026-10-13T12:00:00Z'};
+ await check({events:[request,removed],requestedReviewers:[]},'progress');
+ await check({events:[request,removed],requestedReviewers:[{login:'other'}]},'waiting');
+ await check({events:[request,removed],requestedReviewers:[],requestedTeams:[{slug:'team'}]},'waiting');
+ await check({events:[request,removed,rerequest]},'waiting');
+ await check({events:[request,removed],reviews:[review('COMMENTED')],requestedReviewers:[]},'reviewed');
+ await check({events:[request,rerequest,{...removed,createdAt:'2026-10-13T13:00:00Z'}],reviews:[review('APPROVED')],requestedReviewers:[]},'reviewed');
+ await check({events:[request,removed,rerequest],reviews:[review('APPROVED')]},'waiting');
+ console.log('22 mocked integration scenarios passed');
 })().catch(e=>{console.error(e);process.exitCode=1});

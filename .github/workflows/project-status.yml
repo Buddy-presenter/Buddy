@@ -119,8 +119,12 @@ jobs:
                 // Reviewed records submitted feedback, not permission to merge.
                 // A later request begins another review cycle. Dismissed reviews
                 // and the PR author's own reviews cannot mark work Reviewed.
-                if (lastRequest > lastDraft) status = waiting;
-                if (lastReview && lastReview >= lastRequest) status = reviewed;
+                // Historical request events survive cancellation. Current people/teams
+                // decide whether a request is still outstanding, including on scheduled runs.
+                const outstanding = (pr.requested_reviewers?.length || 0) +
+                  (pr.requested_teams?.length || 0) > 0;
+                if (outstanding && lastRequest > lastDraft) status = waiting;
+                if (lastReview && (!outstanding || lastReview >= lastRequest)) status = reviewed;
               }
               for (const issue of issues) {
                 if (issue.state !== "OPEN" || issue.repository.nameWithOwner !== owner + "/" + repo) continue;
@@ -133,10 +137,20 @@ jobs:
             let updated = 0;
             for (const item of items) {
               const issue = item.content;
-              if (item.isArchived || !issue || issue.state !== "OPEN" ||
+              if (item.isArchived || !issue ||
                   issue.repository.nameWithOwner !== owner + "/" + repo) continue;
+              const statusName = id => field.options.find(o => o.id === id)?.name || "Unset";
+              if (issue.state !== "OPEN") {
+                core.info("Closed issue #" + issue.number + " Project status: " +
+                  statusName(item.fieldValueByName?.optionId));
+                continue;
+              }
               const status = desired.get(issue.id);
-              if (!status || status === item.fieldValueByName?.optionId) continue;
+              if (!status) continue;
+              if (status === item.fieldValueByName?.optionId) {
+                core.info("Issue #" + issue.number + " Project status: " + statusName(status));
+                continue;
+              }
               // Never assign Done or close issues: built-in Project workflows own completion.
               await github.graphql(`mutation($project:ID!,$item:ID!,$field:ID!,$status:String!) {
                 updateProjectV2ItemFieldValue(input:{projectId:$project,itemId:$item,
@@ -144,7 +158,7 @@ jobs:
                   projectV2Item { id }
                 }
               }`, {project:project.id,item:item.id,field:field.id,status});
-              core.info("Updated issue #" + issue.number);
+              core.info("Updated issue #" + issue.number + " Project status: " + statusName(status));
               updated++;
             }
             core.info("Project statuses updated: " + updated);
