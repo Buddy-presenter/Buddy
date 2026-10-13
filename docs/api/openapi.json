@@ -252,7 +252,7 @@
                 }
               }
             },
-            "description": "Bad Request"
+            "description": "Malformed or disallowed request."
           },
           "404": {
             "content": {
@@ -262,7 +262,7 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Resource not found."
           },
           "405": {
             "content": {
@@ -272,7 +272,7 @@
                 }
               }
             },
-            "description": "Method Not Allowed"
+            "description": "Method not allowed."
           },
           "422": {
             "content": {
@@ -282,7 +282,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Request validation failed."
           },
           "500": {
             "content": {
@@ -292,7 +292,7 @@
                 }
               }
             },
-            "description": "Internal Server Error"
+            "description": "An unexpected error occurred."
           },
           "503": {
             "content": {
@@ -302,7 +302,7 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Service is not ready."
           }
         },
         "summary": "Health",
@@ -333,7 +333,7 @@
                 }
               }
             },
-            "description": "Bad Request"
+            "description": "Malformed or disallowed request."
           },
           "404": {
             "content": {
@@ -343,7 +343,7 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Resource not found."
           },
           "405": {
             "content": {
@@ -353,7 +353,7 @@
                 }
               }
             },
-            "description": "Method Not Allowed"
+            "description": "Method not allowed."
           },
           "422": {
             "content": {
@@ -363,7 +363,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Request validation failed."
           },
           "500": {
             "content": {
@@ -373,7 +373,7 @@
                 }
               }
             },
-            "description": "Internal Server Error"
+            "description": "An unexpected error occurred."
           },
           "503": {
             "content": {
@@ -383,7 +383,7 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Service is not ready."
           }
         },
         "summary": "Ready",
@@ -427,7 +427,7 @@
                 }
               }
             },
-            "description": "Bad Request"
+            "description": "Malformed or disallowed request."
           },
           "404": {
             "content": {
@@ -437,7 +437,7 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Resource not found."
           },
           "405": {
             "content": {
@@ -447,7 +447,7 @@
                 }
               }
             },
-            "description": "Method Not Allowed"
+            "description": "Method not allowed."
           },
           "422": {
             "content": {
@@ -457,7 +457,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Request validation failed."
           },
           "500": {
             "content": {
@@ -467,7 +467,7 @@
                 }
               }
             },
-            "description": "Internal Server Error"
+            "description": "An unexpected error occurred."
           },
           "503": {
             "content": {
@@ -477,7 +477,7 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Service is not ready."
           }
         },
         "summary": "Version",
@@ -508,7 +508,7 @@
                 }
               }
             },
-            "description": "Bad Request"
+            "description": "Malformed or disallowed request."
           },
           "404": {
             "content": {
@@ -518,7 +518,7 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Resource not found."
           },
           "405": {
             "content": {
@@ -528,7 +528,7 @@
                 }
               }
             },
-            "description": "Method Not Allowed"
+            "description": "Method not allowed."
           },
           "422": {
             "content": {
@@ -538,7 +538,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Request validation failed."
           },
           "500": {
             "content": {
@@ -548,7 +548,7 @@
                 }
               }
             },
-            "description": "Internal Server Error"
+            "description": "An unexpected error occurred."
           },
           "503": {
             "content": {
@@ -558,7 +558,7 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Service is not ready."
           }
         },
         "summary": "Desktop Health",

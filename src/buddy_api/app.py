@@ -27,12 +27,12 @@ from buddy_api.middleware import RequestContextMiddleware
 from buddy_api.readiness import DependencyProbe, check_dependencies, validate_probes
 
 ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
-    400: {"model": ErrorResponse},
-    404: {"model": ErrorResponse},
-    405: {"model": ErrorResponse},
-    422: {"model": ErrorResponse},
-    500: {"model": ErrorResponse},
-    503: {"model": ErrorResponse},
+    400: {"model": ErrorResponse, "description": "Malformed or disallowed request."},
+    404: {"model": ErrorResponse, "description": "Resource not found."},
+    405: {"model": ErrorResponse, "description": "Method not allowed."},
+    422: {"model": ErrorResponse, "description": "Request validation failed."},
+    500: {"model": ErrorResponse, "description": "An unexpected error occurred."},
+    503: {"model": ErrorResponse, "description": "Service is not ready."},
 }
 
 

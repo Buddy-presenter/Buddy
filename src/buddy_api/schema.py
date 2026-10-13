@@ -4,6 +4,8 @@ import argparse
 import json
 import subprocess
 import sys
+from difflib import unified_diff
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
@@ -69,6 +71,15 @@ def main() -> int:
                 "OpenAPI snapshot is stale. Regenerate it and review the contract change.",
                 file=sys.stderr,
             )
+            if args.output.is_file():
+                diff = unified_diff(
+                    args.output.read_text(encoding="utf-8").splitlines(),
+                    rendered.splitlines(),
+                    fromfile="committed contract",
+                    tofile="generated contract",
+                    lineterm="",
+                )
+                print("\n".join(islice(diff, 60)), file=sys.stderr)
             return 1
     else:
         args.output.parent.mkdir(parents=True, exist_ok=True)
