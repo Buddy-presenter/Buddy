@@ -1,6 +1,47 @@
 const fs = require('node:fs');
 const assert = require('node:assert/strict');
 const yaml = fs.readFileSync('.github/workflows/project-status.yml', 'utf8').replace(/\r\n/g, '\n');
+// Configuration regression: event/review/manual runs for one PR serialize together,
+// but distinct PRs cannot replace each other's pending updates.
+const groupTemplate = yaml.match(/^  group: (.+)$/m)?.[1];
+assert.equal(groupTemplate, 'buddy-project-status-${{ github.event.pull_request.number || inputs.pr_number }}');
+assert.match(yaml, /^  cancel-in-progress: false$/m);
+function groupFor(payload, inputs = {}) {
+  return groupTemplate.replace(/\$\{\{\s*(.*?)\s*\}\}/g, (_, expression) => {
+    const values = {
+      'github.event.pull_request.number': payload.pull_request?.number,
+      'inputs.pr_number': inputs.pr_number,
+    };
+    for (const key of expression.split('||').map(value => value.trim())) {
+      assert.ok(Object.hasOwn(values, key), 'Unexpected concurrency input: ' + key);
+      if (values[key]) return String(values[key]);
+    }
+    throw Error('Missing PR concurrency identity');
+  });
+}
+const eventGroup = number => groupFor({pull_request:{number}});
+assert.equal(eventGroup(64), groupFor({}, {pr_number:64}));
+assert.equal(eventGroup(64), groupFor({pull_request:{number:64}, review:{state:'APPROVED'}}));
+assert.notEqual(eventGroup(64), eventGroup(65));
+// Model GitHub's single pending slot per concurrency group.
+const running = new Set([eventGroup(64), eventGroup(65), eventGroup(66)]);
+const pending = new Map();
+const canceled = [];
+function enqueue(group, run) {
+  if (!running.has(group)) { running.add(group); return; }
+  if (pending.has(group)) canceled.push(pending.get(group));
+  pending.set(group, run);
+}
+enqueue(eventGroup(64), 'A2');
+enqueue(eventGroup(65), 'B2');
+enqueue(eventGroup(66), 'C2');
+assert.deepEqual(canceled, []);
+assert.deepEqual([...pending.values()], ['A2', 'B2', 'C2']);
+enqueue(groupFor({}, {pr_number:65}), 'B3');
+assert.deepEqual(canceled, ['B2']);
+assert.equal(pending.get(eventGroup(64)), 'A2');
+assert.equal(pending.get(eventGroup(66)), 'C2');
+console.log('Per-PR concurrency configuration and queue regression checks passed');
 const script = yaml.split('          script: |\n')[1].split('\n').map(l => l.slice(12)).join('\n');
 const execute = new (Object.getPrototypeOf(async function() {}).constructor)('github', 'context', 'core', script);
 const pageInfo = {hasNextPage:false};
