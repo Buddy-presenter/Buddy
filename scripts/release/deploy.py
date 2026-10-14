@@ -176,13 +176,17 @@ class Deployment:
             "started_at": datetime.now(UTC).isoformat(),
         }
 
-    def record(self, revision: str, value: dict[str, Any]) -> None:
+    def record(self, revision: str, value: dict[str, Any], *, finished: bool = True) -> None:
         # Each attempt has its own immutable history object, including reruns of
         # the same SHA and multiple rollbacks from the same operator revision.
         prefix = f"{self.config['environment']}/backend/operations/{revision}"
-        key = f"{prefix}/{value['operation_id']}.json"
+        suffix = ".json" if finished else ".started.json"
+        key = f"{prefix}/{value['operation_id']}{suffix}"
         value["audit_key"] = key
-        value["completed_at"] = datetime.now(UTC).isoformat()
+        if finished:
+            value["completed_at"] = datetime.now(UTC).isoformat()
+        else:
+            value["started_audit_key"] = key
         self.s3.put_object(
             Bucket=self.config["bucket"],
             Key=key,
@@ -193,7 +197,7 @@ class Deployment:
         # Operators can fetch the exact retained record even on a failed run;
         # the deployment role deliberately has no bucket-wide list permission.
         print(f"Audit record saved: {key}", file=sys.stderr)
-        if value["operation"] == "deploy" and value["status"] == "healthy":
+        if finished and value["operation"] == "deploy" and value["status"] == "healthy":
             # Compatibility lookup for the existing SHA-based rollback input.
             # This is the latest healthy attempt, not the retained audit history.
             # Failed attempts and rollback operations never overwrite this lookup.
@@ -209,36 +213,55 @@ class Deployment:
     ) -> dict[str, Any]:
         validate(self.config, revision)
         services = ["api"] + (["worker"] if worker_image else [])
-        previous = self.states(services)
-        # Resolve and validate every definition before any service change.
-        definitions = {
-            "api": self.task("api", api_image),
-            "migration": self.task("migration", api_image),
-        }
-        if worker_image:
-            definitions["worker"] = self.task("worker", worker_image)
-        self.migrate(definitions["migration"])
-        target = {
-            service: {
-                "taskDefinition": definitions[service],
-                "desiredCount": max(
-                    previous[service]["desiredCount"],
-                    2 if self.config["environment"] == "production" else 1,
-                ),
-            }
-            for service in services
-        }
         audit = {
             **self.audit("deploy", revision),
-            "previous": previous,
-            "target": target,
-            "migration": definitions["migration"],
+            "status": "started",
+            "stage": "definition_setup",
+            "previous": None,
+            "target": None,
+            "migration": None,
         }
+        # If durable intent cannot be saved, do not register or run a migration.
+        # A retained start without a terminal record also identifies interrupted runs.
+        self.record(revision, audit, finished=False)
         try:
+            previous = self.states(services)
+            audit["previous"] = previous
+            definitions = {"api": self.task("api", api_image)}
+            audit["stage"] = "migration_setup"
+            definitions["migration"] = self.task("migration", api_image)
+            audit["migration"] = definitions["migration"]
+            if worker_image:
+                audit["stage"] = "worker_setup"
+                definitions["worker"] = self.task("worker", worker_image)
+            target = {
+                service: {
+                    "taskDefinition": definitions[service],
+                    "desiredCount": max(
+                        previous[service]["desiredCount"],
+                        2 if self.config["environment"] == "production" else 1,
+                    ),
+                }
+                for service in services
+            }
+            audit["target"] = target
+            audit["stage"] = "migration"
+            self.migrate(definitions["migration"])
+        except Exception:
+            migration_failed = audit["stage"] in {"migration_setup", "migration"}
+            audit["status"] = "migration_failed" if migration_failed else "setup_failed"
+            self.record(revision, audit)
+            raise DeploymentError(
+                "Migration failed or deployment setup was rejected; no traffic promoted. "
+                "Inspect the retained private audit record."
+            ) from None
+        try:
+            audit["stage"] = "promotion"
             for service, state in target.items():
                 self.ecs.update_service(cluster=self.config["cluster"], service=service, **state)
             self.settle(target)
             audit["status"] = "healthy"
+            audit["stage"] = "complete"
         except Exception:
             try:
                 self.restore(previous)

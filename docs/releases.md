@@ -73,6 +73,13 @@ Promotion outcomes and explicit rollback attempts have immutable audit objects u
 <environment>/backend/operations/<operation SHA>/<unique operation ID>.json. Conditional
 S3 writes prevent replacing an existing history object. Records include operation type,
 ID, current workflow revision, account/environment and start/completion timestamps.
+Each promotion first saves a separate immutable <operation ID>.started.json intent
+before registering task definitions or starting migrations. If that write fails, no
+migration starts. Definition setup and migration rejection, failure or waiter timeout
+retain sanitized terminal records with the failing stage and `setup_failed` or
+`migration_failed`; they never promote traffic or replace a healthy revision lookup.
+The terminal record links its initial intent through `started_audit_key`. An intent
+without a terminal outcome identifies an interrupted run requiring state inspection.
 Logs include the exact saved object key on success and failure, so operators can fetch
 the retained record with scoped GetObject access without bucket-wide list permissions.
 Promotion records retain previous/target definitions and counts plus migration revision.
@@ -102,6 +109,7 @@ failure, rollback and backup restoration in staging and record evidence before p
 
 Run python -m pytest tests/test_release.py for migration-failure, unhealthy promotion,
 explicit rollback audit success/failure, repeated-SHA history preservation,
+durable migration setup/rejection/exit/timeout failures and audit-write guards,
 cross-environment rejection, CI and tampering regressions.
 Native packaging CI executes actual installers/applications without provider credentials.
 Local native packaging requires PyInstaller 6.22.3 and Inno Setup 6 on Windows; use
