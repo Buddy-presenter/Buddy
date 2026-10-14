@@ -353,6 +353,7 @@ def test_native_layout_with_long_titles(desktop_window, monkeypatch, qtbot, qapp
         library.table.selectRow(2)
         assert rows[2].title in library.detail.toPlainText()
         qtbot.waitUntil(lambda: library.detail.verticalScrollBar().maximum() > 0)
+        qtbot.waitUntil(lambda: library.count.width() >= library.count.sizeHint().width())
         destination = Path("build")
         destination.mkdir(exist_ok=True)
         assert window.grab().save(str(destination / f"library-preview-{size[0]}.png"))

@@ -120,6 +120,7 @@ def test_end_to_end_library_and_native_layout(
             ]:
                 assert library.rect().contains(control.geometry())
             assert library.table.columnWidth(0) > 100
+            qtbot.waitUntil(lambda: library.count.width() >= library.count.sizeHint().width())
             screenshots = Path("build")
             screenshots.mkdir(exist_ok=True)
             assert window.grab().save(str(screenshots / f"library-{size[0]}.png"))
