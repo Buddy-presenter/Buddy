@@ -5,6 +5,8 @@ API foundation and [Cognito account lifecycle](docs/accounts.md). Deck processin
 live presentation are separate issues.
 The API's [PostgreSQL persistence guide](docs/database.md) covers durable records,
 explicit migrations and optional local Docker/native server setup.
+The [test foundations guide](docs/testing.md) documents repeatable desktop/API commands,
+shared Qt and database fixtures, and the pending processing-worker prerequisite.
 
 ## Desktop development
 
