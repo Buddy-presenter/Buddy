@@ -727,7 +727,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Request validation failed."
           },
           "429": {
             "content": {
@@ -852,7 +852,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Request validation failed."
           },
           "429": {
             "content": {
@@ -987,7 +987,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Request validation failed."
           },
           "429": {
             "content": {
@@ -1099,7 +1099,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Request validation failed."
           },
           "429": {
             "content": {

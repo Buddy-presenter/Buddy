@@ -260,3 +260,4 @@ def test_validation_schema_matches_actual_body_and_uuid_errors(private_api):
         for operation in paths[path].values():
             schema = operation["responses"]["422"]["content"]["application/json"]["schema"]
             assert schema == {"$ref": "#/components/schemas/ErrorResponse"}
+            assert operation["responses"]["422"]["description"] == "Request validation failed."

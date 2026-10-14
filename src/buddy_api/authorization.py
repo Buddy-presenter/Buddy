@@ -169,7 +169,10 @@ def private_router() -> APIRouter:
     router = APIRouter(
         prefix="/api/v1",
         tags=["private resources"],
-        responses={code: {"model": ErrorResponse} for code in (401, 403, 404, 409, 422, 429, 503)},
+        responses={
+            **{code: {"model": ErrorResponse} for code in (401, 403, 404, 409, 429, 503)},
+            422: {"model": ErrorResponse, "description": "Request validation failed."},
+        },
     )
 
     @router.get("/resources/{kind}/{identifier}", response_model=ResourceResponse)
