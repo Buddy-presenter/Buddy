@@ -1,0 +1,90 @@
+mock_provider "aws" {
+  mock_data "aws_availability_zones" {
+    defaults = { names = ["eu-central-1a", "eu-central-1b"] }
+  }
+}
+variables {
+  environment              = "staging"
+  region                   = "eu-central-1"
+  account_id               = "123456789012"
+  api_domain               = "staging.example.com"
+  zone_id                  = "Z0123456789"
+  vpc_cidr                 = "10.40.0.0/16"
+  github_oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+}
+run "private_staging_before_images_exist" {
+  command = plan
+  assert {
+    condition     = !aws_db_instance.main.publicly_accessible && aws_db_instance.main.storage_encrypted && aws_db_instance.main.deletion_protection
+    error_message = "Database must be private, encrypted and protected."
+  }
+  assert {
+    condition     = aws_db_instance.main.backup_retention_period == 7 && !aws_db_instance.main.skip_final_snapshot
+    error_message = "Staging backups and final snapshots are required."
+  }
+  assert {
+    condition     = alltrue([for bucket in aws_s3_bucket_public_access_block.private : bucket.block_public_acls && bucket.block_public_policy && bucket.ignore_public_acls && bucket.restrict_public_buckets])
+    error_message = "Both private data and distribution storage must block public access."
+  }
+  assert {
+    condition     = length(aws_ecs_service.api) == 0 && length(aws_ecs_service.worker) == 0
+    error_message = "Missing images must not be replaced with pretend API/worker services."
+  }
+  assert {
+    condition     = !aws_cognito_user_pool_client.desktop.generate_secret && aws_cognito_user_pool_client.desktop.enable_token_revocation && aws_cognito_user_pool_client.desktop.refresh_token_rotation[0].feature == "ENABLED"
+    error_message = "Desktop client must be public with revocation and rotation enabled."
+  }
+  assert {
+    condition     = aws_cognito_user_pool_client.desktop.allowed_oauth_flows == toset(["code"])
+    error_message = "Implicit token grants are forbidden."
+  }
+  assert {
+    condition     = aws_wafv2_web_acl.main.visibility_config[0].sampled_requests_enabled == false
+    error_message = "Identity request samples can contain sensitive parameters."
+  }
+}
+run "production_redundancy" {
+  command = plan
+  variables {
+    environment    = "production"
+    api_domain     = "api.example.com"
+    api_image      = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-production/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    worker_image   = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-production/worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    start_services = true
+  }
+  assert {
+    condition     = aws_db_instance.main.multi_az && aws_db_instance.main.backup_retention_period == 35 && length(aws_nat_gateway.main) == 2
+    error_message = "Production requires independent AZ egress, multi-AZ database and 35-day backups."
+  }
+  assert {
+    condition     = aws_ecs_service.api[0].desired_count == 2 && aws_ecs_service.worker[0].desired_count == 2 && !aws_ecs_service.api[0].network_configuration[0].assign_public_ip
+    error_message = "Production services require redundancy and private addresses."
+  }
+  assert {
+    condition     = aws_ecs_service.api[0].deployment_circuit_breaker[0].rollback
+    error_message = "Failed deployments must roll back."
+  }
+  assert {
+    condition     = jsondecode(aws_iam_role.github["deploy"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:HusseinMoukalled/Buddy:environment:production"
+    error_message = "Deploy role must trust only this repository's protected production environment."
+  }
+  assert {
+    condition     = jsondecode(aws_iam_role.github["release"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:HusseinMoukalled/Buddy:environment:release-production"
+    error_message = "Desktop publishing must have a separate release identity."
+  }
+}
+run "reject_mutable_image" {
+  command = plan
+  variables { api_image = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api:latest" }
+  expect_failures = [var.api_image]
+}
+run "reject_start_without_image" {
+  command = plan
+  variables { start_services = true }
+  expect_failures = [var.start_services]
+}
+run "reject_unknown_environment" {
+  command = plan
+  variables { environment = "development" }
+  expect_failures = [var.environment]
+}
