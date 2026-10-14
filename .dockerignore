@@ -1,0 +1,11 @@
+.git
+.venv
+.terraform
+**/.terraform
+**/*.tfstate*
+**/*.tfvars
+**/backend.hcl
+.env*
+dist
+build
+__pycache__
