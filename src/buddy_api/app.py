@@ -10,7 +10,8 @@ from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 
 from buddy_api import __version__
-from buddy_api.auth import auth_router
+from buddy_api.auth import Authentication, auth_router
+from buddy_api.authorization import private_router
 from buddy_api.config import Environment, Settings
 from buddy_api.contracts import (
     ErrorData,
@@ -74,16 +75,26 @@ def create_app(
     )
     app.add_middleware(RequestContextMiddleware, allowed_hosts=config.allowed_hosts)
     app.state.database = database
+    app.state.authentication = Authentication(config.identity)
     app.include_router(auth_router(config.identity))
+    app.include_router(private_router())
 
     @app.exception_handler(HTTPException)
     async def http_error(request: Request, exc: HTTPException) -> JSONResponse:
-        code = {404: "not_found", 405: "method_not_allowed"}.get(
-            exc.status_code, "request_rejected"
-        )
-        message = {404: "Resource not found.", 405: "Method not allowed."}.get(
-            exc.status_code, "Request rejected."
-        )
+        code = {
+            401: "unauthenticated",
+            403: "forbidden",
+            409: "conflict",
+            404: "not_found",
+            405: "method_not_allowed",
+        }.get(exc.status_code, "request_rejected")
+        message = {
+            401: "Authentication required.",
+            403: "Access denied.",
+            409: "Operation conflicts with stored data.",
+            404: "Resource not found.",
+            405: "Method not allowed.",
+        }.get(exc.status_code, "Request rejected.")
         body = ErrorResponse(
             error=ErrorData(code=code, message=message), request_id=request_id(request)
         )
