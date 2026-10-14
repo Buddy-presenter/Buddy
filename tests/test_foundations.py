@@ -24,7 +24,9 @@ def test_service_error_is_delivered_without_blocking_event_loop(
 ):
     backend.response_code = 403
     backend.release.clear()
-    window = desktop_window(f"http://127.0.0.1:{backend.server_port}")
+    # The server deliberately waits for GUI ticks (and releases itself after 3s).
+    # Keep transport timeout above that bound, even on a busy native Windows runner.
+    window = desktop_window(f"http://127.0.0.1:{backend.server_port}", request_timeout=5)
     failure = signal_recorder(window.runner.failed)
     ticks = []
     timer = QTimer(window)

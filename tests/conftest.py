@@ -24,11 +24,11 @@ def desktop_window(qtbot, tmp_path, monkeypatch):
         monkeypatch.delenv(name, raising=False)
     windows = []
 
-    def make(api_url="http://127.0.0.1:8000", **kwargs):
+    def make(api_url="http://127.0.0.1:8000", *, request_timeout=0.5, **kwargs):
         settings = QSettings(
             str(tmp_path / f"buddy-{len(windows)}.ini"), QSettings.Format.IniFormat
         )
-        window = MainWindow(AppConfig(api_url, 0.5), settings, **kwargs)
+        window = MainWindow(AppConfig(api_url, request_timeout), settings, **kwargs)
         qtbot.addWidget(window)
         windows.append(window)
         window.show()
