@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QPushButton,
     QStyle,
     QTableWidget,
@@ -113,9 +114,11 @@ class LibraryWidget(QWidget):
         )
         self.table.setMinimumHeight(220)
         layout.addWidget(self.table, 1)
-        self.detail = QLabel()
-        self.detail.setWordWrap(True)
-        self.detail.setTextFormat(Qt.TextFormat.PlainText)
+        self.detail = QPlainTextEdit()
+        self.detail.setReadOnly(True)
+        self.detail.setTabChangesFocus(True)
+        self.detail.setFixedHeight(96)
+        self.detail.setFrameShape(QPlainTextEdit.Shape.NoFrame)
         self.detail.setAccessibleName("Selected deck processing status")
         layout.addWidget(self.detail)
         pager = QHBoxLayout()
@@ -314,7 +317,7 @@ class LibraryWidget(QWidget):
             deck = self.last_page.items[row]
             guidance = STATUS_TEXT[deck.status][1]
             attempts = f" Processing attempts: {deck.attempts}." if deck.attempts else ""
-            self.detail.setText(deck.title + "\n" + guidance + attempts)
+            self.detail.setPlainText(guidance + attempts + "\n\n" + deck.title)
 
     def failed(self, _identifier: int, message: str) -> None:
         if self.current():

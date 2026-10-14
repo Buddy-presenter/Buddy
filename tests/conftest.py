@@ -1,3 +1,4 @@
+import gc
 from collections.abc import Iterator
 from contextlib import suppress
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,6 +26,9 @@ def desktop_window(qtbot, tmp_path, monkeypatch):
     windows = []
 
     def make(api_url="http://127.0.0.1:8000", *, request_timeout=0.5, **kwargs):
+        # Reclaim prior Qt fixture cycles on the GUI thread, before HTTP workers can
+        # trigger Python's cyclic collector (notably during Windows TLS store loading).
+        gc.collect()
         settings = QSettings(
             str(tmp_path / f"buddy-{len(windows)}.ini"), QSettings.Format.IniFormat
         )

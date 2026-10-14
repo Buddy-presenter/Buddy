@@ -1,6 +1,8 @@
 import json
 import time
 from datetime import UTC, datetime
+from importlib.resources import files
+from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
 from uuid import uuid4
@@ -131,14 +133,14 @@ def test_real_library_loading_responsive_refresh_and_keyboard(desktop_window, ba
     qtbot.waitUntil(lambda: not library.runner.busy)
     assert library.table.item(0, 0).text() == "<b>Literal deck</b>"
     assert library.table.item(0, 1).text() == "Processing"
-    assert "running" in library.detail.text()
+    assert "running" in library.detail.toPlainText()
     assert library.poll.isActive()
     assert not library.state.isVisible()
     backend.body = json.dumps(payload("Updated deck", "failed")).encode()
     qtbot.keyClick(library.refresh, Qt.Key.Key_Space)
     qtbot.waitUntil(lambda: not library.runner.busy)
     assert library.table.item(0, 0).text() == "Updated deck"
-    assert "Contact support" in library.detail.text()
+    assert "Contact support" in library.detail.toPlainText()
     assert not library.poll.isActive()
     window.resize(800, 600)
     library.search.setFocus()
@@ -324,3 +326,35 @@ def test_poll_uses_current_filters_and_stops_when_leaving(desktop_window, monkey
     assert calls == ["", "Deck", "Deck"]
     window.navigation.setCurrentRow(0)
     assert not library.poll.isActive()
+
+
+@pytest.mark.parametrize("size", [(800, 600), (1120, 760)])
+def test_native_layout_with_long_titles(desktop_window, monkeypatch, qtbot, qapp, size):
+    rows = tuple(
+        DeckSummary(uuid4(), title, datetime.now(UTC), status, 2)
+        for title, status in [
+            ("Quarterly results", "processing"),
+            ("Product roadmap", "failed"),
+            ("Research notes " + "W" * 220, "incomplete"),
+        ]
+    )
+    monkeypatch.setattr(LibraryService, "list", lambda *args, **kwargs: LibraryPage(rows, 3, 1, 20))
+    old_style = qapp.styleSheet()
+    qapp.setStyleSheet(files("buddy_desktop").joinpath("theme.qss").read_text(encoding="utf-8"))
+    try:
+        window = desktop_window()
+        window.resize(*size)
+        library = signed_in(window)
+        qtbot.waitUntil(lambda: not library.runner.busy)
+        qtbot.waitUntil(lambda: library.table.columnWidth(0) > 0)
+        assert library.table.columnWidth(0) > 100
+        for control in [library.search, library.sort, library.refresh, library.table, library.next]:
+            assert library.rect().contains(control.geometry())
+        library.table.selectRow(2)
+        assert rows[2].title in library.detail.toPlainText()
+        qtbot.waitUntil(lambda: library.detail.verticalScrollBar().maximum() > 0)
+        destination = Path("build")
+        destination.mkdir(exist_ok=True)
+        assert window.grab().save(str(destination / f"library-preview-{size[0]}.png"))
+    finally:
+        qapp.setStyleSheet(old_style)

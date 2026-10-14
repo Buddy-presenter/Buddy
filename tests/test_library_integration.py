@@ -140,7 +140,7 @@ def test_end_to_end_library_and_native_layout(
             library.reload()
             qtbot.waitUntil(lambda: not library.runner.busy, timeout=10000)
             assert library.total == 1 and library.table.item(0, 1).text() == "Failed"
-            assert "Contact support" in library.detail.text()
+            assert "Contact support" in library.detail.toPlainText()
         finally:
             if window:
                 window.close()
