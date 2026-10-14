@@ -55,6 +55,21 @@ class Deck(OwnedRecord):
     source_key: Mapped[str | None] = mapped_column(String(1024))
 
 
+class RenderedAsset(OwnedRecord):
+    __tablename__ = "rendered_assets"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["deck_id", "owner_id"], ["decks.id", "decks.owner_id"], ondelete="RESTRICT"
+        ),
+        CheckConstraint("length(storage_key) > 0", name="storage_key_nonempty"),
+        CheckConstraint("size_bytes >= 0", name="size_nonnegative"),
+    )
+    deck_id: Mapped[UUID] = mapped_column(index=True)
+    storage_key: Mapped[str] = mapped_column(String(1024), unique=True)
+    content_type: Mapped[str] = mapped_column(String(128))
+    size_bytes: Mapped[int] = mapped_column()
+
+
 class ProcessingJob(OwnedRecord):
     __tablename__ = "processing_jobs"
     __table_args__ = (
