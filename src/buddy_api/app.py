@@ -10,6 +10,7 @@ from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 
 from buddy_api import __version__
+from buddy_api.auth import auth_router
 from buddy_api.config import Environment, Settings
 from buddy_api.contracts import (
     ErrorData,
@@ -73,6 +74,7 @@ def create_app(
     )
     app.add_middleware(RequestContextMiddleware, allowed_hosts=config.allowed_hosts)
     app.state.database = database
+    app.include_router(auth_router(config.identity))
 
     @app.exception_handler(HTTPException)
     async def http_error(request: Request, exc: HTTPException) -> JSONResponse:
