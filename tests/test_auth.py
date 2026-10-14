@@ -5,7 +5,7 @@ import time
 from threading import Event, Thread
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 from uuid import uuid4
 
 import pytest
@@ -170,28 +170,36 @@ def test_loopback_callback_rejects_wrong_state_and_accepts_single_use_code():
     from buddy_desktop.auth import browser_code
 
     responses = []
+    threads = []
+    state = str(uuid4())
+
+    def callback_request(query):
+        return Request(
+            "http://127.0.0.1:8765/callback?" + query, headers={"Host": "localhost:8765"}
+        )
 
     def open_browser(_url):
         def callbacks():
             try:
-                urlopen("http://localhost:8765/callback?state=wrong&code=untrusted", timeout=3)
+                urlopen(callback_request("state=wrong&code=untrusted"), timeout=3)
             except HTTPError as exc:
                 responses.append(exc.code)
                 exc.close()
-            with urlopen(
-                "http://localhost:8765/callback?state=expected&code=valid", timeout=3
-            ) as response:
+            with urlopen(callback_request(f"state={state}&code=valid"), timeout=3) as response:
                 responses.append(response.status)
                 assert response.headers["Cache-Control"] == "no-store"
 
         thread = Thread(target=callbacks)
+        threads.append(thread)
         thread.start()
         return True
 
     assert (
-        browser_code("https://example.com", "expected", Event(), timeout=4, opener=open_browser)
+        browser_code("https://example.com", state, Event(), timeout=10, opener=open_browser)
         == "valid"
     )
+    threads[0].join(timeout=3)
+    assert not threads[0].is_alive()
     assert responses == [400, 200]
 
 
@@ -203,20 +211,29 @@ def test_callback_cancellation_is_bounded():
 
 
 def test_rejected_browser_recovery_never_creates_a_session():
+    state = str(uuid4())
+    threads = []
+
     def open_browser(_url):
         def callback():
             with urlopen(
-                "http://localhost:8765/callback?state=expected&error=access_denied", timeout=3
+                Request(
+                    f"http://127.0.0.1:8765/callback?state={state}&error=access_denied",
+                    headers={"Host": "localhost:8765"},
+                ),
+                timeout=3,
             ):
                 pass
 
-        Thread(target=callback).start()
+        thread = Thread(target=callback)
+        threads.append(thread)
+        thread.start()
         return True
 
     with pytest.raises(IdentityError, match="rejected"):
-        auth.browser_code(
-            "https://example.com", "expected", Event(), timeout=4, opener=open_browser
-        )
+        auth.browser_code("https://example.com", state, Event(), timeout=10, opener=open_browser)
+    threads[0].join(timeout=3)
+    assert not threads[0].is_alive()
 
 
 @pytest.mark.parametrize(

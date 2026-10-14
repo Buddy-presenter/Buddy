@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Event
-from typing import Protocol
+from typing import Protocol, cast
 from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request
 
@@ -42,13 +42,11 @@ class NativeTokenStore:
             if sys.platform == "win32":
                 from keyring.backends.Windows import WinVaultKeyring
 
-                factory: Callable[[], KeyringBackend] = WinVaultKeyring
-                return factory()
+                return cast(Callable[[], KeyringBackend], WinVaultKeyring)()
             if sys.platform == "darwin":
                 from keyring.backends.macOS import Keyring
 
-                factory = Keyring
-                return factory()
+                return cast(Callable[[], KeyringBackend], Keyring)()
         except Exception:
             pass
         raise IdentityError("The operating-system credential store is unavailable.")
