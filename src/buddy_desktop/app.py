@@ -53,3 +53,4 @@ def main() -> int:
         return app.exec()
     finally:
         window.runner.wait_for_shutdown()
+        window.account.runner.wait_for_shutdown()

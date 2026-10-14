@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from buddy_api.persistence.settings import DatabaseConfigurationError, DatabaseSettings
+from buddy_identity.config import IdentityConfig, IdentityError
 
 
 class ConfigurationError(ValueError):
@@ -40,6 +41,7 @@ class Settings:
     port: int = 8000
     readiness_timeout: float = 2.0
     database: DatabaseSettings | None = field(default=None, repr=False)
+    identity: IdentityConfig | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.environment, Environment):
@@ -93,6 +95,16 @@ class Settings:
             )
         except DatabaseConfigurationError as exc:
             raise ConfigurationError(str(exc)) from None
+        try:
+            identity = IdentityConfig.from_environment(values)
+        except IdentityError as exc:
+            raise ConfigurationError(str(exc)) from None
         return cls(
-            environment, hosts, values.get("BUDDY_BIND_HOST", "127.0.0.1"), port, timeout, database
+            environment,
+            hosts,
+            values.get("BUDDY_BIND_HOST", "127.0.0.1"),
+            port,
+            timeout,
+            database,
+            identity,
         )

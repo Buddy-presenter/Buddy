@@ -8,12 +8,13 @@ version = "0.1.0"
 description = "Buddy context-aware presenter companion desktop client"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
-dependencies = ["PySide6-Essentials==6.12.0"]
+dependencies = ["PySide6-Essentials==6.12.0", "keyring==25.7.0"]
 
 [project.optional-dependencies]
 api = [
   "fastapi==0.143.0", "uvicorn==0.54.0", "pydantic==2.14.1", "starlette==1.8.0",
   "SQLAlchemy[asyncio]==2.1.4", "asyncpg==0.32.0", "alembic==1.20.0",
+  "PyJWT[crypto]==2.12.1",
 ]
 dev = [
   "build==1.6.1",
@@ -33,7 +34,7 @@ buddy-db = "buddy_api.persistence.migrate:main"
 buddy = "buddy_desktop.app:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/buddy_desktop", "src/buddy_api"]
+packages = ["src/buddy_desktop", "src/buddy_api", "src/buddy_identity"]
 
 [tool.ruff]
 target-version = "py312"
@@ -45,7 +46,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["src/buddy_desktop", "src/buddy_api"]
+files = ["src/buddy_desktop", "src/buddy_api", "src/buddy_identity"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -24,6 +24,32 @@ from buddy_api.persistence.settings import DatabaseSettings
 pytestmark = pytest.mark.postgres
 
 
+def test_cognito_account_is_persisted_across_api_restart(database_settings, monkeypatch):
+    from buddy_api.auth import CognitoVerifier
+    from buddy_identity.config import IdentityConfig
+
+    config = IdentityConfig(
+        "eu-central-1",
+        "eu-central-1_Example",
+        "client123",
+        "https://buddy.auth.eu-central-1.amazoncognito.com",
+    )
+    subject = config.issuer + "#" + str(uuid4())
+    monkeypatch.setattr(CognitoVerifier, "verify", lambda self, token: subject)
+    asyncio.run(migrate(database_settings))
+    settings = Settings(
+        Environment.TEST, ("testserver",), database=database_settings, identity=config
+    )
+    identifiers = []
+    for _ in range(2):
+        with TestClient(create_app(settings)) as client:
+            response = client.get("/api/v1/auth/me", headers={"Authorization": "Bearer synthetic"})
+            assert response.status_code == 200
+            identifiers.append(response.json()["data"]["id"])
+            assert client.get("/api/v1/auth/me").status_code == 401
+    assert identifiers[0] == identifiers[1]
+
+
 @pytest.fixture
 def database_settings():
     url = os.environ.get("BUDDY_TEST_DATABASE_URL")
