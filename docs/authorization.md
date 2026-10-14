@@ -20,6 +20,10 @@ Rendered assets now have a durable deck/owner constraint (migration 0002_assets)
 Storage byte delivery/upload is owned by the storage/rendering features; no public
 object URL or unprotected download endpoint is introduced here.
 
+GET /api/v1/decks adds the [owner-scoped library](library.md): bounded pagination,
+literal title search, deterministic sorting and persisted processing states. Both the
+result rows and total exclude other accounts, with no source/asset keys or graph data.
+
 PATCH uses a strict body without owner identifiers. Deck titles can be changed. Session
 activation/end requires the current state_version and uses a locked transaction; stale
 updates and updates after end return 409. Analyses and asset/job records are immutable

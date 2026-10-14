@@ -25,6 +25,7 @@ from buddy_api.contracts import (
     VersionData,
     VersionResponse,
 )
+from buddy_api.library import library_router
 from buddy_api.middleware import RequestContextMiddleware
 from buddy_api.persistence.database import Database, DatabaseProbe
 from buddy_api.readiness import DependencyProbe, check_dependencies, validate_probes
@@ -78,6 +79,7 @@ def create_app(
     app.state.authentication = Authentication(config.identity)
     app.include_router(auth_router(config.identity))
     app.include_router(private_router())
+    app.include_router(library_router())
 
     @app.exception_handler(HTTPException)
     async def http_error(request: Request, exc: HTTPException) -> JSONResponse:

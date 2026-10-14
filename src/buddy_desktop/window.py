@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from buddy_desktop.account_widget import AccountWidget
 from buddy_desktop.config import AppConfig, ConfigurationError, validate_api_url
+from buddy_desktop.library_widget import LibraryWidget
 from buddy_desktop.services import Health, HealthService
 from buddy_desktop.tasks import TaskRunner
 from buddy_desktop.views import HomePage, SettingsPage, UnavailablePage
@@ -68,6 +69,8 @@ class MainWindow(QMainWindow):
         self.pages = QStackedWidget()
         self.home = HomePage(config.api_url)
         self.account = AccountWidget(config.api_url)
+        self.library = LibraryWidget(config, self.account)
+        self.library.activity_changed.connect(self._library_activity)
         self.home.body.insertWidget(self.home.body.count() - 1, self.account)
         self.home.check_requested.connect(self.check_connection)
         self.preferences = SettingsPage(config.api_url, environment_override=environment_override)
@@ -75,10 +78,7 @@ class MainWindow(QMainWindow):
         self.account.activity_changed.connect(self._account_activity)
         page_widgets = [
             self.home,
-            UnavailablePage(
-                "Library",
-                "Your deck library will be available when account access is connected.",
-            ),
+            self.library,
             UnavailablePage(
                 "Present",
                 "Presentation tools will be available when deck processing is connected.",
@@ -125,6 +125,7 @@ class MainWindow(QMainWindow):
     def navigate(self, index: int) -> None:
         if 0 <= index < self.pages.count():
             self.pages.setCurrentIndex(index)
+            self.library.activate(index == 1)
 
     @Slot()
     def check_connection(self) -> None:
@@ -161,13 +162,29 @@ class MainWindow(QMainWindow):
         else:
             self.home.check.setEnabled(True)
             self.preferences.save.setEnabled(
-                not self.environment_override and not self.account.runner.busy
+                not self.environment_override
+                and not self.account.runner.busy
+                and not self.library.runner.busy
             )
 
     @Slot(bool)
     def _account_activity(self, busy: bool) -> None:
         self.preferences.save.setEnabled(
-            not busy and not self.runner.busy and not self.environment_override
+            not busy
+            and not self.runner.busy
+            and not self.library.runner.busy
+            and not self.environment_override
+        )
+        if self._closing and not busy:
+            self.close()
+
+    @Slot(bool)
+    def _library_activity(self, busy: bool) -> None:
+        self.preferences.save.setEnabled(
+            not busy
+            and not self.runner.busy
+            and not self.account.runner.busy
+            and not self.environment_override
         )
         if self._closing and not busy:
             self.close()
@@ -177,6 +194,7 @@ class MainWindow(QMainWindow):
         if (
             self.runner.busy
             or self.account.runner.busy
+            or self.library.runner.busy
             or self._closing
             or self.environment_override
         ):
@@ -196,6 +214,7 @@ class MainWindow(QMainWindow):
             return
         self.config = replace(self.config, api_url=url)
         self.account.configure(url)
+        self.library.configure(self.config)
         self.preferences.url.setText(url)
         self.home.endpoint.setText(url)
         self.home.connection.show_state(
@@ -213,7 +232,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self.account.shutdown()
-        if self.runner.busy or self.account.runner.busy:
+        self.library.shutdown()
+        if self.runner.busy or self.account.runner.busy or self.library.runner.busy:
             self._closing = True
             self.runner.stop()
             central = self.centralWidget()

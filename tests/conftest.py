@@ -38,7 +38,11 @@ def desktop_window(qtbot, tmp_path, monkeypatch):
     for window in reversed(windows):
         window.close()
         qtbot.waitUntil(
-            lambda window=window: not window.runner.busy and not window.account.runner.busy,
+            lambda window=window: (
+                not window.runner.busy
+                and not window.account.runner.busy
+                and not window.library.runner.busy
+            ),
             timeout=5000,
         )
         qtbot.waitUntil(lambda window=window: not window.isVisible(), timeout=5000)

@@ -17,11 +17,14 @@ dependent work in a later wave. Do not treat an unmerged PR as completed work on
    calls and production credentials out of tests.
 5. Push the issue branch and open a PR targeting main, with `Closes #<issue>` and a
    concise description of behavior, validation, and limitations.
-6. Assign the PR to **Lahhamix** and **yasminahanna** and request both as reviewers; then
+6. Self-review the complete diff and test the actual implementation. Assign the PR to
+   **Lahhamix** and **yasminahanna** and request all other repository collaborators as
+   reviewers, excluding the PR author; then
    verify the status workflow sets **Waiting for review**. Submitted feedback sets
    **Reviewed**; a later review request returns to **Waiting for review**. Leave the issue
    open until the PR merges, then verify the Project completion workflow sets **Done**.
-7. Respond to review and keep CI passing. Main requires a teammate approval and CI;
+7. Check current-head CI after opening the PR and fix failures on the existing branch.
+   Respond to review and keep CI passing. Main requires a teammate approval and CI;
    do not merge or push implementation directly to main.
 
 Keep implementation issues assigned to their owner. PR assignees/reviewers are separate;
