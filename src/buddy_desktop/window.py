@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from buddy_desktop.account_widget import AccountWidget
 from buddy_desktop.config import AppConfig, ConfigurationError, validate_api_url
 from buddy_desktop.services import Health, HealthService
 from buddy_desktop.tasks import TaskRunner
@@ -66,9 +67,12 @@ class MainWindow(QMainWindow):
         sidebar_layout.addWidget(help_label)
         self.pages = QStackedWidget()
         self.home = HomePage(config.api_url)
+        self.account = AccountWidget(config.api_url)
+        self.home.body.insertWidget(self.home.body.count() - 1, self.account)
         self.home.check_requested.connect(self.check_connection)
         self.preferences = SettingsPage(config.api_url, environment_override=environment_override)
         self.preferences.save_requested.connect(self.save_settings)
+        self.account.activity_changed.connect(self._account_activity)
         page_widgets = [
             self.home,
             UnavailablePage(
@@ -156,11 +160,26 @@ class MainWindow(QMainWindow):
             self.close()
         else:
             self.home.check.setEnabled(True)
-            self.preferences.save.setEnabled(not self.environment_override)
+            self.preferences.save.setEnabled(
+                not self.environment_override and not self.account.runner.busy
+            )
+
+    @Slot(bool)
+    def _account_activity(self, busy: bool) -> None:
+        self.preferences.save.setEnabled(
+            not busy and not self.runner.busy and not self.environment_override
+        )
+        if self._closing and not busy:
+            self.close()
 
     @Slot(str)
     def save_settings(self, value: str) -> None:
-        if self.runner.busy or self._closing or self.environment_override:
+        if (
+            self.runner.busy
+            or self.account.runner.busy
+            or self._closing
+            or self.environment_override
+        ):
             return
         try:
             url = validate_api_url(value)
@@ -176,6 +195,7 @@ class MainWindow(QMainWindow):
             )
             return
         self.config = replace(self.config, api_url=url)
+        self.account.configure(url)
         self.preferences.url.setText(url)
         self.home.endpoint.setText(url)
         self.home.connection.show_state(
@@ -192,7 +212,8 @@ class MainWindow(QMainWindow):
             self.move(screens[0].availableGeometry().topLeft())
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if self.runner.busy:
+        self.account.shutdown()
+        if self.runner.busy or self.account.runner.busy:
             self._closing = True
             self.runner.stop()
             central = self.centralWidget()

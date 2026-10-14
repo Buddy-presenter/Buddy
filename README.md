@@ -1,7 +1,8 @@
 # Buddy
 
 A context-aware presenter companion with a Python/PySide6 desktop shell and a separate
-API foundation. Authentication, deck processing, and live presentation are separate issues.
+API foundation and [Cognito account lifecycle](docs/accounts.md). Deck processing and
+live presentation are separate issues.
 The API's [PostgreSQL persistence guide](docs/database.md) covers durable records,
 explicit migrations and optional local Docker/native server setup.
 
@@ -51,7 +52,8 @@ Without `BUDDY_API_URL`, Settings can save the backend URL in native `QSettings`
 An environment URL overrides and disables editing the saved URL. Native preferences also
 retain window geometry. On Windows, Qt stores these under the current user's registry
 preferences for `Buddy/BuddyDesktop`; on macOS, it uses the user's preferences system.
-No deck, transcript, or credentials are persisted by this shell.
+No deck or transcript is persisted by this shell. Configured account sessions store only
+refresh tokens in the OS credential store; see [account setup and recovery](docs/accounts.md).
 
 The compatibility adapter contract is `GET <base-url>/health`, returning HTTP 200 with
 `Content-Type: application/json` and `{"status":"ok"}` (or `"healthy"`). Redirects,
