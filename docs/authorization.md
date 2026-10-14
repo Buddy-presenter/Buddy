@@ -7,6 +7,13 @@ Missing/invalid tokens return 401 with WWW-Authenticate; cross-account operation
 403 without private content, and unknown records return 404. Provider/DB failures deny
 access with 503. Existing public health/version/readiness routes remain public.
 
+Client-IP throttling belongs to the trusted WAF edge. The API does not trust forwarded
+IP headers or use the ALB's direct-peer address as a shared user budget. `/auth/me` has
+a bounded per-process bootstrap budget keyed by an opaque credential digest (30/minute,
+4096 keys maximum); different credentials do not share it. Resource operations and SSE
+revocation rechecks do not consume that bootstrap budget. This is not a distributed
+client-IP defense; changing tokens does not bypass the deployment's WAF policy.
+
 GET /api/v1/resources/{kind}/{id} supports decks, analyses, rendered asset metadata,
 sessions and processing jobs. Internal storage keys and source paths are not returned.
 Rendered assets now have a durable deck/owner constraint (migration 0002_assets).

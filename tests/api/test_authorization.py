@@ -12,6 +12,7 @@ from buddy_api import authorization
 from buddy_api.app import create_app
 from buddy_api.auth import CognitoVerifier, Principal
 from buddy_api.config import Environment, Settings
+from buddy_api.contracts import ErrorResponse
 from buddy_api.persistence.database import Database
 from buddy_api.persistence.models import RenderedAsset
 from buddy_identity.config import IdentityConfig, SessionExpired
@@ -188,3 +189,74 @@ def test_stream_rechecks_authentication_and_stops_on_revocation(monkeypatch):
     assert events[0].startswith("event: snapshot")
     assert events[1] == 'event: access_closed\ndata: {"status":401}\n\n'
     assert calls == ["Bearer test", "Bearer test"]
+
+
+@pytest.mark.postgres
+def test_users_sharing_one_proxy_do_not_share_resource_or_bootstrap_budgets(
+    private_api, monkeypatch
+):
+    client, ids, _, _ = private_api
+    path = f"/api/v1/resources/decks/{ids['decks']}"
+    # Both identities use the same TestClient peer, as unrelated ALB users do.
+    for _ in range(36):
+        assert client.get(path, headers={"Authorization": "Bearer owner"}).status_code == 200
+        assert client.get(path, headers={"Authorization": "Bearer other"}).status_code == 403
+    for _ in range(30):
+        assert (
+            client.get("/api/v1/auth/me", headers={"Authorization": "Bearer owner"}).status_code
+            == 200
+        )
+    assert (
+        client.get("/api/v1/auth/me", headers={"Authorization": "Bearer owner"}).status_code == 429
+    )
+    assert (
+        client.get("/api/v1/auth/me", headers={"Authorization": "Bearer other"}).status_code == 200
+    )
+    assert client.get(path, headers={"Authorization": "Bearer owner"}).status_code == 200
+
+    async def connected():
+        return False
+
+    async def immediate(_):
+        return None
+
+    # Exercise every real authentication/DB snapshot after the bootstrap budget is spent.
+    # Replace only this module's clock, not asyncio.sleep throughout the DB event loop.
+    monkeypatch.setattr(authorization, "asyncio", SimpleNamespace(sleep=immediate))
+    request = SimpleNamespace(
+        app=client.app,
+        headers={"authorization": "Bearer owner"},
+        state=SimpleNamespace(request_id=str(uuid4())),
+        is_disconnected=connected,
+        client=SimpleNamespace(host="same-proxy"),
+    )
+
+    async def collect():
+        return [event async for event in authorization.session_events(request, ids["sessions"])]
+
+    events = client.portal.call(collect)
+    assert len(events) == 30
+    assert all(event.startswith("event: snapshot") for event in events)
+
+
+@pytest.mark.postgres
+def test_validation_schema_matches_actual_body_and_uuid_errors(private_api):
+    client, ids, _, other = private_api
+    headers = {"Authorization": "Bearer owner"}
+    responses = [
+        client.patch(
+            f"/api/v1/resources/decks/{ids['decks']}",
+            headers=headers,
+            json={"owner_id": str(other), "title": "spoofed"},
+        ),
+        client.get("/api/v1/resources/decks/not-a-uuid", headers=headers),
+        client.get("/api/v1/sessions/not-a-uuid/events", headers=headers),
+    ]
+    for response in responses:
+        assert response.status_code == 422
+        assert ErrorResponse.model_validate(response.json()).error.code == "validation_error"
+    paths = client.app.openapi()["paths"]
+    for path in ("/api/v1/resources/{kind}/{identifier}", "/api/v1/sessions/{identifier}/events"):
+        for operation in paths[path].values():
+            schema = operation["responses"]["422"]["content"]["application/json"]["schema"]
+            assert schema == {"$ref": "#/components/schemas/ErrorResponse"}

@@ -1,5 +1,6 @@
 """Cognito access verification and durable account bootstrap; resource ownership is #31."""
 
+import hashlib
 import json
 import re
 import time
@@ -36,7 +37,7 @@ class AccountResponse(BaseModel):
 
 
 class AttemptLimiter:
-    """Bounded per-process defense, supplemented by the deployment's shared WAF limit."""
+    """Bounded bootstrap credential budgets; trusted-edge WAF owns client-IP limits."""
 
     def __init__(self) -> None:
         self.buckets: OrderedDict[str, tuple[float, int]] = OrderedDict()
@@ -120,8 +121,6 @@ class Authentication:
         self.limiter = AttemptLimiter()
 
     async def identify(self, request: Request, authorization: str | None) -> Principal:
-        if not self.limiter.allow(request.client.host if request.client else "unknown"):
-            raise HTTPException(429, headers={"Retry-After": "60"})
         if self.verifier is None or request.app.state.database is None:
             raise HTTPException(503)
         if (
@@ -174,6 +173,12 @@ def auth_router(config: IdentityConfig | None) -> APIRouter:
         request: Request, authorization: Annotated[str | None, Header()] = None
     ) -> AccountResponse:
         authentication: Authentication = request.app.state.authentication
+        # The direct peer is an ALB in production. Never share that peer's budget
+        # across accounts, and never charge resource/SSE checks to bootstrap limits.
+        # Store only an opaque digest; forwarded headers are not trusted here.
+        credential = hashlib.sha256((authorization or "").encode()).hexdigest()
+        if not authentication.limiter.allow(credential):
+            raise HTTPException(429, headers={"Retry-After": "60"})
         principal = await authentication.identify(request, authorization)
         return AccountResponse(
             data=AccountData(id=principal.id), request_id=request.state.request_id
