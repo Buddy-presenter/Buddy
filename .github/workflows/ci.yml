@@ -44,7 +44,7 @@ jobs:
       - name: API schema snapshot and backwards compatibility
         run: python -m buddy_api.schema --check --compare-ref origin/main
       - name: Behavior and Qt lifecycle tests
-        run: python -m pytest
+        run: python scripts/test.py all
       - name: Build distributions
         run: python -m build
       - name: Install built wheel
@@ -94,7 +94,9 @@ jobs:
       - name: API schema snapshot and backwards compatibility
         run: python -m buddy_api.schema --check --compare-ref origin/main
       - name: API and real PostgreSQL tests without the desktop Qt plugin
-        run: python -m pytest -p no:pytest-qt tests/api --strict-markers
+        run: |
+          python scripts/test.py api
+          python scripts/test.py database
       - run: python -m build
       - name: Install wheel and verify packaged migrations against actual PostgreSQL
         shell: bash

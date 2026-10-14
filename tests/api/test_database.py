@@ -12,7 +12,8 @@ from alembic import command
 from alembic.script import ScriptDirectory
 from fastapi.testclient import TestClient
 from sqlalchemy import text
-from sqlalchemy.schema import CreateSchema, DropSchema
+from support.database import database_settings as database_settings
+from support.database import migrate
 
 from buddy_api.app import create_app
 from buddy_api.config import Environment, Settings
@@ -49,50 +50,6 @@ def test_cognito_account_is_persisted_across_api_restart(database_settings, monk
             identifiers.append(response.json()["data"]["id"])
             assert client.get("/api/v1/auth/me").status_code == 401
     assert identifiers[0] == identifiers[1]
-
-
-@pytest.fixture
-def database_settings():
-    url = os.environ.get("BUDDY_TEST_DATABASE_URL")
-    if not url:
-        pytest.skip("Set BUDDY_TEST_DATABASE_URL to a disposable PostgreSQL database ending _test.")
-    admin = DatabaseSettings(url)
-    if not admin.connection_url().database.endswith("_test"):
-        pytest.fail("Database integration tests require a database ending _test.")
-    schema = "buddy_test_" + uuid4().hex
-
-    async def manage(create):
-        engine = create_engine(admin)
-        try:
-            async with engine.begin() as connection:
-                await connection.execute(
-                    CreateSchema(schema) if create else DropSchema(schema, cascade=True)
-                )
-        finally:
-            await engine.dispose()
-
-    asyncio.run(manage(True))
-    try:
-        yield DatabaseSettings(url, schema)
-    finally:
-        asyncio.run(manage(False))
-
-
-async def migrate(settings, operation="upgrade"):
-    engine = create_engine(settings)
-    try:
-        async with engine.connect() as connection:
-
-            def apply(sync):
-                config = migration_config(settings, sync)
-                if operation == "upgrade":
-                    command.upgrade(config, "head")
-                else:
-                    command.check(config)
-
-            await connection.run_sync(apply)
-    finally:
-        await engine.dispose()
 
 
 async def seed(database, subject="synthetic-owner"):
