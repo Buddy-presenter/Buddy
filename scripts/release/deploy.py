@@ -190,6 +190,9 @@ class Deployment:
             ContentType="application/json",
             IfNoneMatch="*",
         )
+        # Operators can fetch the exact retained record even on a failed run;
+        # the deployment role deliberately has no bucket-wide list permission.
+        print(f"Audit record saved: {key}", file=sys.stderr)
         if value["operation"] == "deploy" and value["status"] == "healthy":
             # Compatibility lookup for the existing SHA-based rollback input.
             # This is the latest healthy attempt, not the retained audit history.

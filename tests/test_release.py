@@ -150,11 +150,12 @@ def test_healthy_deployment_is_auditable_and_explicit_rollback_works():
 
 
 @pytest.mark.parametrize("failure", ["update", "readiness"])
-def test_explicit_rollback_failure_leaves_durable_audit_without_claiming_recovery(failure):
+def test_explicit_rollback_failure_leaves_durable_audit_without_claiming_recovery(failure, capsys):
     ecs, s3 = Ecs(), S3()
     deployment = Deployment(CONFIG, ecs, s3, Sts(), lambda _: None)
     deployed = deployment.deploy(SHA, IMAGE)
     lookup = copy.deepcopy(s3.records[f"staging/backend/{SHA}.json"])
+    capsys.readouterr()
 
     def unavailable(*args, **kwargs):
         raise RuntimeError("synthetic private failure details must not enter audit")
@@ -177,6 +178,7 @@ def test_explicit_rollback_failure_leaves_durable_audit_without_claiming_recover
     assert audit["target"] == deployed["previous"]
     assert audit["restored"] is None
     assert audit["observed"] == ecs.state
+    assert audit["audit_key"] in capsys.readouterr().err
     assert "private failure details" not in json.dumps(audit)
     assert s3.records[f"staging/backend/{SHA}.json"] == lookup
     assert ecs.waits.count("tasks_stopped") == 1

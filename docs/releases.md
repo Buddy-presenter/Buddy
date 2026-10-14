@@ -73,6 +73,8 @@ Promotion outcomes and explicit rollback attempts have immutable audit objects u
 <environment>/backend/operations/<operation SHA>/<unique operation ID>.json. Conditional
 S3 writes prevent replacing an existing history object. Records include operation type,
 ID, current workflow revision, account/environment and start/completion timestamps.
+Logs include the exact saved object key on success and failure, so operators can fetch
+the retained record with scoped GetObject access without bucket-wide list permissions.
 Promotion records retain previous/target definitions and counts plus migration revision.
 Rollback records identify the target deployment SHA and source audit key, the state before
 rollback and the requested state. Only a verified healthy rollback records `restored`;
