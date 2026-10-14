@@ -41,6 +41,8 @@ class S3:
         self.records = {}
 
     def put_object(self, **kwargs):
+        if kwargs.get("IfNoneMatch") == "*" and kwargs["Key"] in self.records:
+            raise RuntimeError("Audit history cannot be overwritten.")
         self.records[kwargs["Key"]] = kwargs["Body"]
 
     def get_object(self, **kwargs):
@@ -129,9 +131,134 @@ def test_healthy_deployment_is_auditable_and_explicit_rollback_works():
     deployment = Deployment(CONFIG, ecs, s3, Sts(), lambda _: None)
     assert deployment.deploy(SHA, IMAGE)["status"] == "healthy"
     assert ecs.state["api"]["taskDefinition"] == PREFIX + "api:2"
-    assert deployment.rollback("c" * 40, SHA)["status"] == "rolled_back"
+    lookup = copy.deepcopy(s3.records[f"staging/backend/{SHA}.json"])
+    result = deployment.rollback("c" * 40, SHA)
+    assert result["status"] == "rolled_back"
+    recorded = json.loads(s3.records[result["audit_key"]])
+    assert recorded == result
+    assert recorded["operation"] == "rollback"
+    assert recorded["revision"] == "c" * 40
+    assert recorded["target_deployment_revision"] == SHA
+    assert recorded["environment"] == "staging"
+    assert recorded["account_id"] == ACCOUNT
+    assert recorded["before"]["api"]["taskDefinition"] == PREFIX + "api:2"
+    assert recorded["restored"] == ecs.state
+    assert recorded["completed_at"] >= recorded["started_at"]
+    assert s3.records[f"staging/backend/{SHA}.json"] == lookup
     assert ecs.state["api"]["taskDefinition"] == PREFIX + "api:1"
     assert ecs.waits.count("tasks_stopped") == 1  # rollback never downgrades the DB
+
+
+@pytest.mark.parametrize("failure", ["update", "readiness"])
+def test_explicit_rollback_failure_leaves_durable_audit_without_claiming_recovery(failure):
+    ecs, s3 = Ecs(), S3()
+    deployment = Deployment(CONFIG, ecs, s3, Sts(), lambda _: None)
+    deployed = deployment.deploy(SHA, IMAGE)
+    lookup = copy.deepcopy(s3.records[f"staging/backend/{SHA}.json"])
+
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("synthetic private failure details must not enter audit")
+
+    if failure == "update":
+        ecs.update_service = unavailable
+    else:
+        deployment.readiness = unavailable
+    with pytest.raises(DeploymentError, match="Rollback failed"):
+        deployment.rollback("c" * 40, SHA)
+    audits = [json.loads(body) for key, body in s3.records.items() if "/operations/" in key]
+    assert len(audits) == 2
+    audit = next(record for record in audits if record["operation"] == "rollback")
+    assert audit["status"] == "rollback_failed"
+    assert audit["revision"] == "c" * 40
+    assert audit["target_deployment_revision"] == SHA
+    assert audit["target_audit_key"] == deployed["audit_key"]
+    assert audit["environment"] == CONFIG["environment"]
+    assert audit["account_id"] == ACCOUNT
+    assert audit["target"] == deployed["previous"]
+    assert audit["restored"] is None
+    assert audit["observed"] == ecs.state
+    assert "private failure details" not in json.dumps(audit)
+    assert s3.records[f"staging/backend/{SHA}.json"] == lookup
+    assert ecs.waits.count("tasks_stopped") == 1
+
+
+def test_repeated_same_revision_attempts_retain_each_deployment_and_rollback_record():
+    ecs, s3 = Ecs(), S3()
+    deployment = Deployment(CONFIG, ecs, s3, Sts(), lambda _: None)
+    first = deployment.deploy(SHA, IMAGE)
+    deployment.rollback(SHA, SHA)
+    second = deployment.deploy(SHA, IMAGE)
+    deployment.rollback(SHA, SHA)
+    records = {key: json.loads(body) for key, body in s3.records.items() if "/operations/" in key}
+    assert len(records) == 4
+    assert len({value["operation_id"] for value in records.values()}) == 4
+    assert records[first["audit_key"]] == first
+    assert records[second["audit_key"]] == second
+    assert first["audit_key"] != second["audit_key"]
+    assert json.loads(s3.records[f"staging/backend/{SHA}.json"])["audit_key"] == second["audit_key"]
+    assert {value["operation"] for value in records.values()} == {"deploy", "rollback"}
+    assert ecs.waits.count("tasks_stopped") == 2  # two promotions, no rollback DDL
+
+
+def test_partial_api_worker_rollback_records_observed_state_and_supports_legacy_lookup():
+    ecs, s3 = Ecs(), S3()
+    ecs.state = {
+        "api": {"taskDefinition": PREFIX + "api:2", "desiredCount": 2},
+        "worker": {"taskDefinition": PREFIX + "worker:2", "desiredCount": 2},
+    }
+    previous = {
+        "api": {"taskDefinition": PREFIX + "api:1", "desiredCount": 1},
+        "worker": {"taskDefinition": PREFIX + "worker:1", "desiredCount": 1},
+    }
+    s3.records[f"staging/backend/{SHA}.json"] = json.dumps(
+        {
+            "schema": 1,
+            "revision": SHA,
+            "environment": "staging",
+            "account_id": ACCOUNT,
+            "status": "healthy",
+            "previous": previous,
+        }
+    ).encode()
+    update = ecs.update_service
+
+    def partial(**kwargs):
+        if kwargs["service"] == "worker":
+            raise RuntimeError("worker update failed")
+        update(**kwargs)
+
+    ecs.update_service = partial
+    with pytest.raises(DeploymentError, match="Rollback failed"):
+        Deployment(CONFIG, ecs, s3, Sts(), lambda _: None).rollback("c" * 40, SHA)
+    audit = next(json.loads(body) for key, body in s3.records.items() if "/operations/" in key)
+    assert audit["status"] == "rollback_failed"
+    assert audit["before"]["api"]["taskDefinition"] == PREFIX + "api:2"
+    assert audit["target"] == previous
+    assert audit["target_audit_key"] is None  # old schema-1 records still work
+    assert audit["observed"] == ecs.state
+    assert audit["observed"]["api"] == previous["api"]
+    assert audit["observed"]["worker"]["taskDefinition"] == PREFIX + "worker:2"
+    assert audit["restored"] is None
+    assert "tasks_stopped" not in ecs.waits
+
+
+def test_failed_later_deployment_does_not_overwrite_healthy_revision_lookup():
+    ecs, s3 = Ecs(), S3()
+    deployment = Deployment(CONFIG, ecs, s3, Sts(), lambda _: None)
+    first = deployment.deploy(SHA, IMAGE)
+    lookup = copy.deepcopy(s3.records[f"staging/backend/{SHA}.json"])
+
+    def unavailable(_):
+        raise RuntimeError("unhealthy")
+
+    deployment.readiness = unavailable
+    with pytest.raises(DeploymentError):
+        deployment.deploy(SHA, IMAGE)
+    assert s3.records[f"staging/backend/{SHA}.json"] == lookup
+    assert json.loads(s3.records[first["audit_key"]]) == first
+    audits = [json.loads(body) for key, body in s3.records.items() if "/operations/" in key]
+    assert len(audits) == 2
+    assert any(value["status"] == "rollback_failed" for value in audits)
 
 
 def test_failed_rollback_is_not_reported_as_success():
@@ -177,7 +304,7 @@ def test_cross_environment_rollback_record_is_rejected():
     ecs, s3 = Ecs(), S3()
     deployment = Deployment(CONFIG, ecs, s3, Sts(), lambda _: None)
     deployment.deploy(SHA, IMAGE)
-    key = next(iter(s3.records))
+    key = f"staging/backend/{SHA}.json"
     value = json.loads(s3.records[key])
     value["environment"] = "production"
     s3.records[key] = json.dumps(value).encode()
@@ -185,6 +312,10 @@ def test_cross_environment_rollback_record_is_rejected():
     with pytest.raises(DeploymentError):
         deployment.rollback("c" * 40, SHA)
     assert ecs.updates == before
+    failures = [json.loads(body) for key, body in s3.records.items() if "/operations/" in key]
+    audit = next(record for record in failures if record["operation"] == "rollback")
+    assert audit["status"] == "rollback_failed"
+    assert audit["restored"] is None and audit["target"] is None
 
 
 def test_missing_failed_or_wrong_revision_ci_blocks_release():

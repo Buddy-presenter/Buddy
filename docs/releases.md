@@ -69,12 +69,25 @@ recover records rollback_failed. Migration failure does not promote traffic. No 
 automatically downgrades the database: use expand/contract changes compatible with both
 old/new code, reviewed schema checks and isolated backups before rollout.
 
-Healthy/failed promotion audit records under <environment>/backend/<SHA>.json record
-previous/target definitions and counts, migration revision, environment and outcome.
-Rollback input names a healthy deployment whose previous state should be restored.
-Rollback validates its account/environment/task family and rechecks health; it runs no
-DDL. Recovery does not require approving the current app build as production-ready.
-AWS/bootstrap/signing credentials and real sessions never enter these records.
+Promotion outcomes and explicit rollback attempts have immutable audit objects under
+<environment>/backend/operations/<operation SHA>/<unique operation ID>.json. Conditional
+S3 writes prevent replacing an existing history object. Records include operation type,
+ID, current workflow revision, account/environment and start/completion timestamps.
+Promotion records retain previous/target definitions and counts plus migration revision.
+Rollback records identify the target deployment SHA and source audit key, the state before
+rollback and the requested state. Only a verified healthy rollback records `restored`;
+failures record `rollback_failed`, the failing stage and observed service state when
+available, without leaking arbitrary exception text. No rollback executes migration/DDL.
+
+<environment>/backend/<deployment SHA>.json is only a compatibility lookup for the latest
+healthy promotion of that SHA. It points to its immutable audit object; failed promotions
+and rollback operations never overwrite it. Repeated healthy deployments may update the
+lookup but retain every earlier attempt's history. Rollback input names a healthy
+deployment whose previous state should be restored and validates account/environment/task
+family before changing services. Recovery does not require approving the current app
+build as production-ready. Audit-write failures fail the command rather than reporting a
+fully recorded release; operators must inspect service state if a write fails after a
+service change. AWS/bootstrap/signing credentials and real sessions never enter records.
 
 Every new promotion requires successful CI and infrastructure checks on exactly the
 current main SHA. Production also requires environment variables
@@ -86,7 +99,8 @@ failure, rollback and backup restoration in staging and record evidence before p
 ## Verification and remaining external prerequisites
 
 Run python -m pytest tests/test_release.py for migration-failure, unhealthy promotion,
-rollback success/failure, cross-environment rejection, CI and tampering regressions.
+explicit rollback audit success/failure, repeated-SHA history preservation,
+cross-environment rejection, CI and tampering regressions.
 Native packaging CI executes actual installers/applications without provider credentials.
 Local native packaging requires PyInstaller 6.22.3 and Inno Setup 6 on Windows; use
 python scripts/release/build_desktop.py --output packaged --revision <reviewed full SHA>

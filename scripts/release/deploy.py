@@ -5,8 +5,11 @@ import json
 import re
 import sys
 from collections.abc import Callable
+from contextlib import suppress
+from datetime import UTC, datetime
 from typing import Any
 from urllib.request import urlopen
+from uuid import uuid4
 
 
 class DeploymentError(Exception):
@@ -162,13 +165,41 @@ class Deployment:
             self.ecs.update_service(cluster=self.config["cluster"], service=service, **state)
         self.settle(states)
 
+    def audit(self, operation: str, revision: str) -> dict[str, Any]:
+        return {
+            "schema": 2,
+            "operation": operation,
+            "operation_id": uuid4().hex,
+            "revision": revision,
+            "environment": self.config["environment"],
+            "account_id": self.config["account_id"],
+            "started_at": datetime.now(UTC).isoformat(),
+        }
+
     def record(self, revision: str, value: dict[str, Any]) -> None:
+        # Each attempt has its own immutable history object, including reruns of
+        # the same SHA and multiple rollbacks from the same operator revision.
+        prefix = f"{self.config['environment']}/backend/operations/{revision}"
+        key = f"{prefix}/{value['operation_id']}.json"
+        value["audit_key"] = key
+        value["completed_at"] = datetime.now(UTC).isoformat()
         self.s3.put_object(
             Bucket=self.config["bucket"],
-            Key=f"{self.config['environment']}/backend/{revision}.json",
+            Key=key,
             Body=json.dumps(value).encode(),
             ContentType="application/json",
+            IfNoneMatch="*",
         )
+        if value["operation"] == "deploy" and value["status"] == "healthy":
+            # Compatibility lookup for the existing SHA-based rollback input.
+            # This is the latest healthy attempt, not the retained audit history.
+            # Failed attempts and rollback operations never overwrite this lookup.
+            self.s3.put_object(
+                Bucket=self.config["bucket"],
+                Key=f"{self.config['environment']}/backend/{revision}.json",
+                Body=json.dumps(value).encode(),
+                ContentType="application/json",
+            )
 
     def deploy(
         self, revision: str, api_image: str, worker_image: str | None = None
@@ -195,10 +226,7 @@ class Deployment:
             for service in services
         }
         audit = {
-            "schema": 1,
-            "revision": revision,
-            "environment": self.config["environment"],
-            "account_id": self.config["account_id"],
+            **self.audit("deploy", revision),
             "previous": previous,
             "target": target,
             "migration": definitions["migration"],
@@ -208,7 +236,6 @@ class Deployment:
                 self.ecs.update_service(cluster=self.config["cluster"], service=service, **state)
             self.settle(target)
             audit["status"] = "healthy"
-            self.record(revision, audit)
         except Exception:
             try:
                 self.restore(previous)
@@ -220,39 +247,75 @@ class Deployment:
                 "Deployment failed. Inspect the private audit record; "
                 "no database downgrade was attempted."
             ) from None
+        self.record(revision, audit)
         return audit
 
     def rollback(self, revision: str, previous_revision: str) -> dict[str, Any]:
         validate(self.config, revision)
         if not re.fullmatch(r"[a-f0-9]{40}", previous_revision):
             raise DeploymentError("A full deployment revision is required.")
-        response = self.s3.get_object(
-            Bucket=self.config["bucket"],
-            Key=f"{self.config['environment']}/backend/{previous_revision}.json",
-        )
-        value = json.loads(response["Body"].read(65537))
-        if (
-            value.get("status") != "healthy"
-            or value.get("environment") != self.config["environment"]
-            or value.get("account_id") != self.config["account_id"]
-            or value.get("revision") != previous_revision
-        ):
-            raise DeploymentError("Rollback requires a healthy audit record from this environment.")
-        previous = value["previous"]
-        # The authenticated audit record is still constrained to this account/family.
-        for service, state in previous.items():
+        audit = {
+            **self.audit("rollback", revision),
+            "target_deployment_revision": previous_revision,
+            "deployment": previous_revision,
+            "target": None,
+            "before": None,
+            "restored": None,
+            "observed": None,
+            "stage": "load_target",
+        }
+        try:
+            response = self.s3.get_object(
+                Bucket=self.config["bucket"],
+                Key=f"{self.config['environment']}/backend/{previous_revision}.json",
+            )
+            value = json.loads(response["Body"].read(65537))
             if (
-                service not in {"api", "worker"}
-                or not re.fullmatch(
-                    rf"arn:aws:ecs:{self.config['region']}:{self.config['account_id']}:task-definition/buddy-{self.config['environment']}-{service}:\d+",
-                    state["taskDefinition"],
-                )
-                or type(state["desiredCount"]) is not int
-                or not 0 <= state["desiredCount"] <= 100
+                value.get("status") != "healthy"
+                or value.get("environment") != self.config["environment"]
+                or value.get("account_id") != self.config["account_id"]
+                or value.get("revision") != previous_revision
             ):
+                raise DeploymentError(
+                    "Rollback requires a healthy audit record from this environment."
+                )
+            audit["stage"] = "validate_target"
+            previous = value["previous"]
+            if not isinstance(previous, dict) or "api" not in previous:
                 raise DeploymentError("Invalid rollback target.")
-        self.restore(previous)
-        return {"status": "rolled_back", "deployment": previous_revision, "restored": previous}
+            # The authenticated audit record remains constrained to this account/family.
+            for service, state in previous.items():
+                if (
+                    service not in {"api", "worker"}
+                    or not re.fullmatch(
+                        rf"arn:aws:ecs:{self.config['region']}:{self.config['account_id']}:task-definition/buddy-{self.config['environment']}-{service}:\d+",
+                        state["taskDefinition"],
+                    )
+                    or type(state["desiredCount"]) is not int
+                    or not 0 <= state["desiredCount"] <= 100
+                ):
+                    raise DeploymentError("Invalid rollback target.")
+            audit["target"] = previous
+            audit["target_audit_key"] = value.get("audit_key")
+            audit["before"] = self.states(list(previous))
+            audit["stage"] = "restore"
+            self.restore(previous)
+            audit["restored"] = previous
+            audit["status"] = "rolled_back"
+            audit["stage"] = "complete"
+        except Exception:
+            audit["status"] = "rollback_failed"
+            if audit["target"] is not None:
+                # An unavailable service must not be reported as restored.
+                with suppress(Exception):
+                    audit["observed"] = self.states(list(audit["target"]))
+            self.record(revision, audit)
+            raise DeploymentError(
+                "Rollback failed. Inspect the retained private audit record; "
+                "no database change was attempted."
+            ) from None
+        self.record(revision, audit)
+        return audit
 
 
 def main() -> int:
