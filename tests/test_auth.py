@@ -194,12 +194,15 @@ def test_loopback_callback_rejects_wrong_state_and_accepts_single_use_code():
         thread.start()
         return True
 
-    assert (
-        browser_code("https://example.com", state, Event(), timeout=10, opener=open_browser)
-        == "valid"
-    )
-    threads[0].join(timeout=3)
-    assert not threads[0].is_alive()
+    try:
+        assert (
+            browser_code("https://example.com", state, Event(), timeout=10, opener=open_browser)
+            == "valid"
+        )
+    finally:
+        for thread in threads:
+            thread.join(timeout=7)
+            assert not thread.is_alive()
     assert responses == [400, 200]
 
 
@@ -230,10 +233,15 @@ def test_rejected_browser_recovery_never_creates_a_session():
         thread.start()
         return True
 
-    with pytest.raises(IdentityError, match="rejected"):
-        auth.browser_code("https://example.com", state, Event(), timeout=10, opener=open_browser)
-    threads[0].join(timeout=3)
-    assert not threads[0].is_alive()
+    try:
+        with pytest.raises(IdentityError, match="rejected"):
+            auth.browser_code(
+                "https://example.com", state, Event(), timeout=10, opener=open_browser
+            )
+    finally:
+        for thread in threads:
+            thread.join(timeout=4)
+            assert not thread.is_alive()
 
 
 @pytest.mark.parametrize(
@@ -250,3 +258,49 @@ def test_invalid_identity_configuration(field, value):
     values[field] = value
     with pytest.raises(IdentityError):
         IdentityConfig(**values)
+
+
+@pytest.mark.parametrize("shutdown", [False, True])
+@pytest.mark.parametrize("boundary", ["token", "me", "queued_result"])
+def test_widget_late_cancellation_clears_and_revokes_session(
+    session, monkeypatch, qtbot, shutdown, boundary
+):
+    from buddy_desktop.account_widget import AccountWidget
+
+    client, requests, _ = session
+    widget = AccountWidget(client.api_url)
+    qtbot.addWidget(widget)
+    widget.session = client
+    entered, release = Event(), Event()
+    respond = auth.request_json
+
+    def blocked(request, **kwargs):
+        if request.full_url.endswith("/" + boundary):
+            entered.set()
+            assert release.wait(5), "Test did not release the provider response"
+        return respond(request, **kwargs)
+
+    monkeypatch.setattr(auth, "request_json", blocked)
+    widget.start("signin")
+    try:
+        if boundary == "queued_result":
+            # Complete the worker without dispatching its queued success on the GUI thread.
+            assert widget.runner.pool.waitForDone(5000)
+            assert client.tokens is not None
+        else:
+            qtbot.waitUntil(entered.is_set, timeout=5000)
+        if shutdown:
+            widget.shutdown()
+        else:
+            widget.cancel.click()
+        release.set()
+        qtbot.waitUntil(lambda: not widget.runner.busy, timeout=5000)
+        assert client.tokens is None
+        assert client.store.read() is None
+        assert client.store.token is None
+        assert any(request.full_url.endswith("/revoke") for request in requests)
+        assert widget.message.text() != "Signed in to Buddy."
+        assert not widget.timer.isActive()
+    finally:
+        release.set()
+        widget.runner.wait_for_shutdown()

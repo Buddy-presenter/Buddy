@@ -207,21 +207,40 @@ class AccountSession:
         )
 
     def accept(self, tokens: Tokens, *, fresh: bool) -> str:
+        self.tokens = tokens
         try:
             if self.cancelled.is_set():
                 raise IdentityError("Sign-in was cancelled.")
             self.store.save(tokens.refresh, fresh=fresh)
+            account = self.account()
+            if self.cancelled.is_set():
+                raise IdentityError("Sign-in was cancelled.")
+            return account
         except IdentityError:
             with suppress(IdentityError):
-                self.revoke(tokens.refresh)
-            self.tokens = None
+                self.discard()
             raise
-        self.tokens = tokens
-        try:
-            return self.account()
-        except IdentityError:
-            self.tokens = None
-            raise
+
+    def discard(self) -> str:
+        """Invalidate an abandoned session without opening another browser flow."""
+        refresh = self.tokens.refresh if self.tokens else self.pending_revocation
+        self.tokens = None
+        errors = []
+        for operation in (self.store.block, self.store.delete):
+            try:
+                operation()
+            except IdentityError as exc:
+                errors.append(str(exc))
+        if refresh:
+            self.pending_revocation = refresh
+            try:
+                self.revoke(refresh)
+                self.pending_revocation = None
+            except IdentityError:
+                errors.append("Online revocation failed. Retry sign-out when connected.")
+        if errors:
+            raise IdentityError(" ".join(errors))
+        return "Sign-in was cancelled."
 
     def sign_in(self, action: str = "signin") -> str:
         state, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(64)

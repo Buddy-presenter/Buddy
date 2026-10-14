@@ -107,6 +107,9 @@ class AccountWidget(QWidget):
         self.runner.submit(work)
 
     def completed(self, _identifier: int, result: object) -> None:
+        if self.closing or (self.session and self.session.cancelled.is_set()):
+            self.message.setText("Sign-in was cancelled.")
+            return
         self.message.setText(
             "Signed out." if self.operation == "signout" else "Signed in to Buddy."
         )
@@ -119,6 +122,21 @@ class AccountWidget(QWidget):
             self.session.tokens = None
 
     def idle(self) -> None:
+        session = self.session
+        # Cancel may arrive after worker completion but before its queued Qt result.
+        # Finish cleanup on the worker before allowing another operation or closing.
+        if session and session.cancelled.is_set() and session.tokens is not None:
+
+            def cleanup() -> str:
+                try:
+                    return session.discard()
+                except IdentityError as exc:
+                    raise ServiceError(str(exc)) from None
+
+            self.runner.submit(cleanup)
+            return
+        if self.closing:
+            self.runner.stop()
         for action, button in self.buttons.items():
             signed_in = self.session is not None and self.session.tokens is not None
             button.setEnabled(
@@ -140,5 +158,7 @@ class AccountWidget(QWidget):
     def shutdown(self) -> None:
         self.closing = True
         self.timer.stop()
-        self.cancel_operation()
-        self.runner.stop()
+        if self.runner.busy:
+            self.cancel_operation()
+        else:
+            self.runner.stop()
