@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import pytest
 from alembic import command
+from alembic.script import ScriptDirectory
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.schema import CreateSchema, DropSchema
@@ -352,11 +353,14 @@ def test_concurrent_migration_processes_serialize(database_settings):
 
 
 def test_failed_ddl_migration_rolls_back_atomically(database_settings, tmp_path):
+    previous_head = ScriptDirectory.from_config(
+        migration_config(database_settings)
+    ).get_current_head()
     folder = tmp_path / "migrations"
     shutil.copytree(migration_config(database_settings).get_main_option("script_location"), folder)
     (folder / "versions/0002_failure.py").write_text(
         "from alembic import op\nimport sqlalchemy as sa\n"
-        'revision="0002_failure"\ndown_revision="0001_initial"\n'
+        f'revision="synthetic_failure"\ndown_revision="{previous_head}"\n'
         "def upgrade():\n"
         '    op.create_table("migration_probe", sa.Column("id",sa.Integer()))\n'
         '    raise RuntimeError("synthetic migration failure")\n'
@@ -384,7 +388,7 @@ def test_failed_ddl_migration_rolls_back_atomically(database_settings, tmp_path)
                 ).scalar_one() is None
                 assert (
                     await connection.execute(text("SELECT version_num FROM alembic_version"))
-                ).scalar_one() == "0001_initial"
+                ).scalar_one() == previous_head
                 assert (
                     await connection.execute(text("SELECT count(*) FROM users"))
                 ).scalar_one() == 1

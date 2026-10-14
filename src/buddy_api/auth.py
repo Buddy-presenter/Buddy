@@ -4,6 +4,7 @@ import json
 import re
 import time
 from collections import OrderedDict
+from dataclasses import dataclass
 from threading import Lock
 from typing import Annotated, Any
 from urllib.request import Request as HttpRequest
@@ -106,31 +107,32 @@ class CognitoVerifier:
         return self.config.issuer + "#" + str(claims["sub"])
 
 
-def auth_router(config: IdentityConfig | None) -> APIRouter:
-    router = APIRouter(prefix="/api/v1/auth", tags=["account"])
-    verifier = CognitoVerifier(config) if config else None
-    limiter = AttemptLimiter()
+@dataclass(frozen=True)
+class Principal:
+    """An account resolved from verified provider state, never a client-supplied UUID."""
 
-    @router.get(
-        "/me",
-        response_model=AccountResponse,
-        responses={code: {"model": ErrorResponse} for code in (401, 429, 503)},
-    )
-    async def account(
-        request: Request, authorization: Annotated[str | None, Header()] = None
-    ) -> AccountResponse:
-        if not limiter.allow(request.client.host if request.client else "unknown"):
+    id: UUID
+
+
+class Authentication:
+    def __init__(self, config: IdentityConfig | None) -> None:
+        self.verifier = CognitoVerifier(config) if config else None
+        self.limiter = AttemptLimiter()
+
+    async def identify(self, request: Request, authorization: str | None) -> Principal:
+        if not self.limiter.allow(request.client.host if request.client else "unknown"):
             raise HTTPException(429, headers={"Retry-After": "60"})
-        if verifier is None or request.app.state.database is None:
+        if self.verifier is None or request.app.state.database is None:
             raise HTTPException(503)
         if (
             not authorization
             or not authorization.startswith("Bearer ")
             or len(authorization) > 16384
+            or not authorization[7:].strip()
         ):
             raise HTTPException(401, headers={"WWW-Authenticate": "Bearer"})
         try:
-            subject = await run_in_threadpool(verifier.verify, authorization[7:])
+            subject = await run_in_threadpool(self.verifier.verify, authorization[7:])
             async with request.app.state.database.sessions() as session, session.begin():
                 await session.execute(
                     insert(User)
@@ -144,6 +146,37 @@ def auth_router(config: IdentityConfig | None) -> APIRouter:
             raise HTTPException(401, headers={"WWW-Authenticate": "Bearer"}) from None
         except (IdentityError, SQLAlchemyError, OSError, TimeoutError):
             raise HTTPException(503) from None
-        return AccountResponse(data=AccountData(id=identifier), request_id=request.state.request_id)
+        return Principal(identifier)
+
+
+async def authenticated(
+    request: Request, authorization: Annotated[str | None, Header()] = None
+) -> Principal:
+    authentication: Authentication = request.app.state.authentication
+    if (
+        not authorization
+        or not authorization.startswith("Bearer ")
+        or not authorization[7:].strip()
+    ):
+        raise HTTPException(401, headers={"WWW-Authenticate": "Bearer"})
+    return await authentication.identify(request, authorization)
+
+
+def auth_router(config: IdentityConfig | None) -> APIRouter:
+    router = APIRouter(prefix="/api/v1/auth", tags=["account"])
+
+    @router.get(
+        "/me",
+        response_model=AccountResponse,
+        responses={code: {"model": ErrorResponse} for code in (401, 429, 503)},
+    )
+    async def account(
+        request: Request, authorization: Annotated[str | None, Header()] = None
+    ) -> AccountResponse:
+        authentication: Authentication = request.app.state.authentication
+        principal = await authentication.identify(request, authorization)
+        return AccountResponse(
+            data=AccountData(id=principal.id), request_id=request.state.request_id
+        )
 
     return router

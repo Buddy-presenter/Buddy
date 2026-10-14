@@ -15,6 +15,7 @@ from buddy_api.persistence.models import (
     Deck,
     PresentationSession,
     ProcessingJob,
+    RenderedAsset,
     User,
 )
 from buddy_api.persistence.repositories import Repositories
@@ -58,6 +59,7 @@ class Database:
                     ProcessingJob.id,
                     AnalysisVersion.id,
                     PresentationSession.id,
+                    RenderedAsset.id,
                 ):
                     await connection.execute(select(identifier).limit(0))
         except (SQLAlchemyError, OSError, TimeoutError):
