@@ -20,6 +20,32 @@ text/shape geometry; semantic graphs and corrections; microphone audio; transcri
 presentation state/history; QA screenshots; prepared demo inputs/outputs; signing keys
 and provider/cloud secrets. Presentation material and speech are private by default.
 
+## Sprint 2 analysis scope decision
+
+Sprint 2 sends the accepted original PPTX file unchanged to the selected analysis
+provider. There is no content cleaning, redaction, anonymization, PDF/image substitution,
+privacy-settings product, policy-revision acknowledgement gate, provider-retention
+approval workflow, or separate retention-policy workstream. Issue
+[#36](https://github.com/HusseinMoukalled/Buddy/issues/36) is cancelled, not implemented,
+and is not a prerequisite for Sprint 2. This decision supersedes the older minimum-context,
+provider-disclosure/retention and policy-release requirements below for this presentation
+analysis scope; historical #36 references do not restore those requirements.
+
+[#12](https://github.com/HusseinMoukalled/Buddy/issues/12) owns selecting and verifying a
+real provider/API that accepts the original PPTX, checking submitted source bytes/hash,
+and delivering the three outputs: presentation summary, per-slide content summaries and
+parameterized catalog actions with purpose descriptions. Internal extraction/rendering
+supports stable slide IDs, geometry, previews and executor tests; it does not replace the
+provider's original-file input. Unsupported provider input is an integration blocker,
+not permission to silently convert the file.
+
+Private storage, server-side ownership checks, server-side provider credentials, TLS,
+safe handling of untrusted files/model output, bounded jobs/spend and failure cleanup
+remain required. Operational cleanup/resource limits are chosen by engineers and do not
+require a new policy subsystem. Future speech/session/deletion features remain separately
+scoped. This records the intended implementation; it does not claim the pipeline is
+already implemented or deployed.
+
 ## Data flows and trust boundaries
 
 | Flow | Boundaries crossed | Data | Required controls and implementation owners |
@@ -27,7 +53,7 @@ and provider/cloud secrets. Presentation material and speech are private by defa
 | Sign-in | Desktop → identity service/API → OS credential store | Account identifiers, session tokens | S01/S02; [#5](https://github.com/HusseinMoukalled/Buddy/issues/5), [#31](https://github.com/HusseinMoukalled/Buddy/issues/31) |
 | PPTX upload | Native file selection → desktop network adapter → API → private storage | PPTX, notes, filename | S02/S03/S04; [#7](https://github.com/HusseinMoukalled/Buddy/issues/7), [#37](https://github.com/HusseinMoukalled/Buddy/issues/37) |
 | Deck processing | Queue → isolated worker → converter/extractor → database/storage | Untrusted archives, fonts, images, shapes, derived assets | S03/S04/S05; [#8](https://github.com/HusseinMoukalled/Buddy/issues/8)–[#12](https://github.com/HusseinMoukalled/Buddy/issues/12) |
-| Analysis | Worker → configured model/provider → graph validator → database | Minimum necessary slide/text context, candidate regions | S05/S06/S10; [#11](https://github.com/HusseinMoukalled/Buddy/issues/11), [#12](https://github.com/HusseinMoukalled/Buddy/issues/12), [#36](https://github.com/HusseinMoukalled/Buddy/issues/36) |
+| Analysis | Worker → configured provider accepting original PPTX → typed summary/action validation → database | Original PPTX unchanged, finite catalog/instructions; three analysis outputs | S01–S05/S08/S13 subject to the Sprint 2 scope decision above; [#11](https://github.com/HusseinMoukalled/Buddy/issues/11), [#12](https://github.com/HusseinMoukalled/Buddy/issues/12), [#47](https://github.com/HusseinMoukalled/Buddy/issues/47), [#49](https://github.com/HusseinMoukalled/Buddy/issues/49) |
 | Microphone/ASR | OS capture device → bounded desktop buffers → backend/provider | Live audio, partial/final transcript | S06/S07/S10; [#15](https://github.com/HusseinMoukalled/Buddy/issues/15), [#16](https://github.com/HusseinMoukalled/Buddy/issues/16), [#18](https://github.com/HusseinMoukalled/Buddy/issues/18), [#36](https://github.com/HusseinMoukalled/Buddy/issues/36) |
 | Live presentation | Desktop ↔ authenticated session/event API → resolver/model → policy/executor → audience window | Deck snapshot, rolling context, action IDs, state versions | S02/S05/S08/S09; [#17](https://github.com/HusseinMoukalled/Buddy/issues/17)–[#22](https://github.com/HusseinMoukalled/Buddy/issues/22), [#33](https://github.com/HusseinMoukalled/Buddy/issues/33) |
 | Preflight QA | Test-only process/tools → actual audience viewport → private evidence storage → owner inspection | Action versions, screenshots, visual verdicts/corrections | S02/S05/S11; [#47](https://github.com/HusseinMoukalled/Buddy/issues/47)–[#53](https://github.com/HusseinMoukalled/Buddy/issues/53) |
