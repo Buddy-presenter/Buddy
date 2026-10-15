@@ -1,24 +1,28 @@
 # Buddy API foundation
 
 The API is a separate server process used by the native desktop client and future
-processing workers. It is not a browser frontend. This increment has only operational
-endpoints. [PostgreSQL persistence](../database.md) supplies internal durable records;
-account, deck and presentation workflows remain separate issues.
+processing workers; it is not a browser frontend. The implemented service includes
+operational health/readiness/version endpoints, Cognito account identity, server-side
+authorization, and persisted library reads. Upload, processing, analysis, and live
+presentation workflows remain separate issues. [PostgreSQL persistence](../database.md)
+describes the durable records and local database setup.
 
 ## Start locally
 
-Install Python 3.12–3.14 and use the repository's virtual environment:
+Install Python 3.12–3.14. From the repository root, install the shared identity package and backend API extra into the active virtual environment:
 
 ```powershell
 # Windows PowerShell, from the repository root
-.\.venv\Scripts\python.exe -m pip install -e ".[api,dev]"
+.\.venv\Scripts\python.exe -m pip install -e .\shared
+.\.venv\Scripts\python.exe -m pip install -e ".\backend[api,dev]"
 $env:BUDDY_ENVIRONMENT = 'development'
 .\.venv\Scripts\python.exe -m buddy_api
 ```
 
 ```sh
 # macOS/Linux, from the repository root
-.venv/bin/python -m pip install -e '.[api,dev]'
+.venv/bin/python -m pip install -e ./shared
+.venv/bin/python -m pip install -e './backend[api,dev]'
 export BUDDY_ENVIRONMENT=development
 .venv/bin/python -m buddy_api
 ```
@@ -28,9 +32,9 @@ export BUDDY_ENVIRONMENT=development
 desktop in another terminal and click Check connection. Development API documentation
 is at `http://127.0.0.1:8000/docs`; its generated schema is at `/openapi.json`.
 
-The package contains both namespaces; installing the `api` extra adds the pinned
-FastAPI/Uvicorn/Pydantic dependencies. API requests do not create a Qt event loop or
-import the desktop UI. Signed installers/service distribution remain separate release work.
+The backend project installs `buddy_api`; the shared identity package is installed as a
+separate local project. API requests do not create a Qt event loop or import the desktop
+UI. Signed installers/service distribution remain separate release work.
 
 ## Configuration and failure behavior
 
@@ -96,8 +100,8 @@ not swallow cancellation or block the event loop with synchronous network work.
 python -m buddy_api.schema                  # regenerate docs/api/openapi.json
 python -m buddy_api.schema --check          # exact snapshot matches real route models
 python -m buddy_api.schema --check --compare-ref origin/main
-python -m pytest tests/api
-python scripts/smoke_api.py
+python scripts/test.py api
+python backend/scripts/smoke_api.py
 ```
 
 Generation uses explicit test configuration and needs no secrets or running backend.

@@ -4,7 +4,7 @@ import json
 import os
 from pathlib import Path
 
-from scripts.release.smoke_package import verify
+from frontend.scripts.release.smoke_package import verify
 
 
 def publish(folder: Path, s3, sts) -> None:

@@ -8,7 +8,7 @@ from buddy_api.schema import breaking_changes, generate_schema
 
 
 def test_openapi_snapshot_matches_real_routes_and_contracts():
-    snapshot = Path(__file__).resolve().parents[2] / "docs" / "api" / "openapi.json"
+    snapshot = Path(__file__).resolve().parents[3] / "docs" / "api" / "openapi.json"
     assert json.loads(snapshot.read_text(encoding="utf-8")) == generate_schema()
 
 

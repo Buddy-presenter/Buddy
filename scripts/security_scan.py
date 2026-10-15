@@ -7,6 +7,19 @@ import tempfile
 from pathlib import Path
 
 
+def scan_targets(root: Path) -> list[Path]:
+    """Return every maintained application and operational code directory."""
+    return [
+        root / "frontend/src",
+        root / "backend/src",
+        root / "shared/src",
+        root / "frontend/scripts",
+        root / "backend/scripts",
+        root / "backend/migrations",
+        root / "scripts",
+    ]
+
+
 def complete_and_clean(report: object) -> bool:
     if not isinstance(report, dict):
         return False
@@ -15,6 +28,7 @@ def complete_and_clean(report: object) -> bool:
 
 
 def main() -> int:
+    root = Path(__file__).resolve().parents[1]
     with tempfile.TemporaryDirectory() as directory:
         output = Path(directory) / "bandit.json"
         result = subprocess.run(
@@ -23,8 +37,7 @@ def main() -> int:
                 "-m",
                 "bandit",
                 "-r",
-                "src",
-                "scripts",
+                *(str(path.relative_to(root)) for path in scan_targets(root)),
                 "--severity-level",
                 "high",
                 "--confidence-level",
@@ -34,7 +47,7 @@ def main() -> int:
                 "-o",
                 str(output),
             ],
-            cwd=Path(__file__).resolve().parents[1],
+            cwd=root,
             check=False,
         )
         try:

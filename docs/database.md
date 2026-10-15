@@ -11,8 +11,10 @@ run explicitly before API startup; the API never creates or upgrades tables itse
 
 ## Install and choose a local server
 
-Use Python 3.12–3.14 and install `python -m pip install -e '.[api,dev]'` in the project's
-virtual environment. PostgreSQL **18** is tested; use the current supported patch release.
+Use Python 3.12–3.14 and install the shared package and backend API extra in the virtual
+environment: `python -m pip install -e ./shared` followed by
+`python -m pip install -e './backend[api,dev]'`. PostgreSQL **18** is tested; use the
+current supported patch release.
 SQLAlchemy's asynchronous asyncpg driver keeps database I/O outside the API event loop.
 
 **Native or existing PostgreSQL:** install from [PostgreSQL's official downloads](https://www.postgresql.org/download/)
@@ -132,14 +134,14 @@ PostgreSQL or an optional container. Set `BUDDY_TEST_DATABASE_URL` to its Postgr
 (PowerShell `$env:... = '...'` or shell `export ...='...'`) and run:
 
 ```sh
-python -m pytest tests/api/test_database.py --strict-markers
+python scripts/test.py database
 python -m pytest
 python -m ruff format --check .
 python -m ruff check .
 python -m mypy
 python -m buddy_api.schema --check --compare-ref origin/main
 python -m build
-python scripts/smoke_api.py --database   # uses migrated BUDDY_DATABASE_URL
+python backend/scripts/smoke_api.py --database   # uses migrated BUDDY_DATABASE_URL
 ```
 
 Tests refuse a database name not ending `_test`. Each test creates and drops only its own

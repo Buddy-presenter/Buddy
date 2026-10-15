@@ -1,5 +1,6 @@
 """Locate immutable packaged migrations, independent of the working directory."""
 
+from importlib.resources import files
 from pathlib import Path
 
 from alembic.config import Config
@@ -11,7 +12,9 @@ from buddy_api.persistence.settings import DatabaseSettings
 
 def migration_config(settings: DatabaseSettings, connection: Connection | None = None) -> Config:
     config = Config()
-    config.set_main_option("script_location", str(Path(__file__).with_name("migrations")))
+    packaged = files("buddy_api").joinpath("persistence", "migrations")
+    source = Path(__file__).resolve().parents[3] / "migrations"
+    config.set_main_option("script_location", str(packaged if packaged.is_dir() else source))
     config.attributes["database_settings"] = settings
     if connection is not None:
         config.attributes["connection"] = connection

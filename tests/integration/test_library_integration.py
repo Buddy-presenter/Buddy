@@ -11,10 +11,10 @@ from threading import Event, Thread
 from types import SimpleNamespace
 
 import pytest
+from backend.tests.support.database import database_settings as database_settings
+from backend.tests.support.database import migrate
 from fastapi.testclient import TestClient
 from sqlalchemy import select
-from support.database import database_settings as database_settings
-from support.database import migrate
 
 from buddy_api.app import create_app
 from buddy_api.auth import CognitoVerifier

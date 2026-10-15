@@ -3,7 +3,7 @@
 import sys
 
 if "--smoke-test" in sys.argv:
-    from scripts.smoke_desktop import main
+    from frontend.scripts.smoke_desktop import main
 
     sys.argv = [sys.argv[0]]
 else:

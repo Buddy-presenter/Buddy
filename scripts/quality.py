@@ -7,8 +7,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 APPLICATIONS = {
-    "desktop": ROOT / "src" / "buddy_desktop",
-    "api": ROOT / "src" / "buddy_api",
+    "desktop": [ROOT / "frontend/src/buddy_desktop", ROOT / "shared/src/buddy_identity"],
+    "api": [ROOT / "backend/src/buddy_api", ROOT / "shared/src/buddy_identity"],
 }
 
 
@@ -18,16 +18,16 @@ def main() -> int:
     parser.add_argument("command", choices=["format", "format-check", "lint", "type", "check"])
     args = parser.parse_args()
     targets = (
-        list(APPLICATIONS.values())
+        list(dict.fromkeys(path for group in APPLICATIONS.values() for path in group))
         if args.application == "all"
-        else [APPLICATIONS[args.application]]
+        else APPLICATIONS[args.application]
     )
     for target in targets:
         if not target.is_dir():
             print(f"Application source is missing: {target.relative_to(ROOT)}", file=sys.stderr)
             return 2
     # The all target checks shared scripts/tests as well as both application packages.
-    formatting_paths = ["."] if args.application == "all" else [str(targets[0])]
+    formatting_paths = ["."] if args.application == "all" else [str(path) for path in targets]
     typing_paths = [str(target) for target in targets]
     operations = {
         "format": ["ruff", "format", *formatting_paths],

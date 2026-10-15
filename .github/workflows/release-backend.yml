@@ -78,4 +78,4 @@ jobs:
             args+=(--api-image "$API_IMAGE")
             if [ -n "$WORKER_IMAGE" ]; then args+=(--worker-image "$WORKER_IMAGE"); fi
           fi
-          python scripts/release/deploy.py "${args[@]}"
+          python backend/scripts/release/deploy.py "${args[@]}"

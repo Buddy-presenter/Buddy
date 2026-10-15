@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling==1.32.4"]
+build-backend = "hatchling.build"
+
+[project]
+name = "buddy-desktop"
+version = "0.1.0"
+description = "Buddy context-aware presenter companion desktop client"
+readme = "README.md"
+requires-python = ">=3.12,<3.15"
+dependencies = ["PySide6-Essentials==6.12.0", "keyring==25.7.0", "buddy-identity==0.1.0"]
+
+[project.optional-dependencies]
+dev = ["build==1.6.1", "mypy==2.4.0", "pytest==9.1.1", "pytest-qt==4.5.0", "ruff==0.17.0"]
+
+[project.gui-scripts]
+buddy = "buddy_desktop.app:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/buddy_desktop"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/buddy_desktop/**", "pyproject.toml", "README.md"]

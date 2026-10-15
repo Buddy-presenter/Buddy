@@ -1,0 +1,15 @@
+[build-system]
+requires = ["hatchling==1.32.4"]
+build-backend = "hatchling.build"
+
+[project]
+name = "buddy-identity"
+version = "0.1.0"
+description = "Shared identity-provider configuration and transport contracts for Buddy"
+requires-python = ">=3.12,<3.15"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/buddy_identity"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/buddy_identity/**", "pyproject.toml"]

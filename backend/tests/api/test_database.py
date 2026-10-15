@@ -10,10 +10,10 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from alembic.script import ScriptDirectory
+from backend.tests.support.database import database_settings as database_settings
+from backend.tests.support.database import migrate
 from fastapi.testclient import TestClient
 from sqlalchemy import text
-from support.database import database_settings as database_settings
-from support.database import migrate
 
 from buddy_api.app import create_app
 from buddy_api.config import Environment, Settings

@@ -152,7 +152,8 @@ terraform -chdir=infra/terraform fmt -check -recursive
 terraform -chdir=infra/terraform/modules/environment init -backend=false -lockfile=readonly
 terraform -chdir=infra/terraform/modules/environment validate
 terraform -chdir=infra/terraform/modules/environment test
-python -m pip install -e '.[api,dev]' boto3==1.40.50
+python -m pip install -e ./shared
+python -m pip install -e './backend[api,dev]' boto3==1.40.50
 python -m pytest -p no:pytest-qt infra/tests
 ```
 

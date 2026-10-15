@@ -13,15 +13,18 @@ def checkout(tmp_path):
     root = tmp_path / "checkout"
     (root / "scripts").mkdir(parents=True)
     shutil.copyfile(
-        Path(__file__).resolve().parents[1] / "scripts/quality.py", root / "scripts/quality.py"
+        Path(__file__).resolve().parents[2] / "scripts/quality.py", root / "scripts/quality.py"
     )
     (root / "pyproject.toml").write_text(
         "[tool.ruff]\nline-length = 100\n[tool.mypy]\nstrict = true\n", encoding="utf-8"
     )
-    for package in ["buddy_desktop", "buddy_api"]:
-        source = root / "src" / package
+    for component, package in [("frontend", "buddy_desktop"), ("backend", "buddy_api")]:
+        source = root / component / "src" / package
         source.mkdir(parents=True)
         (source / "__init__.py").write_text('value: str = "valid"\n', encoding="utf-8")
+    shared = root / "shared/src/buddy_identity"
+    shared.mkdir(parents=True)
+    (shared / "__init__.py").write_text('value: str = "valid"\n', encoding="utf-8")
     return root
 
 
@@ -41,7 +44,7 @@ def test_checks_use_checkout_configuration_from_other_directory(checkout, target
 
 
 def test_formatting_is_explicit_and_failed_checks_stop_without_mutation(checkout):
-    source = checkout / "src/buddy_api/__init__.py"
+    source = checkout / "backend/src/buddy_api/__init__.py"
     original = 'value:str="valid"\n'
     source.write_text(original, encoding="utf-8")
     failed = run(checkout, "api", "check")
@@ -54,7 +57,7 @@ def test_formatting_is_explicit_and_failed_checks_stop_without_mutation(checkout
 
 @pytest.mark.parametrize("command,source", [("lint", "import os\n"), ("type", "value: str = 1\n")])
 def test_tool_failures_propagate(checkout, command, source):
-    (checkout / "src/buddy_api/__init__.py").write_text(source, encoding="utf-8")
+    (checkout / "backend/src/buddy_api/__init__.py").write_text(source, encoding="utf-8")
     assert run(checkout, "api", command).returncode != 0
 
 
@@ -64,7 +67,7 @@ def test_invalid_arguments_are_rejected(checkout, arguments):
 
 
 def test_missing_application_is_reported(checkout):
-    shutil.rmtree(checkout / "src/buddy_api")
+    shutil.rmtree(checkout / "backend/src/buddy_api")
     result = run(checkout, "api", "check")
     assert result.returncode == 2
     assert "Application source is missing" in result.stderr

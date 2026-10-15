@@ -107,14 +107,14 @@ failure, rollback and backup restoration in staging and record evidence before p
 
 ## Verification and remaining external prerequisites
 
-Run python -m pytest tests/test_release.py for migration-failure, unhealthy promotion,
+Run python -m pytest tests/integration/test_release.py for migration-failure, unhealthy promotion,
 explicit rollback audit success/failure, repeated-SHA history preservation,
 durable migration setup/rejection/exit/timeout failures and audit-write guards,
 cross-environment rejection, CI and tampering regressions.
 Native packaging CI executes actual installers/applications without provider credentials.
 Local native packaging requires PyInstaller 6.22.3 and Inno Setup 6 on Windows; use
-python scripts/release/build_desktop.py --output packaged --revision <reviewed full SHA>
-then python scripts/release/smoke_package.py packaged on a disposable native environment.
+python frontend/scripts/release/build_desktop.py --output packaged --revision <reviewed full SHA>
+then python frontend/scripts/release/smoke_package.py packaged on a disposable native environment.
 
 No AWS deployment, Apple notarization or trusted Windows signing is claimed until real
 protected environments, provider access and signing identities are supplied. Live staging

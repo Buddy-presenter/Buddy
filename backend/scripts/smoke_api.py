@@ -1,4 +1,4 @@
-"""Start the real ASGI server on an isolated socket and verify HTTP and desktop integration."""
+"""Start the real ASGI server on an isolated socket and verify HTTP readiness contracts."""
 
 import argparse
 import json
@@ -14,8 +14,6 @@ import uvicorn
 from buddy_api.app import create_app
 from buddy_api.config import Environment, Settings
 from buddy_api.persistence.settings import DatabaseSettings
-from buddy_desktop.config import AppConfig
-from buddy_desktop.services import HealthService
 
 
 def main() -> int:
@@ -49,11 +47,14 @@ def main() -> int:
                     raise RuntimeError("API did not start within the smoke-check deadline.")
                 time.sleep(0.02)
             base_url = f"http://127.0.0.1:{port}"
-            assert HealthService(AppConfig(base_url, 2)).check().status == "ok"
-            for path in ["/api/v1/health", "/api/v1/version"]:
+            for path in ["/health", "/api/v1/health", "/api/v1/version"]:
                 with urlopen(base_url + path, timeout=2) as response:
                     payload = json.load(response)
-                    assert payload["request_id"] == response.headers["X-Request-ID"]
+                    assert response.headers.get_content_type() == "application/json"
+                    if path == "/health":
+                        assert payload["status"] == "ok"
+                    else:
+                        assert payload["request_id"] == response.headers["X-Request-ID"]
             if database is not None:
                 with urlopen(base_url + "/api/v1/ready", timeout=5) as response:
                     assert json.load(response)["data"]["dependencies"] == [
@@ -70,7 +71,7 @@ def main() -> int:
                     assert payload["error"]["details"] == [
                         {"location": "database", "code": "dependency_unavailable"}
                     ]
-            print("Real API HTTP startup, readiness and desktop health integration passed.")
+            print("Real API HTTP startup and readiness checks passed.")
         except (AssertionError, RuntimeError, URLError, OSError, ValueError) as exc:
             print(f"API smoke check failed: {type(exc).__name__}", file=sys.stderr)
             result = 1

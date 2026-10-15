@@ -3,15 +3,16 @@
 Use Python 3.12 or 3.14 and install the pinned extras from the repository root:
 
 ```sh
-python -m pip install -e ".[api,dev]"
+python -m pip install -e ./shared
+python -m pip install -e './frontend[dev]' './backend[api,dev]'
 python scripts/test.py all
 python scripts/test.py desktop
 python scripts/test.py api
 ```
 
-`desktop` runs the desktop, identity and repository-tool tests without the API tests.
-`api` disables the Qt pytest plugin, so it also runs on a server without a display.
-`all` includes both. These commands propagate pytest failures and use strict markers.
+`desktop` runs the desktop tests. `api` disables the Qt pytest plugin, so it also runs on a
+server without a display. `all` runs both component suites, repository tests, and
+cross-component tests; PostgreSQL-marked cases skip there if no test URL is configured. These commands propagate pytest failures and use strict markers.
 Database tests skip unless a disposable database is configured; that skip is not evidence
 of database acceptance. No AI, ASR, storage, payment or production identity credentials
 are needed. Existing identity tests inject synthetic verifier/token-store adapters.
@@ -36,14 +37,13 @@ explicit database command against its disposable PostgreSQL service.
 
 ## Shared fixtures
 
-`tests/api/conftest.py` provides `api_client`, `api_client_factory`, `database_settings`
+`backend/tests/api/conftest.py` provides `api_client`, `api_client_factory`, `database_settings`
 and `migrated_database`. Clients enter the actual FastAPI lifespan and close on teardown.
 The factory accepts explicit test `Settings`, including synthetic identity configuration;
-it rejects production configuration. `tests/support/database.py` exposes the isolation
-fixture and migration helper for future processing-worker tests too. Existing imports
-from `api.test_database` remain compatible with the authorization PR.
+it rejects production configuration. `backend/tests/support/database.py` exposes the isolation fixture and migration helper for
+backend tests. Cross-component database/Qt coverage lives in `tests/integration/`.
 
-`tests/conftest.py` provides:
+`frontend/tests/conftest.py` provides:
 
 - `desktop_window`: a factory for actual MainWindow instances with separate temporary INI
   settings, bounded network timeouts and Qt teardown. It clears identity configuration
@@ -71,7 +71,7 @@ identity, error, cancellation and Qt lifecycle tests remain in the suites.
 CI runs the Qt suite and built-wheel GUI smoke on Windows and macOS for Python 3.12/3.14.
 Windows uses native Qt. macOS CI uses Qt's offscreen platform; local interactive tests use
 the normal platform unless you set `QT_QPA_PLATFORM=offscreen`. API CI runs on Linux with
-PostgreSQL. Existing `scripts/smoke_desktop.py` and `scripts/smoke_api.py --database` verify
+PostgreSQL. Existing `frontend/scripts/smoke_desktop.py` and `backend/scripts/smoke_api.py --database` verify
 the installed applications, beyond pytest's editable-install checks.
 
 There is no processing-worker application or capture/device contract on main. Issue #8
