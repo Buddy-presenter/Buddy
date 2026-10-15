@@ -105,6 +105,10 @@ jobs:
         run: |
           python scripts/test.py api
           python scripts/test.py database
+      - name: Install Qt runtime libraries for desktop integration tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libegl1
       - name: Cross-component desktop, API and PostgreSQL integration
         run: python scripts/test.py integration
       - run: python -m build backend
