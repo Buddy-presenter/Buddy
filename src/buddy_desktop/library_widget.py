@@ -271,8 +271,9 @@ class LibraryWidget(QWidget):
         if not isinstance(result, LibraryPage):
             self.failed(_identifier, "The backend returned an invalid library response.")
             return
-        if not result.items and result.total and self.page > ceil(result.total / 20):
-            self.page = ceil(result.total / 20)
+        last_page = max(1, ceil(result.total / result.page_size))
+        if not result.items and self.page > last_page:
+            self.page = last_page
             self.pending = True
             return
         self.last_page = result

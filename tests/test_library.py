@@ -256,14 +256,15 @@ def test_shutdown_discards_results_and_keeps_event_loop_running(desktop_window, 
     assert library.table.rowCount() == 0
 
 
+@pytest.mark.parametrize("remaining", [0, 1], ids=["empty-collection", "nonempty-collection"])
 def test_disappeared_page_recovers_and_account_check_preserves_page(
-    desktop_window, monkeypatch, qtbot
+    desktop_window, monkeypatch, qtbot, remaining
 ):
     calls = []
 
     def listing(self, access, *, search, sort, page):
         calls.append(page)
-        count = 21 if len(calls) == 1 else 1
+        count = 21 if len(calls) == 1 else remaining
         rows = (
             ()
             if page > 1
@@ -283,7 +284,11 @@ def test_disappeared_page_recovers_and_account_check_preserves_page(
     assert library.page == 2
     qtbot.waitUntil(lambda: not library.runner.busy and len(calls) == 3)
     assert calls == [1, 2, 1]
-    assert library.page == 1 and library.table.rowCount() == 1
+    assert library.page == 1 and library.table.rowCount() == remaining
+    assert library.count.text().startswith("Page 1 of 1")
+    assert not library.previous.isEnabled() and not library.next.isEnabled()
+    if remaining == 0:
+        assert library.state.title.text() == "No saved decks"
 
 
 def test_backend_switch_and_abandoned_view_ignore_late_results(desktop_window, backend, qtbot):
