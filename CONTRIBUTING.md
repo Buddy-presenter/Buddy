@@ -54,9 +54,8 @@ do not reassign another contributor's issue or change its status as part of your
 The empty main baseline was initialized solely to make the first PR possible. Its
 one-time creation exception is not permission to bypass protections for future work.
 
-Read [the security baseline](docs/security-baseline.md) for required controls, implementation
-owners, and unresolved release blockers. It is a requirement document, not a claim that
-the listed authentication, privacy or deployment controls have already shipped.
+Read the [authorization](docs/authorization.md), [CI](docs/ci.md), and
+[deployment](docs/deployment.md) guides for the applicable security and operations controls.
 
 See [Project status automation](docs/project-status-automation.md) for workflow setup,
 status semantics, and limitations. The Issues and Waves views share the same Status field.
