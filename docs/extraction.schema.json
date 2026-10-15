@@ -1,0 +1,300 @@
+{
+  "$defs": {
+    "Bounds": {
+      "additionalProperties": false,
+      "properties": {
+        "height": {
+          "minimum": 0,
+          "title": "Height",
+          "type": "number"
+        },
+        "width": {
+          "minimum": 0,
+          "title": "Width",
+          "type": "number"
+        },
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "title": "Bounds",
+      "type": "object"
+    },
+    "ObjectKind": {
+      "enum": [
+        "shape",
+        "picture",
+        "chart",
+        "table",
+        "group",
+        "connector",
+        "unsupported"
+      ],
+      "type": "string"
+    },
+    "Point": {
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "title": "Point",
+      "type": "object"
+    },
+    "Slide": {
+      "additionalProperties": false,
+      "properties": {
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "index": {
+          "minimum": 0,
+          "title": "Index",
+          "type": "integer"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Notes"
+        },
+        "objects": {
+          "items": {
+            "$ref": "#/$defs/SlideObject"
+          },
+          "title": "Objects",
+          "type": "array"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "integer"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "source_id",
+        "index",
+        "width",
+        "height",
+        "text",
+        "notes",
+        "objects"
+      ],
+      "title": "Slide",
+      "type": "object"
+    },
+    "SlideObject": {
+      "additionalProperties": false,
+      "properties": {
+        "bounds": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Bounds"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "corners": {
+          "anyOf": [
+            {
+              "maxItems": 4,
+              "minItems": 4,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/Point"
+                },
+                {
+                  "$ref": "#/$defs/Point"
+                },
+                {
+                  "$ref": "#/$defs/Point"
+                },
+                {
+                  "$ref": "#/$defs/Point"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Corners"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ObjectKind"
+        },
+        "parent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent Id"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "integer"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "source_id",
+        "kind",
+        "text",
+        "bounds",
+        "corners"
+      ],
+      "title": "SlideObject",
+      "type": "object"
+    },
+    "Warning": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "object_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Object Id"
+        },
+        "slide_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Slide Id"
+        }
+      },
+      "required": [
+        "code"
+      ],
+      "title": "Warning",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "coordinate_units": {
+      "const": "EMU",
+      "default": "EMU",
+      "title": "Coordinate Units",
+      "type": "string"
+    },
+    "extractor_version": {
+      "const": "1",
+      "default": "1",
+      "title": "Extractor Version",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "buddy.extraction.v1",
+      "default": "buddy.extraction.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "slides": {
+      "items": {
+        "$ref": "#/$defs/Slide"
+      },
+      "title": "Slides",
+      "type": "array"
+    },
+    "source_revision": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_.:-]+$",
+      "title": "Source Revision",
+      "type": "string"
+    },
+    "source_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Source Sha256",
+      "type": "string"
+    },
+    "warnings": {
+      "items": {
+        "$ref": "#/$defs/Warning"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "source_revision",
+    "source_sha256",
+    "slides",
+    "warnings"
+  ],
+  "title": "Extraction",
+  "type": "object"
+}

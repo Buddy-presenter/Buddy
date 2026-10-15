@@ -69,3 +69,6 @@ Tests do not call paid providers or require production credentials.
 For feature-specific contracts, read the linked guide before editing. Keep tests with
 their owning component unless a test intentionally crosses a component boundary; those
 belong in `tests/integration/`.
+
+The standalone backend PPTX extraction stage and local inspection command are documented
+in [extraction](extraction.md); it requires no upload, worker, renderer or paid provider.

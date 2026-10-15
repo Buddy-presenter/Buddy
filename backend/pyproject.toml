@@ -15,13 +15,16 @@ api = [
   "fastapi==0.143.0", "uvicorn==0.54.0", "pydantic==2.14.1", "starlette==1.8.0",
   "SQLAlchemy[asyncio]==2.1.4", "asyncpg==0.32.0", "alembic==1.20.0",
   "PyJWT[crypto]==2.15.1",
+  "defusedxml==0.7.1",
 ]
-dev = ["build==1.6.1", "mypy==2.4.0", "pytest==9.1.1", "ruff==0.17.0", "httpx==0.28.1"]
+dev = ["build==1.6.1", "mypy==2.4.0", "pytest==9.1.1", "ruff==0.17.0", "httpx==0.28.1",
+       "python-pptx==1.0.2"]
 
 [project.scripts]
 buddy-api = "buddy_api.cli:main"
 buddy-api-schema = "buddy_api.schema:main"
 buddy-db = "buddy_api.persistence.migrate:main"
+buddy-extract = "buddy_api.extraction.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/buddy_api"]

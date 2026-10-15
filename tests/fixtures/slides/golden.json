@@ -1,0 +1,26 @@
+{
+  "Buddy_60_Second_Pitch.pptx": {
+    "sha256": "7da9669a468632968447a3a08d740444a7281630de6d20881fc51750a55fadfe",
+    "slides": 6,
+    "objects": 49,
+    "text_sha256": "cf2cc86a790694075fd614fe6cceaa0ff020d6e31325a9224208e503b1a714be"
+  },
+  "Dickinson_Sample_Slides.pptx": {
+    "sha256": "ac7f2627645042190df3244cc25929f4b006d144fc2cac520e79ab376197bbbf",
+    "slides": 9,
+    "objects": 23,
+    "text_sha256": "511adba53f32dc087fe502cc625e3d96b003830fbd51930e70e4a0556147d87e"
+  },
+  "SustainABLE_Orientation_presentation.pptx": {
+    "sha256": "747c8ab5d77a3305d682199576e5e16c1132aeac79d8d8d4a18798edeab3d374",
+    "slides": 18,
+    "objects": 53,
+    "text_sha256": "d6056c5a8a0f315136ca0b1ced59770900a7f5a63824f2c7c5d894e6ba10f39d"
+  },
+  "WWF_Wildlife_and_Climate_Change.pptx": {
+    "sha256": "ad0a3cec97951c07ae43b00ab43604d0b8feb31c7401ce7938d233dd99666290",
+    "slides": 28,
+    "objects": 108,
+    "text_sha256": "4f4e29f98c81cfa4ee515be545b98c1f41b514da335d44bb4095e0cceef934f8"
+  }
+}
