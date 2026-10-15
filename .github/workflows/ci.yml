@@ -33,8 +33,11 @@ jobs:
         if: runner.os == 'macOS'
         run: echo "QT_QPA_PLATFORM=offscreen" >> "$GITHUB_ENV"
       # Windows intentionally uses its native platform to catch window/shortcut races.
-      - name: Install desktop and development dependencies
-        run: python -m pip install -e ".[api,dev]"
+      - name: Install the shared identity, desktop, and API development projects
+        run: |
+          python -m pip install -e ./shared
+          python -m pip install -e "./frontend[dev]"
+          python -m pip install -e "./backend[api,dev]"
       - name: Formatting
         run: python -m ruff format --check .
       - name: Lint
@@ -46,16 +49,16 @@ jobs:
       - name: Behavior and Qt lifecycle tests
         run: python scripts/test.py all
       - name: Build distributions
-        run: python -m build
+        run: python -m build frontend
       - name: Install built wheel
         shell: bash
         run: |
           python -m pip uninstall -y buddy-desktop
-          python -m pip install --no-deps dist/*.whl
+          python -m pip install --no-deps frontend/dist/*.whl
       - name: Start the installed desktop shell
-        run: python scripts/smoke_desktop.py
+        run: python frontend/scripts/smoke_desktop.py
       - name: Start the installed API and verify real HTTP integration
-        run: python scripts/smoke_api.py
+        run: python backend/scripts/smoke_api.py
 
   backend:
     name: Backend (Python ${{ matrix.python }})
@@ -81,6 +84,7 @@ jobs:
       BUDDY_TEST_DATABASE_URL: postgresql://buddy:buddy-ci-test-only@127.0.0.1:5432/buddy_test?sslmode=disable
       BUDDY_DATABASE_URL: postgresql://buddy:buddy-ci-test-only@127.0.0.1:5432/buddy_test?sslmode=disable
       BUDDY_ENVIRONMENT: test
+      QT_QPA_PLATFORM: offscreen
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -88,7 +92,11 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: ${{ matrix.python }}
-      - run: python -m pip install -e ".[api,dev]"
+      - name: Install the shared identity, desktop, and API development projects
+        run: |
+          python -m pip install -e ./shared
+          python -m pip install -e "./frontend[dev]"
+          python -m pip install -e "./backend[api,dev]"
       - name: API formatting, lint and types
         run: python scripts/quality.py api check
       - name: API schema snapshot and backwards compatibility
@@ -97,18 +105,20 @@ jobs:
         run: |
           python scripts/test.py api
           python scripts/test.py database
-      - run: python -m build
+      - name: Cross-component desktop, API and PostgreSQL integration
+        run: python scripts/test.py integration
+      - run: python -m build backend
       - name: Install wheel and verify packaged migrations against actual PostgreSQL
         shell: bash
         run: |
-          python -m pip uninstall -y buddy-desktop
-          python -m pip install --no-deps dist/*.whl
+          python -m pip uninstall -y buddy-backend
+          python -m pip install --no-deps backend/dist/*.whl
           cd "$RUNNER_TEMP"
           python -m buddy_api.persistence.migrate upgrade
           python -m buddy_api.persistence.migrate upgrade
           python -m buddy_api.persistence.migrate check
           python -m buddy_api.persistence.migrate current
-      - run: python scripts/smoke_api.py --database
+      - run: python backend/scripts/smoke_api.py --database
 
   automation:
     name: Automation

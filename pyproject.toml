@@ -1,55 +1,21 @@
-[build-system]
-requires = ["hatchling==1.32.4"]
-build-backend = "hatchling.build"
-
-[project]
-name = "buddy-desktop"
-version = "0.1.0"
-description = "Buddy context-aware presenter companion desktop client"
-readme = "README.md"
-requires-python = ">=3.12,<3.15"
-dependencies = ["PySide6-Essentials==6.12.0", "keyring==25.7.0"]
-
-[project.optional-dependencies]
-api = [
-  "fastapi==0.143.0", "uvicorn==0.54.0", "pydantic==2.14.1", "starlette==1.8.0",
-  "SQLAlchemy[asyncio]==2.1.4", "asyncpg==0.32.0", "alembic==1.20.0",
-  "PyJWT[crypto]==2.15.1",
-]
-dev = [
-  "build==1.6.1",
-  "mypy==2.4.0",
-  "pytest==9.1.1",
-  "pytest-qt==4.5.0",
-  "ruff==0.17.0",
-  "httpx==0.28.1",
-]
-
-[project.scripts]
-buddy-api = "buddy_api.cli:main"
-buddy-api-schema = "buddy_api.schema:main"
-buddy-db = "buddy_api.persistence.migrate:main"
-
-[project.gui-scripts]
-buddy = "buddy_desktop.app:main"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/buddy_desktop", "src/buddy_api", "src/buddy_identity"]
-
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+src = ["frontend/src", "backend/src", "shared/src"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
+[tool.ruff.lint.isort]
+known-first-party = ["buddy_api", "buddy_desktop", "buddy_identity"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["src/buddy_desktop", "src/buddy_api", "src/buddy_identity"]
+files = ["frontend/src/buddy_desktop", "backend/src/buddy_api", "shared/src/buddy_identity"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["frontend/tests", "backend/tests", "tests/integration", "tests/repository"]
 qt_api = "pyside6"
 addopts = "-ra"
 markers = ["postgres: real PostgreSQL integration using isolated disposable test schemas"]

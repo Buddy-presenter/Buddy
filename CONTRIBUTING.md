@@ -1,9 +1,30 @@
 # Contribution workflow
 
 Use the GitHub Project's assignments and fields as the source of truth. The initial
-issue-body Sprint metadata may be stale. Start only issues assigned to you and respect
-wave precedence: complete and review dependencies from the earlier wave before starting
-dependent work in a later wave. Do not treat an unmerged PR as completed work on main.
+issue-body Sprint metadata may be stale. Work only on issues assigned to the requesting
+contributor unless they explicitly authorize an exception; respect wave precedence by
+completing and reviewing earlier-wave dependencies first. Do not treat an unmerged PR as
+completed work on main.
+
+## Where changes belong
+
+- `frontend/src/buddy_desktop/` owns PySide6 UI, the presentation surface, authenticated
+  API client, and local Windows/macOS adapters. Put its tests in `frontend/tests/` and
+  component-specific smoke/package tools in `frontend/scripts/`.
+- `backend/src/buddy_api/` owns API endpoints, application logic, authorization,
+  persistence, and worker entry points. Put API/database tests in `backend/tests/`,
+  Alembic revisions in `backend/migrations/`, and backend-specific scripts in
+  `backend/scripts/`.
+- `shared/src/buddy_identity/` is limited to the existing identity configuration and
+  transport contracts used by both applications. Keep the components independent; add
+  shared code only for a concrete cross-component need.
+- Cross-component tests belong in `tests/integration/`; repository tooling tests belong in
+  `tests/repository/`. Keep repository-wide tooling in `scripts/`, infrastructure in
+  `infra/`, executable automation in `.github/workflows/`, and guides in `docs/`.
+
+Read [the architecture map](docs/architecture.md) and [development guide](docs/development.md)
+before moving code or changing component setup. Update the relevant guide when a change
+materially changes behavior, boundaries, configuration, entry points, commands, or CI.
 
 1. Set the issue's Project Status to **In Progress** when work starts, using available
    Project write access or a linked draft PR. Ask the user to update only if neither is

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-check = runpy.run_path(str(Path(__file__).resolve().parents[1] / "scripts/security_scan.py"))[
+check = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/security_scan.py"))[
     "complete_and_clean"
 ]
 

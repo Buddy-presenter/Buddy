@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling==1.32.4"]
+build-backend = "hatchling.build"
+
+[project]
+name = "buddy-backend"
+version = "0.1.0"
+description = "Buddy API and backend services"
+readme = "README.md"
+requires-python = ">=3.12,<3.15"
+dependencies = ["buddy-identity==0.1.0"]
+
+[project.optional-dependencies]
+api = [
+  "fastapi==0.143.0", "uvicorn==0.54.0", "pydantic==2.14.1", "starlette==1.8.0",
+  "SQLAlchemy[asyncio]==2.1.4", "asyncpg==0.32.0", "alembic==1.20.0",
+  "PyJWT[crypto]==2.15.1",
+]
+dev = ["build==1.6.1", "mypy==2.4.0", "pytest==9.1.1", "ruff==0.17.0", "httpx==0.28.1"]
+
+[project.scripts]
+buddy-api = "buddy_api.cli:main"
+buddy-api-schema = "buddy_api.schema:main"
+buddy-db = "buddy_api.persistence.migrate:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/buddy_api"]
+force-include = { "migrations" = "buddy_api/persistence/migrations" }
+
+[tool.hatch.build.targets.sdist]
+include = ["src/buddy_api/**", "migrations/**", "pyproject.toml", "README.md"]

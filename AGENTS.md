@@ -1,34 +1,28 @@
 # Working on Buddy
 
-Read the full assigned issue: objective, acceptance criteria, dependencies, and definition
-of done. Use the GitHub Project's **Waves** view and its Sprint/Wave fields for ordering.
-The Issues tab is a list, not the execution order; issue-body sprint metadata can be stale.
+Before editing, read [the architecture map](docs/architecture.md) and the relevant
+[development](docs/development.md) or feature guide. Use the GitHub Project's Waves view
+and Sprint/Wave fields as the execution order; issue-body planning metadata may be stale.
 
-- Work only on issues assigned to HusseinMoukalled unless the user directs otherwise.
-  Never reassign implementation issues or change another contributor's issue without
-  the user's explicit instruction. PR assignment and issue assignment are separate.
-- Finish and peer-review earlier-wave prerequisites before dependent later-wave work.
-- Each issue has its own branch, starting from current main. Use the exact issue title,
-  replacing spaces with hyphens because Git forbids spaces in ref names. Preserve wording
-  and capitalization; explicitly explain any additional normalization Git requires.
-- For each issue, fetch/pull current main, implement on its issue branch, self-review
-  the diff and test the implementation before requesting review. Open one linked PR
-  targeting main, assign the PR to **Lahhamix** and **yasminahanna**, and request every
-  other repository collaborator as reviewer (exclude the PR author). Preserve the
-  implementation issue's assignment. Check current-head CI and fix failures on that PR.
-- Do not push implementation directly to main. Merge only after teammate approval,
-  required checks passing on the current head, and the user's instruction to merge.
-- For requested changes, fix the existing branch/PR and request the other collaborators again.
-- Use the Project status workflow for linked PR/review transitions and verify its logs.
-  Requesting review sets **Waiting for review**; submitted feedback sets **Reviewed**,
-  which does not imply approval. A re-request starts a new review cycle. Existing Project
-  completion workflows own **Done** after merge. Issue state and Project status are separate.
-  For work without a linked PR, set **In Progress** through available Project write access;
-  ask the user to update only when that access is unavailable. See
-  `docs/project-status-automation.md` for scope and credential setup.
-- Keep real integrations, typed boundaries, recoverable failures, tests appropriate to
-  the change, and reviewable documentation. Record unavailable prerequisite code rather
-  than treating a Done card or closed issue as proof that it was implemented.
+- Work only on issues assigned to the requesting contributor unless they explicitly
+  authorize an exception. Never reassign an implementation issue without explicit direction.
+- Complete and review earlier-wave prerequisites before dependent later-wave work.
+- Read the full issue, including acceptance criteria, dependencies, and definition of done.
+- Use one branch per issue, based on current `main`, named with the exact issue title and
+  spaces replaced by hyphens. Preserve wording and capitalization; explain any further
+  normalization required by Git.
+- Keep implementation in its owning component. Do not introduce features, services,
+  generic shared layers, or unrelated refactors while reorganizing code.
+- Run relevant component and repository checks, update docs when setup or behavior changes,
+  and preserve security boundaries. See [CONTRIBUTING.md](CONTRIBUTING.md) and the
+  [security baseline](docs/security-baseline.md).
+- Open one linked PR for review; never push implementation directly to `main`. Assign
+  PRs to `Lahhamix` and `yasminahanna`, request all other repository collaborators as
+  reviewers (excluding the PR author), and wait for teammate approval and current-head CI.
+  Merge only when the requester explicitly asks.
+- Preserve issue ownership and wave order. Issue assignees and PR reviewers are separate.
+  Project status is distinct from issue open/closed state. Requesting review sets
+  **Waiting for review**; submitted feedback sets **Reviewed**; merge completion owns
+  **Done**. Follow [Project status automation](docs/project-status-automation.md).
 
-Follow `CONTRIBUTING.md` and `docs/security-baseline.md`. The security baseline states
-requirements and release blockers; it does not claim unfinished controls are implemented.
+Keep this file short and link to authoritative guides instead of duplicating them.

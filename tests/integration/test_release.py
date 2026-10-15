@@ -3,13 +3,16 @@
 import copy
 import io
 import json
+import runpy
+from pathlib import Path
 
 import pytest
+from backend.scripts.release.deploy import Deployment, DeploymentError, image_digest, validate
+from frontend.scripts.release.build_desktop import manifest
+from frontend.scripts.release.smoke_package import verify
 
-from scripts.release.build_desktop import manifest
-from scripts.release.deploy import Deployment, DeploymentError, image_digest, validate
-from scripts.release.gate import approved_checks
-from scripts.release.smoke_package import verify
+release_gate = runpy.run_path(str(Path(__file__).resolve().parents[2] / "scripts/release/gate.py"))
+approved_checks = release_gate["approved_checks"]
 
 SHA = "a" * 40
 ACCOUNT = "123456789012"
@@ -447,7 +450,7 @@ def test_modified_installer_or_path_traversal_is_rejected(tmp_path):
 
 
 def test_publication_uploads_only_verified_entries_not_the_build_tree(tmp_path, monkeypatch):
-    from scripts.release.publish import publish
+    from frontend.scripts.release.publish import publish
 
     artifact = tmp_path / "Buddy-test.exe"
     artifact.write_bytes(b"synthetic artifact")
@@ -475,8 +478,6 @@ def test_publication_uploads_only_verified_entries_not_the_build_tree(tmp_path, 
 
 
 def test_production_and_branch_gates_fail_before_credentials_or_network(monkeypatch):
-    from scripts.release import gate
-
     monkeypatch.setenv("GITHUB_SHA", SHA)
     monkeypatch.setenv("RELEASE_TARGET", "production")
     monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
@@ -484,9 +485,9 @@ def test_production_and_branch_gates_fail_before_credentials_or_network(monkeypa
     monkeypatch.delenv("CALLBACK_RELEASE_APPROVED", raising=False)
     monkeypatch.delenv("RELEASE_OPERATION", raising=False)
     with pytest.raises(ValueError, match="staging acceptance"):
-        gate.main()
+        release_gate["main"]()
     monkeypatch.setenv("RELEASE_OPERATION", "rollback")
-    assert gate.main() == 0
+    assert release_gate["main"]() == 0
     monkeypatch.setenv("GITHUB_REF", "refs/pull/1/merge")
     with pytest.raises(ValueError, match="main revision"):
-        gate.main()
+        release_gate["main"]()

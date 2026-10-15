@@ -66,14 +66,14 @@ the application never injects sample decks or reads a backend database directly.
 Install the documented API/dev extras, then run:
 
 ```sh
-python -m pytest tests/test_library.py
+python -m pytest frontend/tests/test_library.py
 python scripts/test.py database
 python scripts/quality.py all check
 python -m mypy
 python -m buddy_api.schema --check --compare-ref origin/main
 ```
 
-`tests/api/test_library.py` requires BUDDY_TEST_DATABASE_URL for real migrated PostgreSQL
+`backend/tests/api/test_library.py` requires BUDDY_TEST_DATABASE_URL for real migrated PostgreSQL
 owner isolation, literal searches, sorting, pagination, latest-job transitions, restart
 reads and failure handling. Qt/HTTP tests cover bounded transport, sanitized errors,
 loading/empty/failed states, keyboard controls, filtering races, account changes,

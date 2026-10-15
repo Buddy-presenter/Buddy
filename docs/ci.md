@@ -1,7 +1,8 @@
 # Continuous integration (#30)
 
 `ci.yml` runs on every pull request and push to main, without path filters. It replaces
-`desktop.yml` and `project-status-tests.yml`. No application behavior changes in this issue.
+`desktop.yml` and `project-status-tests.yml`. CI installs the local projects from `shared/`,
+`frontend/`, and `backend/`; application behavior does not change.
 
 | Job | Coverage |
 | --- | --- |
@@ -26,11 +27,11 @@ At implementation time the live main ruleset required CI, one teammate approval,
 approval of the latest push, stale-review dismissal, and an up-to-date branch.
 
 Dependency audit blocks all reported vulnerabilities and lookup failures (`--strict`).
-`pip freeze --exclude buddy-desktop` exports resolved third-party versions; only the
-local Buddy distribution is excluded because it is not a PyPI dependency.
+`pip freeze` excludes the local `buddy-desktop`, `buddy-backend`, and `buddy-identity`
+distributions and audits their resolved third-party dependencies.
 Gitleaks blocks detected secrets in the PR/push history with redacted output and without
 PR comments or uploaded reports. Bandit blocks high-severity findings at every confidence
-level in `src` and `scripts`. There are no blanket finding allowlists or continue-on-error
+level in `frontend/src`, `backend/src`, `shared/src`, and `scripts`. There are no blanket finding allowlists or continue-on-error
 steps. Lower-severity static findings remain review work; changing thresholds needs review.
 Scanner versions and action commits are pinned. Advisory-service or scanner failures
 block CI; fixing infrastructure or rerunning a transient failure is preferable to bypassing it.
@@ -51,23 +52,24 @@ workflow called by CI, so it needs no duplicate push/PR trigger. Infrastructure 
 belongs to #27; backend deploy/promotion/rollback (`deploy.yml`) and desktop
 packaging/signing/publishing (`release.yml`) belong to their implementation issues.
 No empty workflows are added for those responsibilities, and no worker implementation
-is claimed while none exists. Update the source paths when #59 lands.
+is claimed while none exists. Component paths in this guide follow #59's ownership layout.
 
 ## Local checks
 
-After installing `.[api,dev]` in a virtual environment:
+After installing `./shared`, `./frontend[dev]`, and `./backend[api,dev]` in a virtual environment:
 
 ```sh
 python scripts/quality.py all check
-python -m pytest
+python scripts/test.py all
 python -m buddy_api.schema --check --compare-ref origin/main
-python -m build
-python scripts/smoke_desktop.py
-python scripts/smoke_api.py
+python -m build frontend
+python -m build backend
+python frontend/scripts/smoke_desktop.py
+python backend/scripts/smoke_api.py
 node scripts/test_project_status.cjs
 node scripts/test_ci_gate.cjs
 python -m pip install -r .github/security-requirements.txt
-python -m pip freeze --exclude buddy-desktop > audit-requirements.txt
+python -m pip freeze --exclude buddy-desktop --exclude buddy-backend --exclude buddy-identity > audit-requirements.txt
 python -m pip_audit --strict --no-deps --disable-pip -r audit-requirements.txt --progress-spinner off
 python scripts/security_scan.py
 ```

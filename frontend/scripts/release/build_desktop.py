@@ -12,7 +12,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 
 
 def manifest(folder: Path, revision: str, channel: str) -> dict:
@@ -25,7 +25,9 @@ def manifest(folder: Path, revision: str, channel: str) -> dict:
         "schema": 1,
         "revision": revision,
         "channel": channel,
-        "version": tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"],
+        "version": tomllib.loads((ROOT / "frontend/pyproject.toml").read_text())["project"][
+            "version"
+        ],
         "platform": sys.platform,
         "architecture": platform.machine(),
         "backend_api": "v1",
@@ -77,7 +79,7 @@ def build(
         command += ["--osx-bundle-identifier", "org.buddy.desktop"]
         if signing_identity:
             command += ["--codesign-identity", signing_identity]
-    command += [str(ROOT / "scripts/release/desktop_entry.py")]
+    command += [str(ROOT / "frontend/scripts/release/desktop_entry.py")]
     build_environment = dict(os.environ)
     if sys.platform == "win32":
         # Do not let unrelated tools (e.g. Poppler's ICU/OpenSSL) shadow Qt/OS DLLs.
@@ -95,7 +97,7 @@ def build(
         "Buddy/Buddy.exe" if sys.platform == "win32" else "Buddy.app/Contents/MacOS/Buddy"
     )
     subprocess.run([str(executable), "--smoke-test"], check=True, timeout=30)
-    version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+    version = tomllib.loads((ROOT / "frontend/pyproject.toml").read_text())["project"]["version"]
     if not re.fullmatch(r"\d+\.\d+\.\d+", version):
         raise ValueError("Installer version must be a three-part numeric version.")
     if sys.platform == "win32":
@@ -104,7 +106,7 @@ def build(
                 [
                     "pwsh",
                     "-File",
-                    str(ROOT / "scripts/release/sign_windows.ps1"),
+                    str(ROOT / "frontend/scripts/release/sign_windows.ps1"),
                     "-OutputDirectory",
                     str(output),
                     "-BundleOnly",
@@ -123,7 +125,7 @@ def build(
                 f"/DAppSource={bundle / 'Buddy'}",
                 f"/DOutputDirectory={output}",
                 f"/DOutputName=Buddy-{version}-{revision[:12]}-windows-x64",
-                str(ROOT / "scripts/release/windows.iss"),
+                str(ROOT / "frontend/scripts/release/windows.iss"),
             ],
             check=True,
         )

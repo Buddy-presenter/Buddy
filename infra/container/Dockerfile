@@ -1,8 +1,13 @@
 FROM python:3.12.12-slim-bookworm AS builder
 WORKDIR /build
-COPY pyproject.toml README.md ./
-COPY src ./src
-RUN python -m pip wheel --no-cache-dir --wheel-dir /wheels '.[api]' boto3==1.40.50
+COPY shared/pyproject.toml ./shared/pyproject.toml
+COPY shared/src ./shared/src
+COPY backend/pyproject.toml backend/README.md ./backend/
+COPY backend/src ./backend/src
+COPY backend/migrations ./backend/migrations
+RUN python -m pip wheel --no-cache-dir --wheel-dir /wheels --no-deps ./shared ./backend \
+    && python -m pip wheel --no-cache-dir --wheel-dir /wheels \
+       --find-links=/wheels 'buddy-backend[api]' boto3==1.40.50
 
 FROM python:3.12.12-slim-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
@@ -15,7 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 buddy && useradd --uid 10001 --gid 10001 --no-create-home buddy
 COPY --from=builder /wheels /wheels
-RUN python -m pip install --no-cache-dir --no-index --find-links=/wheels 'buddy-desktop[api]' boto3 \
+RUN python -m pip install --no-cache-dir --no-index --find-links=/wheels 'buddy-backend[api]' boto3 \
     && rm -rf /wheels
 COPY infra/container/container_entrypoint.py infra/container/bootstrap_database.py infra/container/migrate_database.py /opt/buddy/
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt

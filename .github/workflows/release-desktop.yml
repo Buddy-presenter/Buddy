@@ -37,16 +37,17 @@ jobs:
           STAGING_ACCEPTED_REVISION: ${{ vars.BUDDY_STAGING_ACCEPTED_REVISION }}
           CALLBACK_RELEASE_APPROVED: ${{ vars.BUDDY_CALLBACK_RELEASE_APPROVED }}
         run: python scripts/release/gate.py
-      - run: python -m pip install -e ".[dev]" PyInstaller==6.22.3
+      - run: python -m pip install -e ./shared
+      - run: python -m pip install -e "./frontend[dev]" PyInstaller==6.22.3
       - name: Install checksum-pinned Windows compiler
         if: runner.os == 'Windows'
-        run: ./scripts/release/install_inno.ps1
+        run: ./frontend/scripts/release/install_inno.ps1
       - name: Import production macOS signing identity
         if: runner.os == 'macOS' && inputs.target == 'production'
         env:
           MAC_SIGNING_P12_BASE64: ${{ secrets.MAC_SIGNING_P12_BASE64 }}
           MAC_SIGNING_PASSWORD: ${{ secrets.MAC_SIGNING_PASSWORD }}
-        run: bash scripts/release/macos_keychain.sh
+        run: bash frontend/scripts/release/macos_keychain.sh
       - name: Build native package
         shell: bash
         env:
@@ -60,20 +61,20 @@ jobs:
             args+=(--channel stable)
             if [ "$RUNNER_OS" = macOS ]; then args+=(--signing-identity "$MAC_SIGNING_IDENTITY"); fi
           fi
-          python scripts/release/build_desktop.py "${args[@]}"
+          python frontend/scripts/release/build_desktop.py "${args[@]}"
       - name: Sign and verify production Windows installer
         if: runner.os == 'Windows' && inputs.target == 'production'
         env:
           WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
           WINDOWS_SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PASSWORD }}
-        run: ./scripts/release/sign_windows.ps1 -OutputDirectory packaged
+        run: ./frontend/scripts/release/sign_windows.ps1 -OutputDirectory packaged
       - name: Notarize and staple production macOS application
         if: runner.os == 'macOS' && inputs.target == 'production'
         env:
           APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
           APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
           APPLE_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER }}
-        run: bash scripts/release/notarize_macos.sh packaged
+        run: bash frontend/scripts/release/notarize_macos.sh packaged
       - name: Hash final signed artifacts
         shell: bash
         env:
@@ -81,8 +82,8 @@ jobs:
         run: |
           channel=preview
           if [ "$RELEASE_TARGET" = production ]; then channel=stable; fi
-          python scripts/release/build_desktop.py --manifest-only --output packaged --revision "$GITHUB_SHA" --channel "$channel"
-      - run: python scripts/release/smoke_package.py packaged
+          python frontend/scripts/release/build_desktop.py --manifest-only --output packaged --revision "$GITHUB_SHA" --channel "$channel"
+      - run: python frontend/scripts/release/smoke_package.py packaged
       - uses: actions/attest-build-provenance@8beda2b7ed98355c0e97c0a63bec38ae472e66c4
         with:
           subject-path: |
@@ -102,7 +103,7 @@ jobs:
           AWS_ACCOUNT: ${{ vars.BUDDY_AWS_ACCOUNT_ID }}
         run: |
           python -m pip install boto3==1.40.50
-          python -m scripts.release.publish packaged
+          python -m frontend.scripts.release.publish packaged
       - name: Remove temporary macOS signing keychain
         if: always() && runner.os == 'macOS' && inputs.target == 'production'
         run: security delete-keychain "$RUNNER_TEMP/buddy-signing.keychain-db"

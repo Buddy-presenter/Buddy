@@ -41,6 +41,6 @@ Run migrations explicitly before deployment. The new table is additive; the old 
 run against it during rollout. Downgrading removes rendered asset metadata and must never
 be an automatic rollback step. Database readiness requires the new migration and table.
 
-Run python -m pytest tests/api/test_authorization.py with BUDDY_TEST_DATABASE_URL pointing
+Run python -m pytest backend/tests/api/test_authorization.py with BUDDY_TEST_DATABASE_URL pointing
 to a disposable database ending _test for real persisted cross-account/owner checks.
 No AWS credentials are used by tests; provider identity is deterministic, SQL is real.
