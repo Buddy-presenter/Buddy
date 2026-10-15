@@ -31,7 +31,9 @@ Dependency audit blocks all reported vulnerabilities and lookup failures (`--str
 distributions and audits their resolved third-party dependencies.
 Gitleaks blocks detected secrets in the PR/push history with redacted output and without
 PR comments or uploaded reports. Bandit blocks high-severity findings at every confidence
-level in `frontend/src`, `backend/src`, `shared/src`, and `scripts`. There are no blanket finding allowlists or continue-on-error
+level in `frontend/src`, `backend/src`, `shared/src`, `frontend/scripts`, `backend/scripts`,
+`backend/migrations`, and root `scripts`. A repository regression test verifies that these
+targets include the relocated deployment, packaging, and migration code. There are no blanket finding allowlists or continue-on-error
 steps. Lower-severity static findings remain review work; changing thresholds needs review.
 Scanner versions and action commits are pinned. Advisory-service or scanner failures
 block CI; fixing infrastructure or rerunning a transient failure is preferable to bypassing it.
