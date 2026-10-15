@@ -14,8 +14,9 @@ and Sprint/Wave fields as the execution order; issue-body planning metadata may 
 - Keep implementation in its owning component. Do not introduce features, services,
   generic shared layers, or unrelated refactors while reorganizing code.
 - Run relevant component and repository checks, update docs when setup or behavior changes,
-  and preserve security boundaries. See [CONTRIBUTING.md](CONTRIBUTING.md) and the
-  [security baseline](docs/security-baseline.md).
+  and preserve security boundaries. See [CONTRIBUTING.md](CONTRIBUTING.md).
+- Before any frontend UI change, read the [Buddy visual guidelines](frontend/BUDDY_VISUAL_GUIDELINES.md)
+  and the [Apple Design skill](frontend/skills/apple-design/SKILL.md).
 - Open one linked PR for review; never push implementation directly to `main`. Assign
   PRs to `Lahhamix` and `yasminahanna`, request all other repository collaborators as
   reviewers (excluding the PR author), and wait for teammate approval and current-head CI.

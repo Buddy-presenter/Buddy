@@ -36,5 +36,6 @@ complete setup, test commands, and macOS equivalents.
 - [Architecture and ownership](docs/architecture.md)
 - [Development and testing](docs/development.md)
 - [Deployment and release](docs/deployment.md)
-- [Security baseline](docs/security-baseline.md)
+- [Authorization](docs/authorization.md)
+- [CI and security checks](docs/ci.md)
 - [Contribution workflow](CONTRIBUTING.md)
