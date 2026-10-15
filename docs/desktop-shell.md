@@ -26,7 +26,8 @@ preferences survive restarts; malformed saved addresses fall back to the validat
 default. An explicit environment URL always wins. HTTP is restricted to loopback,
 redirects are disabled, and service bodies are never displayed as markup or error text.
 
-The shell leaves authentication (#5), library (#6), upload/processing (#7–#12),
+The shell includes account controls (#5) and the [deck library](library.md) (#6).
+It leaves upload/processing (#7–#12),
 presentation (#13 onward), and the security baseline (#46) to their owners. This does
 not claim those workflows are implemented. The included CI is the minimal desktop
 foundation required by #1; #30 owns broader desktop/API security and CI policy.

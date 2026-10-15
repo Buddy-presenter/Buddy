@@ -13,10 +13,12 @@ from buddy_identity.config import IdentityConfig, IdentityError
 
 class AccountWidget(QWidget):
     activity_changed = Signal(bool)
+    session_changed = Signal()
 
     def __init__(self, api_url: str) -> None:
         super().__init__()
         self.session: AccountSession | None = None
+        self.account_id: str | None = None
         self.runner = TaskRunner(self)
         self.runner.succeeded.connect(self.completed)
         self.runner.failed.connect(self.failed)
@@ -56,6 +58,7 @@ class AccountWidget(QWidget):
             return
         self.timer.stop()
         self.session = None
+        self.account_id = None
         try:
             config = IdentityConfig.from_environment()
             if config:
@@ -80,6 +83,8 @@ class AccountWidget(QWidget):
         if session is None or self.runner.busy or self.closing:
             return
         self.operation = action
+        if action != "check":
+            self.account_id = None
         session.cancelled.clear()
         self.timer.stop()
         self.message.setText(
@@ -114,9 +119,13 @@ class AccountWidget(QWidget):
             "Signed out." if self.operation == "signout" else "Signed in to Buddy."
         )
         if self.session and self.session.tokens:
+            self.account_id = str(result)
             self.timer.start()
+        else:
+            self.account_id = None
 
     def failed(self, _identifier: int, message: str) -> None:
+        self.account_id = None
         self.message.setText(message)
         if self.session:
             self.session.tokens = None
@@ -146,6 +155,15 @@ class AccountWidget(QWidget):
             )
         self.cancel.setEnabled(False)
         self.activity_changed.emit(False)
+        self.session_changed.emit()
+
+    def expire_session(self, message: str) -> None:
+        self.account_id = None
+        if self.session:
+            self.session.tokens = None
+        self.timer.stop()
+        self.message.setText(message)
+        self.idle()
 
     def check_session(self) -> None:
         if self.session and self.session.tokens and not self.runner.busy:

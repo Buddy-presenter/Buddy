@@ -76,6 +76,8 @@ navigation stays available; backend changes are disabled to avoid stale results.
 
 See [the desktop architecture](docs/desktop-shell.md) for extension boundaries and
 [the contribution workflow](CONTRIBUTING.md) before beginning another issue.
+The [presentation library](docs/library.md) supports authenticated deck discovery,
+search, sorting, pagination and persisted processing states.
 
 ## Verification
 
