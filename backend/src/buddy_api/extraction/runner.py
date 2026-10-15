@@ -7,13 +7,64 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import BinaryIO
 
 from buddy_api.extraction.contracts import Extraction, ExtractionError, Limits
+
+
+@contextmanager
+def rss_memory_limit(pid: int, memory_bytes: int) -> Iterator[None]:
+    """Darwin fallback: sample RSS every 10ms and kill on excess or monitor failure."""
+    import psutil  # type: ignore[import-untyped]
+
+    stop = threading.Event()
+    errors: list[str] = []
+    try:
+        child = psutil.Process(pid)
+        child.memory_info()  # Verify access before allowing source parsing.
+    except psutil.Error:
+        raise ExtractionError("isolation_unavailable") from None
+
+    def watch() -> None:
+        while not stop.is_set():
+            try:
+                if child.memory_info().rss > memory_bytes:
+                    errors.append("memory_limit")
+                    child.kill()
+                    return
+            except psutil.NoSuchProcess:
+                return
+            except psutil.Error:
+                errors.append("isolation_unavailable")
+                with suppress(psutil.NoSuchProcess):
+                    child.kill()
+                return
+            stop.wait(0.01)
+
+    thread = threading.Thread(target=watch, name="buddy-extraction-memory", daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join()
+        if errors:
+            raise ExtractionError(errors[0])
+
+
+@contextmanager
+def parser_memory_limit(pid: int, memory_bytes: int) -> Iterator[None]:
+    if sys.platform == "darwin":
+        with rss_memory_limit(pid, memory_bytes):
+            yield
+    else:
+        with windows_memory_limit(pid, memory_bytes):
+            yield
 
 
 @contextmanager
@@ -159,7 +210,7 @@ def extract_pptx(
                 },
             )
             try:
-                with windows_memory_limit(process.pid, limits.memory_mb * 1024 * 1024):
+                with parser_memory_limit(process.pid, limits.memory_mb * 1024 * 1024):
                     remaining = limits.seconds - (time.monotonic() - start)
                     if remaining <= 0:
                         raise ExtractionError("time_limit")

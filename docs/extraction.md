@@ -81,7 +81,11 @@ Default ceilings (callers can lower them using `Limits`, not exceed its maxima):
 | Parser process memory | 512 MiB |
 
 Parsing runs in a separate process, with Windows Job Object process-memory containment
-and kill-on-close or POSIX address/data/CPU resource limits. Parent timeout kills/reaps
+and kill-on-close, Linux address/data limits, and POSIX CPU limits. macOS rejects the
+address/data limit configuration, so its parent samples RSS every 10ms using psutil and
+kills on excess or monitoring failure. This sampled guard can briefly overshoot between
+checks; it is not an instantaneous allocation ceiling. Parser structure/count limits still
+apply on every platform. Parent timeout kills/reaps
 the parser. Failure to establish limits fails closed; caller cancellation is not a queue
 cancellation API. The stage accepts only stored/deflated unencrypted ZIP members, rejects
 duplicate/traversal/absolute/symlink entries, parses XML with DTD/entities/external entities

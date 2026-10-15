@@ -78,10 +78,24 @@ class Reader:
                     other = candidate.find(".//p:ph", NS)
                     if other is None:
                         continue
+                    inherited_type = ph.get("type", "obj")
+                    if inherited_type in {
+                        "obj",
+                        "chart",
+                        "tbl",
+                        "clipArt",
+                        "dgm",
+                        "media",
+                        "pic",
+                        "subTitle",
+                    }:
+                        inherited_type = "body"
+                    elif inherited_type == "ctrTitle":
+                        inherited_type = "title"
                     match = (
                         other.get("idx", "0") == ph.get("idx", "0")
                         if root.tag == tag("p", "sldLayout")
-                        else other.get("type", "obj") == ph.get("type", "obj")
+                        else other.get("type", "obj") == inherited_type
                     )
                     if match:
                         found = candidate.find("p:spPr/a:xfrm", NS)
@@ -152,9 +166,18 @@ class Reader:
                 self.warn("custom_geometry_envelope_only", slide_id, obj_id)
             if shape.find(".//a:srcRect", NS) is not None:
                 self.warn("picture_crop_not_extracted", slide_id, obj_id)
+            if any(
+                e.tag.startswith("{http://schemas.openxmlformats.org/officeDocument/2006/math}")
+                for e in shape.iter()
+            ):
+                self.warn("equations_not_extracted", slide_id, obj_id)
             if ident.get("hidden") in {"1", "true"}:
                 self.warn("hidden_object", slide_id, obj_id)
             xfrm = self.xfrm(shape, inherited)
+            if kind == "group" and (
+                xfrm is None or xfrm.find("a:chOff", NS) is None or xfrm.find("a:chExt", NS) is None
+            ):
+                raise ExtractionError("invalid_group_geometry")
             corners = None
             bounds = None
             child = parent
@@ -181,9 +204,6 @@ class Reader:
                 )
             )
             if kind == "group":
-                if xfrm is None:
-                    # Do not present child-local coordinates as known slide coordinates.
-                    raise ExtractionError("invalid_group_geometry")
                 records.extend(self.shapes(shape, slide_id, part, [], child, obj_id, seen))
         return records
 

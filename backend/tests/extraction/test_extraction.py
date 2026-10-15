@@ -205,13 +205,15 @@ def test_traversal_entries_are_never_written(tmp_path, name):
 
 
 def test_memory_ceiling_is_enforced_by_the_os():
-    from buddy_api.extraction.runner import windows_memory_limit
+    from buddy_api.extraction.runner import parser_memory_limit
 
     script = (
         "import sys; sys.stdin.buffer.read(1); "
         "from buddy_api.extraction.worker import set_posix_limits; "
         "from buddy_api.extraction import Limits; "
-        "set_posix_limits(Limits(memory_mb=128)); data=bytearray(256*1024*1024)"
+        "set_posix_limits(Limits(memory_mb=128)); "
+        "exec('import time\\nblocks=[]\\nfor _ in range(32):\\n "
+        "blocks.append(bytearray(8*1024*1024)); time.sleep(0.02)')"
     )
     process = subprocess.Popen(
         [sys.executable, "-c", script],
@@ -220,10 +222,35 @@ def test_memory_ceiling_is_enforced_by_the_os():
         stderr=subprocess.PIPE,
     )
     try:
-        with windows_memory_limit(process.pid, 128 * 1024 * 1024):
-            _, stderr = process.communicate(b"x", timeout=15)
-            assert process.returncode != 0
-            assert b"MemoryError" in stderr
+        if sys.platform == "darwin":
+            with (
+                pytest.raises(ExtractionError, match="memory_limit"),
+                parser_memory_limit(process.pid, 128 * 1024 * 1024),
+            ):
+                process.communicate(b"x", timeout=15)
+        else:
+            with parser_memory_limit(process.pid, 128 * 1024 * 1024):
+                _, stderr = process.communicate(b"x", timeout=15)
+                assert process.returncode != 0
+                assert b"MemoryError" in stderr
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.communicate()
+
+
+def test_rss_watchdog_kills_and_reports_excess_memory():
+    from buddy_api.extraction.runner import rss_memory_limit
+
+    process = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(15)"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        with pytest.raises(ExtractionError, match="memory_limit"), rss_memory_limit(process.pid, 1):
+            process.communicate(timeout=10)
+        assert process.returncode != 0
     finally:
         if process.poll() is None:
             process.kill()
@@ -342,6 +369,11 @@ def test_missing_shape_geometry_is_explicit_and_group_geometry_is_required(tmp_p
     )
     with pytest.raises(ExtractionError, match="invalid_group_geometry"):
         extract_pptx(path, source_revision="v1")
+    path = rewrite(
+        tmp_path, {"ppt/slides/slide1.xml": lambda b: re.sub(b"<a:chOff[^>]*/>", b"", b)}
+    )
+    with pytest.raises(ExtractionError, match="invalid_group_geometry"):
+        extract_pptx(path, source_revision="v1")
 
 
 def test_negative_or_nonfinite_dimensions_fail(tmp_path):
@@ -406,6 +438,17 @@ def test_nested_groups_and_inherited_placeholder_geometry():
         inherited = reader.xfrm(shape, [layout, master])
         assert inherited is not None
         assert inherited.find("a:off", NS).get("x") == "10"
+        layout_ph = layout.find(".//p:ph", NS)
+        master_ph = master.find(".//p:ph", NS)
+        for layout_type, master_type in [
+            ("obj", "body"),
+            ("pic", "body"),
+            ("subTitle", "body"),
+            ("ctrTitle", "title"),
+        ]:
+            layout_ph.set("type", layout_type)
+            master_ph.set("type", master_type)
+            assert reader.xfrm(shape, [layout, master]) is not None
 
 
 def test_cli_real_invocation_output_and_failure_redaction(tmp_path, capsys):

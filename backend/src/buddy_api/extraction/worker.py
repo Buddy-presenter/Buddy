@@ -10,11 +10,18 @@ def set_posix_limits(limits: Limits) -> None:
     if sys.platform != "win32":
         import resource
 
-        memory = limits.memory_mb * 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_AS, (memory, memory))
-        resource.setrlimit(resource.RLIMIT_DATA, (memory, memory))
-        cpu = max(1, int(limits.seconds) + 1)
-        resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
+        resources = [(resource.RLIMIT_CPU, max(1, int(limits.seconds) + 1))]
+        # Darwin rejects these memory rlimits; the parent enforces RSS there instead.
+        if sys.platform != "darwin":
+            memory = limits.memory_mb * 1024 * 1024
+            resources += [(resource.RLIMIT_AS, memory), (resource.RLIMIT_DATA, memory)]
+        try:
+            for kind, ceiling in resources:
+                _, hard = resource.getrlimit(kind)
+                bound = ceiling if hard == resource.RLIM_INFINITY else min(ceiling, hard)
+                resource.setrlimit(kind, (bound, hard))
+        except (OSError, ValueError):
+            raise ExtractionError("isolation_unavailable") from None
 
 
 def main() -> int:
