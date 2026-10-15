@@ -78,5 +78,7 @@ There is no processing-worker application or capture/device contract on main. Is
 must supply the real worker before its startup/success/error smoke can exist.
 `python scripts/test.py worker` exits with a specific blocked result rather than passing
 a fabricated worker test. The persisted-job smoke verifies the shared database contract;
-it does not claim to execute jobs. Issue #43 must remain open until the real worker smoke
-and device adapters are added against their implemented contracts.
+it does not claim to execute jobs. Issue #43 is complete for its accepted desktop/API
+test-foundation scope. Worker startup, execution and failure coverage belongs to #8;
+microphone/device coverage belongs to #15 once its capture contracts exist. Neither is
+implemented by the completed test-foundation issue.
