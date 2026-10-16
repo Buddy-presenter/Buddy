@@ -10,7 +10,7 @@ unchanged and is still the provider input; these records are internal extraction
 Install `./shared` and `./backend[api,dev]` using the development guide. From the repo:
 
 ```sh
-python -m buddy_api.extraction.cli tests/fixtures/slides/Buddy_60_Second_Pitch.pptx --source-revision sample-v1 --output build/extraction.json
+python -m buddy_api.extraction.cli tests/fixtures/slides/Buddy_Extraction_Geometry.pptx --source-revision sample-v1 --output build/extraction.json
 ```
 
 The installed equivalent is `buddy-extract`. Output files are created exclusively, with
@@ -118,7 +118,12 @@ python scripts/quality.py all check
 
 Database checks require the disposable PostgreSQL settings in the database guide. Fixture
 provenance is in `tests/fixtures/slides/README.md`; no cloud/provider calls occur in tests.
-Golden and independent-reader checks cover the four approved decks; exact-value tests
+CI uses only the checked-in Buddy-authored geometry fixture for deterministic coverage;
+the four full external decks remain in Drive and are not required or downloaded by CI.
+For optional local golden/independent-reader checks, download them into ignored storage
+and set `BUDDY_PPTX_FIXTURE_DIR` as documented in the fixture README. Configured downloads
+must match pinned SHA-256 before parsing; missing or changed files fail, not skip. Without
+explicit opt-in, only those four external-corpus cases skip. Exact-value tests always
 cover controlled transforms/content. Adversarial tests exercise archive/XML/path/part
 failures, budgets, stable IDs, source integrity, exclusive output, cleanup, owner isolation,
 revision conflicts, concurrent retries and durable reads after a database restart.

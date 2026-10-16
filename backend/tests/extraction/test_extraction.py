@@ -3,6 +3,7 @@
 import hashlib
 import io
 import json
+import os
 import subprocess
 import sys
 from collections import Counter
@@ -19,6 +20,20 @@ from buddy_api.extraction.contracts import Extraction
 ROOT = Path(__file__).resolve().parents[3]
 FIXTURES = ROOT / "tests/fixtures/slides"
 CONTROL = FIXTURES / "Buddy_Extraction_Geometry.pptx"
+
+
+def external_fixture(filename, expected):
+    directory = os.environ.get("BUDDY_PPTX_FIXTURE_DIR")
+    if directory is None:
+        pytest.skip("Optional local Drive corpus: set BUDDY_PPTX_FIXTURE_DIR to enable.")
+    if not directory.strip():
+        pytest.fail("BUDDY_PPTX_FIXTURE_DIR must name a local fixture directory.")
+    path = Path(directory) / filename
+    if not path.is_file():
+        pytest.fail(f"Configured external fixture is missing: {filename}")
+    if sha(path) != expected["sha256"]:
+        pytest.fail(f"Configured external fixture SHA-256 does not match: {filename}")
+    return path
 
 
 def sha(path):
@@ -124,7 +139,7 @@ def shape_texts(shapes):
 )
 def test_approved_drive_decks_against_golden_and_independent_reader(filename):
     expected = json.loads((FIXTURES / "golden.json").read_text())[filename]
-    path = FIXTURES / filename
+    path = external_fixture(filename, expected)
     before = sha(path)
     result = extract_pptx(path, source_revision="approved-fixture-v1")
     assert before == sha(path) == result.source_sha256 == expected["sha256"]
@@ -143,6 +158,28 @@ def test_approved_drive_decks_against_golden_and_independent_reader(filename):
         hashlib.sha256("\n".join(s.text for s in result.slides).encode()).hexdigest()
         == expected["text_sha256"]
     )
+
+
+def test_external_corpus_is_opt_in_even_if_a_file_exists(tmp_path, monkeypatch):
+    monkeypatch.delenv("BUDDY_PPTX_FIXTURE_DIR", raising=False)
+    with pytest.raises(pytest.skip.Exception, match="Optional local Drive corpus"):
+        external_fixture(CONTROL.name, {"sha256": sha(CONTROL)})
+
+
+@pytest.mark.parametrize("directory", ["", "missing"])
+def test_configured_external_corpus_cannot_silently_skip(directory, tmp_path, monkeypatch):
+    monkeypatch.setenv("BUDDY_PPTX_FIXTURE_DIR", "" if not directory else str(tmp_path))
+    with pytest.raises(pytest.fail.Exception):
+        external_fixture("not-present.pptx", {"sha256": "0" * 64})
+
+
+def test_external_hash_is_checked_before_parsing(tmp_path, monkeypatch):
+    monkeypatch.setenv("BUDDY_PPTX_FIXTURE_DIR", str(tmp_path))
+    path = tmp_path / "changed.pptx"
+    path.write_bytes(b"not the approved bytes")
+    with pytest.raises(pytest.fail.Exception, match="SHA-256 does not match"):
+        external_fixture(path.name, {"sha256": "0" * 64})
+    assert external_fixture(path.name, {"sha256": sha(path)}) == path
 
 
 def test_repeated_stream_and_path_results_are_stable_and_revision_scoped():
