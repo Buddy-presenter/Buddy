@@ -70,6 +70,24 @@ class RenderedAsset(OwnedRecord):
     size_bytes: Mapped[int] = mapped_column()
 
 
+class DeckExtraction(OwnedRecord):
+    __tablename__ = "deck_extractions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["deck_id", "owner_id"], ["decks.id", "decks.owner_id"], ondelete="RESTRICT"
+        ),
+        UniqueConstraint("deck_id", "source_revision", "extractor_version"),
+        CheckConstraint("length(source_revision) > 0", name="source_revision_nonempty"),
+        CheckConstraint("source_sha256 ~ '^[0-9a-f]{64}$'", name="source_sha256"),
+        CheckConstraint("extractor_version = '1'", name="extractor_version"),
+    )
+    deck_id: Mapped[UUID] = mapped_column(index=True)
+    source_revision: Mapped[str] = mapped_column(String(128))
+    source_sha256: Mapped[str] = mapped_column(String(64))
+    extractor_version: Mapped[str] = mapped_column(String(16))
+    document: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
+
 class ProcessingJob(OwnedRecord):
     __tablename__ = "processing_jobs"
     __table_args__ = (

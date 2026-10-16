@@ -13,6 +13,7 @@ from buddy_api.persistence.migration_config import migration_heads
 from buddy_api.persistence.models import (
     AnalysisVersion,
     Deck,
+    DeckExtraction,
     PresentationSession,
     ProcessingJob,
     RenderedAsset,
@@ -60,6 +61,7 @@ class Database:
                     AnalysisVersion.id,
                     PresentationSession.id,
                     RenderedAsset.id,
+                    DeckExtraction.id,
                 ):
                     await connection.execute(select(identifier).limit(0))
         except (SQLAlchemyError, OSError, TimeoutError):
