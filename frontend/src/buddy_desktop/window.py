@@ -139,7 +139,7 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self.activity_mark)
         self.account_button = QPushButton("Account")
         command(self.account_button, "circle-user-round", compact=True)
-        self.account_button.clicked.connect(lambda: self._select_route(0))
+        self.account_button.clicked.connect(self._show_account)
         header_layout.addWidget(self.account_button)
         workspace_layout.addWidget(header)
         workspace_layout.addWidget(self.pages, 1)
@@ -172,6 +172,13 @@ class MainWindow(QMainWindow):
     def _select_route(self, index: int) -> None:
         self.navigation.setCurrentRow(index)
         self.navigation.setFocus()
+
+    @Slot()
+    def _show_account(self) -> None:
+        self._select_route(0)
+        scroll = self.pages.widget(0)
+        if isinstance(scroll, QScrollArea):
+            scroll.ensureWidgetVisible(self.account)
 
     @Slot(int)
     def navigate(self, index: int) -> None:

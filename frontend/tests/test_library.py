@@ -1,7 +1,6 @@
 import json
 import time
 from datetime import UTC, datetime
-from importlib.resources import files
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -19,6 +18,7 @@ from buddy_desktop.library_service import (
     LibraryService,
 )
 from buddy_desktop.services import ServiceError
+from buddy_desktop.visuals import apply_theme
 
 
 def payload(title="Saved deck", status="ready", *, total=1, page=1):
@@ -344,8 +344,8 @@ def test_native_layout_with_long_titles(desktop_window, monkeypatch, qtbot, qapp
         ]
     )
     monkeypatch.setattr(LibraryService, "list", lambda *args, **kwargs: LibraryPage(rows, 3, 1, 20))
-    old_style = qapp.styleSheet()
-    qapp.setStyleSheet(files("buddy_desktop").joinpath("theme.qss").read_text(encoding="utf-8"))
+    old_style, old_palette = qapp.styleSheet(), qapp.palette()
+    apply_theme(qapp)
     try:
         window = desktop_window()
         window.resize(*size)
@@ -364,3 +364,4 @@ def test_native_layout_with_long_titles(desktop_window, monkeypatch, qtbot, qapp
         assert window.grab().save(str(destination / f"library-preview-{size[0]}.png"))
     finally:
         qapp.setStyleSheet(old_style)
+        qapp.setPalette(old_palette)

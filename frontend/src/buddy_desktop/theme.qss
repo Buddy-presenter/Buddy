@@ -21,6 +21,7 @@ QListWidget#navigation::item:focus { border: 1px solid #FFA56A; }
 QPushButton { background: #202128; border: 1px solid #363740; border-radius: 6px; padding: 8px 14px; min-height: 20px; font-weight: 500; }
 QPushButton:hover { background: #2B2C35; border-color: #696976; }
 QPushButton:pressed { background: #17181E; border-color: #FFAA6A; }
+QPushButton:checked { background: #38271E; border-color: #FFAA6A; color: #FFD0AA; }
 QPushButton:disabled { background: #16171C; color: #787883; border-color: #2A2B33; }
 QPushButton[primary="true"] { background: #FF9F61; border-color: #FF9F61; color: #20130C; font-weight: 600; }
 QPushButton[primary="true"]:hover { background: #FFB580; border-color: #FFB580; }
@@ -48,6 +49,8 @@ QScrollBar::handle:vertical:hover { background: #747480; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
 QCheckBox { spacing: 10px; padding: 8px 0; border: 2px solid transparent; }
+QCheckBox::indicator { width: 18px; height: 18px; border: 1px solid #95959F; border-radius: 4px; background: #15161C; }
+QCheckBox::indicator:checked { background: #FF9F61; border-color: #FF9F61; image: url("__BUDDY_CHECK_ICON__"); }
 QStatusBar { background: #101116; color: #A4A4AF; border-top: 1px solid #24252C; font-size: 12px; }
 QStatusBar::item { border: 0; }
 QMenuBar { background: #101116; color: #B5B5C0; }

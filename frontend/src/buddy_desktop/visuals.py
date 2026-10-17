@@ -66,7 +66,10 @@ def apply_theme(app: QApplication) -> None:
     palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor("#777781"))
     palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor("#777781"))
     app.setPalette(palette)
-    app.setStyleSheet(files("buddy_desktop").joinpath("theme.qss").read_text(encoding="utf-8"))
+    resources = files("buddy_desktop")
+    check_path = str(resources.joinpath("assets", "icons", "check.svg")).replace("\\", "/")
+    stylesheet = resources.joinpath("theme.qss").read_text(encoding="utf-8")
+    app.setStyleSheet(stylesheet.replace("__BUDDY_CHECK_ICON__", check_path))
 
 
 class BuddyMark(QWidget):
