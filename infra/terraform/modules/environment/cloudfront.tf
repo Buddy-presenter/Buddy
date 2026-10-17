@@ -95,9 +95,9 @@ resource "aws_cloudfront_distribution" "api" {
   }
   viewer_certificate {
     cloudfront_default_certificate = var.api_domain == null
-    acm_certificate_arn             = var.api_domain == null ? null : aws_acm_certificate_validation.edge[0].certificate_arn
-    ssl_support_method              = var.api_domain == null ? null : "sni-only"
-    minimum_protocol_version        = var.api_domain == null ? "TLSv1" : "TLSv1.2_2021"
+    acm_certificate_arn            = var.api_domain == null ? null : aws_acm_certificate_validation.edge[0].certificate_arn
+    ssl_support_method             = var.api_domain == null ? null : "sni-only"
+    minimum_protocol_version       = var.api_domain == null ? "TLSv1" : "TLSv1.2_2021"
   }
 }
 resource "aws_route53_record" "edge_api" {

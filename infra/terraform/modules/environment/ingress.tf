@@ -1,11 +1,11 @@
 resource "aws_acm_certificate" "api" {
-  count = local.aws_https ? 0 : 1
+  count             = local.aws_https ? 0 : 1
   domain_name       = var.api_domain
   validation_method = "DNS"
   lifecycle { create_before_destroy = true }
 }
 resource "aws_route53_record" "certificate" {
-  count = local.aws_https ? 0 : 1
+  count   = local.aws_https ? 0 : 1
   zone_id = var.zone_id
   name    = one(aws_acm_certificate.api[0].domain_validation_options).resource_record_name
   type    = one(aws_acm_certificate.api[0].domain_validation_options).resource_record_type
@@ -13,7 +13,7 @@ resource "aws_route53_record" "certificate" {
   records = [one(aws_acm_certificate.api[0].domain_validation_options).resource_record_value]
 }
 resource "aws_acm_certificate_validation" "api" {
-  count = local.aws_https ? 0 : 1
+  count                   = local.aws_https ? 0 : 1
   certificate_arn         = aws_acm_certificate.api[0].arn
   validation_record_fqdns = [aws_route53_record.certificate[0].fqdn]
 }
@@ -45,7 +45,7 @@ resource "aws_lb_target_group" "api" {
   }
 }
 resource "aws_lb_listener" "https" {
-  count = local.aws_https ? 0 : 1
+  count             = local.aws_https ? 0 : 1
   load_balancer_arn = aws_lb.api.arn
   port              = 443
   protocol          = "HTTPS"
@@ -57,7 +57,7 @@ resource "aws_lb_listener" "https" {
   }
 }
 resource "aws_lb_listener" "redirect" {
-  count = local.aws_https ? 0 : 1
+  count             = local.aws_https ? 0 : 1
   load_balancer_arn = aws_lb.api.arn
   port              = 80
   protocol          = "HTTP"
@@ -71,7 +71,7 @@ resource "aws_lb_listener" "redirect" {
   }
 }
 resource "aws_route53_record" "api" {
-  count = local.aws_https ? 0 : 1
+  count   = local.aws_https ? 0 : 1
   zone_id = var.zone_id
   name    = var.api_domain
   type    = "A"
@@ -82,7 +82,7 @@ resource "aws_route53_record" "api" {
   }
 }
 resource "aws_wafv2_web_acl_association" "api" {
-  count = local.aws_https ? 0 : 1
+  count        = local.aws_https ? 0 : 1
   resource_arn = aws_lb.api.arn
   web_acl_arn  = aws_wafv2_web_acl.main.arn
 }

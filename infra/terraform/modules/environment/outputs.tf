@@ -31,9 +31,9 @@ output "deployment_configuration" {
     api_url     = local.api_url
     tasks       = { for name, task in aws_ecs_task_definition.service : name => task.arn }
     network = {
-      subnets         = aws_subnet.private[*].id
-      securityGroups  = [aws_security_group.service["migration"].id]
-      assignPublicIp  = "DISABLED"
+      subnets        = aws_subnet.private[*].id
+      securityGroups = [aws_security_group.service["migration"].id]
+      assignPublicIp = "DISABLED"
     }
   }
 }
