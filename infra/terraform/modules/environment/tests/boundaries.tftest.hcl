@@ -68,11 +68,11 @@ run "production_redundancy" {
     error_message = "Failed deployments must roll back."
   }
   assert {
-    condition     = jsondecode(aws_iam_role.github["deploy"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:HusseinMoukalled/Buddy:environment:production"
+    condition     = jsondecode(aws_iam_role.github["deploy"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:Buddy-presenter/Buddy:environment:production"
     error_message = "Deploy role must trust only this repository's protected production environment."
   }
   assert {
-    condition     = jsondecode(aws_iam_role.github["release"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:HusseinMoukalled/Buddy:environment:release-production"
+    condition     = jsondecode(aws_iam_role.github["release"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:Buddy-presenter/Buddy:environment:release-production"
     error_message = "Desktop publishing must have a separate release identity."
   }
 }

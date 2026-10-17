@@ -75,7 +75,7 @@ variable "service_egress_mode" {
 }
 variable "github_repository" {
   type    = string
-  default = "HusseinMoukalled/Buddy"
+  default = "Buddy-presenter/Buddy"
 }
 variable "github_oidc_provider_arn" {
   type = string

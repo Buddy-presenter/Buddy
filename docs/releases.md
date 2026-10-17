@@ -29,7 +29,7 @@ verifies the installer. macOS uses Developer ID hardened-runtime signing, Apple
 notarization, stapling and Gatekeeper assessment. Missing credentials stop publication.
 
 All final bytes have SHA-256/size manifests and GitHub build provenance attestations.
-Verify downloaded artifacts with gh attestation verify <artifact> -R HusseinMoukalled/Buddy
+Verify downloaded artifacts with gh attestation verify <artifact> -R Buddy-presenter/Buddy
 and verify manifest hashes before installation. Private download authorization is a
 separate storage feature; this workflow does not expose a public bucket. Artifacts live
 under <environment>/desktop/<full SHA>/<platform>/; production manifests use stable,
