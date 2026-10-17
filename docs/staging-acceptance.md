@@ -11,6 +11,13 @@ An owned domain can be added later without changing the ingress mode. No worker 
 or worker service is supplied by this issue. See [infrastructure](infrastructure.md)
 for configuration, the TLS policy limitation and the private HTTP origin boundary.
 
+The requester chose to retain the AWS Free account plan after live provisioning rejected
+seven-day RDS backup retention. Staging now requests one-day automated backup retention;
+production retains 35 days. This shortens staging's recovery window without changing
+database capacity. Verify the account accepts this setting and execute the isolated
+restore drill before claiming acceptance. Never silently disable backups to bypass an
+account-plan restriction.
+
 The issue PR prepares deployment and stays open until live checks and retained recovery
 evidence pass. Its closing link drives Project status; do not merge it or close #73 while
 these gates are pending. Build the API image only from reviewed main with passing checks.

@@ -22,7 +22,7 @@ run "private_staging_before_images_exist" {
     error_message = "Database must be private, encrypted and protected."
   }
   assert {
-    condition     = aws_db_instance.main.backup_retention_period == 7 && !aws_db_instance.main.skip_final_snapshot
+    condition     = aws_db_instance.main.backup_retention_period == 1 && !aws_db_instance.main.skip_final_snapshot
     error_message = "Staging backups and final snapshots are required."
   }
   assert {
@@ -106,7 +106,7 @@ run "aws_https_without_a_domain" {
     error_message = "Low-cost staging must have no NAT costs or private-subnet default internet route."
   }
   assert {
-    condition     = aws_ecs_task_definition.service["api"].cpu == "512" && aws_ecs_task_definition.service["api"].memory == "1024" && aws_db_instance.main.instance_class == "db.t4g.micro" && !aws_db_instance.main.publicly_accessible && aws_db_instance.main.backup_retention_period == 7 && one(aws_ecs_cluster.main.setting).value == "disabled"
+    condition     = aws_ecs_task_definition.service["api"].cpu == "512" && aws_ecs_task_definition.service["api"].memory == "1024" && aws_db_instance.main.instance_class == "db.t4g.micro" && !aws_db_instance.main.publicly_accessible && aws_db_instance.main.backup_retention_period == 1 && one(aws_ecs_cluster.main.setting).value == "disabled"
     error_message = "Savings must preserve compute/database capacity and backups; only optional metrics are disabled."
   }
   assert {

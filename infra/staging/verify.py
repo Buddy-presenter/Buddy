@@ -124,7 +124,7 @@ def verify(session, deployment, revision, expected_image):
         and not db["PubliclyAccessible"]
         and db["StorageEncrypted"]
         and db["DeletionProtection"]
-        and db["BackupRetentionPeriod"] >= 7,
+        and db["BackupRetentionPeriod"] >= 1,
         "Database availability, isolation, encryption or recovery protection failed",
     )
     alb = client("elbv2").describe_load_balancers(
