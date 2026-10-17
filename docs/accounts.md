@@ -63,6 +63,18 @@ the account. While signed in, the account check runs each minute and renews toke
 expiry; failure removes signed-in state and exposes a recoverable message. An expired
 refresh token requires a new browser sign-in.
 
+Windows Credential Manager limits each credential blob to 2,560 bytes. Buddy stores
+refresh tokens in bounded vault entries (512 characters each, at most 32 pieces),
+with a versioned manifest and integrity check in the vault. Existing single-entry
+sessions remain readable and are converted when next saved. macOS keeps its existing
+single Keychain entry. No token or manifest is written to a plaintext file.
+
+Saving first marks the vault session as incomplete, writes the pieces, removes unused
+pieces from the previous session, and only then publishes the complete manifest. Missing,
+changed, or partially written pieces cannot be resumed. A save failure blocks resume and
+attempts cleanup; sign-out attempts every bounded slot even if metadata is unavailable
+or one deletion fails. The existing non-secret sign-out marker remains the restart guard.
+
 Sign-out clears memory, records a non-secret local tombstone before attempting vault
 deletion, revokes the refresh token online and clears the Cognito browser session. The
 tombstone prevents restoring a saved token when credential deletion fails; only a fresh
@@ -82,6 +94,39 @@ headers; the local limit can also constrain users behind the same proxy. Neither
 is a substitute for provider-level login throttling.
 
 ## Validation and deployment limits
+
+### Windows staging sign-in and resume check
+
+From PowerShell in the repository root, load the checked-in public staging settings
+for this process and launch Buddy:
+
+```powershell
+$config = Get-Content .\infra\staging\public-config.json -Raw | ConvertFrom-Json
+foreach ($property in $config.PSObject.Properties) {
+    [Environment]::SetEnvironmentVariable($property.Name, $property.Value, 'Process')
+}
+.\.venv\Scripts\python.exe -m buddy_desktop
+```
+
+1. Close any older Buddy window first so it does not keep the previous login code loaded.
+2. On Home, click **Check connection**; expect **Backend connected**.
+3. Click **Sign in**, complete the browser login, and return to Buddy; expect
+   **Signed in to Buddy**, with no credential-store error.
+4. Close Buddy, launch it again from the same PowerShell session, then click
+   **Resume session**; expect **Signed in to Buddy**. This verifies saved-session
+   loading, refresh-token rotation, and authenticated API access.
+5. Click **Sign out**, complete any browser handoff, restart Buddy and try
+   **Resume session**; expect no saved session. A new browser sign-in is required.
+
+Do not copy token values from Credential Manager or include them in screenshots or logs.
+The native Windows regression test uses random isolated vault entries with synthetic
+values, verifies long-token save/read/rotation, and cleans those entries afterward:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest frontend/tests/test_native_token_store.py -q
+```
+
+### Automated coverage
 
 `python -m pytest` covers signed JWT boundaries, online revocation, browser state/PKCE,
 recovery callback rejection, restart/renewal, vault failure and sign-out retries. Tests use

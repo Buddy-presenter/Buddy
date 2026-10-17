@@ -31,6 +31,13 @@ class TokenStore(Protocol):
 
 
 class NativeTokenStore:
+    # Windows stores keyring strings as UTF-16 in a 2,560-byte credential blob.
+    # Even 512 non-BMP characters fit (2,048 bytes). Bound the complete token to
+    # the same 16,300-character limit accepted by AccountSession.token_request.
+    _chunk_size = 512
+    _max_chunks = 32
+    _prefix = "Buddy-refresh-v1:"
+
     def __init__(self, identity: str, directory: Path) -> None:
         digest = hashlib.sha256(identity.encode()).hexdigest()
         self.service = "Buddy/" + digest
@@ -55,17 +62,74 @@ class NativeTokenStore:
         try:
             if self.marker.exists():
                 return None
-            return self.backend().get_password(self.service, "refresh")
+            backend = self.backend()
+            value = backend.get_password(self.service, "refresh")
+            if sys.platform != "win32" or value is None or not value.startswith("Buddy-refresh-"):
+                return value  # Existing single-entry sessions remain readable.
+            if not value.startswith(self._prefix):
+                raise ValueError("Unsupported credential format")
+            count_text, digest = value.removeprefix(self._prefix).split(":")
+            count = int(count_text)
+            if not 1 <= count <= self._max_chunks or len(digest) != 64:
+                raise ValueError("Invalid credential metadata")
+            chunks = []
+            for index in range(count):
+                chunk = backend.get_password(self._chunk_service(index), "refresh")
+                if not chunk or len(chunk) > self._chunk_size:
+                    raise ValueError("Incomplete credential")
+                chunks.append(chunk)
+            token = "".join(chunks)
+            if (
+                len(token) > 16300
+                or hashlib.sha256(token.encode()).hexdigest() != digest
+                or backend.get_password(self.service, "refresh") != value
+                or self.marker.exists()
+            ):
+                raise ValueError("Incomplete credential")
+            return token
         except Exception:
             raise IdentityError("Cannot read the credential store. Please sign in again.") from None
 
     def save(self, token: str, *, fresh: bool = False) -> None:
         try:
-            self.backend().set_password(self.service, "refresh", token)
+            backend = self.backend()
+            if sys.platform == "win32":
+                if not 1 <= len(token) <= 16300:
+                    raise ValueError("Unsupported credential length")
+                # Invalidate the previous value before touching any pieces. Only
+                # publish a readable manifest after all writes and cleanup succeed.
+                backend.set_password(self.service, "refresh", self._prefix + "pending")
+                chunks = [
+                    token[offset : offset + self._chunk_size]
+                    for offset in range(0, len(token), self._chunk_size)
+                ]
+                for index, chunk in enumerate(chunks):
+                    backend.set_password(self._chunk_service(index), "refresh", chunk)
+                for index in range(len(chunks), self._max_chunks):
+                    self._delete_entry(backend, self._chunk_service(index))
+                digest = hashlib.sha256(token.encode()).hexdigest()
+                backend.set_password(
+                    self.service, "refresh", f"{self._prefix}{len(chunks)}:{digest}"
+                )
+            else:
+                backend.set_password(self.service, "refresh", token)
             if fresh:
                 self.marker.unlink(missing_ok=True)
         except Exception:
+            # A failed write must never make an older or partial session resumable.
+            with suppress(IdentityError):
+                self.block()
+            with suppress(IdentityError):
+                self.delete()
             raise IdentityError("Cannot save the session in the OS credential store.") from None
+
+    def _chunk_service(self, index: int) -> str:
+        return f"{self.service}/refresh-v1/{index}"
+
+    @staticmethod
+    def _delete_entry(backend: KeyringBackend, service: str) -> None:
+        if backend.get_password(service, "refresh") is not None:
+            backend.delete_password(service, "refresh")
 
     def block(self) -> None:
         try:
@@ -80,8 +144,18 @@ class NativeTokenStore:
     def delete(self) -> None:
         try:
             backend = self.backend()
-            if backend.get_password(self.service, "refresh") is not None:
-                backend.delete_password(self.service, "refresh")
+            services = [self.service]
+            if sys.platform == "win32":
+                # Scan bounded slots even if the manifest was lost or malformed.
+                services.extend(self._chunk_service(index) for index in range(self._max_chunks))
+            failed = False
+            for service in services:
+                try:
+                    self._delete_entry(backend, service)
+                except Exception:
+                    failed = True  # Still attempt every other entry.
+            if failed:
+                raise IdentityError("Credential deletion failed")
         except Exception:
             raise IdentityError(
                 "Cannot remove the saved session. Resume remains disabled."
