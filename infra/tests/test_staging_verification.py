@@ -99,7 +99,7 @@ def live_boundary(monkeypatch):
             "PubliclyAccessible": False,
             "StorageEncrypted": True,
             "DeletionProtection": True,
-            "BackupRetentionPeriod": 7,
+            "BackupRetentionPeriod": 1,
         },
         "behavior": {
             "ViewerProtocolPolicy": "https-only",
@@ -170,7 +170,8 @@ def test_read_only_success_keeps_unexecuted_drills_pending(live_boundary):
 
 
 @pytest.mark.parametrize(
-    "failure", ["account", "drift", "public_db", "wrong_image", "caching", "network", "public_api"]
+    "failure",
+    ["account", "drift", "public_db", "no_backups", "wrong_image", "caching", "network", "public_api"],
 )
 def test_live_drift_and_isolation_fail_closed(live_boundary, failure):
     session, outputs, state = live_boundary
@@ -180,6 +181,8 @@ def test_live_drift_and_isolation_fail_closed(live_boundary, failure):
         state["service"]["taskDefinition"] = "task:2"
     elif failure == "public_db":
         state["db"]["PubliclyAccessible"] = True
+    elif failure == "no_backups":
+        state["db"]["BackupRetentionPeriod"] = 0
     elif failure == "wrong_image":
         state["task"]["containerDefinitions"][0]["image"] = IMAGE.replace("staging", "production")
     elif failure == "network":
