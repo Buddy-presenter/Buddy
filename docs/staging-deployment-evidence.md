@@ -79,10 +79,15 @@ The value was verified identical to the public image-source commit above.
   post-recovery log assertion failed. The corrected collection records the observed
   ELB response-code mismatch, three stopped tasks, stable HTTPS/service state and the
   retained rollback audit. It does not claim access-log evidence.
-- Final Terraform reconciliation and a no-change plan verify the retained configuration.
+- The initial final Terraform reconciliation exposed an ownership defect: it reset the
+  API service from promoted revision `:3` to the configured template revision `:1` (both
+  used image A at that time). PR #84 now gives the release driver ownership of only the
+  service `task_definition` attribute; Terraform still manages counts and other service
+  settings. A Terraform mocked-provider regression test promotes a newer revision, then
+  runs a plan with the older configured revision and checks it does not propose a rollback.
   Synthetic source-database records and temporary operator provisioning access were
   removed after acceptance. The final-state record distinguishes retained resources from
-  disposable ones.
+  disposable ones; the original live no-change plan predates this ownership fix.
 
 ## Configuration, costs and recovery limits
 

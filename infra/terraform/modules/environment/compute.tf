@@ -88,6 +88,12 @@ resource "aws_ecs_service" "api" {
     container_name   = "api"
     container_port   = 8000
   }
+  # The release driver registers and promotes immutable revisions. Terraform owns
+  # the task-definition template above, while ECS service revision ownership stays
+  # with the release driver until the next explicit promotion.
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
   depends_on = [aws_lb_listener.https, aws_lb_listener.private, aws_iam_role_policy.execution]
 }
 resource "aws_ecs_service" "worker" {
@@ -106,6 +112,10 @@ resource "aws_ecs_service" "worker" {
     subnets          = local.task_subnets
     security_groups  = [aws_security_group.service["worker"].id]
     assign_public_ip = local.public_task_ip
+  }
+  # Keep active service revisions under the same release-driver ownership as API.
+  lifecycle {
+    ignore_changes = [task_definition]
   }
   depends_on = [aws_iam_role_policy.execution]
 }

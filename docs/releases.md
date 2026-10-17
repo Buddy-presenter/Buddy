@@ -72,6 +72,18 @@ recover records rollback_failed. Migration failure does not promote traffic. No 
 automatically downgrades the database: use expand/contract changes compatible with both
 old/new code, reviewed schema checks and isolated backups before rollout.
 
+Terraform owns the ECS task-definition templates and service infrastructure; the release
+driver owns the API/worker services' active `task_definition` revisions. The service
+resources ignore only that attribute, so a later Terraform apply cannot undo a healthy
+promotion or an audited rollback. Terraform continues to manage desired counts, networking,
+load balancers and the rest of each service. Changes to a task template (roles, secrets,
+environment or container settings) are registered by Terraform and become active at the
+next explicit release promotion, which clones the configured template and replaces only
+the image digest. Review and test template changes before promoting them. A mocked-provider
+Terraform regression test applies a promoted service revision, then runs a plan with the
+older configured revision and verifies the active revision is retained while other service
+settings remain managed.
+
 Promotion outcomes and explicit rollback attempts have immutable audit objects under
 <environment>/backend/operations/<operation SHA>/<unique operation ID>.json. Conditional
 S3 writes prevent replacing an existing history object. Records include operation type,
