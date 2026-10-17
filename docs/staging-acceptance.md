@@ -49,7 +49,7 @@ eliminates about $38/month plus NAT data processing. Its IPv4 charge is replaced
 single running task's IPv4 charge (about $3.65/month); temporary migration/bootstrap tasks
 and rolling deployments can add short-lived IP/compute charges.
 
-The updated **low-traffic planning allowance is roughly $75–105/month** before credits
+The updated **low-traffic planning allowance is roughly $75â€“105/month** before credits
 and taxes, including the existing API/database capacity, ALB, storage, WAF, keys/secrets,
 small logs and requests. Optional Container Insights is disabled rather than assigned
 an invented fixed saving. Traffic, image storage and restore drills can increase this.
