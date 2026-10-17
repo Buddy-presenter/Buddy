@@ -1,6 +1,6 @@
 # AWS infrastructure (#27)
 
-Selected stack: Terraform 1.13.5, AWS provider 6.19.0, Cognito managed login, ECS Fargate,
+Selected stack: Terraform 1.13.5, AWS provider 6.20.0, Cognito managed login, ECS Fargate,
 PostgreSQL RDS, S3, SQS, CloudFront private VPC origins, optional ACM/Route 53 and WAF. The default region is Frankfurt
 (`eu-central-1`); both environment roots allow an explicit different region. Buddy is
 still a PySide6 desktop product. There is no browser application deployment.
