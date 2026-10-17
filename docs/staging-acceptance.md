@@ -14,9 +14,13 @@ for configuration, the TLS policy limitation and the private HTTP origin boundar
 The issue PR prepares deployment and stays open until live checks and retained recovery
 evidence pass. Its closing link drives Project status; do not merge it or close #73 while
 these gates are pending. Build the API image only from reviewed main with passing checks.
-An operator may apply infrastructure from the exact teammate-reviewed PR head using a
-reviewed saved Terraform plan, after spending approval; never apply an unreviewed diff.
-Record both the infrastructure head and the separately reviewed API revision in evidence.
+For #73, the requester has authorized staging deployment from the exact PR head before
+teammate review so reviewers can assess the deployed result and live evidence. The
+operator must inspect the saved Terraform plan before applying it, within the approved
+staging scope. Record the infrastructure head and the separately reviewed main API
+revision in evidence. Request teammate review after live acceptance; merging still
+requires teammate approval and current-head CI. This exception does not authorize
+production deployment or bypass GitHub environment protections.
 
 ## Operator prerequisites
 
