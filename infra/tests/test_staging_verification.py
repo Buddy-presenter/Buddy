@@ -171,7 +171,16 @@ def test_read_only_success_keeps_unexecuted_drills_pending(live_boundary):
 
 @pytest.mark.parametrize(
     "failure",
-    ["account", "drift", "public_db", "no_backups", "wrong_image", "caching", "network", "public_api"],
+    [
+        "account",
+        "drift",
+        "public_db",
+        "no_backups",
+        "wrong_image",
+        "caching",
+        "network",
+        "public_api",
+    ],
 )
 def test_live_drift_and_isolation_fail_closed(live_boundary, failure):
     session, outputs, state = live_boundary
