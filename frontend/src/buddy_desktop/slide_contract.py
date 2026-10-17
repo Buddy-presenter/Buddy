@@ -37,7 +37,7 @@ def _finite(value: object) -> None:
             raise ContractError("Input contains a non-JSON value.")
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=3)
 def _schema(schema: str) -> Any:
     definition = json.loads((Path(__file__).parent / "slide_contracts" / schema).read_text())
     return Draft202012Validator(definition)
@@ -147,7 +147,12 @@ class Action:
 def parse_action(value: object, manifest: Manifest, current: int) -> Action:
     if type(current) is not int or not 0 <= current < len(manifest.slides):
         raise ContractError("Invalid current slide index.")
-    data = validate(value, "action-v1.schema.json")
+    schema = (
+        "action-v1.1.schema.json"
+        if isinstance(value, dict) and value.get("version") == "1.1"
+        else "action-v1.schema.json"
+    )
+    data = validate(value, schema)
     if (data["deck_id"], data["render_id"]) != (manifest.deck_id, manifest.render_id):
         raise ContractError("Stale deck or render reference.")
     slide = manifest.slides[current]
@@ -162,10 +167,12 @@ def parse_action(value: object, manifest: Manifest, current: int) -> Action:
     elif kind == "go_to_slide":
         target = manifest.index(params["target_slide_id"])
     region = manifest.slides[target].full
-    if kind == "zoom_region":
+    if kind in {"zoom_region", "highlight_region"}:
         region = Region(**params["region"])
         if region.x + region.width > slide.width or region.y + region.height > slide.height:
             raise ContractError("Region exceeds source slide bounds.")
-        if region.width < slide.width / 32 or region.height < slide.height / 32:
+        if kind == "zoom_region" and (
+            region.width < slide.width / 32 or region.height < slide.height / 32
+        ):
             raise ContractError("Region exceeds the maximum 32x magnification.")
     return Action(data["instance_id"], data["purpose"], kind, slide.slide_id, target, region)

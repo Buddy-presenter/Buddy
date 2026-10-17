@@ -49,6 +49,7 @@ class SlideSurface(QWidget):
         self._image = QImage()
         self._slide: Slide | None = None
         self._region: Region | None = None
+        self._highlight: Region | None = None
         self.setAutoFillBackground(False)
 
     def check_thread(self) -> None:
@@ -63,9 +64,14 @@ class SlideSurface(QWidget):
     def slide(self) -> Slide | None:
         return self._slide
 
+    @property
+    def highlight(self) -> Region | None:
+        return self._highlight
+
     def commit(self, slide: Slide, image: QImage, region: Region) -> None:
         self.check_thread()
         self._slide, self._image, self._region = slide, image, region
+        self._highlight = None
         self.setAccessibleDescription(f"Slide {slide.slide_id}")
         self.update()
 
@@ -73,7 +79,13 @@ class SlideSurface(QWidget):
         self.check_thread()
         if self._slide is not None:
             self._region = self._slide.full
+            self._highlight = None
             self.update()
+
+    def set_highlight(self, region: Region) -> None:
+        self.check_thread()
+        self._highlight = region
+        self.update()
 
     def set_region(self, region: Region) -> None:
         self.check_thread()
@@ -95,3 +107,10 @@ class SlideSurface(QWidget):
         painter.translate(mapping.offset_x, mapping.offset_y)
         painter.scale(mapping.scale, mapping.scale)
         painter.drawImage(QRectF(0, 0, self._slide.width, self._slide.height), self._image)
+        if self._highlight is not None:
+            highlight = self._highlight
+            color = QColor("#FFEB3B")
+            color.setAlpha(90)
+            painter.fillRect(
+                QRectF(highlight.x, highlight.y, highlight.width, highlight.height), color
+            )

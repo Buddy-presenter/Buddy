@@ -67,6 +67,7 @@ def main() -> int:
                 "action": current,
                 "slide_id": surface.slide.slide_id,
                 "region": asdict(surface.region),
+                "highlight": asdict(surface.highlight) if surface.highlight is not None else None,
                 "viewport": [surface.width(), surface.height()],
                 "dpr": args.dpr,
                 "capture": filename,

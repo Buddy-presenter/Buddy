@@ -375,6 +375,8 @@ def test_busy_cancel_reset_and_closed_executor_are_responsive(player, qtbot, mon
         return real_load(manifest, slide)
 
     monkeypatch.setattr(module, "load_image", delayed)
+    marked = {"x": 80, "y": 64, "width": 100, "height": 30}
+    assert wait(executor.dispatch(highlight(marked))).status == "completed"
     request = executor.dispatch(action("next_slide"))
     qtbot.waitUntil(entered.is_set)
     timer_events = []
@@ -382,10 +384,13 @@ def test_busy_cancel_reset_and_closed_executor_are_responsive(player, qtbot, mon
     qtbot.waitUntil(lambda: bool(timer_events))
     try:
         assert wait(executor.dispatch(action("next_slide"))).status == "rejected"
+        assert wait(executor.dispatch(highlight(marked))).status == "rejected"
+        assert surface.highlight == Region(**marked)
         assert wait(executor.load_manifest(FIXTURES / "manifest.json")).status == "rejected"
         assert wait(executor.dispatch(action("reset_view"))).status == "completed"
         assert wait(request).status == "cancelled"
         assert surface.region == surface.slide.full
+        assert surface.highlight is None
         executor.close()
     finally:
         release.set()
@@ -523,4 +528,194 @@ def test_immutable_evidence_states_match_each_published_action(player):
             assert wait(executor.dispatch(case["action"])).status == "completed"
         assert surface.slide.slide_id == case["slide_id"]
         assert surface.region == Region(**case["region"])
+        assert pixels(capture(surface)) == pixels(QImage(str(root / case["capture"])))
+
+
+def highlight(region, current=0, **changes):
+    value = action("highlight_region", current, region=region)
+    value["version"] = "1.1"
+    value.update(changes)
+    return value
+
+
+def test_highlight_real_pixels_replace_repeat_and_reset(player):
+    surface, executor, wait, _ = player
+    first = {"x": 400, "y": 600, "width": 200, "height": 100}
+    second = {"x": 1000, "y": 600, "width": 200, "height": 100}
+    original = capture(surface)
+    assert wait(executor.dispatch(highlight(first))).status == "completed"
+    marked = capture(surface)
+    before, after = original.pixelColor(250, 325), marked.pixelColor(250, 325)
+    for old, yellow, actual in zip(
+        before.getRgb()[:3], (255, 235, 59), after.getRgb()[:3], strict=True
+    ):
+        assert abs(actual - round(old * 165 / 255 + yellow * 90 / 255)) <= 1
+    assert marked.pixelColor(10, 10) == original.pixelColor(10, 10)
+    assert surface.region == surface.slide.full
+    assert surface.highlight == Region(**first)
+    assert wait(executor.dispatch(highlight(first))).status == "completed"
+    assert pixels(capture(surface)) == pixels(marked)  # No accumulated darkening.
+    assert wait(executor.dispatch(highlight(second))).status == "completed"
+    assert capture(surface).pixelColor(250, 325) == before
+    assert surface.highlight == Region(**second)
+    assert wait(executor.dispatch(action("reset_view"))).status == "completed"
+    assert surface.highlight is None
+    assert pixels(capture(surface)) == pixels(original)
+
+
+def test_highlight_preserves_camera_and_tracks_zoom_and_resize(player):
+    surface, executor, wait, _ = player
+    zoom = {"x": 400, "y": 400, "width": 1000, "height": 400}
+    assert wait(executor.dispatch(action("zoom_region", region=zoom))).status == "completed"
+    region = {"x": 500, "y": 500, "width": 100, "height": 40}
+    assert wait(executor.dispatch(highlight(region))).status == "completed"
+    assert surface.region == Region(**zoom)
+    for size in [(800, 600), (400, 300), (960, 540)]:
+        surface.resize(*size)
+        assert surface.highlight == Region(**region)
+        mapping = surface.mapping()
+        center = mapping.point(550, 520)
+        assert capture(surface).pixelColor(round(center.x()), round(center.y())) != QColor(
+            "#101820"
+        )
+    assert (
+        wait(
+            executor.dispatch(
+                action("zoom_region", region={"x": 450, "y": 450, "width": 600, "height": 400})
+            )
+        ).status
+        == "completed"
+    )
+    assert surface.highlight == Region(**region)
+
+
+@pytest.mark.parametrize("kind", ["next_slide", "previous_slide", "go_to_slide"])
+def test_changing_slides_clears_highlight_but_rejected_jump_preserves_it(player, kind):
+    surface, executor, wait, _ = player
+    if kind == "previous_slide":
+        assert wait(executor.dispatch(action("next_slide"))).status == "completed"
+    current = executor.current_index
+    region = {"x": 80, "y": 64, "width": 100, "height": 30}
+    assert wait(executor.dispatch(highlight(region, current))).status == "completed"
+    assert (
+        wait(executor.dispatch(action("go_to_slide", current, target_slide_id="unknown"))).status
+        == "rejected"
+    )
+    assert surface.highlight == Region(**region)
+    params = {"target_slide_id": MANIFEST["slides"][2]["slide_id"]} if kind == "go_to_slide" else {}
+    assert wait(executor.dispatch(action(kind, current, **params))).status == "completed"
+    assert surface.highlight is None
+
+
+def test_highlight_accepts_small_fractional_regions_and_preserves_boundary_highlight(player):
+    surface, executor, wait, _ = player
+    region = {"x": 1919.5, "y": 1079.5, "width": 0.5, "height": 0.5}
+    assert wait(executor.dispatch(highlight(region))).status == "completed"
+    assert surface.highlight == Region(**region)
+    assert wait(executor.dispatch(action("previous_slide"))).status == "completed"
+    assert surface.highlight == Region(**region)
+    assert (
+        wait(
+            executor.dispatch(
+                action("go_to_slide", target_slide_id=MANIFEST["slides"][0]["slide_id"])
+            )
+        ).status
+        == "completed"
+    )
+    assert surface.highlight == Region(**region)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("x", -1),
+        ("y", -1),
+        ("width", 0),
+        ("height", 0),
+        ("width", -1),
+        ("x", float("nan")),
+        ("y", float("inf")),
+        ("width", float("-inf")),
+        ("x", 1920),
+        ("y", 1080),
+        ("width", 1921),
+        ("height", 1081),
+        ("width", True),
+        ("extra", 0),
+    ],
+)
+def test_invalid_highlights_preserve_image_camera_and_prior_highlight(player, field, value):
+    surface, executor, wait, _ = player
+    region = {"x": 80, "y": 64, "width": 100, "height": 30}
+    assert wait(executor.dispatch(highlight(region))).status == "completed"
+    before = pixels(capture(surface))
+    invalid = region | {field: value}
+    assert wait(executor.dispatch(highlight(invalid))).status == "rejected"
+    assert pixels(capture(surface)) == before
+    assert surface.highlight == Region(**region)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"version": "1.0"},
+        {"version": "2.0"},
+        {"render_id": "old"},
+        {"deck_id": "other"},
+        {"slide_id": "unknown"},
+        {"extra": 1},
+        {"params": {"text": "Buddy"}},
+    ],
+)
+def test_highlight_contract_rejects_stale_refs_unknown_fields_and_unsupported_versions(
+    player, change
+):
+    surface, executor, wait, _ = player
+    value = highlight({"x": 80, "y": 64, "width": 100, "height": 30}) | change
+    assert wait(executor.dispatch(value)).status == "rejected"
+    assert surface.highlight is None
+
+
+def test_v11_schema_is_standalone_and_accepts_all_six_catalog_types():
+    schema = json.loads((SCHEMAS / "action-v1.1.schema.json").read_text())
+    Draft202012Validator.check_schema(schema)
+    validator = Draft202012Validator(schema)
+    for value in EXAMPLES:
+        validator.validate(value | {"version": "1.1"})
+    validator.validate(highlight({"x": 80, "y": 64, "width": 100, "height": 30}))
+
+
+@pytest.mark.parametrize("dpr", [1, 1.5, 2])
+@pytest.mark.parametrize("index", [0, 1, 2])
+def test_highlight_pixels_follow_device_ratio_and_all_slide_aspects(player, dpr, index):
+    surface, executor, wait, _ = player
+    assert (
+        wait(
+            executor.dispatch(
+                action("go_to_slide", target_slide_id=MANIFEST["slides"][index]["slide_id"])
+            )
+        ).status
+        == "completed"
+    )
+    before = capture(surface, dpr)
+    region = {"x": 80, "y": 80, "width": 100, "height": 40}
+    assert wait(executor.dispatch(highlight(region, index))).status == "completed"
+    after = capture(surface, dpr)
+    point = surface.mapping().point(130, 100)
+    x, y = round(point.x() * dpr), round(point.y() * dpr)
+    assert before.pixelColor(x, y) != after.pixelColor(x, y)
+    assert surface.region == surface.slide.full
+
+
+def test_v11_word_phrase_expression_formula_evidence_and_clear(player):
+    surface, executor, wait, _ = player
+    assert wait(executor.load_manifest(FIXTURES / "manual-manifest.json")).status == "completed"
+    root = Path(__file__).parents[2] / "docs" / "evidence" / "slide-actions-v1.1"
+    cases = json.loads((root / "evidence.json").read_text())
+    for index, case in enumerate(cases):
+        if index:
+            assert wait(executor.dispatch(case["action"])).status == "completed"
+        assert surface.region == Region(**case["region"])
+        expected_highlight = Region(**case["highlight"]) if case["highlight"] else None
+        assert surface.highlight == expected_highlight
         assert pixels(capture(surface)) == pixels(QImage(str(root / case["capture"])))

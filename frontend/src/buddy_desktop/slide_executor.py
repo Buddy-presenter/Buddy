@@ -157,12 +157,15 @@ class SlideExecutor(QObject):
             # Reset is always available, even while an image is loading.
             if self.busy and action.type != "reset_view":
                 raise ContractError("Executor is busy; retry after idle.")
-        except (ContractError, RecursionError):
-            self._finish(request, instance, "rejected", "Unsupported, stale or unavailable action.")
+        except ContractError as exc:
+            self._finish(request, instance, "rejected", str(exc))
             return request
         if action.type == "reset_view":
             self.cancel()
-        if action.target_index == self.current_index:
+        if action.type == "highlight_region":
+            self.surface.set_highlight(action.region)
+            self._finish(request, instance, "completed")
+        elif action.target_index == self.current_index:
             # Uses the committed image; never re-read a file to zoom or recover.
             self.surface.set_region(action.region)
             self._finish(request, instance, "completed")

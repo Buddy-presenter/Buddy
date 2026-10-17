@@ -1,24 +1,29 @@
-# Slide action catalog v1
+# Slide action catalog v1 / v1.1
 
 Issue #47 provides a reusable production PySide6 executor and raster presentation surface.
-It implements exactly `next_slide`, `previous_slide`, `go_to_slide`, `zoom_region` and
-`reset_view`. It does not need an account, converter, semantic graph, generated analysis,
-live session, microphone, OS automation or model. Library/session wiring remains with
+It implements `next_slide`, `previous_slide`, `go_to_slide`, `zoom_region`, `reset_view`
+and the requester-approved sixth command, `highlight_region`. Buddy's Present workspace
+provides local file opening, rectangle selection and buttons for manual testing. It does
+not need an account, converter, semantic graph, generated analysis, live session,
+microphone, OS automation or model. Library/session wiring remains with
 the corresponding later issues. The persisted input is a manifest plus image files;
-camera position is transient local UI state, not a new database/session record.
+camera position, selection and highlights are transient local UI state, not new
+database/session records. See the [manual test guide](slide-actions-manual.md).
 
 ## Standalone contracts
 
 The authoritative JSON Schema 2020-12 files are packaged with the desktop wheel, but
 can be read/copied by backend tools **without importing frontend Python or Qt**:
 
-- [Action instance schema](../frontend/src/buddy_desktop/slide_contracts/action-v1.schema.json)
+- [Original five-action v1.0 schema](../frontend/src/buddy_desktop/slide_contracts/action-v1.schema.json)
+- [Six-action v1.1 schema](../frontend/src/buddy_desktop/slide_contracts/action-v1.1.schema.json)
 - [Slide manifest schema](../frontend/src/buddy_desktop/slide_contracts/manifest-v1.schema.json)
 - [Golden manifest](../frontend/tests/fixtures/slide_actions/manifest.json),
   [action instances](../frontend/tests/fixtures/slide_actions/actions.json) and
   [coordinate mappings](../frontend/tests/fixtures/slide_actions/mappings.json)
 
-Each schema variant is a reusable **template**. An instance is JSON with `version: "1.0"`,
+Each schema variant is a reusable **template**. An instance is JSON with `version: "1.0"`
+(original five commands) or `version: "1.1"` (all six commands),
 `type`, `instance_id`, a nonblank specific `purpose`, `deck_id`, `render_id`, `slide_id`
 and `params`. Do not send a schema as an instance. Unknown fields at every level,
 unknown types/versions, missing fields and unsupported parameters are rejected.
@@ -31,6 +36,25 @@ The frontend validates against these exact packaged schemas; there is no second 
 | `go_to_slide` | `{"target_slide_id": "opaque-id"}` | Exact matching entry, full view; unknown ID rejected. |
 | `zoom_region` | `{"region": {"x": 80, "y": 64, "width": 1760, "height": 200}}` | Contain and center this canonical rectangle. |
 | `reset_view` | `{}` | Current full slide, including during an in-flight load. |
+| `highlight_region` (v1.1) | `{"region": {"x": 80, "y": 760, "width": 320, "height": 90}}` | Replace the single yellow highlight without changing the camera. |
+
+The v1.0 action and manifest schemas are unchanged. Existing five-command v1.0 inputs
+remain valid; v1.0 intentionally rejects highlighting. The manifest version remains `1.0`
+for both action versions. [Six-command examples](../frontend/tests/fixtures/slide_actions/actions-v1.1.json)
+use the [four-slide manual manifest](../frontend/tests/fixtures/slide_actions/manual-manifest.json).
+
+Highlighting uses the same source rectangle coordinates and bounds as zoom, with no
+1/32 minimum size: a word, formula, expression, picture or any other visible content can
+be marked. This is a pixel-region overlay, so no text recognition or text-position index
+is required. Every valid highlight replaces the previous one; repeating it does not
+accumulate opacity. The overlay is `#FFEB3B` with alpha `90/255` (about 35%), SourceOver.
+It follows the slide's transform on zoom/resize and does not modify source image files.
+
+Zoom preserves the highlight. Changing to a different slide, loading a new manifest,
+pressing Reset, cancellation or a load failure clears it. A navigation boundary or jump
+to the already-current slide preserves the highlight because no slide changes. Invalid
+commands preserve the existing highlight, camera and image. The six-command catalog does
+not introduce a separate clear action; Reset returns to the full slide and clears the mark.
 
 All references are opaque, case-sensitive stable IDs, 1..128 characters with at least one
 non-whitespace character. IDs must not be parsed into file paths, order or indices.
@@ -102,10 +126,10 @@ Create `SlideSurface` and its `SlideExecutor` on the QApplication thread. Call
 Both return a local monotonically increasing request ID. Connect `completed` **before**
 calling: validation, cached zoom/reset and boundary navigation may complete synchronously.
 `Completion` contains request ID, validated instance ID when available, status, safe error
-message and committed slide ID. It is an immutable snapshot. `surface.region`, `surface.slide`
+message and committed slide ID. It is an immutable snapshot. `surface.region`, `surface.highlight`, `surface.slide`
 and `executor.current_index` expose committed state for later validation.
 
-There is no animation or duration parameter in v1: cached operations commit immediately;
+There is no animation or duration parameter in v1/v1.1: cached operations commit immediately;
 disk reads, hashing and QImage decoding run in a single worker. The signal marks committed
 state and a scheduled repaint; it does not promise physical display scanout. To inspect
 rendered pixels, render/grab the widget after completion. Long IO never blocks the GUI thread.
@@ -145,7 +169,7 @@ python -m pytest frontend/tests/test_slide_actions.py
 
 Set `QT_QPA_PLATFORM=offscreen` on macOS/headless systems; Windows tests use native Qt.
 Add `--width 800 --height 600 --dpr 2` to inspect another viewport/device ratio.
-The script imports the real production executor/surface, replays only the five allowed
+The script imports the real production executor/surface, replays only the allowed catalog
 types, and records each input plus committed rectangle/ID and a PNG of the actual widget.
 
 | Step | Instance parameters | Before → after |
@@ -169,3 +193,13 @@ See [captured states and parameters](evidence/slide-actions-v1/evidence.json):
 The captures show centered contain behavior at 960x540 logical pixels, DPR 1. They are
 review evidence, not a platform-specific font baseline: tests compare the already-rendered
 PNG pixels and allow small interpolation differences only for fractional-device scaling.
+
+The [v1.1 evidence](evidence/slide-actions-v1.1/evidence.json) additionally records each
+highlight rectangle and its rendered pixels for the real word, phrase, expression and
+formula slide, followed by Reset. Reproduce it with:
+
+```sh
+python frontend/scripts/capture_slide_actions.py --manifest frontend/tests/fixtures/slide_actions/manual-manifest.json --actions frontend/tests/fixtures/slide_actions/actions-v1.1.json --output build/slide-actions-v1.1-evidence
+```
+
+![Highlighted formula](evidence/slide-actions-v1.1/12-viewport.png)

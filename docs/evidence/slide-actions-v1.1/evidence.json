@@ -1,0 +1,423 @@
+[
+  {
+    "action": null,
+    "slide_id": "slide:wide/opaque",
+    "region": {
+      "x": 0,
+      "y": 0,
+      "width": 1920,
+      "height": 1080
+    },
+    "highlight": null,
+    "viewport": [
+      960,
+      540
+    ],
+    "dpr": 1,
+    "capture": "00-viewport.png"
+  },
+  {
+    "action": {
+      "version": "1.1",
+      "instance_id": "example:focus-title",
+      "purpose": "Focus on the presentation title.",
+      "deck_id": "buddy-authored-fixtures",
+      "render_id": "powerpoint-highlight-manual-v1",
+      "slide_id": "slide:wide/opaque",
+      "type": "zoom_region",
+      "params": {
+        "region": {
+          "x": 80,
+          "y": 64,
+          "width": 1000,
+          "height": 200
+        }
+      }
+    },
+    "slide_id": "slide:wide/opaque",
+    "region": {
+      "x": 80,
+      "y": 64,
+      "width": 1000,
+      "height": 200
+    },
+    "highlight": null,
+    "viewport": [
+      960,
+      540
+    ],
+    "dpr": 1,
+    "capture": "01-viewport.png"
+  },
+  {
+    "action": {
+      "version": "1.1",
+      "instance_id": "example:focus-body",
+      "purpose": "Focus on the three body points.",
+      "deck_id": "buddy-authored-fixtures",
+      "render_id": "powerpoint-highlight-manual-v1",
+      "slide_id": "slide:wide/opaque",
+      "type": "zoom_region",
+      "params": {
+        "region": {
+          "x": 80,
+          "y": 320,
+          "width": 1000,
+          "height": 360
+        }
+      }
+    },
+    "slide_id": "slide:wide/opaque",
+    "region": {
+      "x": 80,
+      "y": 320,
+      "width": 1000,
+      "height": 360
+    },
+    "highlight": null,
+    "viewport": [
+      960,
+      540
+    ],
+    "dpr": 1,
+    "capture": "02-viewport.png"
+  },
+  {
+    "action": {
+      "version": "1.1",
+      "instance_id": "example:restore-wide",
+      "purpose": "Restore the full wide slide after focusing.",
+      "deck_id": "buddy-authored-fixtures",
+      "render_id": "powerpoint-highlight-manual-v1",
+      "slide_id": "slide:wide/opaque",
+      "type": "reset_view",
+      "params": {}
+    },
+    "slide_id": "slide:wide/opaque",
+    "region": {
+      "x": 0,
+      "y": 0,
+      "width": 1920,
+      "height": 1080
+    },
+    "highlight": null,
+    "viewport": [
+      960,
+      540
+    ],
+    "dpr": 1,
+    "capture": "03-viewport.png"
+  },
+  {
+    "action": {
+      "version": "1.1",
+      "instance_id": "example:advance-standard",
+      "purpose": "Continue to the standard-aspect slide.",
+      "deck_id": "buddy-authored-fixtures",
+      "render_id": "powerpoint-highlight-manual-v1",
+      "slide_id": "slide:wide/opaque",
+      "type": "next_slide",
+      "params": {}
+    },
+    "slide_id": "slide:standard/opaque",
+    "region": {
+      "x": 0,
+      "y": 0,
+      "width": 1440,
+      "height": 1080
+    },
+    "highlight": null,
+    "viewport": [
+      960,
+      540
+    ],
+    "dpr": 1,
+    "capture": "04-viewport.png"
+  },
+  {
+    "action": {
+      "version": "1.1",
+      "instance_id": "example:return-wide",
+      "purpose": "Revisit the wide slide.",
+      "deck_id": "buddy-authored-fixtures",
+      "render_id": "powerpoint-highlight-manual-v1",
+      "slide_id": "slide:standard/opaque",
+      "type": "previous_slide",
+      "params": {}
+    },
+    "slide_id": "slide:wide/opaque",
+    "region": {
+      "x": 0,
+      "y": 0,
+      "width": 1920,
+      "height": 1080
+    },
+    "highlight": null,
+    "viewport": [
+      960,
+      540
+    ],
+    "dpr": 1,
+    "capture": "05-viewport.png"
+  },
+  {
+    "action": {
+      "version": "1.1",
+      "instance_id": "example:jump-portrait",
+      "purpose": "Jump directly to the portrait slide.",
+      "deck_id": "buddy-authored-fixtures",
+      "render_id": "powerpoint-highlight-manual-v1",
+      "slide_id": "slide:wide/opaque",
+      "type": "go_to_slide",
+      "params": {
+        "target_slide_id": "slide:portrait/opaque"
+      }
+    },
+    "slide_id": "slide:portrait/opaque",
+    "region": {
+      "x": 0,
+      "y": 0,
+      "width": 1080,
+      "height": 1440
+    },
+    "highlight": null,
+    "viewport": [
+      960,
+      540
+    ],
+    "dpr": 1,
+    "capture": "06-viewport.png"
+  },
+  {
+    "action": {
+      "version": "1.1",
+      "instance_id": "example:restore-portrait",
+      "purpose": "Keep the portrait slide in full view.",
+      "deck_id": "buddy-authored-fixtures",
+      "render_id": "powerpoint-highlight-manual-v1",
+      "slide_id": "slide:portrait/opaque",
+      "type": "reset_view",
+      "params": {}
+    },
+    "slide_id": "slide:portrait/opaque",
+    "region": {
+      "x": 0,
+      "y": 0,
+      "width": 1080,
+      "height": 1440
+    },
+    "highlight": null,
+    "viewport": [
+      960,
+      540
+    ],
+    "dpr": 1,
+    "capture": "07-viewport.png"
+  },
+  {
+    "action": {
+      "version": "1.1",
+      "instance_id": "example:jump-content",
+      "purpose": "Show the content-highlighting slide.",
+      "deck_id": "buddy-authored-fixtures",
+      "render_id": "powerpoint-highlight-manual-v1",
+      "slide_id": "slide:portrait/opaque",
+      "type": "go_to_slide",
+      "params": {
+        "target_slide_id": "slide:content/opaque"
+      }
+    },
+    "slide_id": "slide:content/opaque",
+    "region": {
+      "x": 0,
+      "y": 0,
+      "width": 1920,
+      "height": 1080
+    },
+    "highlight": null,
+    "viewport": [
+      960,
+      540
+    ],
+    "dpr": 1,
+    "capture": "08-viewport.png"
+  },
+  {
+    "action": {
+      "version": "1.1",
+      "instance_id": "example:highlight-word",
+      "purpose": "Emphasize the word on the content slide.",
+      "deck_id": "buddy-authored-fixtures",
+      "render_id": "powerpoint-highlight-manual-v1",
+      "slide_id": "slide:content/opaque",
+      "type": "highlight_region",
+      "params": {
+        "region": {
+          "x": 80,
+          "y": 280,
+          "width": 200,
+          "height": 90
+        }
+      }
+    },
+    "slide_id": "slide:content/opaque",
+    "region": {
+      "x": 0,
+      "y": 0,
+      "width": 1920,
+      "height": 1080
+    },
+    "highlight": {
+      "x": 80,
+      "y": 280,
+      "width": 200,
+      "height": 90
+    },
+    "viewport": [
+      960,
+      540
+    ],
+    "dpr": 1,
+    "capture": "09-viewport.png"
+  },
+  {
+    "action": {
+      "version": "1.1",
+      "instance_id": "example:highlight-phrase",
+      "purpose": "Emphasize the phrase on the content slide.",
+      "deck_id": "buddy-authored-fixtures",
+      "render_id": "powerpoint-highlight-manual-v1",
+      "slide_id": "slide:content/opaque",
+      "type": "highlight_region",
+      "params": {
+        "region": {
+          "x": 80,
+          "y": 440,
+          "width": 600,
+          "height": 90
+        }
+      }
+    },
+    "slide_id": "slide:content/opaque",
+    "region": {
+      "x": 0,
+      "y": 0,
+      "width": 1920,
+      "height": 1080
+    },
+    "highlight": {
+      "x": 80,
+      "y": 440,
+      "width": 600,
+      "height": 90
+    },
+    "viewport": [
+      960,
+      540
+    ],
+    "dpr": 1,
+    "capture": "10-viewport.png"
+  },
+  {
+    "action": {
+      "version": "1.1",
+      "instance_id": "example:highlight-expression",
+      "purpose": "Emphasize the expression on the content slide.",
+      "deck_id": "buddy-authored-fixtures",
+      "render_id": "powerpoint-highlight-manual-v1",
+      "slide_id": "slide:content/opaque",
+      "type": "highlight_region",
+      "params": {
+        "region": {
+          "x": 80,
+          "y": 600,
+          "width": 550,
+          "height": 90
+        }
+      }
+    },
+    "slide_id": "slide:content/opaque",
+    "region": {
+      "x": 0,
+      "y": 0,
+      "width": 1920,
+      "height": 1080
+    },
+    "highlight": {
+      "x": 80,
+      "y": 600,
+      "width": 550,
+      "height": 90
+    },
+    "viewport": [
+      960,
+      540
+    ],
+    "dpr": 1,
+    "capture": "11-viewport.png"
+  },
+  {
+    "action": {
+      "version": "1.1",
+      "instance_id": "example:highlight-formula",
+      "purpose": "Emphasize the formula on the content slide.",
+      "deck_id": "buddy-authored-fixtures",
+      "render_id": "powerpoint-highlight-manual-v1",
+      "slide_id": "slide:content/opaque",
+      "type": "highlight_region",
+      "params": {
+        "region": {
+          "x": 80,
+          "y": 760,
+          "width": 320,
+          "height": 90
+        }
+      }
+    },
+    "slide_id": "slide:content/opaque",
+    "region": {
+      "x": 0,
+      "y": 0,
+      "width": 1920,
+      "height": 1080
+    },
+    "highlight": {
+      "x": 80,
+      "y": 760,
+      "width": 320,
+      "height": 90
+    },
+    "viewport": [
+      960,
+      540
+    ],
+    "dpr": 1,
+    "capture": "12-viewport.png"
+  },
+  {
+    "action": {
+      "version": "1.1",
+      "instance_id": "example:clear-content",
+      "purpose": "Restore the full content slide and clear the highlight.",
+      "deck_id": "buddy-authored-fixtures",
+      "render_id": "powerpoint-highlight-manual-v1",
+      "slide_id": "slide:content/opaque",
+      "type": "reset_view",
+      "params": {}
+    },
+    "slide_id": "slide:content/opaque",
+    "region": {
+      "x": 0,
+      "y": 0,
+      "width": 1920,
+      "height": 1080
+    },
+    "highlight": null,
+    "viewport": [
+      960,
+      540
+    ],
+    "dpr": 1,
+    "capture": "13-viewport.png"
+  }
+]
