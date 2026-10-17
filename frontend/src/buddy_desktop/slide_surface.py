@@ -82,6 +82,12 @@ class SlideSurface(QWidget):
             self._highlight = None
             self.update()
 
+    def clear(self) -> None:
+        self.check_thread()
+        self._image = QImage()
+        self._slide = self._region = self._highlight = None
+        self.update()
+
     def set_highlight(self, region: Region) -> None:
         self.check_thread()
         self._highlight = region

@@ -73,7 +73,8 @@ their owning component unless a test intentionally crosses a component boundary;
 belong in `tests/integration/`.
 
 Authenticated original-PPTX ingestion, storage limits, retry contracts and recovery are
-documented in [private uploads](uploads.md). Desktop upload controls remain issue #37.
+documented in [private uploads](uploads.md). Library includes PDF/PPTX upload controls.
+See [PDF presentations](pdf-presentations.md) for the built-in PDF viewer and page validation.
 
 The standalone backend PPTX extraction stage and local inspection command are documented
 in [extraction](extraction.md); it requires no upload, worker, renderer or paid provider.
@@ -82,3 +83,7 @@ The reusable Qt slide surface, six-action executor, standalone input schemas and
 slide-image test/evidence commands are documented in [slide actions](slide-actions.md).
 For launching Buddy and trying every command in Present, follow the
 [manual test guide](slide-actions-manual.md). These local controls need no backend.
+
+The isolated PDF action validation API, private evidence, runtime setup and test commands
+are documented in [action validation](action-validation.md). It uses predefined actions;
+no model generation or document text extraction is required.

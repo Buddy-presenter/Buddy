@@ -364,3 +364,52 @@ def test_native_layout_with_long_titles(desktop_window, monkeypatch, qtbot, qapp
         assert window.grab().save(str(destination / f"library-preview-{size[0]}.png"))
     finally:
         qapp.setStyleSheet(old_style)
+
+
+@pytest.mark.parametrize("invalidate_during_success", [False, True])
+def test_upload_retry_reuses_key_until_confirmed_success(
+    desktop_window, qtbot, monkeypatch, tmp_path, invalidate_during_success
+):
+    from PySide6.QtWidgets import QFileDialog
+
+    from buddy_desktop.presentation_service import PresentationService, SavedPresentation
+
+    window = desktop_window()
+    window.account.session = SimpleNamespace(
+        tokens=Tokens("access", "refresh", time.monotonic() + 3600), cancelled=Event()
+    )
+    window.account.session_changed.emit()
+    library = window.library
+    library.active = True
+    monkeypatch.setattr(LibraryService, "list", lambda *a, **kw: LibraryPage((), 0, 1, 20))
+    path = tmp_path / "deck.pdf"
+    path.write_bytes(b"%PDF-test")
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a: (str(path), ""))
+    keys = []
+    entered, release = Event(), Event()
+
+    def upload(self, chosen, key):
+        assert chosen == path
+        keys.append(key)
+        if len(keys) == 1:
+            raise ServiceError("Uncertain transfer outcome")
+        if len(keys) == 2 and invalidate_during_success:
+            entered.set()
+            assert release.wait(5)
+        return SavedPresentation(str(uuid4()))
+
+    monkeypatch.setattr(PresentationService, "upload", upload)
+    library.choose_upload()
+    qtbot.waitUntil(lambda: not library.runner.busy)
+    assert len(library.upload_keys) == 1
+    library.choose_upload()
+    if invalidate_during_success:
+        qtbot.waitUntil(entered.is_set)
+        library.invalidate()
+        release.set()
+    qtbot.waitUntil(lambda: not library.runner.busy)
+    assert not library.upload_keys
+    library.choose_upload()
+    qtbot.waitUntil(lambda: not library.runner.busy)
+    assert keys[0] == keys[1] and keys[2] != keys[1]
+    assert not library.upload_keys

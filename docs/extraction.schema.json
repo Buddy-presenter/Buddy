@@ -269,6 +269,15 @@
       "title": "Slides",
       "type": "array"
     },
+    "source_format": {
+      "default": "pptx",
+      "enum": [
+        "pptx",
+        "pdf"
+      ],
+      "title": "Source Format",
+      "type": "string"
+    },
     "source_revision": {
       "maxLength": 128,
       "minLength": 1,

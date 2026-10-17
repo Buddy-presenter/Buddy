@@ -35,6 +35,8 @@ from buddy_api.uploads.contracts import UploadError
 from buddy_api.uploads.router import UploadMetadataLimitMiddleware, upload_router
 from buddy_api.uploads.service import UploadService
 from buddy_api.uploads.storage import SourceStorage, StorageProbe
+from buddy_api.validation.api import validation_router
+from buddy_api.validation.service import ValidationService
 
 ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     400: {"model": ErrorResponse, "description": "Malformed or disallowed request."},
@@ -71,6 +73,9 @@ def create_app(
         *probes,
     )
     validate_probes(dependencies)
+    validator = (
+        ValidationService(uploads, config.validator) if uploads and config.validator else None
+    )
     started = False
 
     @asynccontextmanager
@@ -78,6 +83,17 @@ def create_app(
         nonlocal started
         started = True
         reconciler = asyncio.create_task(uploads.run_reconciliation()) if uploads else None
+
+        async def reconcile_validation() -> None:
+            while True:
+                try:
+                    assert validator is not None
+                    await validator.reconcile()
+                except UploadError:
+                    pass  # Durable cleanup reservations remain for the next bounded retry.
+                await asyncio.sleep(30)
+
+        validation_cleanup = asyncio.create_task(reconcile_validation()) if validator else None
         try:
             yield
         finally:
@@ -86,6 +102,10 @@ def create_app(
                 reconciler.cancel()
                 with suppress(asyncio.CancelledError):
                     await reconciler
+            if validation_cleanup:
+                validation_cleanup.cancel()
+                with suppress(asyncio.CancelledError):
+                    await validation_cleanup
             if storage:
                 await asyncio.to_thread(storage.close)
             if database is not None:
@@ -105,11 +125,13 @@ def create_app(
     app.state.database = database
     app.state.authentication = Authentication(config.identity)
     app.state.uploads = uploads
+    app.state.validator = validator
     app.include_router(auth_router(config.identity))
     app.include_router(private_router())
     app.include_router(library_router())
     app.include_router(analysis_router())
     app.include_router(upload_router())
+    app.include_router(validation_router())
 
     @app.exception_handler(UploadError)
     async def upload_error(request: Request, exc: UploadError) -> JSONResponse:

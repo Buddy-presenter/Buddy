@@ -11,6 +11,7 @@ from buddy_api.persistence.engine import create_engine
 from buddy_api.persistence.errors import PersistenceConflict, PersistenceUnavailable
 from buddy_api.persistence.migration_config import migration_heads
 from buddy_api.persistence.models import (
+    ActionCheck,
     ActionValidation,
     AnalysisSlide,
     AnalysisVersion,
@@ -72,6 +73,7 @@ class Database:
                     ActionValidation.id,
                     LegacyAnalysisPayload.analysis_id,
                     DeckUpload.id,
+                    ActionCheck.id,
                 ):
                     await connection.execute(select(identifier).limit(0))
         except (SQLAlchemyError, OSError, TimeoutError):
