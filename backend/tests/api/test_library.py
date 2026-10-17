@@ -211,11 +211,15 @@ def test_published_analysis_requires_complete_revision_bound_render_proof(librar
                 analysis = await create(repos, owner_id=owner, deck_id=ids[5], job_id=job.id)
                 assert analysis.publication == "published"
                 for position in range(asset_count):
-                    session.add(RenderedAsset(
-                        owner_id=owner, deck_id=ids[5],
-                        storage_key=f"unrelated-old-render-{position}",
-                        content_type="image/png", size_bytes=1,
-                    ))
+                    session.add(
+                        RenderedAsset(
+                            owner_id=owner,
+                            deck_id=ids[5],
+                            storage_key=f"unrelated-old-render-{position}",
+                            content_type="image/png",
+                            size_bytes=1,
+                        )
+                    )
         finally:
             await db.close()
 
@@ -237,11 +241,16 @@ def test_new_candidate_revision_is_not_hidden_by_old_published_revision(library_
                 repos = Repositories.for_session(session)
                 from backend.tests.support.analysis import create
 
-                job = await session.scalar(select(ProcessingJob).where(ProcessingJob.deck_id == ids[4]))
-                old = await session.scalar(select(AnalysisVersion).where(AnalysisVersion.deck_id == ids[4]))
+                job = await session.scalar(
+                    select(ProcessingJob).where(ProcessingJob.deck_id == ids[4])
+                )
+                old = await session.scalar(
+                    select(AnalysisVersion).where(AnalysisVersion.deck_id == ids[4])
+                )
                 assert old.publication == "published"
-                current = await create(repos, owner_id=owner, deck_id=ids[4], job_id=job.id,
-                                       version=2, actions=True)
+                current = await create(
+                    repos, owner_id=owner, deck_id=ids[4], job_id=job.id, version=2, actions=True
+                )
                 assert current.publication == "awaiting_validation"
                 return old.id, current.id
         finally:
