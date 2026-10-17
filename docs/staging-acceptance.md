@@ -5,6 +5,8 @@
 Use one approved AWS account with distinct staging/production roots, state, networks,
 databases, buckets, queues, secrets, Cognito clients and protected-environment OIDC roles.
 Staging uses `ingress_mode = "aws_https"`, CloudFront's AWS hostname and an internal ALB.
+Its `service_egress_mode = "public_ip"` removes NAT: tasks have public IPs for outbound
+HTTPS but API ingress stays restricted to the ALB security group; RDS stays private.
 An owned domain can be added later without changing the ingress mode. No worker image
 or worker service is supplied by this issue. See [infrastructure](infrastructure.md)
 for configuration, the TLS policy limitation and the private HTTP origin boundary.
@@ -41,18 +43,24 @@ another `aws login`; do not replace this with long-lived access keys.
 
 ## Cost and cleanup plan
 
-The initial Frankfurt Price List lookup on 2026-10-17 gives approximately $92/month for
-one NAT gateway, the ALB, a db.t4g.micro database and the 0.5-vCPU/1-GB API task at 730 hours.
-Allow roughly $110â€“140/month for low-traffic always-on staging after storage, the NAT
-IPv4 address, two WAF ACLs/rules, KMS/secrets and small logs/request usage; traffic,
-backups, restore drills, taxes and price changes can increase this. This is an estimate,
-not a spending cap. Credits offset eligible charges, not the underlying resource cost.
+The initial Frankfurt Price List lookup on 2026-10-17 gave approximately $92/month for
+NAT, ALB, db.t4g.micro and the 0.5-vCPU/1-GB API task at 730 hours. Removing staging NAT
+eliminates about $38/month plus NAT data processing. Its IPv4 charge is replaced by the
+single running task's IPv4 charge (about $3.65/month); temporary migration/bootstrap tasks
+and rolling deployments can add short-lived IP/compute charges.
+
+The updated **low-traffic planning allowance is roughly $75–105/month** before credits
+and taxes, including the existing API/database capacity, ALB, storage, WAF, keys/secrets,
+small logs and requests. Optional Container Insights is disabled rather than assigned
+an invented fixed saving. Traffic, image storage and restore drills can increase this.
+This is not a quote or spending cap: obtain a reviewed actual plan and usage assumptions
+before deployment. Credits offset eligible charges, not the underlying resource cost.
 The account initially reported $100 earned credits, not a guaranteed $200 balance.
 
 Before applying, configure notifications against **gross usage including credit-covered
 usage** as well as remaining credits, with agreed thresholds and a recipient. AWS Budget
 alerts do not enforce a hard spending limit. A short test window still incurs retained
-storage/key/snapshot charges. Scaling ECS to zero does not stop NAT, ALB or RDS billing.
+storage/key/snapshot charges. Scaling ECS to zero does not stop ALB, RDS, key or retained-storage billing. The low-cost staging plan contains no NAT to stop.
 Do not create production during staging acceptance.
 
 At the end of the test window, explicitly review whether to retain staging. Inventory
@@ -70,11 +78,15 @@ Pricing sources: [VPC](https://aws.amazon.com/vpc/pricing/),
 ## Provision and deploy
 
 1. Follow the bootstrap and environment phases in [infrastructure](infrastructure.md).
-   Use separate state/workspaces, the real account ID and `ingress_mode = "aws_https"`;
+   Use separate state/workspaces, the real account ID, `ingress_mode = "aws_https"`
+   and `service_egress_mode = "public_ip"`;
    omit `api_domain`/`zone_id`. Reuse the account OIDC provider for the second environment.
 2. Review/apply the initial infrastructure with images absent and services stopped.
-   Confirm CloudFront/VPC origin deployed, private ALB and DB, buckets and secrets.
-3. Build the exact reviewed main SHA, push to staging ECR with the full SHA in its immutable
+   Confirm CloudFront/VPC origin deployed, private ALB and DB, buckets and secrets,
+   zero NAT gateways and no direct internet ingress to task security groups.
+3. Use output `task_subnets` and `task_public_ip` for bootstrap/migration networking;
+   do not substitute `private_subnets` in public egress mode.
+   Build the exact reviewed main SHA, push to staging ECR with the full SHA in its immutable
    tag, and retain build provenance plus the resolved image digest. Apply that digest with
    services stopped. Never use a mutable tag or a production repository image.
 4. Run the operator-only bootstrap task and require exit code zero. Run migration twice

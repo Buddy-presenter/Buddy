@@ -44,7 +44,7 @@ resource "aws_s3_bucket_versioning" "private" {
 resource "aws_s3_bucket_policy" "tls" {
   for_each = aws_s3_bucket.private
   bucket   = each.value.id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{
+  policy   = jsonencode({ Version = "2012-10-17", Statement = [{
     Effect    = "Deny", Principal = "*", Action = "s3:*",
     Resource  = [each.value.arn, "${each.value.arn}/*"],
     Condition = { Bool = { "aws:SecureTransport" = "false" } }
@@ -122,7 +122,7 @@ resource "aws_sqs_queue" "processing" {
 }
 resource "aws_sqs_queue_policy" "tls" {
   queue_url = aws_sqs_queue.processing.id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{
+  policy    = jsonencode({ Version = "2012-10-17", Statement = [{
     Effect    = "Deny", Principal = "*", Action = "sqs:*", Resource = aws_sqs_queue.processing.arn,
     Condition = { Bool = { "aws:SecureTransport" = "false" } }
   }] })

@@ -64,6 +64,15 @@ variable "start_services" {
   }
 }
 variable "vpc_cidr" { type = string }
+variable "service_egress_mode" {
+  description = "Staging may avoid NAT using public task IPs with SG-restricted inbound traffic."
+  type        = string
+  default     = "private_nat"
+  validation {
+    condition     = contains(["private_nat", "public_ip"], var.service_egress_mode) && (var.environment != "production" || var.service_egress_mode == "private_nat")
+    error_message = "Use private_nat, or staging-only public_ip. Production retains private task addresses."
+  }
+}
 variable "github_repository" {
   type    = string
   default = "HusseinMoukalled/Buddy"
@@ -76,10 +85,13 @@ variable "github_oidc_provider_arn" {
   }
 }
 locals {
-  name       = "buddy-${var.environment}"
-  production = var.environment == "production"
-  services   = toset(["api", "migration", "worker"])
-  aws_https  = var.ingress_mode == "aws_https"
-  api_host   = local.aws_https ? aws_cloudfront_distribution.api[0].domain_name : var.api_domain
-  api_url    = "https://${coalesce(var.api_domain, local.api_host)}"
+  name           = "buddy-${var.environment}"
+  production     = var.environment == "production"
+  services       = toset(["api", "migration", "worker"])
+  aws_https      = var.ingress_mode == "aws_https"
+  api_host       = local.aws_https ? aws_cloudfront_distribution.api[0].domain_name : var.api_domain
+  api_url        = "https://${coalesce(var.api_domain, local.api_host)}"
+  public_task_ip = var.service_egress_mode == "public_ip"
+  nat_count      = local.public_task_ip ? 0 : (local.production ? 2 : 1)
+  task_subnets   = local.public_task_ip ? aws_subnet.public[*].id : aws_subnet.private[*].id
 }

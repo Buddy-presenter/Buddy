@@ -24,16 +24,17 @@ output "desktop_configuration" {
 output "deployment_configuration" {
   value = {
     environment = var.environment
+    egress_mode = var.service_egress_mode
     account_id  = var.account_id
     region      = var.region
     cluster     = aws_ecs_cluster.main.name
     bucket      = aws_s3_bucket.private["releases"].id
     api_url     = local.api_url
     tasks       = { for name, task in aws_ecs_task_definition.service : name => task.arn }
-    network = {
-      subnets        = aws_subnet.private[*].id
+    network     = {
+      subnets        = local.task_subnets
       securityGroups = [aws_security_group.service["migration"].id]
-      assignPublicIp = "DISABLED"
+      assignPublicIp = local.public_task_ip ? "ENABLED" : "DISABLED"
     }
   }
 }
@@ -49,3 +50,6 @@ output "verification_resources" {
     queue_url         = aws_sqs_queue.processing.url
   }
 }
+
+output "task_subnets" { value = local.task_subnets }
+output "task_public_ip" { value = local.public_task_ip ? "ENABLED" : "DISABLED" }

@@ -95,10 +95,23 @@ run "reject_unknown_environment" {
 run "aws_https_without_a_domain" {
   command = plan
   variables {
-    ingress_mode = "aws_https"
-    api_domain   = null
-    zone_id      = null
-    api_image    = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ingress_mode        = "aws_https"
+    service_egress_mode = "public_ip"
+    api_domain          = null
+    zone_id             = null
+    api_image           = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+  assert {
+    condition     = length(aws_nat_gateway.main) == 0 && length(aws_eip.nat) == 0 && aws_ecs_service.api[0].network_configuration[0].assign_public_ip
+    error_message = "Low-cost staging must have no NAT costs or private-subnet default internet route."
+  }
+  assert {
+    condition     = aws_ecs_task_definition.service["api"].cpu == "512" && aws_ecs_task_definition.service["api"].memory == "1024" && aws_db_instance.main.instance_class == "db.t4g.micro" && !aws_db_instance.main.publicly_accessible && aws_db_instance.main.backup_retention_period == 7 && one(aws_ecs_cluster.main.setting).value == "disabled"
+    error_message = "Savings must preserve compute/database capacity and backups; only optional metrics are disabled."
+  }
+  assert {
+    condition     = aws_vpc_security_group_ingress_rule.api.from_port == 8000 && aws_vpc_security_group_ingress_rule.api.cidr_ipv4 == null && aws_vpc_security_group_ingress_rule.api.cidr_ipv6 == null
+    error_message = "A public task address must not introduce public inbound API rules."
   }
   assert {
     condition     = aws_lb.api.internal && length(aws_vpc_security_group_ingress_rule.public) == 0 && length(aws_lb_listener.https) == 0 && length(aws_lb_listener.redirect) == 0
@@ -159,4 +172,12 @@ run "reject_foreign_account_oidc_provider" {
     github_oidc_provider_arn = "arn:aws:iam::999999999999:oidc-provider/token.actions.githubusercontent.com"
   }
   expect_failures = [var.github_oidc_provider_arn]
+}
+run "reject_public_task_addresses_in_production" {
+  command = plan
+  variables {
+    environment         = "production"
+    service_egress_mode = "public_ip"
+  }
+  expect_failures = [var.service_egress_mode]
 }

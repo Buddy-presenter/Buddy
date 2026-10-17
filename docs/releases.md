@@ -48,7 +48,10 @@ reviewers, BUDDY_DEPLOY_ROLE_ARN, BUDDY_AWS_REGION, BUDDY_AWS_ACCOUNT_ID and
 BUDDY_DEPLOYMENT_CONFIG. The latter is public JSON containing environment, account_id,
 region, cluster (buddy-staging/production), bucket (the corresponding release bucket),
 api_url (HTTPS origin), tasks (API/migration and optional worker task-definition ARNs),
-and network (private subnet IDs, migration security group IDs, assignPublicIp: DISABLED).
+egress_mode (private_nat or staging-only public_ip), and network (the selected subnet IDs,
+migration security group IDs and matching assignPublicIp: DISABLED/ENABLED). Legacy configs
+without egress_mode require DISABLED. Public task egress does not permit public database
+access or direct inbound API access; use the exact reviewed Terraform outputs.
 Use #27's output identifiers; do not include secret values. Infrastructure bootstrap
 must already have initialized database roles/secrets and task definitions.
 

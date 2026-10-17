@@ -10,6 +10,10 @@ variable "region" {
   type    = string
   default = "eu-central-1"
 }
+variable "service_egress_mode" {
+  type    = string
+  default = "public_ip"
+}
 variable "api_domain" {
   type    = string
   default = null
@@ -54,6 +58,7 @@ module "environment" {
   source                   = "../../modules/environment"
   providers                = { aws = aws, aws.edge = aws.edge }
   ingress_mode             = var.ingress_mode
+  service_egress_mode      = var.service_egress_mode
   environment              = "staging"
   account_id               = var.account_id
   region                   = var.region

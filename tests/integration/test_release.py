@@ -61,8 +61,9 @@ def operation_records(s3):
 
 
 class Ecs:
-    def __init__(self, migration_exit=0):
+    def __init__(self, migration_exit=0, expected_public_ip="DISABLED"):
         self.migration_exit = migration_exit
+        self.expected_public_ip = expected_public_ip
         self.state = {"api": {"taskDefinition": PREFIX + "api:1", "desiredCount": 1}}
         self.updates = []
         self.waits = []
@@ -95,7 +96,10 @@ class Ecs:
 
     def run_task(self, **kwargs):
         self.runs.append(kwargs)
-        assert kwargs["networkConfiguration"]["awsvpcConfiguration"]["assignPublicIp"] == "DISABLED"
+        assert (
+            kwargs["networkConfiguration"]["awsvpcConfiguration"]["assignPublicIp"]
+            == self.expected_public_ip
+        )
         return {"tasks": [{"taskArn": "task"}]}
 
     def get_waiter(self, name):
@@ -382,6 +386,32 @@ def test_failed_rollback_is_not_reported_as_success():
     ],
 )
 def test_wrong_environment_or_unsafe_network_is_rejected(change):
+    with pytest.raises(DeploymentError):
+        validate({**CONFIG, **change}, SHA)
+
+
+def test_explicit_staging_public_egress_runs_real_deployment_driver():
+    config = {
+        **CONFIG,
+        "egress_mode": "public_ip",
+        "network": {**CONFIG["network"], "subnets": ["subnet-public"], "assignPublicIp": "ENABLED"},
+    }
+    validate(config, SHA)
+    ecs, s3 = Ecs(expected_public_ip="ENABLED"), S3()
+    Deployment(config, ecs, s3, Sts(), lambda _: None).deploy(SHA, IMAGE)
+    assert len(ecs.runs) == 1
+    assert ecs.updates
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"egress_mode": "unknown"},
+        {"egress_mode": "public_ip"},  # Must also explicitly select public networking.
+        {"egress_mode": "public_ip", "environment": "production"},
+    ],
+)
+def test_unreviewed_or_production_public_egress_is_rejected(change):
     with pytest.raises(DeploymentError):
         validate({**CONFIG, **change}, SHA)
 

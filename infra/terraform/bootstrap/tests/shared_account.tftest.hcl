@@ -13,7 +13,7 @@ run "staging_owns_the_shared_account_provider" {
 run "production_reuses_provider_with_independent_state" {
   command = plan
   variables {
-    environment                     = "production"
+    environment                       = "production"
     existing_github_oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
   }
   assert {
