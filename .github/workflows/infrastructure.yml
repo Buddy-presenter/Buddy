@@ -31,6 +31,7 @@ jobs:
           done
       - name: Test isolation and failure boundaries with mocked AWS
         run: |
+          terraform -chdir=infra/terraform/bootstrap test
           terraform -chdir=infra/terraform/modules/environment init -backend=false -lockfile=readonly
           terraform -chdir=infra/terraform/modules/environment test
 

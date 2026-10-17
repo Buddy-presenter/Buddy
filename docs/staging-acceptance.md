@@ -9,10 +9,12 @@ An owned domain can be added later without changing the ingress mode. No worker 
 or worker service is supplied by this issue. See [infrastructure](infrastructure.md)
 for configuration, the TLS policy limitation and the private HTTP origin boundary.
 
-The configuration PR prepares deployment. It does **not** complete #73: only the live
-checks and retained recovery evidence below can do that. Keep the issue open and use
-`Refs #73` while these gates are pending. Deploy only reviewed main with passing checks;
-do not deploy an unreviewed branch to manufacture acceptance evidence.
+The issue PR prepares deployment and stays open until live checks and retained recovery
+evidence pass. Its closing link drives Project status; do not merge it or close #73 while
+these gates are pending. Build the API image only from reviewed main with passing checks.
+An operator may apply infrastructure from the exact teammate-reviewed PR head using a
+reviewed saved Terraform plan, after spending approval; never apply an unreviewed diff.
+Record both the infrastructure head and the separately reviewed API revision in evidence.
 
 ## Operator prerequisites
 
