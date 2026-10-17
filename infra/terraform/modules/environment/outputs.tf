@@ -43,11 +43,13 @@ output "cloudfront_domain" {
 }
 output "verification_resources" {
   value = {
-    database_id       = aws_db_instance.main.identifier
-    load_balancer_arn = aws_lb.api.arn
-    cloudfront_id     = local.aws_https ? aws_cloudfront_distribution.api[0].id : null
-    buckets           = { for name, bucket in aws_s3_bucket.private : name => bucket.id }
-    queue_url         = aws_sqs_queue.processing.url
+    database_id        = aws_db_instance.main.identifier
+    load_balancer_arn  = aws_lb.api.arn
+    cloudfront_id      = local.aws_https ? aws_cloudfront_distribution.api[0].id : null
+    api_security_group = aws_security_group.service["api"].id
+    alb_security_group = aws_security_group.ingress.id
+    buckets            = { for name, bucket in aws_s3_bucket.private : name => bucket.id }
+    queue_url          = aws_sqs_queue.processing.url
   }
 }
 

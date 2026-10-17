@@ -67,8 +67,11 @@ def live_boundary(monkeypatch):
         "cluster": "buddy-staging",
         "tasks": {"api": "task:1"},
         "api_url": "https://d123.cloudfront.net",
+        "network": {"assignPublicIp": "ENABLED", "subnets": ["subnet-public"]},
     }
     resources = {
+        "api_security_group": "sg-api",
+        "alb_security_group": "sg-alb",
         "database_id": "buddy-staging",
         "load_balancer_arn": "alb",
         "cloudfront_id": "distribution",
@@ -77,6 +80,13 @@ def live_boundary(monkeypatch):
     state = {
         "account": "123456789012",
         "service": {
+            "networkConfiguration": {
+                "awsvpcConfiguration": {
+                    "assignPublicIp": "ENABLED",
+                    "subnets": ["subnet-public"],
+                    "securityGroups": ["sg-api"],
+                }
+            },
             "desiredCount": 1,
             "runningCount": 1,
             "pendingCount": 0,
@@ -98,7 +108,18 @@ def live_boundary(monkeypatch):
             "MaxTTL": 0,
         },
     }
+    state["permissions"] = [
+        {
+            "IpProtocol": "tcp",
+            "FromPort": 8000,
+            "ToPort": 8000,
+            "UserIdGroupPairs": [{"GroupId": "sg-alb"}],
+        }
+    ]
     client = SimpleNamespace(
+        describe_security_groups=lambda **kwargs: {
+            "SecurityGroups": [{"IpPermissions": state["permissions"]}]
+        },
         get_caller_identity=lambda: {"Account": state["account"]},
         describe_services=lambda **kwargs: {"services": [state["service"]]},
         describe_task_definition=lambda **kwargs: {"taskDefinition": state["task"]},
@@ -148,7 +169,9 @@ def test_read_only_success_keeps_unexecuted_drills_pending(live_boundary):
     assert "acceptance_complete" not in result
 
 
-@pytest.mark.parametrize("failure", ["account", "drift", "public_db", "wrong_image", "caching"])
+@pytest.mark.parametrize(
+    "failure", ["account", "drift", "public_db", "wrong_image", "caching", "network", "public_api"]
+)
 def test_live_drift_and_isolation_fail_closed(live_boundary, failure):
     session, outputs, state = live_boundary
     if failure == "account":
@@ -159,6 +182,12 @@ def test_live_drift_and_isolation_fail_closed(live_boundary, failure):
         state["db"]["PubliclyAccessible"] = True
     elif failure == "wrong_image":
         state["task"]["containerDefinitions"][0]["image"] = IMAGE.replace("staging", "production")
+    elif failure == "network":
+        state["service"]["networkConfiguration"]["awsvpcConfiguration"]["assignPublicIp"] = (
+            "DISABLED"
+        )
+    elif failure == "public_api":
+        state["permissions"][0]["IpRanges"] = [{"CidrIp": "0.0.0.0/0"}]
     else:
         state["behavior"]["MaxTTL"] = 60
     with pytest.raises(ValueError):

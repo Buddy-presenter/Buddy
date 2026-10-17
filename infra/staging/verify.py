@@ -73,6 +73,28 @@ def verify(session, deployment, revision, expected_image):
     result = ecs.describe_services(cluster=config["cluster"], services=["api"])
     require(not result.get("failures") and len(result["services"]) == 1, "API service missing")
     service = result["services"][0]
+    network = service.get("networkConfiguration", {}).get("awsvpcConfiguration", {})
+    require(
+        network.get("assignPublicIp") == config["network"]["assignPublicIp"]
+        and set(network.get("subnets", [])) == set(config["network"]["subnets"])
+        and network.get("securityGroups") == [resources["api_security_group"]],
+        "API networking differs from the reviewed egress configuration",
+    )
+    group = client("ec2").describe_security_groups(GroupIds=[resources["api_security_group"]])[
+        "SecurityGroups"
+    ][0]
+    permissions = group.get("IpPermissions", [])
+    require(
+        len(permissions) == 1
+        and permissions[0].get("IpProtocol") == "tcp"
+        and permissions[0].get("FromPort") == permissions[0].get("ToPort") == 8000
+        and not permissions[0].get("IpRanges")
+        and not permissions[0].get("Ipv6Ranges")
+        and not permissions[0].get("PrefixListIds")
+        and [pair["GroupId"] for pair in permissions[0].get("UserIdGroupPairs", [])]
+        == [resources["alb_security_group"]],
+        "API ingress must allow only the reviewed ALB security group",
+    )
     require(
         service["desiredCount"] == service["runningCount"] == 1
         and service["pendingCount"] == 0
