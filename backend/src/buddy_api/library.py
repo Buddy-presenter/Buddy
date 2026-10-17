@@ -7,14 +7,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import exists, func, select
+from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException
 from starlette.responses import Response
 
 from buddy_api.auth import Principal, authenticated
 from buddy_api.contracts import ErrorResponse
-from buddy_api.persistence.models import AnalysisVersion, Deck, ProcessingJob, RenderedAsset
+from buddy_api.persistence.models import AnalysisVersion, Deck, ProcessingJob
 
 
 class DeckStatus(StrEnum):
@@ -87,14 +87,13 @@ def library_router() -> APIRouter:
             .correlate(Deck)
             .scalar_subquery()
         )
-        analysis = exists().where(
-            AnalysisVersion.deck_id == Deck.id,
-            AnalysisVersion.owner_id == principal.id,
-            AnalysisVersion.job_id == ProcessingJob.id,
-            AnalysisVersion.publication == "published",
-        )
-        assets = exists().where(
-            RenderedAsset.deck_id == Deck.id, RenderedAsset.owner_id == principal.id
+        current_analysis = (
+            select(AnalysisVersion.id)
+            .where(AnalysisVersion.deck_id == Deck.id, AnalysisVersion.owner_id == principal.id)
+            .order_by(AnalysisVersion.version.desc())
+            .limit(1)
+            .correlate(Deck)
+            .scalar_subquery()
         )
         order = {
             LibrarySort.NEWEST: Deck.created_at.desc(),
@@ -103,8 +102,16 @@ def library_router() -> APIRouter:
             LibrarySort.TITLE_DESC: func.lower(Deck.title).desc(),
         }[sort]
         query = (
-            select(Deck, ProcessingJob.status, ProcessingJob.attempts, analysis, assets)
+            select(
+                Deck,
+                ProcessingJob.id,
+                ProcessingJob.status,
+                ProcessingJob.attempts,
+                AnalysisVersion.job_id,
+                AnalysisVersion.publication,
+            )
             .outerjoin(ProcessingJob, ProcessingJob.id == latest_job)
+            .outerjoin(AnalysisVersion, AnalysisVersion.id == current_analysis)
             .where(*filters)
             .order_by(order, Deck.id)
             .offset((page - 1) * page_size)
@@ -117,7 +124,13 @@ def library_router() -> APIRouter:
                 total = await session.scalar(select(func.count()).select_from(Deck).where(*filters))
                 records = (await session.execute(query)).all()
                 items = []
-                for deck, job_status, attempts, has_analysis, has_assets in records:
+                for deck, job_id, job_status, attempts, analysis_job_id, publication in records:
+                    has_analysis = analysis_job_id == job_id and publication == "published"
+                    # RenderedAsset currently has no slide identity, render revision, order,
+                    # or checksum. Neither its presence nor a matching row count can prove
+                    # that every raster in this analysis's manifest exists. Fail closed
+                    # until the renderer persists that complete, revision-bound evidence.
+                    has_render_proof = False
                     status = {
                         None: DeckStatus.UPLOADED,
                         "pending": DeckStatus.QUEUED,
@@ -125,7 +138,7 @@ def library_router() -> APIRouter:
                         "failed": DeckStatus.FAILED,
                         "succeeded": (
                             DeckStatus.READY
-                            if has_analysis and has_assets
+                            if has_analysis and has_render_proof
                             else DeckStatus.INCOMPLETE
                         ),
                     }[job_status]

@@ -8,7 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from buddy_api.auth import CognitoVerifier
 from buddy_api.config import Environment, Settings
 from buddy_api.persistence.database import Database
-from buddy_api.persistence.models import ProcessingJob, RenderedAsset
+from buddy_api.persistence.models import AnalysisVersion, ProcessingJob, RenderedAsset
 from buddy_api.persistence.repositories import Repositories
 from buddy_identity.config import IdentityConfig, SessionExpired
 
@@ -125,7 +125,7 @@ def test_durable_status_latest_attempt_and_reload_across_app_instances(
         "processing",
         "failed",
         "incomplete",
-        "ready",
+        "incomplete",
         "uploaded",
     ]
     assert data["items"][2]["attempts"] == 2
@@ -192,3 +192,66 @@ def test_database_errors_recover_without_private_diagnostics(library_api, monkey
     monkeypatch.setattr(AsyncSession, "scalar", broken)
     response = client.get("/api/v1/decks", headers=HEADERS)
     assert response.status_code == 503 and "private-password" not in response.text
+
+
+@pytest.mark.postgres
+@pytest.mark.parametrize("asset_count", [0, 1, 2])
+def test_published_analysis_requires_complete_revision_bound_render_proof(library_api, asset_count):
+    client, ids, owner, settings = library_api
+
+    async def seed():
+        db = Database(settings.database)
+        try:
+            async with db.sessions() as session, session.begin():
+                repos = Repositories.for_session(session)
+                from backend.tests.support.analysis import create
+
+                job = await repos.jobs.create(owner_id=owner, deck_id=ids[5])
+                job.status = "succeeded"
+                analysis = await create(repos, owner_id=owner, deck_id=ids[5], job_id=job.id)
+                assert analysis.publication == "published"
+                for position in range(asset_count):
+                    session.add(RenderedAsset(
+                        owner_id=owner, deck_id=ids[5],
+                        storage_key=f"unrelated-old-render-{position}",
+                        content_type="image/png", size_bytes=1,
+                    ))
+        finally:
+            await db.close()
+
+    asyncio.run(seed())
+    response = client.get("/api/v1/decks?sort=oldest", headers=HEADERS)
+    assert response.status_code == 200
+    # Even two rows (the manifest slide count) cannot prove slide order/revision/hashes.
+    assert response.json()["data"]["items"][5]["status"] == "incomplete"
+
+
+@pytest.mark.postgres
+def test_new_candidate_revision_is_not_hidden_by_old_published_revision(library_api):
+    client, ids, owner, settings = library_api
+
+    async def rerun():
+        db = Database(settings.database)
+        try:
+            async with db.sessions() as session, session.begin():
+                repos = Repositories.for_session(session)
+                from backend.tests.support.analysis import create
+
+                job = await session.scalar(select(ProcessingJob).where(ProcessingJob.deck_id == ids[4]))
+                old = await session.scalar(select(AnalysisVersion).where(AnalysisVersion.deck_id == ids[4]))
+                assert old.publication == "published"
+                current = await create(repos, owner_id=owner, deck_id=ids[4], job_id=job.id,
+                                       version=2, actions=True)
+                assert current.publication == "awaiting_validation"
+                return old.id, current.id
+        finally:
+            await db.close()
+
+    old_id, current_id = asyncio.run(rerun())
+    response = client.get("/api/v1/decks?sort=oldest", headers=HEADERS)
+    assert response.status_code == 200
+    assert response.json()["data"]["items"][4]["status"] == "incomplete"
+    for identifier, publication in [(old_id, "published"), (current_id, "awaiting_validation")]:
+        historical = client.get(f"/api/v1/analyses/{identifier}", headers=HEADERS)
+        assert historical.status_code == 200
+        assert historical.json()["data"]["publication"] == publication

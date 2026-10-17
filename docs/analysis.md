@@ -49,8 +49,12 @@ Never invent content for unreadable slides.
 
 Published means ready for review, not that every action succeeded. Rejected and
 needs-review actions remain inspectable with reasons, but are never usable. The library
-requires a published analysis for the latest successful job and rendered assets before
-reporting ready. Candidate/partial/legacy existence cannot imply completion.
+selects the highest analysis version for the deck, then requires that revision to be
+published and belong to the latest successful job. It also requires complete render
+evidence matching every ordered manifest slide, render revision and raster checksum.
+Current RenderedAsset rows cannot express that evidence, so successful decks remain
+`incomplete` until a renderer persists the proof. Asset presence/count or old published
+versions cannot imply completion. Historical analyses remain readable by ID.
 
 ## Catalog and generation contract
 

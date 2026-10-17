@@ -44,13 +44,15 @@ successful attempt. All records are from the account's own deck:
 | Pending job | Queued (`queued`) |
 | Running job | Processing (`processing`) |
 | Failed job | Failed (`failed`) |
-| Successful job with its analysis and at least one rendered asset | Ready (`ready`) |
-| Successful job missing either prerequisite | Assets unavailable (`incomplete`) |
+| Successful latest job with the current published analysis and complete matching render proof | Ready (`ready`) |
+| Successful job missing current publication or complete render proof | Assets unavailable (`incomplete`) |
 
-Ready here means those durable records exist, not that a presentation player, every
-slide's asset, or preflight validation has shipped. Current asset metadata has no job
-version link; later rendering/versioning issues must strengthen that contract rather
-than treating this library status as a live-presentation safety gate. No fabricated
+The current analysis is the highest persisted version for the deck; an older published
+version cannot mask a newer candidate/partial revision. Complete render proof must bind
+every ordered manifest slide to its render revision and raster checksum. Current asset
+metadata lacks those fields, so the library conservatively reports `incomplete` for
+succeeded jobs until the renderer supplies that proof. An arbitrary asset row, matching
+filename, or matching row count is insufficient. No fabricated
 progress percentage or arbitrary worker exception is displayed. Until #8 provides job
 progress/retry contracts, users see the actual lifecycle and attempt count and are
 directed to support after failures. Refresh retries listing, not processing.
