@@ -46,6 +46,7 @@ def desktop_window(qtbot, tmp_path, monkeypatch):
                 not window.runner.busy
                 and not window.account.runner.busy
                 and not window.library.runner.busy
+                and not window.present.executor.busy
             ),
             timeout=5000,
         )
