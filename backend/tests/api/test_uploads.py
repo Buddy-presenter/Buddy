@@ -263,7 +263,20 @@ def test_failed_cleanup_is_durable_and_reconciled_after_restart(upload_app):
         assert cloud.objects
         cloud.fail_after_put = cloud.fail_delete = False
     with upload_app() as (client, cloud, service):
-        client.portal.call(service.reconcile)
+
+        async def wait_for_startup_cleanup():
+            # Startup reconciliation may hold the row lock already. A concurrent
+            # manual pass intentionally skips it; observe the durable result of
+            # the actual startup pass instead of assuming a second pass joins it.
+            async with asyncio.timeout(5):
+                while True:
+                    async with service.transaction() as session:
+                        record = await session.get(DeckUpload, UUID(identifier))
+                        if record.status == "failed":
+                            return
+                    await asyncio.sleep(0.01)
+
+        client.portal.call(wait_for_startup_cleanup)
         status = client.get(f"/api/v1/uploads/{identifier}").json()["data"]
         assert status["status"] == "failed" and status["retryable"]
         assert not cloud.objects
