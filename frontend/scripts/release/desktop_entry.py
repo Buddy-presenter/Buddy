@@ -2,7 +2,9 @@
 
 import sys
 
-if "--smoke-test" in sys.argv:
+if "--pdf-worker" in sys.argv:
+    from buddy_desktop.pdf_worker import main
+elif "--smoke-test" in sys.argv:
     from frontend.scripts.smoke_desktop import main
 
     sys.argv = [sys.argv[0]]

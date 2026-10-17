@@ -1,7 +1,8 @@
-# Private PPTX uploads (#7)
+# Private PDF/PPTX uploads (#7, #10)
 
-Uploads belong to the authenticated API, not the desktop UI. Issue #37 adds the native
-upload controls. A completed upload appears in the existing library as **Awaiting
+Uploads belong to the authenticated API. Library provides native PDF/PPTX upload
+controls; see [PDF presentations](pdf-presentations.md) for upload, viewing and format
+limits. A completed upload appears in the existing library as **Awaiting
 processing** (`uploaded`); no processing job, extraction record, analysis or fake worker
 is created by this operation. Issue #8 owns scheduling.
 
@@ -15,8 +16,9 @@ content transfer and deck reads; verified-email policy remains issue #74's bound
 
 ## Supported files and limits
 
-Only `.pptx` with content type
-`application/vnd.openxmlformats-officedocument.presentationml.presentation` is accepted.
+PDF (`.pdf`, `application/pdf`) is also accepted through the contained PDF parser; see
+[PDF presentations](pdf-presentations.md). The existing `.pptx` content type is
+`application/vnd.openxmlformats-officedocument.presentationml.presentation`.
 Extension/MIME alone are insufficient: the real contained OOXML parser checks package
 structure, relationships, duplicate/traversal/symlink/encrypted ZIP entries, XML security,
 slide count and resource budgets. All XML inspection, including mixed-case `.xml` and

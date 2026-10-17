@@ -18,6 +18,37 @@ FIXTURE = (
 )
 
 
+def test_pdf_extraction_uses_saved_format_and_persists_idempotently(migrated_database):
+    pdf = FIXTURE.with_name("Buddy_PDF_Geometry.pdf")
+
+    async def scenario():
+        db = Database(migrated_database)
+        try:
+            async with db.transaction() as repos:
+                owner = await repos.users.create("pdf-owner")
+                deck = await repos.decks.create(
+                    owner_id=owner.id, title="PDF fixture", source_format="pdf"
+                )
+            kwargs = {"owner_id": owner.id, "deck_id": deck.id, "source_revision": "pdf-v1"}
+            first = await extract_and_store(db, pdf, **kwargs)
+            again = await extract_and_store(db, pdf, **kwargs)
+            assert first.id == again.id
+            assert first.document["source_format"] == "pdf"
+            assert "Buddy PDF" in first.document["slides"][0]["text"]
+            with pytest.raises(ValueError, match="format"):
+                await extract_and_store(db, pdf, source_format="pptx", **kwargs)
+            await db.close()
+            db = Database(migrated_database)
+            async with db.transaction() as repos:
+                assert (
+                    await repos.extractions.get(first.id, owner_id=owner.id)
+                ).document == first.document
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())
+
+
 def test_real_extraction_persists_across_restart_with_idempotent_retries(migrated_database):
     async def scenario():
         db = Database(migrated_database)

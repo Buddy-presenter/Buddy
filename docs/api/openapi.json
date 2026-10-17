@@ -527,6 +527,11 @@
             "title": "Attempts",
             "type": "integer"
           },
+          "can_present": {
+            "default": false,
+            "title": "Can Present",
+            "type": "boolean"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -535,6 +540,15 @@
           "id": {
             "format": "uuid",
             "title": "Id",
+            "type": "string"
+          },
+          "source_format": {
+            "default": "pptx",
+            "enum": [
+              "pptx",
+              "pdf"
+            ],
+            "title": "Source Format",
             "type": "string"
           },
           "status": {
@@ -1042,13 +1056,16 @@
         "additionalProperties": false,
         "properties": {
           "content_type": {
-            "const": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "enum": [
+              "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+              "application/pdf"
+            ],
             "title": "Content Type",
             "type": "string"
           },
           "filename": {
             "maxLength": 255,
-            "minLength": 6,
+            "minLength": 5,
             "title": "Filename",
             "type": "string"
           },
@@ -1115,6 +1132,15 @@
           "slide_count": {
             "title": "Slide Count",
             "type": "integer"
+          },
+          "source_format": {
+            "default": "pptx",
+            "enum": [
+              "pptx",
+              "pdf"
+            ],
+            "title": "Source Format",
+            "type": "string"
           },
           "source_revision": {
             "title": "Source Revision",
@@ -1616,6 +1642,91 @@
           }
         },
         "summary": "Listing",
+        "tags": [
+          "library"
+        ]
+      }
+    },
+    "/api/v1/decks/{identifier}/source": {
+      "get": {
+        "operationId": "source_api_v1_decks__identifier__source_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/pdf": {}
+            },
+            "description": "Owner-only original PDF bytes."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Source",
         "tags": [
           "library"
         ]
@@ -2643,6 +2754,12 @@
         ],
         "requestBody": {
           "content": {
+            "application/pdf": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            },
             "application/vnd.openxmlformats-officedocument.presentationml.presentation": {
               "schema": {
                 "format": "binary",

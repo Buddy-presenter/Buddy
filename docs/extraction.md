@@ -1,4 +1,8 @@
-# Bounded PPTX extraction (#9)
+# Bounded presentation extraction (#9, #10)
+
+PDF extraction is also available; see [PDF presentations](pdf-presentations.md) for format
+selection, page IDs, static-content limitations and the explicit PDF-to-EMU mapping.
+The PPTX-specific behavior below remains unchanged.
 
 This backend-only stage consumes a validated local PPTX path or binary stream plus an
 immutable source revision. It does not fetch storage objects, run a queue, render slides,

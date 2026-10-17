@@ -19,7 +19,7 @@ from buddy_api.persistence.database import Database
 from buddy_api.persistence.models import Deck, DeckUpload
 from buddy_api.uploads.config import UploadSettings
 from buddy_api.uploads.contracts import (
-    PPTX_TYPE,
+    SOURCE_TYPES,
     UploadData,
     UploadedDeck,
     UploadError,
@@ -104,6 +104,7 @@ class UploadService:
                     "sha256": deck.source_sha256,
                     "size_bytes": deck.source_size_bytes,
                     "slide_count": deck.source_slide_count,
+                    "source_format": deck.source_format,
                 }
             )
         return UploadData.model_validate(
@@ -167,7 +168,7 @@ class UploadService:
             if record is not None:
                 if any(
                     getattr(record, name) != getattr(metadata, name)
-                    for name in ("filename", "title", "size_bytes", "sha256")
+                    for name in ("filename", "title", "size_bytes", "sha256", "source_format")
                 ):
                     raise UploadError(
                         409,
@@ -191,11 +192,12 @@ class UploadService:
                     owner_id=owner,
                     idempotency_key=key,
                     filename=metadata.filename,
+                    source_format=metadata.source_format,
                     title=metadata.title,
                     size_bytes=metadata.size_bytes,
                     sha256=metadata.sha256,
                     source_revision=revision,
-                    storage_key=f"sources/{owner}/{identifier}/{revision}/original.pptx",
+                    storage_key=f"sources/{owner}/{identifier}/{revision}/original.{metadata.source_format}",
                     status="pending",
                     expires_at=datetime.now(UTC)
                     + timedelta(seconds=self.settings.reservation_seconds),
@@ -241,6 +243,7 @@ class UploadService:
                 source_size_bytes=record.size_bytes,
                 source_version_id=version,
                 source_slide_count=slides,
+                source_format=record.source_format,
             )
             session.add(deck)
             await session.flush()
@@ -316,17 +319,21 @@ class UploadService:
         existing = await self.get(owner, identifier)
         if existing.status == "complete":
             return existing
-        if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != PPTX_TYPE:
+        async with self.transaction() as session:
+            reserved = await self.owned(session, owner, identifier)
+            source_format = reserved.source_format
+        if (
+            request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            != SOURCE_TYPES[source_format]
+        ):
             raise UploadError(
-                415,
-                "unsupported_media_type",
-                "Send the original PPTX with its presentation content type.",
+                415, "unsupported_media_type", "Send the reserved presentation content type."
             )
         record = await self.claim(owner, identifier)
         try:
             async with asyncio.timeout(self.settings.seconds):
                 with tempfile.TemporaryDirectory(prefix="buddy-upload-") as directory:
-                    path = Path(directory) / "source.pptx"
+                    path = Path(directory) / ("source." + record.source_format)
                     digest, size = hashlib.sha256(), 0
                     with path.open("xb") as output:
                         async for chunk in request.stream():
@@ -335,7 +342,7 @@ class UploadService:
                                 raise UploadError(
                                     413,
                                     "file_too_large",
-                                    "Transferred PPTX exceeds its reserved size.",
+                                    "Transferred presentation exceeds its reserved size.",
                                 )
                             digest.update(chunk)
                             output.write(chunk)
@@ -354,6 +361,7 @@ class UploadService:
                             record.storage_key,
                             path,
                             size=size,
+                            content_type=SOURCE_TYPES[record.source_format],
                             sha256=record.sha256,
                             revision=record.source_revision,
                         )

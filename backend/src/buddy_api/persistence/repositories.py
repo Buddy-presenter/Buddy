@@ -71,8 +71,17 @@ class Users:
 
 
 class Decks(OwnedRepository[Deck]):
-    async def create(self, *, owner_id: UUID, title: str, source_key: str | None = None) -> Deck:
-        return await self._add(Deck(owner_id=owner_id, title=title, source_key=source_key))
+    async def create(
+        self,
+        *,
+        owner_id: UUID,
+        title: str,
+        source_key: str | None = None,
+        source_format: str = "pptx",
+    ) -> Deck:
+        return await self._add(
+            Deck(owner_id=owner_id, title=title, source_key=source_key, source_format=source_format)
+        )
 
 
 class Jobs(OwnedRepository[ProcessingJob]):
@@ -96,6 +105,8 @@ class Extractions(OwnedRepository[DeckExtraction]):
         )
         if deck is None:
             raise RecordNotFound("Owned record was not found.")
+        if extraction.source_format != deck.source_format:
+            raise PersistenceConflict("Extraction source format does not match the deck.")
         document = extraction.model_dump(mode="json")
         await self.session.execute(
             insert(DeckExtraction)
@@ -119,7 +130,10 @@ class Extractions(OwnedRepository[DeckExtraction]):
                 DeckExtraction.extractor_version == extraction.extractor_version,
             )
         )
-        if value is None or value.document != document:
+        if (
+            value is None
+            or Extraction.model_validate(value.document).model_dump(mode="json") != document
+        ):
             raise PersistenceConflict("Source revision already has a different extraction.")
         return value
 

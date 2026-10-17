@@ -23,6 +23,10 @@ from buddy_desktop.slide_surface import SlideSurface
 
 def load_image(manifest: Manifest, slide: Slide) -> QImage:
     """Read one immutable, digest-verified PNG beneath the manifest directory."""
+    if manifest.pdf_content is not None:
+        from buddy_desktop.pdf_document import render
+
+        return render(manifest.pdf_content, manifest.index(slide.slide_id))[1]
     try:
         path = (manifest.root / slide.image).resolve()
         if not path.is_relative_to(manifest.root):
@@ -146,6 +150,20 @@ class SlideExecutor(QObject):
         self._start(request, None, None, load)
         return request
 
+    def load_pdf(
+        self, source: Path | bytes, *, deck_id: str | None = None, revision: str | None = None
+    ) -> int:
+        from buddy_desktop.pdf_document import open_pdf
+
+        request = self._request()
+        if self._closed or self.busy:
+            self._finish(request, None, "rejected", "Executor is busy or closed.")
+            return request
+        self._start(
+            request, None, None, lambda: open_pdf(source, deck_id=deck_id, revision=revision)
+        )
+        return request
+
     def dispatch(self, value: object) -> int:
         request = self._request()
         instance: str | None = None
@@ -217,6 +235,12 @@ class SlideExecutor(QObject):
         self.surface.check_thread()
         self._closed = True
         self.cancel()
+
+    def clear(self) -> None:
+        self.cancel()
+        self.manifest = None
+        self.current_index = 0
+        self.surface.clear()
 
     def wait_for_shutdown(self) -> None:
         self.pool.waitForDone()

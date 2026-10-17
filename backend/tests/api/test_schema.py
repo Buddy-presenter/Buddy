@@ -7,6 +7,22 @@ import pytest
 from buddy_api.schema import breaking_changes, generate_schema
 
 
+def test_request_only_widening_is_compatible_but_narrowing_and_response_changes_are_not():
+    before = generate_schema()
+    after = copy.deepcopy(before)
+    old = before["components"]["schemas"]["UploadMetadata"]["properties"]
+    old["content_type"] = {"type": "string", "const": "application/pdf"}
+    old["filename"]["minLength"] = 6
+    assert breaking_changes(before, after) == []
+    assert breaking_changes(after, before)
+    after = copy.deepcopy(before)
+    after["components"]["schemas"]["HealthData"]["properties"]["status"] = {
+        "type": "string",
+        "enum": ["ok", "new-value"],
+    }
+    assert breaking_changes(before, after)
+
+
 def test_openapi_snapshot_matches_real_routes_and_contracts():
     snapshot = Path(__file__).resolve().parents[3] / "docs" / "api" / "openapi.json"
     assert json.loads(snapshot.read_text(encoding="utf-8")) == generate_schema()

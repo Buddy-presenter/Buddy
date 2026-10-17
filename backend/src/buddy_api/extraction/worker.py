@@ -29,9 +29,14 @@ def main() -> int:
         request = json.loads(sys.stdin.buffer.read(4096))
         limits = Limits.model_validate(request["limits"])
         set_posix_limits(limits)
-        from buddy_api.extraction.reader import read_package
+        if request.get("source_format", "pptx") == "pdf":
+            from buddy_api.extraction.pdf import read_pdf
 
-        result = read_package(sys.argv[1], request["revision"], limits)
+            result = read_pdf(sys.argv[1], request["revision"], limits)
+        else:
+            from buddy_api.extraction.reader import read_package
+
+            result = read_package(sys.argv[1], request["revision"], limits)
         payload = result.model_dump_json().encode()
         if len(payload) > limits.result_bytes:
             raise ExtractionError("result_limit")

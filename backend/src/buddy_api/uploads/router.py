@@ -9,7 +9,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from buddy_api.auth import Principal, authenticated
 from buddy_api.contracts import ErrorResponse
-from buddy_api.uploads.contracts import PPTX_TYPE, UploadError, UploadMetadata, UploadResponse
+from buddy_api.uploads.contracts import SOURCE_TYPES, UploadError, UploadMetadata, UploadResponse
 from buddy_api.uploads.service import UploadService
 
 
@@ -101,7 +101,10 @@ def upload_router() -> APIRouter:
         openapi_extra={
             "requestBody": {
                 "required": True,
-                "content": {PPTX_TYPE: {"schema": {"type": "string", "format": "binary"}}},
+                "content": {
+                    mime: {"schema": {"type": "string", "format": "binary"}}
+                    for mime in SOURCE_TYPES.values()
+                },
             }
         },
     )

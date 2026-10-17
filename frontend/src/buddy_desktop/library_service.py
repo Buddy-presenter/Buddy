@@ -27,6 +27,8 @@ class DeckSummary:
     created_at: datetime
     status: str
     attempts: int
+    source_format: str = "pptx"
+    can_present: bool = False
 
 
 @dataclass(frozen=True)
@@ -105,7 +107,25 @@ class LibraryService:
                     or created.tzinfo is None
                 ):
                     raise ValueError
-                items.append(DeckSummary(UUID(row["id"]), title, created, status, attempts))
+                source_format, can_present = (
+                    row.get("source_format", "pptx"),
+                    row.get("can_present", False),
+                )
+                if source_format not in {"pdf", "pptx"} or type(can_present) is not bool:
+                    raise ValueError
+                if can_present and source_format != "pdf":
+                    raise ValueError
+                items.append(
+                    DeckSummary(
+                        UUID(row["id"]),
+                        title,
+                        created,
+                        status,
+                        attempts,
+                        source_format,
+                        can_present,
+                    )
+                )
             if len({item.id for item in items}) != len(items):
                 raise ValueError
             return LibraryPage(tuple(items), total, actual_page, size)
