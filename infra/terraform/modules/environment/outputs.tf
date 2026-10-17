@@ -1,4 +1,4 @@
-output "api_url" { value = "https://${var.api_domain}" }
+output "api_url" { value = local.api_url }
 output "database_host" { value = aws_db_instance.main.address }
 output "database_admin_secret" { value = aws_db_instance.main.master_user_secret[0].secret_arn }
 output "database_secrets" { value = { for name, secret in aws_secretsmanager_secret.database : name => secret.arn } }
@@ -13,10 +13,39 @@ output "release_channel" {
 }
 output "desktop_configuration" {
   value = {
-    BUDDY_API_URL           = "https://${var.api_domain}"
+    BUDDY_API_URL           = local.api_url
     BUDDY_AWS_REGION        = var.region
     BUDDY_COGNITO_POOL_ID   = aws_cognito_user_pool.main.id
     BUDDY_COGNITO_CLIENT_ID = aws_cognito_user_pool_client.desktop.id
     BUDDY_COGNITO_DOMAIN    = "https://${aws_cognito_user_pool_domain.main.domain}.auth.${var.region}.amazoncognito.com"
+  }
+}
+
+output "deployment_configuration" {
+  value = {
+    environment = var.environment
+    account_id  = var.account_id
+    region      = var.region
+    cluster     = aws_ecs_cluster.main.name
+    bucket      = aws_s3_bucket.private["releases"].id
+    api_url     = local.api_url
+    tasks       = { for name, task in aws_ecs_task_definition.service : name => task.arn }
+    network = {
+      subnets         = aws_subnet.private[*].id
+      securityGroups  = [aws_security_group.service["migration"].id]
+      assignPublicIp  = "DISABLED"
+    }
+  }
+}
+output "cloudfront_domain" {
+  value = local.aws_https ? aws_cloudfront_distribution.api[0].domain_name : null
+}
+output "verification_resources" {
+  value = {
+    database_id       = aws_db_instance.main.identifier
+    load_balancer_arn = aws_lb.api.arn
+    cloudfront_id     = local.aws_https ? aws_cloudfront_distribution.api[0].id : null
+    buckets           = { for name, bucket in aws_s3_bucket.private : name => bucket.id }
+    queue_url         = aws_sqs_queue.processing.url
   }
 }

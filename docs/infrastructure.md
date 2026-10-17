@@ -1,27 +1,30 @@
 # AWS infrastructure (#27)
 
 Selected stack: Terraform 1.13.5, AWS provider 6.19.0, Cognito managed login, ECS Fargate,
-PostgreSQL RDS, S3, SQS, ACM/Route 53 and WAF. The default region is Frankfurt
+PostgreSQL RDS, S3, SQS, CloudFront private VPC origins, optional ACM/Route 53 and WAF. The default region is Frankfurt
 (`eu-central-1`); both environment roots allow an explicit different region. Buddy is
 still a PySide6 desktop product. There is no browser application deployment.
 
 ## Isolation and service boundaries
 
 `infra/terraform/environments/staging` and `production` have separate roots and remote
-state, and must use different AWS accounts. Providers reject an unexpected account;
-the other environment's account ID must differ. Each environment owns its network,
+state in one approved AWS account. Providers reject an unexpected account; environment
+resource names, roles, CIDRs and state remain distinct. Account administrators are a shared
+trust boundary: this is resource/IAM isolation, not an account-level security boundary. Each environment owns its network,
 database, user pool/client/domain, KMS keys, secrets, buckets, queue and service identities.
-Use separate delegated Route 53 zones and API hostnames in those accounts.
+The account GitHub OIDC provider is shared; its protected-environment trust subjects and
+permissions are not. No production resources are created by staging provisioning.
+Both roots default to `ingress_mode = "aws_https"`; no owned domain or zone is required.
 
 | Component | Configuration |
 | --- | --- |
-| Networking | Two public ALB/NAT subnets, two private service subnets, two isolated database subnets; no public addresses on tasks or RDS. Production uses two NAT gateways; staging one. Security groups allow ingress only from ALB to API and service-to-database traffic. Service internet egress is HTTPS for AWS/provider calls. |
-| TLS/real-time ingress | DNS-validated ACM certificate, TLS 1.2/1.3 HTTPS listener, HTTP redirect, ALB WebSocket support with 120-second idle timeout. Actual session/event protocol is owned by its feature issues. No ALB access logs containing token-bearing paths are enabled. |
+| Networking | Two public NAT subnets, two private service subnets, two isolated database subnets; no public addresses on tasks or RDS. AWS HTTPS mode also keeps the ALB internal. Production uses two NAT gateways; staging one. Security groups allow CloudFront origin traffic to the internal ALB, then only ALB to API and service-to-database traffic. Service internet egress is HTTPS for AWS/provider calls. |
+| TLS/real-time ingress | AWS HTTPS mode uses the AWS-owned `*.cloudfront.net` certificate, HTTPS-only viewer requests and private ENIs to an internal HTTP ALB; API and error caching are disabled. Authentication headers, cookies, query strings and all API methods are forwarded. CloudFront read timeout is 60 seconds, ALB idle timeout 120 seconds; live SSE timing/reconnection is an acceptance gate. Direct custom-domain mode retains the TLS 1.2/1.3 ALB listener and HTTP redirect. Actual session/event protocol is owned by its feature issues. No ALB access logs containing token-bearing paths are enabled. |
 | API | Digest-pinned image, non-root read-only task, dropped capabilities, private addresses, readiness checks, deployment circuit breaker/rollback. Two replicas in production, one staging. ECS task IPs are added to exact allowed hosts by the container entrypoint so ALB health checks work; forwarded headers remain untrusted. |
 | Database | PostgreSQL 17, forced TLS and client certificate verification, KMS encryption, private security group, managed master secret, separate API/migration/worker DB roles. Production multi-AZ/35-day PITR backups; staging 7 days. Deletion protection and final snapshot required. |
 | Private objects | Separate KMS-encrypted data and release buckets; all public access/ACLs blocked; TLS-only policies, versioning, bounded old-version retention (35/7 days) and abandoned multipart cleanup. |
 | Processing | KMS-encrypted SQS with one-day retention, 15-minute visibility, three-attempt dead-letter handling. Worker has a distinct task role, database login and execution role. Only a real supplied worker image creates a service. |
-| Identity | Public Cognito desktop client, code grant only, five-minute access/ID tokens, one-day rotating refresh tokens, zero replay grace, revocation, verified-email recovery, 12-character password policy and suppressed user-existence errors. WAF rate limit protects both ALB and managed login; request sampling is disabled. |
+| Identity | Public Cognito desktop client, code grant only, five-minute access/ID tokens, one-day rotating refresh tokens, zero replay grace, revocation, verified-email recovery, 12-character password policy and suppressed user-existence errors. Separate edge and regional WAF rate limits protect the CloudFront viewer IP and Cognito respectively (direct-domain mode protects ALB and Cognito); request sampling is disabled. |
 | Workload identities | ECS task roles and repository/environment-bound GitHub OIDC roles; no AWS access keys or client secrets in images/installers. API/worker cannot access release artifacts or the RDS master secret. Migration has no object/queue permissions. Bootstrap alone can read master credentials and write the three scoped DB secrets. |
 
 The shared WAF rule allows 300 requests per client IP per minute before blocking. Tune
@@ -30,14 +33,13 @@ exist. AWS quotas and email deliverability must be verified before user acceptan
 
 ## Prerequisites and current limits
 
-No AWS account credentials, domains, hosted zones or running Docker daemon were available
-locally. Nothing has been deployed. Terraform validation/mocked plans establish structural
-boundaries, not actual cloud IAM, certificate, backup-restore or provider acceptance.
-
-An operator must supply two AWS account IDs/SSO profiles, account-owned Route 53 zone IDs,
-API hostnames and AWS permissions to create these resources. Log in through AWS SSO or
-another short-lived role session; do not create permanent access keys for this process.
-The region must support the selected services and RDS instance classes in that account.
+AWS CLI access is available for staging; no deployment or live acceptance is implied by
+this configuration. See [staging acceptance](staging-acceptance.md) for the approved
+hostname decision, cost review and per-criterion evidence. Both environments use one
+account, separate state and environment-scoped resources. Supply the real account ID,
+region and short-lived credentials; never invent a second account ID or create access keys.
+The edge provider uses `us-east-1` for CloudFront WAF and optional edge ACM only; the API,
+RDS, objects, queues and identity stay in the selected workload region.
 
 The repository has no processing-worker implementation. Queue/IAM infrastructure is
 real, but `worker_image = null` deliberately leaves the worker service absent. Supply the
@@ -55,24 +57,27 @@ release controls; provisioning infrastructure alone does not satisfy those contr
 
 ## Reproducible provisioning
 
-1. Install Terraform 1.13.5, AWS CLI v2 and Docker. Authenticate to **staging** through SSO.
+1. Install Terraform 1.13.5, AWS CLI v2 and Docker. Authenticate to **staging** with `aws login --profile buddy-staging` or SSO.
    Verify `aws sts get-caller-identity` matches the intended account before each phase.
 2. Initialize `infra/terraform/bootstrap`. Use a separate local workspace/state for each
    environment (`terraform workspace new staging` or `production`). Pass `account_id`,
    `environment` and `region` explicitly, inspect a saved plan, then apply that plan.
    This creates the private encrypted versioned state bucket and account GitHub OIDC
-   provider. If the account already has that provider, import it into this root instead
-   of attempting to create a duplicate. Keep bootstrap state secure and backed up;
+   provider. If the account already has that provider, pass its ARN as
+   `existing_github_oidc_provider_arn`. The staging bootstrap owns a newly created provider;
+   the production bootstrap reuses it and never manages a second copy. Keep bootstrap state secure and backed up;
    `.tfstate` files must never enter Git.
 3. In the environment root, create an ignored `backend.hcl` with the bootstrap outputs:
    `bucket`, `kms_key_id`, `region`, `key = "environment.tfstate"`, `encrypt = true`,
    `use_lockfile = true`, and `allowed_account_ids = ["<that account ID>"]`.
    Run `terraform init -backend-config=backend.hcl`. No credentials belong in this file.
 4. Create ignored `deployment.auto.tfvars` with the required `account_id`,
-   `other_environment_account_id`, `api_domain`, `zone_id` and
-   `github_oidc_provider_arn`. Initially leave images null and services stopped. Run
+   `region`, `ingress_mode = "aws_https"` and `github_oidc_provider_arn`.
+   Omit `api_domain` and `zone_id`; the obsolete `other_environment_account_id` input
+   has been removed. Initially leave images null and services stopped. Run
    `terraform plan -out=initial.tfplan`, review it, then `terraform apply initial.tfplan`.
-   ACM DNS validation must complete. This phase creates ECR, networking, data and identity.
+   The CloudFront distribution and VPC origin must finish deploying (allow 15 minutes).
+   An optional custom hostname also requires ACM DNS validation. This phase creates ECR, networking, data and identity.
 5. Build `docker build -f infra/container/Dockerfile -t buddy-api:<reviewed-revision> .`
    from the reviewed combined main after required feature PRs are approved and merged.
    Authenticate to the output ECR URI with `aws ecr get-login-password` piped to
@@ -91,10 +96,10 @@ release controls; provisioning infrastructure alone does not satisfy those contr
    it upgrades the schema and removes runtime write access to Alembic metadata. Run
    it a second time to verify idempotence. Applications never run DDL on startup.
 8. Set `start_services = true`, review/apply the plan, wait for ECS stability, then check
-   `https://<api_domain>/api/v1/ready` and perform actual Cognito/signup/recovery/rotation/
+   `<deployment.api_url>/api/v1/ready` and perform actual Cognito/signup/recovery/rotation/
    revocation acceptance. Inspect task logs for sanitized startup failures. A failed
    health check rolls back the ECS deployment; do not bypass readiness.
-9. Repeat in the separate production account only after staging acceptance and review.
+9. Repeat in the separate production root/state in the same account only after staging acceptance and review.
    Record actual provision/restore/provider evidence in the PR. This guide does not
    authorize bypassing PR approval or unreviewed production promotion.
 
@@ -164,3 +169,32 @@ No paid providers, real deck material or real AWS secrets belong in validation.
 Sources: [Terraform provider mocks](https://developer.hashicorp.com/terraform/language/tests/mocking),
 [Cognito client configuration](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cognito_user_pool_client),
 [Cognito callback constraints](https://docs.aws.amazon.com/cognito/latest/developerguide/authorization-endpoint.html).
+
+## AWS HTTPS and adding a domain later
+
+CloudFront is used instead of API Gateway HTTP APIs because Buddy already exposes SSE;
+HTTP APIs buffer responses. CloudFront private origins retain the ALB/ECS service model,
+unchanged API paths and a private origin. AWS added VPC-origin WebSocket support in May
+2026; feature-specific live acceptance is still required. Public HTTP viewer requests
+are rejected, not served or redirected. Database TLS verification is unchanged.
+
+AWS fixes the default `*.cloudfront.net` certificate policy to `TLSv1`; it negotiates
+modern TLS but cannot enforce a server-side TLS 1.2 minimum with that default certificate.
+This staging-specific limitation must be recorded in deployment review; do not claim
+strict TLS 1.2-only server enforcement. Buddy's Python HTTPS clients verify certificates
+and use their modern default TLS minimum. An owned domain enables `TLSv1.2_2021`.
+The private CloudFront-to-ALB leg is HTTP over service-managed VPC ENIs, as is the existing
+ALB-to-task leg; there is no public plaintext origin. No request/access logs or WAF
+samples containing auth/query data are enabled.
+
+Later, keep `ingress_mode = "aws_https"` and set `api_domain` plus `zone_id`. Terraform
+adds a DNS-validated ACM certificate in us-east-1 and a Route 53 alias to the same
+CloudFront distribution. The AWS hostname remains in allowed hosts during client
+migration. Verify both addresses with normal SNI-capable clients before updating desktop
+configuration. Avoid changing to direct ALB ingress during this domain-only change;
+that mode changes ALB placement. Certificate/alias updates are reviewed plans, not an
+assumption of zero interruption.
+
+Sources: [CloudFront private origins](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-vpc-origins.html),
+[viewer certificates and policy](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/DownloadDistValuesGeneral.html),
+[response streaming support](https://docs.aws.amazon.com/apigateway/latest/developerguide/response-transfer-mode.html).

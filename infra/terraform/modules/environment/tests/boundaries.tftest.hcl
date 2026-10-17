@@ -3,6 +3,9 @@ mock_provider "aws" {
     defaults = { names = ["eu-central-1a", "eu-central-1b"] }
   }
 }
+mock_provider "aws" {
+  alias = "edge"
+}
 variables {
   environment              = "staging"
   region                   = "eu-central-1"
@@ -87,4 +90,73 @@ run "reject_unknown_environment" {
   command = plan
   variables { environment = "development" }
   expect_failures = [var.environment]
+}
+
+run "aws_https_without_a_domain" {
+  command = plan
+  variables {
+    ingress_mode = "aws_https"
+    api_domain   = null
+    zone_id      = null
+    api_image    = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+  assert {
+    condition     = aws_lb.api.internal && length(aws_vpc_security_group_ingress_rule.public) == 0 && length(aws_lb_listener.https) == 0 && length(aws_lb_listener.redirect) == 0
+    error_message = "AWS HTTPS must not expose a public HTTP/HTTPS ALB listener."
+  }
+  assert {
+    condition     = length(aws_acm_certificate.api) == 0 && length(aws_route53_record.api) == 0 && length(aws_acm_certificate.edge) == 0 && length(aws_route53_record.edge_api) == 0
+    error_message = "An AWS-owned hostname must require no domain, zone or certificate purchase."
+  }
+  assert {
+    condition     = aws_cloudfront_distribution.api[0].viewer_certificate[0].cloudfront_default_certificate && aws_cloudfront_distribution.api[0].default_cache_behavior[0].viewer_protocol_policy == "https-only"
+    error_message = "The public endpoint must use AWS-managed HTTPS and reject plaintext."
+  }
+  assert {
+    condition     = aws_cloudfront_distribution.api[0].default_cache_behavior[0].min_ttl == 0 && aws_cloudfront_distribution.api[0].default_cache_behavior[0].default_ttl == 0 && aws_cloudfront_distribution.api[0].default_cache_behavior[0].max_ttl == 0 && alltrue([for error in aws_cloudfront_distribution.api[0].custom_error_response : error.error_caching_min_ttl == 0])
+    error_message = "Neither authenticated content nor error responses may be cached."
+  }
+  assert {
+    condition     = aws_cloudfront_distribution.api[0].default_cache_behavior[0].forwarded_values[0].headers == toset(["*"]) && aws_cloudfront_distribution.api[0].default_cache_behavior[0].forwarded_values[0].query_string && !aws_cloudfront_distribution.api[0].default_cache_behavior[0].compress
+    error_message = "Authentication/query data must reach the API and streaming must not be compressed."
+  }
+  assert {
+    condition     = aws_wafv2_web_acl.edge[0].scope == "CLOUDFRONT" && !aws_wafv2_web_acl.edge[0].visibility_config[0].sampled_requests_enabled && length(aws_wafv2_web_acl_association.api) == 0 && length(aws_ecs_service.worker) == 0
+    error_message = "Rate limit real viewers at the edge, retain privacy and leave workers absent."
+  }
+}
+run "add_custom_domain_to_same_cloudfront_ingress" {
+  command = plan
+  variables {
+    ingress_mode = "aws_https"
+    api_domain   = "api.staging.example.com"
+    zone_id      = "Z0123456789"
+  }
+  assert {
+    condition     = aws_lb.api.internal && length(aws_cloudfront_distribution.api) == 1 && aws_cloudfront_distribution.api[0].aliases == toset(["api.staging.example.com"]) && !aws_cloudfront_distribution.api[0].viewer_certificate[0].cloudfront_default_certificate && aws_cloudfront_distribution.api[0].viewer_certificate[0].minimum_protocol_version == "TLSv1.2_2021"
+    error_message = "Adding a domain must keep the private origin and use a modern custom certificate."
+  }
+}
+run "reject_custom_domain_without_zone" {
+  command = plan
+  variables {
+    ingress_mode = "aws_https"
+    zone_id      = null
+  }
+  expect_failures = [var.zone_id]
+}
+
+run "reject_other_environment_image_in_shared_account" {
+  command = plan
+  variables {
+    api_image = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-production/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+  expect_failures = [var.api_image]
+}
+run "reject_foreign_account_oidc_provider" {
+  command = plan
+  variables {
+    github_oidc_provider_arn = "arn:aws:iam::999999999999:oidc-provider/token.actions.githubusercontent.com"
+  }
+  expect_failures = [var.github_oidc_provider_arn]
 }

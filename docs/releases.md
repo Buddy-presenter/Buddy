@@ -119,4 +119,5 @@ then python frontend/scripts/release/smoke_package.py packaged on a disposable n
 No AWS deployment, Apple notarization or trusted Windows signing is claimed until real
 protected environments, provider access and signing identities are supplied. Live staging
 recovery drills remain pending, as does the real worker implementation. These are
-explicit completion gates for #38; passing simulated tests cannot close that evidence gap.
+explicit completion gates for live staging #73 and production #76. Issue #38 covers the
+reviewed pipeline preparation; simulated tests do not establish deployment acceptance.

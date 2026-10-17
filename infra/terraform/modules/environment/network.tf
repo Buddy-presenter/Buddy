@@ -80,7 +80,7 @@ resource "aws_security_group" "database" {
   vpc_id = aws_vpc.main.id
 }
 resource "aws_vpc_security_group_ingress_rule" "public" {
-  for_each          = toset(["80", "443"])
+  for_each          = local.aws_https ? toset([]) : toset(["80", "443"])
   security_group_id = aws_security_group.ingress.id
   cidr_ipv4         = "0.0.0.0/0"
   ip_protocol       = "tcp"
@@ -124,4 +124,19 @@ resource "aws_vpc_security_group_egress_rule" "database" {
   ip_protocol                  = "tcp"
   from_port                    = 5432
   to_port                      = 5432
+}
+
+# AWS requires 55 security-group rule slots for this managed prefix list.
+# The internal ALB remains unreachable from the public internet.
+data "aws_ec2_managed_prefix_list" "cloudfront" {
+  count = local.aws_https ? 1 : 0
+  name  = "com.amazonaws.global.cloudfront.origin-facing"
+}
+resource "aws_vpc_security_group_ingress_rule" "cloudfront" {
+  count             = local.aws_https ? 1 : 0
+  security_group_id = aws_security_group.ingress.id
+  prefix_list_id    = data.aws_ec2_managed_prefix_list.cloudfront[0].id
+  ip_protocol       = "tcp"
+  from_port         = 80
+  to_port           = 80
 }

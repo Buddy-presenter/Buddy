@@ -24,7 +24,7 @@ locals {
   environment = [
     { name = "BUDDY_ENVIRONMENT", value = "production" },
     { name = "BUDDY_BIND_HOST", value = "0.0.0.0" },
-    { name = "BUDDY_ALLOWED_HOSTS", value = "${var.api_domain},localhost,127.0.0.1" },
+    { name = "BUDDY_ALLOWED_HOSTS", value = "${join(",", distinct(compact([var.api_domain, local.api_host, aws_lb.api.dns_name])))},localhost,127.0.0.1" },
     { name = "BUDDY_AWS_REGION", value = var.region },
     { name = "BUDDY_COGNITO_POOL_ID", value = aws_cognito_user_pool.main.id },
     { name = "BUDDY_COGNITO_CLIENT_ID", value = aws_cognito_user_pool_client.desktop.id },
@@ -84,7 +84,7 @@ resource "aws_ecs_service" "api" {
     container_name   = "api"
     container_port   = 8000
   }
-  depends_on = [aws_lb_listener.https, aws_iam_role_policy.execution]
+  depends_on = [aws_lb_listener.https, aws_lb_listener.private, aws_iam_role_policy.execution]
 }
 resource "aws_ecs_service" "worker" {
   count            = var.worker_image == null ? 0 : 1

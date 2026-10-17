@@ -6,19 +6,22 @@ terraform {
   backend "s3" {}
 }
 variable "account_id" { type = string }
-variable "other_environment_account_id" {
-  type = string
-  validation {
-    condition     = var.other_environment_account_id != var.account_id
-    error_message = "Staging and production must use separate AWS accounts."
-  }
-}
 variable "region" {
   type    = string
   default = "eu-central-1"
 }
-variable "api_domain" { type = string }
-variable "zone_id" { type = string }
+variable "api_domain" {
+  type    = string
+  default = null
+}
+variable "zone_id" {
+  type    = string
+  default = null
+}
+variable "ingress_mode" {
+  type    = string
+  default = "aws_https"
+}
 variable "api_image" {
   type    = string
   default = null
@@ -39,8 +42,18 @@ provider "aws" {
     tags = { Application = "Buddy", Environment = "production", ManagedBy = "Terraform" }
   }
 }
+provider "aws" {
+  alias               = "edge"
+  region              = "us-east-1"
+  allowed_account_ids = [var.account_id]
+  default_tags {
+    tags = { Application = "Buddy", Environment = "production", ManagedBy = "Terraform" }
+  }
+}
 module "environment" {
   source                   = "../../modules/environment"
+  providers                = { aws = aws, aws.edge = aws.edge }
+  ingress_mode             = var.ingress_mode
   environment              = "production"
   account_id               = var.account_id
   region                   = var.region
