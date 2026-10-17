@@ -1679,7 +1679,7 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Authentication required."
           },
           "404": {
             "content": {
@@ -1689,7 +1689,7 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Owned resource not found."
           },
           "409": {
             "content": {
@@ -1699,7 +1699,7 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Source or retry state conflicts."
           },
           "413": {
             "content": {
@@ -1709,7 +1709,7 @@
                 }
               }
             },
-            "description": "Request Entity Too Large"
+            "description": "Input or storage limit exceeded."
           },
           "422": {
             "content": {
@@ -1719,7 +1719,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Request validation failed."
           },
           "429": {
             "content": {
@@ -1729,7 +1729,7 @@
                 }
               }
             },
-            "description": "Too Many Requests"
+            "description": "Validation capacity exhausted."
           },
           "503": {
             "content": {
@@ -1739,7 +1739,7 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Validation service is unavailable."
           }
         },
         "summary": "Read",
@@ -1801,7 +1801,7 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Authentication required."
           },
           "404": {
             "content": {
@@ -1811,7 +1811,7 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Owned resource not found."
           },
           "409": {
             "content": {
@@ -1821,7 +1821,7 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Source or retry state conflicts."
           },
           "413": {
             "content": {
@@ -1831,7 +1831,7 @@
                 }
               }
             },
-            "description": "Request Entity Too Large"
+            "description": "Input or storage limit exceeded."
           },
           "422": {
             "content": {
@@ -1841,7 +1841,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Request validation failed."
           },
           "429": {
             "content": {
@@ -1851,7 +1851,7 @@
                 }
               }
             },
-            "description": "Too Many Requests"
+            "description": "Validation capacity exhausted."
           },
           "503": {
             "content": {
@@ -1861,7 +1861,7 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Validation service is unavailable."
           }
         },
         "summary": "Evidence",
@@ -2241,7 +2241,7 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Authentication required."
           },
           "404": {
             "content": {
@@ -2251,7 +2251,7 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Owned resource not found."
           },
           "409": {
             "content": {
@@ -2261,7 +2261,7 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Source or retry state conflicts."
           },
           "413": {
             "content": {
@@ -2271,7 +2271,7 @@
                 }
               }
             },
-            "description": "Request Entity Too Large"
+            "description": "Input or storage limit exceeded."
           },
           "422": {
             "content": {
@@ -2281,7 +2281,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Request validation failed."
           },
           "429": {
             "content": {
@@ -2291,7 +2291,7 @@
                 }
               }
             },
-            "description": "Too Many Requests"
+            "description": "Validation capacity exhausted."
           },
           "503": {
             "content": {
@@ -2301,7 +2301,7 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Validation service is unavailable."
           }
         },
         "summary": "Validate",

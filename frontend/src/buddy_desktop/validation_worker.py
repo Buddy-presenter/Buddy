@@ -272,8 +272,11 @@ def main() -> int:
         result = validate(folder)
         (folder / "result.json").write_text(json.dumps(result, allow_nan=False), encoding="utf-8")
         return 0
-    except Exception:
+    except Exception as exc:
         # Never emit parser/Qt exceptions containing private content or file paths.
+        (folder / "result.json").write_text(
+            json.dumps({"error": "validation_runtime_failed", "error_type": type(exc).__name__})
+        )
         return 1
 
 

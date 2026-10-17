@@ -71,6 +71,8 @@ def main() -> int:
             check=False,
         )
         if result.returncode:
+            if (folder / "result.json").is_file():
+                print((folder / "result.json").read_text())
             return 1
         report = json.loads((folder / "result.json").read_text())
         if report["state"] != "validated" or report["semantic_verified"]:

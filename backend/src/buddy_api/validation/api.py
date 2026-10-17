@@ -23,7 +23,18 @@ def validation_router() -> APIRouter:
     router = APIRouter(
         prefix="/api/v1",
         tags=["action-validation"],
-        responses={code: {"model": ErrorResponse} for code in (401, 404, 409, 413, 422, 429, 503)},
+        responses={
+            code: {"model": ErrorResponse, "description": description}
+            for code, description in {
+                401: "Authentication required.",
+                404: "Owned resource not found.",
+                409: "Source or retry state conflicts.",
+                413: "Input or storage limit exceeded.",
+                422: "Request validation failed.",
+                429: "Validation capacity exhausted.",
+                503: "Validation service is unavailable.",
+            }.items()
+        },
     )
 
     @router.post("/decks/{deck_id}/action-validations", response_model=ValidationResponse)

@@ -16,7 +16,7 @@ RUN python -m pip wheel --no-cache-dir --wheel-dir /validator-wheels --no-deps .
 
 FROM python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258
 RUN apt-get update && apt-get upgrade -y \
-    && apt-get install -y --no-install-recommends ca-certificates curl libegl1 libgl1 libglib2.0-0 libfontconfig1 fonts-dejavu-core \
+    && apt-get install -y --no-install-recommends ca-certificates curl libegl1 libgl1 libglib2.0-0 libfontconfig1 libxkbcommon0 libdbus-1-3 fonts-dejavu-core \
     && curl --fail --silent --show-error --proto '=https' \
        https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
        -o /tmp/rds-bundle.pem \
