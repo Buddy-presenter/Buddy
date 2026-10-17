@@ -1584,7 +1584,7 @@
                 }
               }
             },
-            "description": "Bad Request"
+            "description": "Malformed request."
           },
           "401": {
             "content": {
@@ -1594,7 +1594,7 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Authentication required."
           },
           "403": {
             "content": {
@@ -1604,7 +1604,7 @@
                 }
               }
             },
-            "description": "Forbidden"
+            "description": "Another account owns this upload."
           },
           "404": {
             "content": {
@@ -1614,7 +1614,7 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Upload not found."
           },
           "408": {
             "content": {
@@ -1624,7 +1624,7 @@
                 }
               }
             },
-            "description": "Request Timeout"
+            "description": "Upload interrupted or timed out."
           },
           "409": {
             "content": {
@@ -1634,7 +1634,7 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Retry or upload state conflicts."
           },
           "413": {
             "content": {
@@ -1644,7 +1644,7 @@
                 }
               }
             },
-            "description": "Content Too Large"
+            "description": "File or storage quota limit exceeded."
           },
           "415": {
             "content": {
@@ -1654,7 +1654,7 @@
                 }
               }
             },
-            "description": "Unsupported Media Type"
+            "description": "Unsupported media type."
           },
           "422": {
             "content": {
@@ -1664,7 +1664,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Invalid upload metadata or PPTX."
           },
           "429": {
             "content": {
@@ -1674,7 +1674,7 @@
                 }
               }
             },
-            "description": "Too Many Requests"
+            "description": "Upload capacity exhausted."
           },
           "503": {
             "content": {
@@ -1684,7 +1684,7 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Upload service or cleanup temporarily unavailable."
           }
         },
         "summary": "Initialize",
@@ -1743,7 +1743,7 @@
                 }
               }
             },
-            "description": "Bad Request"
+            "description": "Malformed request."
           },
           "401": {
             "content": {
@@ -1753,7 +1753,7 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Authentication required."
           },
           "403": {
             "content": {
@@ -1763,7 +1763,7 @@
                 }
               }
             },
-            "description": "Forbidden"
+            "description": "Another account owns this upload."
           },
           "404": {
             "content": {
@@ -1773,7 +1773,7 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Upload not found."
           },
           "408": {
             "content": {
@@ -1783,7 +1783,7 @@
                 }
               }
             },
-            "description": "Request Timeout"
+            "description": "Upload interrupted or timed out."
           },
           "409": {
             "content": {
@@ -1793,7 +1793,7 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Retry or upload state conflicts."
           },
           "413": {
             "content": {
@@ -1803,7 +1803,7 @@
                 }
               }
             },
-            "description": "Content Too Large"
+            "description": "File or storage quota limit exceeded."
           },
           "415": {
             "content": {
@@ -1813,7 +1813,7 @@
                 }
               }
             },
-            "description": "Unsupported Media Type"
+            "description": "Unsupported media type."
           },
           "422": {
             "content": {
@@ -1823,7 +1823,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Invalid upload metadata or PPTX."
           },
           "429": {
             "content": {
@@ -1833,7 +1833,7 @@
                 }
               }
             },
-            "description": "Too Many Requests"
+            "description": "Upload capacity exhausted."
           },
           "503": {
             "content": {
@@ -1843,7 +1843,7 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Upload service or cleanup temporarily unavailable."
           }
         },
         "summary": "Status",
@@ -1913,7 +1913,7 @@
                 }
               }
             },
-            "description": "Bad Request"
+            "description": "Malformed request."
           },
           "401": {
             "content": {
@@ -1923,7 +1923,7 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Authentication required."
           },
           "403": {
             "content": {
@@ -1933,7 +1933,7 @@
                 }
               }
             },
-            "description": "Forbidden"
+            "description": "Another account owns this upload."
           },
           "404": {
             "content": {
@@ -1943,7 +1943,7 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Upload not found."
           },
           "408": {
             "content": {
@@ -1953,7 +1953,7 @@
                 }
               }
             },
-            "description": "Request Timeout"
+            "description": "Upload interrupted or timed out."
           },
           "409": {
             "content": {
@@ -1963,7 +1963,7 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "Retry or upload state conflicts."
           },
           "413": {
             "content": {
@@ -1973,7 +1973,7 @@
                 }
               }
             },
-            "description": "Content Too Large"
+            "description": "File or storage quota limit exceeded."
           },
           "415": {
             "content": {
@@ -1983,7 +1983,7 @@
                 }
               }
             },
-            "description": "Unsupported Media Type"
+            "description": "Unsupported media type."
           },
           "422": {
             "content": {
@@ -1993,7 +1993,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Invalid upload metadata or PPTX."
           },
           "429": {
             "content": {
@@ -2003,7 +2003,7 @@
                 }
               }
             },
-            "description": "Too Many Requests"
+            "description": "Upload capacity exhausted."
           },
           "503": {
             "content": {
@@ -2013,7 +2013,7 @@
                 }
               }
             },
-            "description": "Service Unavailable"
+            "description": "Upload service or cleanup temporarily unavailable."
           }
         },
         "summary": "Transfer",

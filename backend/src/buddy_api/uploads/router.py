@@ -53,8 +53,20 @@ def upload_router() -> APIRouter:
         prefix="/api/v1/uploads",
         tags=["uploads"],
         responses={
-            code: {"model": ErrorResponse}
-            for code in (400, 401, 403, 404, 408, 409, 413, 415, 422, 429, 503)
+            code: {"model": ErrorResponse, "description": description}
+            for code, description in {
+                400: "Malformed request.",
+                401: "Authentication required.",
+                403: "Another account owns this upload.",
+                404: "Upload not found.",
+                408: "Upload interrupted or timed out.",
+                409: "Retry or upload state conflicts.",
+                413: "File or storage quota limit exceeded.",
+                415: "Unsupported media type.",
+                422: "Invalid upload metadata or PPTX.",
+                429: "Upload capacity exhausted.",
+                503: "Upload service or cleanup temporarily unavailable.",
+            }.items()
         },
     )
 

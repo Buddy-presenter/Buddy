@@ -41,9 +41,9 @@ resource "aws_iam_role_policy" "upload_versions" {
   role = aws_iam_role.task["api"].id
   policy = jsonencode({ Version = "2012-10-17", Statement = [
     { Effect = "Allow", Action = ["s3:ListBucketVersions"], Resource = aws_s3_bucket.private["data"].arn,
-      Condition = { StringLike = { "s3:prefix" = "sources/*" } } },
+    Condition = { StringLike = { "s3:prefix" = "sources/*" } } },
     { Effect = "Allow", Action = ["s3:GetObjectVersion", "s3:DeleteObjectVersion"],
-      Resource = "${aws_s3_bucket.private["data"].arn}/sources/*" }
+    Resource = "${aws_s3_bucket.private["data"].arn}/sources/*" }
   ] })
 }
 resource "aws_iam_role" "github" {
