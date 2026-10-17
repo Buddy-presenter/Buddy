@@ -9,7 +9,7 @@ from pathlib import Path
 from uuid import UUID
 
 from buddy_api.extraction.contracts import ExtractionError
-from buddy_api.extraction.runner import extract_pptx
+from buddy_api.extraction.runner import extract_source
 from buddy_api.persistence.errors import PersistenceError
 
 
@@ -17,6 +17,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("--source-revision", required=True)
+    parser.add_argument("--source-format", choices=("pptx", "pdf"))
     parser.add_argument("--output", type=Path)
     parser.add_argument("--owner-id", type=UUID)
     parser.add_argument("--deck-id", type=UUID)
@@ -24,7 +25,11 @@ def main(argv: list[str] | None = None) -> int:
     if bool(args.owner_id) != bool(args.deck_id) or (not args.output and not args.deck_id):
         parser.error("Choose --output and/or both --owner-id and --deck-id.")
     try:
-        result = extract_pptx(args.source, source_revision=args.source_revision)
+        result = extract_source(
+            args.source,
+            source_revision=args.source_revision,
+            source_format=args.source_format or args.source.suffix.lower().lstrip("."),
+        )
         if args.deck_id:
             from buddy_api.persistence.database import Database
             from buddy_api.persistence.settings import DatabaseSettings

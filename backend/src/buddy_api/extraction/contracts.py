@@ -78,6 +78,7 @@ class Slide(Model):
 class Extraction(Model):
     schema_version: Literal["buddy.extraction.v1"] = "buddy.extraction.v1"
     extractor_version: Literal["1"] = "1"
+    source_format: Literal["pptx", "pdf"] = "pptx"
     source_revision: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
     source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     coordinate_units: Literal["EMU"] = "EMU"

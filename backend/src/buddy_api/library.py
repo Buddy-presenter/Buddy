@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -15,6 +15,9 @@ from starlette.responses import Response
 from buddy_api.auth import Principal, authenticated
 from buddy_api.contracts import ErrorResponse
 from buddy_api.persistence.models import AnalysisVersion, Deck, ProcessingJob
+from buddy_api.uploads.contracts import UploadError
+from buddy_api.uploads.router import service
+from buddy_api.uploads.service import blocking
 
 
 class DeckStatus(StrEnum):
@@ -39,6 +42,8 @@ class LibraryDeck(BaseModel):
     created_at: datetime
     status: DeckStatus
     attempts: int = Field(ge=0)
+    source_format: Literal["pptx", "pdf"] = "pptx"
+    can_present: bool = False
 
 
 class LibraryData(BaseModel):
@@ -149,6 +154,9 @@ def library_router() -> APIRouter:
                             created_at=deck.created_at,
                             status=status,
                             attempts=attempts or 0,
+                            source_format=deck.source_format,
+                            can_present=deck.source_format == "pdf"
+                            and bool(deck.source_version_id),
                         )
                     )
         except (SQLAlchemyError, OSError, TimeoutError):
@@ -156,6 +164,63 @@ def library_router() -> APIRouter:
         return LibraryResponse(
             data=LibraryData(items=items, total=total or 0, page=page, page_size=page_size),
             request_id=request.state.request_id,
+        )
+
+    @router.get(
+        "/{identifier}/source",
+        response_class=Response,
+        responses={
+            200: {
+                "content": {"application/pdf": {}},
+                "description": "Owner-only original PDF bytes.",
+            }
+        },
+    )
+    async def source(
+        identifier: UUID, request: Request, principal: Annotated[Principal, Depends(authenticated)]
+    ) -> Response:
+        uploads = service(request)
+        async with uploads.transaction() as session:
+            deck = await session.scalar(
+                select(Deck).where(Deck.id == identifier, Deck.owner_id == principal.id)
+            )
+            if deck is None:
+                raise HTTPException(404)
+            if deck.source_format != "pdf":
+                raise UploadError(
+                    409,
+                    "presentation_unsupported",
+                    "PPTX presentation is not supported yet. Export to PDF and upload it.",
+                )
+            key, version, size, digest, revision = (
+                deck.source_key,
+                deck.source_version_id,
+                deck.source_size_bytes,
+                deck.source_sha256,
+                deck.source_revision,
+            )
+            if not key or not version or not size or not digest or not revision:
+                raise HTTPException(404)
+            async with uploads.parser_slot:
+                content = await blocking(
+                    lambda: uploads.storage.read(
+                        key,
+                        version=version,
+                        size=size,
+                        sha256=digest,
+                        source_format=deck.source_format,
+                    )
+                )
+        return Response(
+            content,
+            media_type="application/pdf",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+                "X-Source-Sha256": digest,
+                "X-Source-Revision": revision,
+                "Content-Disposition": 'attachment; filename="presentation.pdf"',
+            },
         )
 
     return router

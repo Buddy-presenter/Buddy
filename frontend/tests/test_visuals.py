@@ -149,3 +149,46 @@ def test_long_endpoint_does_not_widen_home(desktop_window, themed):
     assert window.home.endpoint.toolTip() == url
     assert window.home.endpoint.accessibleDescription() == url
     assert len(window.home.endpoint.text()) < len(url)
+
+
+@pytest.mark.parametrize("size", [(800, 600), (1200, 800)])
+def test_pdf_controls_fit_new_theme_and_fullscreen(
+    desktop_window, qtbot, themed, size, monkeypatch
+):
+    from pathlib import Path
+
+    from PySide6.QtWidgets import QFileDialog
+
+    fixture = Path(__file__).resolve().parents[2] / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf"
+    window = desktop_window()
+    window.resize(*size)
+    window.navigation.setCurrentRow(2)
+    page = window.present
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a: (str(fixture), ""))
+    page.open_button.click()
+    qtbot.waitUntil(lambda: not page.executor.busy, timeout=10000)
+    assert page.executor.manifest is not None, page.feedback.text()
+    assert not page.surface.empty.isVisible()
+    page.coordinates_button.click()
+    for name, value in {"x": 96, "y": 410, "width": 480, "height": 240}.items():
+        page.fields[name].setValue(value)
+    page.highlight_button.click()
+    page.zoom_button.click()
+    themed.processEvents()
+    assert window.width() == size[0]
+    assert window.pages.currentWidget().horizontalScrollBar().maximum() == 0
+    for control in (page.open_button, page.fullscreen_button, page.coordinates_button):
+        assert control.accessibleName() and control.toolTip() and not control.icon().isNull()
+    destination = Path("build")
+    destination.mkdir(exist_ok=True)
+    assert window.grab().save(str(destination / f"pdf-themed-{size[0]}.png"))
+    page.fullscreen_button.click()
+    qtbot.waitUntil(
+        lambda: page.fullscreen.isFullScreen() and themed.activeWindow() == page.fullscreen
+    )
+    qtbot.keyClick(page.fullscreen, Qt.Key.Key_Right)
+    qtbot.waitUntil(lambda: not page.executor.busy, timeout=10000)
+    assert page.counter.text() == "Slide 2 of 3"
+    qtbot.keyClick(page.fullscreen, Qt.Key.Key_Escape)
+    qtbot.waitUntil(lambda: page.fullscreen is None)
+    assert page.surface.parent() is page

@@ -1,12 +1,16 @@
 """Keyboard-accessible library with serialized requests and invalidated late results."""
 
 import time
+from collections.abc import Callable
 from math import ceil
+from pathlib import Path
+from uuid import UUID, uuid4
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox,
+    QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -24,6 +28,7 @@ from PySide6.QtWidgets import (
 from buddy_desktop.account_widget import AccountWidget
 from buddy_desktop.config import AppConfig
 from buddy_desktop.library_service import LibraryAccessExpired, LibraryPage, LibraryService
+from buddy_desktop.presentation_service import DownloadedPDF, PresentationService, SavedPresentation
 from buddy_desktop.tasks import TaskRunner
 from buddy_desktop.views import StatePanel
 from buddy_desktop.visuals import command, icon
@@ -43,6 +48,8 @@ STATUS_TEXT = {
 
 class LibraryWidget(QWidget):
     activity_changed = Signal(bool)
+    present_requested = Signal(object)
+    private_invalidated = Signal()
 
     def __init__(self, config: AppConfig, account: AccountWidget) -> None:
         super().__init__()
@@ -62,7 +69,9 @@ class LibraryWidget(QWidget):
         self.pending = False
         self.account_busy = False
         self.last_page: LibraryPage | None = None
-        self.account_key: tuple[int, str | None] | None = None
+        self.account_key: tuple[int, str | None, str] | None = None
+        self.upload_keys: dict[tuple[Path, int, int], UUID] = {}
+        self.upload_request: tuple[tuple[Path, int, int], UUID] | None = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 24, 28, 24)
         layout.setSpacing(18)
@@ -99,13 +108,25 @@ class LibraryWidget(QWidget):
         self.refresh.clicked.connect(self.reload)
         controls.addWidget(self.refresh)
         layout.addLayout(controls)
+        actions = QHBoxLayout()
+        self.upload_button = QPushButton("Upload PDF or PPTX…")
+        command(self.upload_button, "folder-open", primary=True)
+        self.upload_button.clicked.connect(self.choose_upload)
+        actions.addWidget(self.upload_button)
+        self.open_button = QPushButton("Present PDF")
+        command(self.open_button, "presentation")
+        self.open_button.setEnabled(False)
+        self.open_button.clicked.connect(self.open_selected)
+        actions.addWidget(self.open_button)
+        actions.addStretch()
+        layout.addLayout(actions)
         self.state = StatePanel()
         self.state.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self.state.retry.setAccessibleName("Retry library request")
         self.state.retry_requested.connect(self.reload)
         layout.addWidget(self.state)
-        self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["Deck", "Status", "Created"])
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["Deck", "Status", "Created", "Format"])
         self.table.setAccessibleName("Saved presentations")
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -125,6 +146,9 @@ class LibraryWidget(QWidget):
         self.table.setShowGrid(False)
         self.table.setAlternatingRowColors(True)
         self.table.horizontalHeader().setHighlightSections(False)
+        self.table.horizontalHeader().setSectionResizeMode(
+            3, QHeaderView.ResizeMode.ResizeToContents
+        )
         layout.addWidget(self.table, 1)
         self.detail = QPlainTextEdit()
         self.detail.setReadOnly(True)
@@ -191,6 +215,7 @@ class LibraryWidget(QWidget):
         self.total = 0
         self.previous.setEnabled(False)
         self.next.setEnabled(False)
+        self.open_button.setEnabled(False)
 
     def invalidate(self) -> None:
         self.generation += 1
@@ -212,17 +237,26 @@ class LibraryWidget(QWidget):
             self.invalidate()
             self.pending = False
             self.refresh.setEnabled(False)
+            self.upload_button.setEnabled(False)
             self.state.show_state(
                 "Checking account", "Library access is paused during account changes."
             )
 
     def account_changed(self) -> None:
         self.invalidate()
-        key = (id(self.account.session), self.account.account_id) if self.token() else None
+        key = (
+            (id(self.account.session), self.account.account_id, self.config.api_url)
+            if self.token()
+            else None
+        )
+        if key is None or key != self.account_key:
+            self.private_invalidated.emit()
         if key != self.account_key:
             self.page = 1
+            self.upload_keys.clear()
         self.account_key = key
         self.refresh.setEnabled(self.token() is not None)
+        self.upload_button.setEnabled(self.token() is not None and not self.runner.busy)
         if not self.token():
             self.state.show_state(
                 "Sign in to view your decks", "Account access is available on Home."
@@ -283,10 +317,24 @@ class LibraryWidget(QWidget):
         return not self.closing and self.active and self.request_generation == self.generation
 
     def completed(self, _identifier: int, result: object) -> None:
+        # A confirmed upload retires its key even if a routine account check or
+        # navigation invalidated the library response while transfer was running.
+        if isinstance(result, SavedPresentation) and self.upload_request:
+            fingerprint, key = self.upload_request
+            if self.upload_keys.get(fingerprint) == key:
+                del self.upload_keys[fingerprint]
         if not self.current():
             return
         if isinstance(result, LibraryAccessExpired):
             self.account.expire_session(str(result))
+            return
+        if isinstance(result, SavedPresentation):
+            self.pending = True
+            self.state.show_state("Presentation saved", "Refreshing your library…")
+            return
+        if isinstance(result, DownloadedPDF):
+            self.state.hide()
+            self.present_requested.emit(result)
             return
         if not isinstance(result, LibraryPage):
             self.failed(_identifier, "The backend returned an invalid library response.")
@@ -315,6 +363,7 @@ class LibraryWidget(QWidget):
                         deck.title,
                         status,
                         deck.created_at.astimezone().strftime("%Y-%m-%d %H:%M"),
+                        deck.source_format.upper(),
                     ]
                 ):
                     item = QTableWidgetItem(text)
@@ -353,6 +402,18 @@ class LibraryWidget(QWidget):
         if self.last_page and 0 <= row < len(self.last_page.items):
             deck = self.last_page.items[row]
             guidance = STATUS_TEXT[deck.status][1]
+            if deck.source_format == "pptx":
+                guidance = (
+                    (
+                        "PPTX is saved. PPTX processing and playback are not supported yet. "
+                        "Export it to PDF and upload the PDF to present."
+                    )
+                    + " "
+                    + guidance
+                )
+            elif deck.can_present:
+                guidance = "PDF is available to present. " + guidance
+            self.open_button.setEnabled(deck.can_present and not self.runner.busy)
             attempts = f" Processing attempts: {deck.attempts}." if deck.attempts else ""
             self.detail.setPlainText(guidance + attempts + "\n\n" + deck.title)
 
@@ -361,10 +422,62 @@ class LibraryWidget(QWidget):
             self.state.show_state("Library unavailable", message, retry=True)
 
     def idle(self) -> None:
+        self.upload_request = None
         self.activity_changed.emit(False)
         self.refresh.setEnabled(not self.closing and self.token() is not None)
+        self.upload_button.setEnabled(not self.closing and self.token() is not None)
+        self.selection_changed()
         if self.pending and self.active and not self.closing:
             self.reload()
+
+    def choose_upload(self) -> None:
+        if self.runner.busy or not self.token():
+            return
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "Upload presentation", "", "Presentations (*.pdf *.pptx)"
+        )
+        if filename:
+            path = Path(filename)
+            try:
+                info = path.stat()
+            except OSError:
+                self.state.show_state("File unavailable", "Choose a readable presentation file.")
+                return
+            # Keep the same reservation key for retries during this account session.
+            fingerprint = (path, info.st_size, info.st_mtime_ns)
+            key = self.upload_keys.setdefault(fingerprint, uuid4())
+            self.upload_request = (fingerprint, key)
+            self.run_presentation(lambda service: service.upload(path, key))
+
+    def open_selected(self) -> None:
+        row = self.table.currentRow()
+        if self.last_page and 0 <= row < len(self.last_page.items):
+            deck = self.last_page.items[row]
+            if deck.can_present:
+                self.run_presentation(lambda service: service.download(str(deck.id)))
+
+    def run_presentation(self, operation: Callable[[PresentationService], object]) -> None:
+        access = self.token()
+        if self.runner.busy or not access or self.closing:
+            return
+        self.poll.stop()
+        self.debounce.stop()
+        self.request_generation = self.generation
+        self.upload_button.setEnabled(False)
+        self.open_button.setEnabled(False)
+        self.refresh.setEnabled(False)
+        self.state.show()
+        self.state.show_state("Working…", "Transferring your private presentation…")
+        self.activity_changed.emit(True)
+        service = PresentationService(self.config, access)
+
+        def work() -> object:
+            try:
+                return operation(service)
+            except LibraryAccessExpired as exc:
+                return exc
+
+        self.runner.submit(work)
 
     def shutdown(self) -> None:
         self.closing = True

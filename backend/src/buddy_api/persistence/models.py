@@ -51,6 +51,7 @@ class Deck(OwnedRecord):
     __table_args__ = (
         UniqueConstraint("id", "owner_id"),
         CheckConstraint("length(title) > 0", name="title_nonempty"),
+        CheckConstraint("source_format IN ('pptx','pdf')", name="source_format"),
     )
     title: Mapped[str] = mapped_column(String(256))
     source_key: Mapped[str | None] = mapped_column(String(1024))
@@ -59,6 +60,7 @@ class Deck(OwnedRecord):
     source_size_bytes: Mapped[int | None] = mapped_column(BigInteger)
     source_version_id: Mapped[str | None] = mapped_column(String(1024))
     source_slide_count: Mapped[int | None] = mapped_column()
+    source_format: Mapped[str] = mapped_column(String(8), server_default="pptx")
 
 
 class DeckUpload(OwnedRecord):
@@ -74,9 +76,11 @@ class DeckUpload(OwnedRecord):
         CheckConstraint("size_bytes > 0 AND size_bytes <= 67108864", name="size_bounds"),
         CheckConstraint("sha256 ~ '^[0-9a-f]{64}$'", name="sha256"),
         CheckConstraint("status != 'complete' OR deck_id IS NOT NULL", name="completed_deck"),
+        CheckConstraint("source_format IN ('pptx','pdf')", name="source_format"),
     )
     idempotency_key: Mapped[UUID] = mapped_column()
     filename: Mapped[str] = mapped_column(String(255))
+    source_format: Mapped[str] = mapped_column(String(8), server_default="pptx")
     title: Mapped[str] = mapped_column(String(256))
     size_bytes: Mapped[int] = mapped_column(BigInteger)
     sha256: Mapped[str] = mapped_column(String(64))
@@ -102,6 +106,26 @@ class RenderedAsset(OwnedRecord):
     storage_key: Mapped[str] = mapped_column(String(1024), unique=True)
     content_type: Mapped[str] = mapped_column(String(128))
     size_bytes: Mapped[int] = mapped_column()
+
+
+class ActionCheck(OwnedRecord):
+    __tablename__ = "action_checks"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["deck_id", "owner_id"], ["decks.id", "decks.owner_id"], ondelete="RESTRICT"
+        ),
+        UniqueConstraint("owner_id", "retry_key"),
+        CheckConstraint("status IN ('pending','complete','cleanup','failed')", name="status"),
+        CheckConstraint("storage_bytes >= 0 AND storage_bytes <= 33554432", name="storage_bytes"),
+    )
+    deck_id: Mapped[UUID] = mapped_column(index=True)
+    retry_key: Mapped[UUID] = mapped_column()
+    request_sha256: Mapped[str] = mapped_column(String(64))
+    storage_bytes: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    status: Mapped[str] = mapped_column(String(16), server_default="pending", index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    artifacts: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, server_default="[]")
 
 
 class DeckExtraction(OwnedRecord):

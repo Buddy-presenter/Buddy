@@ -148,24 +148,27 @@ def windows_memory_limit(pid: int, memory_bytes: int) -> Iterator[None]:
             kernel.CloseHandle(job)
 
 
-def extract_pptx(
+def extract_source(
     source: Path | BinaryIO,
     *,
     source_revision: str,
     limits: Limits | None = None,
+    source_format: str = "pptx",
 ) -> Extraction:
     """Parse an approved/validated local source, never mutate it or return partial success.
 
     Offload this blocking call from event loops. Caller owns stream lifetime/position;
     streams must be local bounded reads, not arbitrary network callbacks.
     """
+    if source_format not in {"pptx", "pdf"}:
+        raise ExtractionError("unsupported_source_format")
     if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", source_revision):
         raise ExtractionError("invalid_source_revision")
     limits = limits or Limits()
     start = time.monotonic()
     try:
         with tempfile.TemporaryDirectory(prefix="buddy-extract-") as folder:
-            path = Path(folder) / "source.pptx"
+            path = Path(folder) / ("source." + source_format)
             stream = source.open("rb") if isinstance(source, Path) else source
             try:
                 with path.open("wb") as output:
@@ -182,7 +185,13 @@ def extract_pptx(
                     stream.close()
             if not size:
                 raise ExtractionError("invalid_archive")
-            request = json.dumps({"revision": source_revision, "limits": limits.model_dump()})
+            request = json.dumps(
+                {
+                    "revision": source_revision,
+                    "limits": limits.model_dump(),
+                    "source_format": source_format,
+                }
+            )
             process = subprocess.Popen(
                 [sys.executable, "-m", "buddy_api.extraction.worker", str(path)],
                 stdin=subprocess.PIPE,
@@ -237,3 +246,17 @@ def extract_pptx(
         raise
     except (OSError, ValueError, TypeError):
         raise ExtractionError("source_or_parser_unavailable") from None
+
+
+def extract_pptx(
+    source: Path | BinaryIO, *, source_revision: str, limits: Limits | None = None
+) -> Extraction:
+    return extract_source(source, source_revision=source_revision, limits=limits)
+
+
+def extract_pdf(
+    source: Path | BinaryIO, *, source_revision: str, limits: Limits | None = None
+) -> Extraction:
+    return extract_source(
+        source, source_revision=source_revision, limits=limits, source_format="pdf"
+    )

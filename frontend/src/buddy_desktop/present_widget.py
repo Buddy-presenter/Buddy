@@ -10,12 +10,14 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
+from buddy_desktop.fullscreen import FullscreenPresentation
 from buddy_desktop.slide_contract import Region
 from buddy_desktop.slide_executor import Completion, SlideExecutor
 from buddy_desktop.slide_surface import SlideSurface
@@ -102,16 +104,17 @@ class PresentWidget(Page):
     """Open local manifests explicitly; no fabricated library or processing integration."""
 
     def __init__(self) -> None:
-        super().__init__("Present", "")
+        super().__init__("Present", "Open a PDF, select any area, and control your presentation.")
         self.body.setSpacing(10)
         self._closing = False
+        self.fullscreen: FullscreenPresentation | None = None
         self._instance = 0
         self._committed_key: tuple[str, str, str] | None = None
         self.surface = SelectionSurface()
         self.executor = SlideExecutor(self.surface)
         self.executor.completed.connect(self._completed)
         self.executor.idle.connect(self._refresh)
-        self.open_button = QPushButton("Open rendered slides…")
+        self.open_button = QPushButton("Open PDF…")
         command(self.open_button, "folder-open", primary=True)
         self.open_button.clicked.connect(self._choose_manifest)
         self.previous_button = QPushButton("Previous")
@@ -130,6 +133,11 @@ class PresentWidget(Page):
         opening.addWidget(self.open_button)
         opening.addStretch()
         opening.addWidget(self.counter)
+        self.fullscreen_button = QPushButton("Full screen")
+        command(self.fullscreen_button, "scan")
+        self.fullscreen_button.setToolTip("F11: full screen. Esc: exit. Arrows or Space: navigate.")
+        self.fullscreen_button.clicked.connect(self.enter_fullscreen)
+        opening.addWidget(self.fullscreen_button)
         self.body.addLayout(opening)
         navigation = QHBoxLayout()
         for widget in (
@@ -188,7 +196,9 @@ class PresentWidget(Page):
             commands.addWidget(button)
         commands.addWidget(self.coordinates_button)
         self.body.addLayout(commands)
-        self.feedback = QLabel("No slides loaded")
+        self.feedback = QLabel(
+            "Open a PDF to begin. PPTX playback is not supported yet; export it to PDF first."
+        )
         self.feedback.setWordWrap(True)
         self.feedback.setTextFormat(Qt.TextFormat.PlainText)
         self.feedback.setAccessibleName("Presentation status")
@@ -199,10 +209,22 @@ class PresentWidget(Page):
     @Slot()
     def _choose_manifest(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(
-            self, "Open slide manifest", "", "Slide manifests (*.json)"
+            self, "Open presentation", "", "PDF presentations (*.pdf);;Slide manifests (*.json)"
         )
         if filename:
-            self.load_manifest(Path(filename))
+            if Path(filename).suffix.lower() == ".pdf":
+                self.load_pdf(Path(filename))
+            else:
+                self.load_manifest(Path(filename))
+
+    def load_pdf(
+        self, source: Path | bytes, *, deck_id: str | None = None, revision: str | None = None
+    ) -> None:
+        self.surface.clear_selection()
+        self._selection_changed(None)
+        self.feedback.setText("Opening PDF…")
+        self.executor.load_pdf(source, deck_id=deck_id, revision=revision)
+        self._refresh()
 
     def load_manifest(self, path: Path) -> None:
         self.surface.clear_selection()
@@ -210,6 +232,46 @@ class PresentWidget(Page):
         self.feedback.setText("Loading slides…")
         self.executor.load_manifest(path)
         self._refresh()
+
+    def enter_fullscreen(self) -> None:
+        if self.fullscreen is not None:
+            self.fullscreen.close()
+            return
+        if self.executor.manifest is None or self._closing:
+            return
+        self.fullscreen = FullscreenPresentation(
+            self.surface,
+            self.body,
+            self.send,
+            self.zoom_button.click,
+            self.highlight_button.click,
+            self._fullscreen_go,
+            self,
+        )
+        self.fullscreen.exited.connect(self._fullscreen_exited)
+        self.fullscreen.showFullScreen()
+        self.fullscreen.activateWindow()
+        self.surface.setFocus()
+
+    def _fullscreen_exited(self) -> None:
+        self.fullscreen = None
+        if not self._closing:
+            self.fullscreen_button.setFocus()
+
+    def _fullscreen_go(self) -> None:
+        manifest = self.executor.manifest
+        if manifest is None or self.executor.busy:
+            return
+        page, accepted = QInputDialog.getInt(
+            self.fullscreen or self,
+            "Go to slide",
+            "Slide:",
+            self.executor.current_index + 1,
+            1,
+            len(manifest.slides),
+        )
+        if accepted:
+            self.send("go_to_slide", {"target_slide_id": manifest.slides[page - 1].slide_id})
 
     def send(self, kind: str, params: dict[str, object] | None = None) -> None:
         manifest, slide = self.executor.manifest, self.surface.slide
@@ -302,6 +364,7 @@ class PresentWidget(Page):
         self.surface.empty.setVisible(self.surface.slide is None)
         ready = loaded and not self.executor.busy
         self.open_button.setEnabled(not self.executor.busy and not self._closing)
+        self.fullscreen_button.setEnabled(loaded)
         for widget in (self.previous_button, self.next_button, self.target, self.go_button):
             widget.setEnabled(ready)
         self.reset_button.setEnabled(loaded)
@@ -314,5 +377,7 @@ class PresentWidget(Page):
 
     def shutdown(self) -> None:
         self._closing = True
+        if self.fullscreen is not None:
+            self.fullscreen.close()
         self.executor.close()
         self._refresh()

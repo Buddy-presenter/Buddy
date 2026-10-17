@@ -6,6 +6,7 @@ import io
 import zipfile
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
@@ -22,7 +23,7 @@ from buddy_api.auth import CognitoVerifier
 from buddy_api.config import Environment, Settings
 from buddy_api.persistence.models import Deck, DeckUpload, ProcessingJob
 from buddy_api.uploads.config import UploadSettings
-from buddy_api.uploads.contracts import PPTX_TYPE, UploadError, UploadMetadata
+from buddy_api.uploads.contracts import PDF_TYPE, PPTX_TYPE, UploadError, UploadMetadata
 from buddy_api.uploads.storage import SourceStorage
 from buddy_identity.config import IdentityConfig
 
@@ -42,6 +43,7 @@ class Cloud:
         self.fail_put = False
         self.fail_after_put = False
         self.fail_delete = False
+        self.content_types = {}
 
     def put_object(self, **kwargs):
         self.puts += 1
@@ -58,9 +60,19 @@ class Cloud:
         assert hashlib.sha256(content).hexdigest() == kwargs["Metadata"]["sha256"]
         version = str(uuid4())
         self.objects[key] = (version, content)
+        self.content_types[key] = kwargs["ContentType"]
         if self.fail_after_put:
             raise OSError("acknowledgement lost")
         return {"VersionId": version}
+
+    def get_object(self, **kwargs):
+        version, content = self.objects[kwargs["Key"]]
+        assert kwargs["VersionId"] == version
+        return {
+            "ContentLength": len(content),
+            "ContentType": self.content_types[kwargs["Key"]],
+            "Body": io.BytesIO(content),
+        }
 
     def list_object_versions(self, **kwargs):
         return {
@@ -144,6 +156,54 @@ def transfer(client, identifier, content=SOURCE):
         content=content,
         headers={"Content-Type": PPTX_TYPE},
     )
+
+
+def test_pdf_upload_storage_database_private_download_and_pptx_preservation(upload_app):
+    fixture = Path(__file__).resolve().parents[3] / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf"
+    content = fixture.read_bytes()
+    body = {**metadata(content), "filename": "slides.pdf", "content_type": PDF_TYPE}
+    with upload_app() as (client, cloud, service):
+        key = uuid4()
+        reserved = initialize(client, key, body)
+        identifier = reserved.json()["data"]["id"]
+        wrong_type = transfer(client, identifier, content)
+        assert wrong_type.status_code == 415
+        completed = client.put(
+            f"/api/v1/uploads/{identifier}/content",
+            content=content,
+            headers={"Content-Type": PDF_TYPE},
+        )
+        assert completed.status_code == 200, completed.text
+        deck = completed.json()["data"]["deck"]
+        assert deck["source_format"] == "pdf" and deck["slide_count"] == 3
+        storage_key = next(iter(cloud.objects))
+        assert storage_key.endswith("/original.pdf")
+        assert cloud.objects[storage_key][1] == content
+        assert cloud.content_types[storage_key] == PDF_TYPE
+        assert initialize(client, key, body).json()["data"]["deck"] == deck
+        listing = client.get("/api/v1/decks").json()["data"]["items"][0]
+        assert listing["can_present"] and listing["status"] == "uploaded"
+        downloaded = client.get(f"/api/v1/decks/{identifier}/source")
+        assert downloaded.content == content
+        assert downloaded.headers["cache-control"] == "no-store"
+        assert downloaded.headers["x-source-revision"] == deck["source_revision"]
+        client.headers["Authorization"] = "Bearer account-b"
+        assert client.get(f"/api/v1/decks/{identifier}/source").status_code == 404
+        client.headers["Authorization"] = "Bearer account-a"
+        cloud.objects[storage_key] = (cloud.objects[storage_key][0], b"x" * len(content))
+        assert client.get(f"/api/v1/decks/{identifier}/source").status_code == 503
+        ppt = initialize(client).json()["data"]["id"]
+        assert transfer(client, ppt).status_code == 200
+        assert client.get(f"/api/v1/decks/{ppt}/source").status_code == 409
+
+        async def persisted():
+            async with service.transaction() as session:
+                stored = await session.get(Deck, UUID(identifier))
+                assert stored.source_format == "pdf"
+                assert stored.source_sha256 == hashlib.sha256(content).hexdigest()
+                assert await session.scalar(select(func.count()).select_from(ProcessingJob)) == 0
+
+        client.portal.call(persisted)
 
 
 def test_original_bytes_private_identity_and_complete_retry_survive_restart(upload_app):

@@ -4,34 +4,47 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from buddy_api.contracts import ErrorData, ErrorResponse
 
 PPTX_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+PDF_TYPE = "application/pdf"
+SOURCE_TYPES = {"pptx": PPTX_TYPE, "pdf": PDF_TYPE}
 
 
 class UploadMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    filename: str = Field(min_length=6, max_length=255)
+    filename: str = Field(min_length=5, max_length=255)
     title: str = Field(min_length=1, max_length=256)
     size_bytes: int = Field(strict=True, ge=1, le=64 * 1024 * 1024)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     content_type: Literal[
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/pdf",
     ]
 
     @field_validator("filename")
     @classmethod
     def safe_filename(cls, value: str) -> str:
         if (
-            not value.lower().endswith(".pptx")
+            not value.lower().endswith((".pptx", ".pdf"))
             or any(c in value for c in '/\\:<>"|?*')
             or any(ord(c) < 32 or ord(c) == 127 for c in value)
             or value.startswith(".")
         ):
-            raise ValueError("Unsupported PPTX filename")
+            raise ValueError("Unsupported presentation filename")
         return value
+
+    @property
+    def source_format(self) -> str:
+        return "pdf" if self.content_type == PDF_TYPE else "pptx"
+
+    @model_validator(mode="after")
+    def matching_format(self) -> "UploadMetadata":
+        if not self.filename.lower().endswith("." + self.source_format):
+            raise ValueError("Filename and content type must agree")
+        return self
 
     @field_validator("title")
     @classmethod
@@ -48,6 +61,7 @@ class UploadedDeck(BaseModel):
     sha256: str
     size_bytes: int
     slide_count: int
+    source_format: Literal["pptx", "pdf"] = "pptx"
     status: Literal["uploaded"] = "uploaded"
 
 

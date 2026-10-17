@@ -21,7 +21,9 @@ from buddy_desktop.account_widget import AccountWidget
 from buddy_desktop.config import AppConfig, ConfigurationError, validate_api_url
 from buddy_desktop.library_widget import LibraryWidget
 from buddy_desktop.present_widget import PresentWidget
+from buddy_desktop.presentation_service import DownloadedPDF
 from buddy_desktop.services import Health, HealthService
+from buddy_desktop.slide_executor import Completion
 from buddy_desktop.tasks import TaskRunner
 from buddy_desktop.views import HomePage, SettingsPage
 from buddy_desktop.visuals import BuddyMark, command, icon
@@ -95,6 +97,10 @@ class MainWindow(QMainWindow):
         self.account = AccountWidget(config.api_url)
         self.library = LibraryWidget(config, self.account)
         self.present = PresentWidget()
+        self._private_presentation = False
+        self.library.present_requested.connect(self._open_saved_pdf)
+        self.library.private_invalidated.connect(self._clear_private_pdf)
+        self.present.executor.completed.connect(self._presentation_completed)
         self.present.executor.idle.connect(self._present_idle)
         self.library.activity_changed.connect(self._library_activity)
         self.home.account_layout.addWidget(self.account)
@@ -164,10 +170,35 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda checked=False, row=index: self._select_route(row))
             workspace_menu.addAction(action)
         workspace_menu.addSeparator()
+        fullscreen_action = QAction("Presentation &full screen", self)
+        fullscreen_action.setShortcut(QKeySequence("F11"))
+        fullscreen_action.triggered.connect(self.present.enter_fullscreen)
+        workspace_menu.addAction(fullscreen_action)
         quit_action = QAction("&Quit Buddy", self)
         quit_action.setShortcut(QKeySequence.StandardKey.Quit)
         quit_action.triggered.connect(self.close)
         workspace_menu.addAction(quit_action)
+
+    def _open_saved_pdf(self, result: DownloadedPDF) -> None:
+        if self.present.executor.busy:
+            return
+        self._private_presentation = True
+        self.navigation.setCurrentRow(2)
+        self.present.load_pdf(result.content, deck_id=result.deck_id, revision=result.revision)
+
+    def _clear_private_pdf(self) -> None:
+        if self._private_presentation:
+            self._private_presentation = False
+            if self.present.fullscreen is not None:
+                self.present.fullscreen.close()
+            self.present.executor.clear()
+            self.present.counter.setText("No slides loaded")
+            self.present._refresh()
+
+    def _presentation_completed(self, result: Completion) -> None:
+        if result.status in {"completed", "failed"}:
+            manifest = self.present.executor.manifest
+            self._private_presentation = bool(manifest and manifest.account_bound)
 
     def _select_route(self, index: int) -> None:
         self.navigation.setCurrentRow(index)
@@ -189,7 +220,7 @@ class MainWindow(QMainWindow):
             self.library.activate(index == 1)
             if index == 2:
                 self.statusBar().showMessage(
-                    "Present controls use local slide files. No backend connection is needed."
+                    "PDF presentation controls run locally after opening or downloading the file."
                 )
             elif previous == 2:
                 self.statusBar().clearMessage()
