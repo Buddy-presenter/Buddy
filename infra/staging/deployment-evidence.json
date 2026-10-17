@@ -114,7 +114,7 @@
   "backup_restore_and_rollback": {
     "started_at": "2026-10-17T14:46:04.394807+00:00",
     "source_database": "buddy-staging",
-    "reviewed_api_revision": "dc1bb7743f9fa95e5fd75fe7a488ca5262c06b75",
+    "reviewed_source_revision": "dc1bb7743f9fa95e5fd75fe7a488ca5262c06b75",
     "image_a": "549327541867.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:f61c966f16ebd4ea59331ae3f54b7034c98b1e91d6716a078ae9f889041a9593",
     "image_b": "549327541867.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:b2146f843f8d56495944ac8855f3bbf57bef379f2122f5d4efac5b65c47f0e22",
     "snapshot": "buddy-staging-acceptance-be534f2ee0d3",

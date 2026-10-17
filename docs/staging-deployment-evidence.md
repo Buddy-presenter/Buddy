@@ -35,6 +35,12 @@ and provenance. Release audit objects remain in the private releases bucket unde
 `staging/backend/operations/<reviewed-source-sha>/`. No passwords, tokens, private signup
 addresses, credential exports or raw Terraform state belong in this record.
 
+Gitleaks initially classified the public reviewed-source Git SHA under the metadata
+label `reviewed_api_revision` as a generic API key. The field is now named
+`reviewed_source_revision`. `.gitleaksignore` permits only that exact historical
+commit/file/rule/line fingerprint; no rule or evidence-directory exclusion was added.
+The value was verified identical to the public image-source commit above.
+
 ## Live verification
 
 - Bootstrap of scoped database roles succeeded. Explicit migration ran twice with exit
