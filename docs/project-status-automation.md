@@ -1,5 +1,5 @@
 # Project status automation
-This workflow has one write capability: update the Status field of an existing issue in Buddy Project #2.
+This workflow has one write capability: update the Status field of an existing issue in [Buddy-presenter organization Project #2](https://github.com/orgs/Buddy-presenter/projects/2). The original personal project is not updated.
 
 ## Rules
 - Only process the explicit PR from the event (or the required manual pr_number input).
@@ -25,8 +25,10 @@ Disable the competing Pull request linked to issue → In Progress rule: it does
 Do not enable other built-in rules that overwrite these review statuses.
 
 ## Credentials and checks
-Repository PROJECT_TOKEN (classic project scope) is required. It reads this public repository and writes Project Status only. Same-repository PR events run pinned inline code without checkout; fork events skip. To reconcile a fork PR after merge of this fix, manually dispatch with its PR number.
+Repository PROJECT_TOKEN (classic project scope) is required. It must have access to the Buddy-presenter organization project (including organization authorization if required). It reads this public repository and writes Project Status only. Same-repository PR events run pinned inline code without checkout; fork events skip. To reconcile a fork PR after merge of this fix, manually dispatch with its PR number.
 Run node scripts/test_project_status.cjs. Tests cover review transitions, canceled requests, closed/Done guards, plain mentions, mixed/paginated cards, and the restricted write API.
+
+The destination is selected with the GraphQL organization lookup, not a personal-user lookup. PR assignees do not affect review status; active review requests drive Waiting for review. After deployment, verify the run logs name the expected issue and status on the organization project.
 
 ## Investigation
 The audited main script from merged PR #58 had no assignment or issue-state writes. Issue #2's reopening at 2026-10-13 15:58 UTC predates #58's workflow creation and merge. The reviewed #59 assignment event records Lahhamix as actor. These observations do not prove every reported incident has the same cause; they do rule out those changes being performed by this script's mutation.

@@ -51,14 +51,14 @@ jobs:
             }
             const page = "pageInfo { hasNextPage endCursor }";
             const projectResult = await github.graphql(`query {
-              user(login:"HusseinMoukalled") { projectV2(number:2) {
+              organization(login:"Buddy-presenter") { projectV2(number:2) {
                 id fields(first:100) { nodes { ... on ProjectV2SingleSelectField {
                   id name options { id name }
                 } } pageInfo { hasNextPage } }
               } }
             }`);
-            const project = projectResult.user?.projectV2;
-            if (!project) throw new Error("Project 2 is unavailable to PROJECT_TOKEN.");
+            const project = projectResult.organization?.projectV2;
+            if (!project) throw new Error("Buddy-presenter organization Project 2 is unavailable to PROJECT_TOKEN.");
             if (project.fields.pageInfo.hasNextPage) throw new Error("Too many project fields.");
             const field = project.fields.nodes.find(f => f.name === "Status");
             const option = name => {
