@@ -101,7 +101,9 @@ Pricing sources: [VPC](https://aws.amazon.com/vpc/pricing/),
    tag, and retain build provenance plus the resolved image digest. Apply that digest with
    services stopped. Never use a mutable tag or a production repository image.
 4. Run the operator-only bootstrap task and require exit code zero. Run migration twice
-   and require zero each time. Never print the master/scoped database passwords.
+   and require zero each time. Set `PGSSLROOTCERT` to the container's RDS-inclusive CA
+   bundle for asyncpg's `verify-full` mode; `SSL_CERT_FILE` alone does not configure
+   asyncpg's libpq-compatible root-certificate lookup. Never print database passwords.
 5. Start the API, require ECS stability and exact running definition/count, then verify
    `deployment.api_url` from Terraform, using its trusted certificate without TLS bypasses.
 6. Populate protected GitHub variables using `deployment_configuration` and public identity

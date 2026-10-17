@@ -32,6 +32,7 @@ locals {
     { name = "BUDDY_DATA_BUCKET", value = aws_s3_bucket.private["data"].id },
     { name = "BUDDY_PROCESSING_QUEUE_URL", value = aws_sqs_queue.processing.url },
     { name = "SSL_CERT_FILE", value = "/etc/ssl/certs/ca-certificates.crt" },
+    { name = "PGSSLROOTCERT", value = "/etc/ssl/certs/ca-certificates.crt" },
   ]
   images = merge(var.api_image == null ? {} : { api = var.api_image, migration = var.api_image }, var.worker_image == null ? {} : { worker = var.worker_image })
 }
