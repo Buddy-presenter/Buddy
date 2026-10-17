@@ -49,8 +49,9 @@ Environment overrides remain available for operators/development. Passwords and 
 stay in the managed browser UI, never in Buddy's widgets, API, logs or database.
 
 Windows installation registers the `org.buddy.desktop` URL protocol under HKCU, without
-administrator rights. macOS packages declare it in CFBundleURLTypes and are re-signed
-after metadata generation, before notarization. Windows launches a second process that
+administrator rights and notifies Windows that protocol associations changed. macOS
+packages declare it in CFBundleURLTypes and are re-signed after metadata generation,
+before notarization. Windows launches a second process that
 forwards the callback to the existing instance over a user-only named pipe. macOS sends
 QFileOpenEvent to the application. Unix-domain IPC uses a private user-owned directory;
 there is no HTTP listener. Source-only runs cannot register themselves with the OS:

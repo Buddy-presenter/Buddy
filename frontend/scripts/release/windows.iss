@@ -5,6 +5,7 @@ AppVersion={#AppVersion}
 DefaultDirName={localappdata}\Programs\Buddy
 DefaultGroupName=Buddy
 PrivilegesRequired=lowest
+ChangesAssociations=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir={#OutputDirectory}
