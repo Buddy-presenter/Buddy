@@ -44,7 +44,9 @@ One parser runs at a time per API process to respect the staging API's 1-GiB mem
 The transfer deadline includes waiting for that parser. Cancellation drains any in-flight
 bounded parser/S3 call before removing its temporary source or starting byte cleanup;
 this drain may extend the response deadline by that call's remaining duration. S3 calls
-have 3-second connect/15-second read timeouts and no automatic retries.
+have 3-second connect/15-second read timeouts and no automatic retries. A version-cleanup
+pass has a 30-second work budget plus any current SDK call's remaining duration; unfinished
+cleanup remains durable and is retried rather than holding a request indefinitely.
 
 Account quota includes accepted source bytes and pending/receiving/cleanup reservations.
 Reservations consume upload slots before request bodies are read. A PostgreSQL transaction

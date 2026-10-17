@@ -7,6 +7,7 @@ import io
 import threading
 import zipfile
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from uuid import uuid4
 
 import boto3
@@ -17,6 +18,7 @@ from pydantic import ValidationError
 
 from buddy_api.app import create_app
 from buddy_api.config import ConfigurationError, Settings
+from buddy_api.uploads import storage as storage_module
 from buddy_api.uploads.config import UploadSettings
 from buddy_api.uploads.contracts import PPTX_TYPE, UploadError, UploadMetadata
 from buddy_api.uploads.service import blocking
@@ -233,6 +235,37 @@ def test_cancellation_waits_for_inflight_work_before_cleanup():
             await task
 
     asyncio.run(scenario())
+
+
+def test_cleanup_deadline_defers_remaining_versions_without_unbounded_calls(monkeypatch):
+    clock = iter([0, 0, 31])
+    monkeypatch.setattr(storage_module, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+    client = boto3.client(
+        "s3",
+        region_name="eu-central-1",
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",
+    )
+    key = "sources/private/original.pptx"
+    with Stubber(client) as stub:
+        stub.add_response(
+            "list_object_versions",
+            {
+                "Versions": [{"Key": key, "VersionId": "remaining"}],
+                "IsTruncated": False,
+            },
+            {
+                "Bucket": CONFIG.bucket,
+                "ExpectedBucketOwner": "123456789012",
+                "Prefix": key,
+                "MaxKeys": 100,
+            },
+        )
+        with pytest.raises(UploadError) as error:
+            SourceStorage(CONFIG, client).remove(key)
+        assert error.value.code == "cleanup_pending"
+        stub.assert_no_pending_responses()
+    client.close()
 
 
 def test_settings_fail_closed_and_disabled_uploads_do_not_need_credentials():

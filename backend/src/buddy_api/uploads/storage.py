@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import time
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -77,9 +78,12 @@ class SourceStorage:
 
     def remove(self, key: str) -> None:
         try:
+            deadline = time.monotonic() + 30
             # The bucket is versioned: a plain DeleteObject would leave source bytes
             # behind a delete marker. Delete all versions/markers for this exact key.
             for _ in range(16):
+                if time.monotonic() >= deadline:
+                    raise TimeoutError
                 listing = self.client().list_object_versions(
                     **self.bucket_arguments,
                     Prefix=key,
@@ -96,6 +100,8 @@ class SourceStorage:
                         raise ValueError("Ambiguous cleanup listing")
                     return
                 for version in versions:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError
                     self.client().delete_object(
                         **self.bucket_arguments,
                         Key=key,
