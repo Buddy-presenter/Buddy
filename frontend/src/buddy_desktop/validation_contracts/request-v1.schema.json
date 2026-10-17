@@ -1,0 +1,60 @@
+{
+  "$defs": {
+    "Digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "Identifier": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "\\S",
+      "type": "string"
+    },
+    "Profile": {
+      "enum": [
+        "wide-1x",
+        "standard-1x",
+        "portrait-1x",
+        "wide-2x"
+      ],
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "additionalProperties": true,
+      "title": "Action",
+      "type": "object"
+    },
+    "deck_id": {
+      "format": "uuid",
+      "title": "Deck Id",
+      "type": "string"
+    },
+    "profile": {
+      "$ref": "#/$defs/Profile",
+      "default": "wide-1x"
+    },
+    "schema_version": {
+      "const": "buddy.action-validation-request.v1",
+      "default": "buddy.action-validation-request.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_revision": {
+      "$ref": "#/$defs/Identifier"
+    },
+    "source_sha256": {
+      "$ref": "#/$defs/Digest"
+    }
+  },
+  "required": [
+    "action",
+    "deck_id",
+    "source_revision",
+    "source_sha256"
+  ],
+  "title": "ProcessRequest",
+  "type": "object"
+}

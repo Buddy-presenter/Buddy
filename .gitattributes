@@ -1,0 +1,2 @@
+# Keep PDF fixture offsets and checksums identical on Windows and macOS.
+*.pdf binary

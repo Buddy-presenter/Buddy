@@ -2,12 +2,13 @@
 
 import asyncio
 import base64
+import hashlib
 import time
 from pathlib import Path
 from typing import Any, Protocol, cast
 
 from buddy_api.uploads.config import UploadSettings
-from buddy_api.uploads.contracts import PPTX_TYPE, UploadError
+from buddy_api.uploads.contracts import PPTX_TYPE, SOURCE_TYPES, UploadError
 
 
 class S3Client(Protocol):
@@ -16,6 +17,7 @@ class S3Client(Protocol):
     def delete_object(self, **kwargs: Any) -> dict[str, Any]: ...
     def head_bucket(self, **kwargs: Any) -> dict[str, Any]: ...
     def close(self) -> None: ...
+    def get_object(self, **kwargs: Any) -> dict[str, Any]: ...
 
 
 class SourceStorage:
@@ -47,7 +49,16 @@ class SourceStorage:
             "ExpectedBucketOwner": self.settings.kms_key.split(":")[4],
         }
 
-    def put(self, key: str, path: Path, *, size: int, sha256: str, revision: str) -> str:
+    def put(
+        self,
+        key: str,
+        path: Path,
+        *,
+        size: int,
+        sha256: str,
+        revision: str,
+        content_type: str = PPTX_TYPE,
+    ) -> str:
         try:
             with path.open("rb") as stream:
                 result = self.client().put_object(
@@ -55,7 +66,7 @@ class SourceStorage:
                     Key=key,
                     Body=stream,
                     ContentLength=size,
-                    ContentType=PPTX_TYPE,
+                    ContentType=content_type,
                     ChecksumSHA256=base64.b64encode(bytes.fromhex(sha256)).decode(),
                     ServerSideEncryption="aws:kms",
                     SSEKMSKeyId=self.settings.kms_key,
@@ -112,6 +123,45 @@ class SourceStorage:
             raise UploadError(
                 503, "cleanup_pending", "File cleanup is pending; retry later.", 30
             ) from None
+
+    def read(
+        self,
+        key: str,
+        *,
+        version: str,
+        size: int,
+        sha256: str,
+        source_format: str,
+        content_type: str | None = None,
+        max_bytes: int | None = None,
+    ) -> bytes:
+        """Fetch only an authorized immutable revision; never return unchecked bytes."""
+        body = None
+        try:
+            if (
+                not 1
+                <= size
+                <= (max_bytes if max_bytes is not None else self.settings.max_bytes)
+                <= 64 * 1024 * 1024
+            ):
+                raise ValueError
+            result = self.client().get_object(**self.bucket_arguments, Key=key, VersionId=version)
+            body = result["Body"]
+            if result["ContentLength"] != size or result["ContentType"] != (
+                content_type or SOURCE_TYPES[source_format]
+            ):
+                raise ValueError
+            content = body.read(size + 1)
+            if len(content) != size or hashlib.sha256(content).hexdigest() != sha256:
+                raise ValueError
+            return bytes(content)
+        except Exception:
+            raise UploadError(
+                503, "source_unavailable", "The saved presentation is unavailable."
+            ) from None
+        finally:
+            if body is not None:
+                body.close()
 
     def check(self) -> None:
         try:

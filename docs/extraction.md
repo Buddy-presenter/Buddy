@@ -1,4 +1,8 @@
-# Bounded PPTX extraction (#9)
+# Bounded presentation extraction (#9, #10)
+
+PDF page metadata inspection is also available; see [PDF presentations](pdf-presentations.md) for format
+selection, page IDs and page dimensions. PDF text and text positions are not extracted.
+The PPTX-specific behavior below remains unchanged.
 
 This backend-only stage consumes a validated local PPTX path or binary stream plus an
 immutable source revision. It does not fetch storage objects, run a queue, render slides,

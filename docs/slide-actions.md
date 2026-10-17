@@ -3,7 +3,8 @@
 Issue #47 provides a reusable production PySide6 executor and raster presentation surface.
 It implements `next_slide`, `previous_slide`, `go_to_slide`, `zoom_region`, `reset_view`
 and the requester-approved sixth command, `highlight_region`. Buddy's Present workspace
-provides local file opening, rectangle selection and buttons for manual testing. It does
+provides local PDF/manifest opening, rectangle selection and buttons for manual testing.
+[PDF presentations](pdf-presentations.md) documents native PDF inputs and Library wiring. It does
 not need an account, converter, semantic graph, generated analysis, live session,
 microphone, OS automation or model. Library/session wiring remains with
 the corresponding later issues. The persisted input is a manifest plus image files;

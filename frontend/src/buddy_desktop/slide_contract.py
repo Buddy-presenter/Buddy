@@ -101,6 +101,8 @@ class Manifest:
     render_id: str
     slides: tuple[Slide, ...]
     root: Path
+    pdf_content: bytes | None = None
+    account_bound: bool = False
 
     def index(self, slide_id: str) -> int:
         for index, slide in enumerate(self.slides):

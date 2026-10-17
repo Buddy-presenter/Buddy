@@ -1,0 +1,223 @@
+{
+  "$defs": {
+    "Digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "Identifier": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "\\S",
+      "type": "string"
+    },
+    "Profile": {
+      "enum": [
+        "wide-1x",
+        "standard-1x",
+        "portrait-1x",
+        "wide-2x"
+      ],
+      "type": "string"
+    },
+    "Region": {
+      "additionalProperties": false,
+      "properties": {
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "number"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "number"
+        },
+        "x": {
+          "minimum": 0,
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "minimum": 0,
+          "title": "Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "title": "Region",
+      "type": "object"
+    },
+    "Snapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "dpr": {
+          "exclusiveMinimum": 0,
+          "maximum": 2,
+          "title": "Dpr",
+          "type": "number"
+        },
+        "height": {
+          "maximum": 960,
+          "minimum": 1,
+          "title": "Height",
+          "type": "integer"
+        },
+        "highlight": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Region"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "offset_x": {
+          "title": "Offset X",
+          "type": "number"
+        },
+        "offset_y": {
+          "title": "Offset Y",
+          "type": "number"
+        },
+        "region": {
+          "$ref": "#/$defs/Region"
+        },
+        "scale": {
+          "exclusiveMinimum": 0,
+          "title": "Scale",
+          "type": "number"
+        },
+        "slide_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "width": {
+          "maximum": 1280,
+          "minimum": 1,
+          "title": "Width",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "slide_id",
+        "region",
+        "highlight",
+        "scale",
+        "offset_x",
+        "offset_y",
+        "width",
+        "height",
+        "dpr"
+      ],
+      "title": "Snapshot",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action_sha256": {
+      "$ref": "#/$defs/Digest"
+    },
+    "after": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Snapshot"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "before": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Snapshot"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "profile": {
+      "$ref": "#/$defs/Profile"
+    },
+    "qt_version": {
+      "$ref": "#/$defs/Identifier",
+      "default": "6.12.0"
+    },
+    "reasons": {
+      "items": {
+        "$ref": "#/$defs/Identifier"
+      },
+      "maxItems": 20,
+      "title": "Reasons",
+      "type": "array"
+    },
+    "renderer_version": {
+      "const": "pdfium-5.14.0-144dpi",
+      "default": "pdfium-5.14.0-144dpi",
+      "title": "Renderer Version",
+      "type": "string"
+    },
+    "runtime_platform": {
+      "enum": [
+        "linux",
+        "win32",
+        "darwin"
+      ],
+      "title": "Runtime Platform",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "buddy.action-validation-result.v1",
+      "default": "buddy.action-validation-result.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "semantic_verified": {
+      "const": false,
+      "default": false,
+      "title": "Semantic Verified",
+      "type": "boolean"
+    },
+    "source_revision": {
+      "$ref": "#/$defs/Identifier"
+    },
+    "source_sha256": {
+      "$ref": "#/$defs/Digest"
+    },
+    "state": {
+      "enum": [
+        "validated",
+        "rejected",
+        "needs-review"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "validator_version": {
+      "const": "qt-executor-1",
+      "default": "qt-executor-1",
+      "title": "Validator Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "state",
+    "reasons",
+    "profile",
+    "runtime_platform",
+    "source_revision",
+    "source_sha256",
+    "action_sha256"
+  ],
+  "title": "ProcessResult",
+  "type": "object"
+}

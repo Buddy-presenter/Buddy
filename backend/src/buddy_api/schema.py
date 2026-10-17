@@ -24,6 +24,36 @@ def generate_schema() -> dict[str, Any]:
 def breaking_changes(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
     """Allow additions to named maps, but conservatively reject existing contract changes."""
     failures: list[str] = []
+
+    def referenced_schemas(document: dict[str, Any], key: str) -> set[str]:
+        schemas = document.get("components", {}).get("schemas", {})
+        found: set[str] = set()
+
+        def walk(value: Any) -> None:
+            if isinstance(value, dict):
+                ref = value.get("$ref", "")
+                if ref.startswith("#/components/schemas/"):
+                    name = ref.rsplit("/", 1)[1]
+                    if name not in found:
+                        found.add(name)
+                        walk(schemas.get(name, {}))
+                for child in value.values():
+                    walk(child)
+            elif isinstance(value, list):
+                for child in value:
+                    walk(child)
+
+        for operations in document.get("paths", {}).values():
+            for operation in operations.values():
+                if isinstance(operation, dict):
+                    walk(operation.get(key, {}))
+        return found
+
+    # Widening accepted request values is compatible, but never widen response enums
+    # (old clients may exhaustively match them), or schemas shared with responses.
+    input_only = (
+        referenced_schemas(before, "requestBody") & referenced_schemas(after, "requestBody")
+    ) - (referenced_schemas(before, "responses") | referenced_schemas(after, "responses"))
     map_entries = {
         "schema_map": "schema",
         "response_map": "response",
@@ -104,7 +134,27 @@ def breaking_changes(before: dict[str, Any], after: dict[str, Any]) -> list[str]
                 key in DOCUMENTATION_KEYS or key.startswith("x-")
             )
 
+        parts = path.split("/")
+        request_value = (
+            len(parts) >= 4 and parts[1:3] == ["components", "schemas"] and parts[3] in input_only
+        )
         if isinstance(old, dict) and isinstance(new, dict):
+            if context == "schema" and request_value:
+                if (
+                    type(old.get("minLength")) is int
+                    and type(new.get("minLength")) is int
+                    and 0 <= new["minLength"] <= old["minLength"]
+                ):
+                    old = {**old, "minLength": new["minLength"]}
+                if "const" in old and "enum" in new and old["const"] in new["enum"]:
+                    old = {**old, "enum": new["enum"]}
+                    del old["const"]
+                elif (
+                    "enum" in old
+                    and "enum" in new
+                    and all(value in new["enum"] for value in old["enum"])
+                ):
+                    old = {**old, "enum": new["enum"]}
             for key, value in old.items():
                 if annotation(key):
                     continue

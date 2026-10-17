@@ -67,6 +67,8 @@ jobs:
           BUDDY_BOOTSTRAP_TEST: 'true'
         run: python -m pytest -p no:pytest-qt infra/tests
       - run: docker build -f infra/container/Dockerfile -t buddy-api:ci .
+      - name: Execute the packaged PDF validator without networking
+        run: python infra/container/smoke_validator.py --image buddy-api:ci
       - name: Start the real read-only API container
         run: >-
           docker run -d --name buddy-api-ci --read-only --cap-drop=ALL

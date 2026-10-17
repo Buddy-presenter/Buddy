@@ -90,6 +90,11 @@ opaque artifact UUIDs, kind and SHA-256, never storage keys. The future validato
 owner must resolve evidence under the same owner and retain actual artifacts; a reference
 alone is not proof of visual correctness. This issue does not run the visual validator.
 
+The PDF [action validator](action-validation.md) produces owner-scoped standalone
+execution reports and private evidence. It does not automatically append analysis-action
+validation history or publish an analysis. The later pipeline must explicitly bind a
+matching report's source/action/renderer/profile to this contract.
+
 Only trusted `record_validation(owner_id=..., result=...)` appends results. Validated needs
 evidence and no failure reasons; rejected/needs-review needs reasons. Validation IDs retry
 idempotently only with identical content. Stale hashes/version/profile reject. History

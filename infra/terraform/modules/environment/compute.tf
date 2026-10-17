@@ -32,6 +32,7 @@ locals {
     { name = "BUDDY_DATA_BUCKET", value = aws_s3_bucket.private["data"].id },
     { name = "BUDDY_DATA_KMS_KEY_ARN", value = aws_kms_key.data.arn },
     { name = "BUDDY_UPLOADS_ENABLED", value = "true" },
+    { name = "BUDDY_VALIDATOR_PYTHON", value = "/opt/buddy-validator/bin/python" },
     { name = "BUDDY_PROCESSING_QUEUE_URL", value = aws_sqs_queue.processing.url },
     { name = "SSL_CERT_FILE", value = "/etc/ssl/certs/ca-certificates.crt" },
     { name = "PGSSLROOTCERT", value = "/etc/ssl/certs/ca-certificates.crt" },
@@ -44,7 +45,7 @@ resource "aws_ecs_task_definition" "service" {
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
   cpu                      = each.key == "worker" ? 1024 : 512
-  memory                   = each.key == "worker" ? 2048 : 1024
+  memory                   = each.key == "migration" ? 1024 : 2048
   execution_role_arn       = aws_iam_role.execution[each.key].arn
   task_role_arn            = aws_iam_role.task[each.key].arn
   volume {
