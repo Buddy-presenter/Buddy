@@ -291,10 +291,7 @@ class Reader:
             )
         if self.package.external_links:
             self.warn("external_links_not_followed")
-        if any(
-            "/embeddings/" in n or n.lower().endswith("vbaproject.bin")
-            for n in self.package.zip.namelist()
-        ):
+        if self.package.embedded_material:
             self.warn("embedded_material_not_executed")
         self.warn("visual_fidelity_not_rendered")
         return Extraction(
