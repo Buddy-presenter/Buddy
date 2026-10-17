@@ -91,6 +91,7 @@ def library_router() -> APIRouter:
             AnalysisVersion.deck_id == Deck.id,
             AnalysisVersion.owner_id == principal.id,
             AnalysisVersion.job_id == ProcessingJob.id,
+            AnalysisVersion.publication == "published",
         )
         assets = exists().where(
             RenderedAsset.deck_id == Deck.id, RenderedAsset.owner_id == principal.id

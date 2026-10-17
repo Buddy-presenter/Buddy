@@ -44,11 +44,13 @@ def library_api(migrated_database, monkeypatch, api_client_factory):
                         ]
                         job.attempts = 2
                         if index == 4:
-                            await repos.analyses.create(
+                            from backend.tests.support.analysis import create
+
+                            await create(
+                                repos,
                                 owner_id=owner.id,
                                 deck_id=deck.id,
                                 version=1,
-                                graph={"private": "never return"},
                                 job_id=job.id,
                             )
                             session.add(

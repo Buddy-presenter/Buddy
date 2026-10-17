@@ -11,12 +11,16 @@ from buddy_api.persistence.engine import create_engine
 from buddy_api.persistence.errors import PersistenceConflict, PersistenceUnavailable
 from buddy_api.persistence.migration_config import migration_heads
 from buddy_api.persistence.models import (
+    ActionValidation,
+    AnalysisSlide,
     AnalysisVersion,
     Deck,
     DeckExtraction,
+    LegacyAnalysisPayload,
     PresentationSession,
     ProcessingJob,
     RenderedAsset,
+    SlideAction,
     User,
 )
 from buddy_api.persistence.repositories import Repositories
@@ -62,6 +66,10 @@ class Database:
                     PresentationSession.id,
                     RenderedAsset.id,
                     DeckExtraction.id,
+                    AnalysisSlide.id,
+                    SlideAction.id,
+                    ActionValidation.id,
+                    LegacyAnalysisPayload.analysis_id,
                 ):
                     await connection.execute(select(identifier).limit(0))
         except (SQLAlchemyError, OSError, TimeoutError):

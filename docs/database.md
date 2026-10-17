@@ -80,7 +80,7 @@ Without a database URL, development/test liveness remains available; readiness i
 Production and all remote database connections require `sslmode=verify-full` and
 system-trusted server certificates; disabling TLS is allowed only for loopback development.
 Readiness is 200 only after application startup, connectivity, current packaged migration
-head and existence of all five record tables are verified. It reads no private rows.
+head and existence of all required record tables are verified. It reads no private rows.
 Unmigrated/outdated/unavailable databases produce the shared redacted 503 envelope while
 `/health` stays live. Shutdown disposes the pool; probes are asynchronous and cancellable.
 
@@ -91,7 +91,7 @@ Unmigrated/outdated/unavailable databases produce the shared redacted 503 envelo
 | User | UUID, unique nonempty external identity subject, UTC creation time. Identity-provider selection/login remain #5. |
 | Deck | UUID, owner, nonempty title, optional private source-object key, UTC creation time. No object is fabricated or uploaded here. |
 | Processing job | Owner/deck, pending/running/succeeded/failed status and nonnegative attempts. Processing remains its own workflow. |
-| Analysis version | Owner/deck, optional matching job, positive per-deck unique version, explicit JSONB graph payload. Graph validation belongs to #12; an initial payload is never invented. |
+| Analysis version | Owner/deck/job/extraction, immutable version provenance, presentation summary and publication state. Related records store slide summaries, content actions and validation history; see [analysis](analysis.md). Historical untyped payloads are archived and require reprocessing. |
 | Presentation session | Owner/deck, pinned matching analysis version, created/active/ended status and nonnegative state version. No raw audio/transcript persistence. |
 
 All children have database-enforced owner/deck consistency. Deletion is restricted until
@@ -121,7 +121,7 @@ automatically. `check` must pass after upgrade.
 Provisioning, backups/encryption at rest, certificate/secret rotation, deployment and
 deletion policies remain #27/#26/#35/#38 release requirements. Require private network
 access and a non-superuser runtime role. Use a separate DDL-owning migration identity.
-Grant runtime only schema USAGE and SELECT/INSERT/UPDATE/DELETE on the five record tables,
+Grant runtime only schema USAGE and the necessary record-table operations,
 plus SELECT on `alembic_version`; grant no schema CREATE, role management or migration DDL.
 The runtime needs no sequence grants because IDs are application-generated UUIDs.
 Apply appropriate default privileges for later migrations. Keep credentials in the

@@ -77,6 +77,7 @@ class DeckExtraction(OwnedRecord):
             ["deck_id", "owner_id"], ["decks.id", "decks.owner_id"], ondelete="RESTRICT"
         ),
         UniqueConstraint("deck_id", "source_revision", "extractor_version"),
+        UniqueConstraint("id", "deck_id", "owner_id"),
         CheckConstraint("length(source_revision) > 0", name="source_revision_nonempty"),
         CheckConstraint("source_sha256 ~ '^[0-9a-f]{64}$'", name="source_sha256"),
         CheckConstraint("extractor_version = '1'", name="extractor_version"),
@@ -117,11 +118,125 @@ class AnalysisVersion(OwnedRecord):
         UniqueConstraint("id", "deck_id", "owner_id"),
         UniqueConstraint("deck_id", "version"),
         CheckConstraint("version > 0", name="version_positive"),
+        ForeignKeyConstraint(
+            ["extraction_id", "deck_id", "owner_id"],
+            ["deck_extractions.id", "deck_extractions.deck_id", "deck_extractions.owner_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "publication IN ('legacy','partial','awaiting_validation','published')",
+            name="publication",
+        ),
+        CheckConstraint(
+            "(publication = 'legacy' AND provenance IS NULL AND content_sha256 IS NULL) OR "
+            "(publication <> 'legacy' AND provenance IS NOT NULL AND content_sha256 IS NOT NULL "
+            "AND extraction_id IS NOT NULL AND job_id IS NOT NULL)",
+            name="typed_lineage",
+        ),
     )
     deck_id: Mapped[UUID] = mapped_column(index=True)
     job_id: Mapped[UUID | None] = mapped_column()
     version: Mapped[int] = mapped_column()
-    graph: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    extraction_id: Mapped[UUID | None] = mapped_column()
+    provenance: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    content_sha256: Mapped[str | None] = mapped_column(String(64))
+    publication: Mapped[str] = mapped_column(String(24), server_default="legacy")
+    summary_status: Mapped[str] = mapped_column(String(16), server_default="unavailable")
+    summary_text: Mapped[str | None] = mapped_column()
+    summary_reason: Mapped[str | None] = mapped_column(String(512))
+
+
+class LegacyAnalysisPayload(Base):
+    """Migration-only archive; never interpreted or returned as current analysis."""
+
+    __tablename__ = "legacy_analysis_payloads"
+    analysis_id: Mapped[UUID] = mapped_column(
+        ForeignKey("analysis_versions.id", ondelete="RESTRICT"), primary_key=True
+    )
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
+
+class AnalysisSlide(OwnedRecord):
+    __tablename__ = "analysis_slides"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["analysis_id", "deck_id", "owner_id"],
+            ["analysis_versions.id", "analysis_versions.deck_id", "analysis_versions.owner_id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("analysis_id", "slide_id"),
+        UniqueConstraint("analysis_id", "position", name="uq_analysis_slides_position"),
+        UniqueConstraint("id", "analysis_id", "deck_id", "owner_id"),
+        CheckConstraint("position >= 0 AND position < 500", name="position"),
+        CheckConstraint(
+            "summary_status IN ('pending','available','unavailable')", name="summary_status"
+        ),
+    )
+    analysis_id: Mapped[UUID] = mapped_column(index=True)
+    deck_id: Mapped[UUID] = mapped_column()
+    slide_id: Mapped[str] = mapped_column(String(128))
+    position: Mapped[int] = mapped_column()
+    summary_status: Mapped[str] = mapped_column(String(16))
+    summary_text: Mapped[str | None] = mapped_column()
+    summary_reason: Mapped[str | None] = mapped_column(String(512))
+
+
+class SlideAction(OwnedRecord):
+    __tablename__ = "slide_actions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["slide_record_id", "analysis_id", "deck_id", "owner_id"],
+            [
+                "analysis_slides.id",
+                "analysis_slides.analysis_id",
+                "analysis_slides.deck_id",
+                "analysis_slides.owner_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("analysis_id", "instance_id"),
+        UniqueConstraint("slide_record_id", "position"),
+        UniqueConstraint("id", "analysis_id", "deck_id", "owner_id"),
+        CheckConstraint("action_type IN ('zoom_region','highlight_region')", name="content_type"),
+        CheckConstraint("position >= 0 AND position < 100", name="position"),
+    )
+    slide_record_id: Mapped[UUID] = mapped_column()
+    analysis_id: Mapped[UUID] = mapped_column(index=True)
+    deck_id: Mapped[UUID] = mapped_column()
+    instance_id: Mapped[str] = mapped_column(String(128))
+    position: Mapped[int] = mapped_column()
+    catalog_version: Mapped[str] = mapped_column(String(16))
+    action_type: Mapped[str] = mapped_column(String(32))
+    purpose: Mapped[str] = mapped_column(String(512))
+    parameters: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    content_sha256: Mapped[str] = mapped_column(String(64))
+
+
+class ActionValidation(OwnedRecord):
+    __tablename__ = "action_validations"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["action_id", "analysis_id", "deck_id", "owner_id"],
+            [
+                "slide_actions.id",
+                "slide_actions.analysis_id",
+                "slide_actions.deck_id",
+                "slide_actions.owner_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("action_id", "sequence"),
+        CheckConstraint("sequence >= 0", name="sequence"),
+        CheckConstraint(
+            "state IN ('candidate','validated','rejected','needs-review')", name="state"
+        ),
+    )
+    action_id: Mapped[UUID] = mapped_column(index=True)
+    analysis_id: Mapped[UUID] = mapped_column(index=True)
+    deck_id: Mapped[UUID] = mapped_column()
+    sequence: Mapped[int] = mapped_column()
+    state: Mapped[str] = mapped_column(String(16))
+    document: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
 
 class PresentationSession(OwnedRecord):

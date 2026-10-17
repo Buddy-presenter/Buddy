@@ -1,0 +1,127 @@
+{
+  "$defs": {
+    "Digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "EvidenceReference": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "format": "uuid",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "executor_result",
+            "before_image",
+            "after_image",
+            "report"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "sha256"
+      ],
+      "title": "EvidenceReference",
+      "type": "object"
+    },
+    "Identifier": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "\\S",
+      "type": "string"
+    },
+    "ValidationState": {
+      "enum": [
+        "candidate",
+        "validated",
+        "rejected",
+        "needs-review"
+      ],
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "buddy.validation.v1",
+      "default": "buddy.validation.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "validation_id": {
+      "format": "uuid",
+      "title": "Validation Id",
+      "type": "string"
+    },
+    "analysis_id": {
+      "format": "uuid",
+      "title": "Analysis Id",
+      "type": "string"
+    },
+    "analysis_sha256": {
+      "$ref": "#/$defs/Digest"
+    },
+    "instance_id": {
+      "$ref": "#/$defs/Identifier"
+    },
+    "action_sha256": {
+      "$ref": "#/$defs/Digest"
+    },
+    "validator_version": {
+      "$ref": "#/$defs/Identifier"
+    },
+    "renderer_version": {
+      "$ref": "#/$defs/Identifier"
+    },
+    "display_profile": {
+      "$ref": "#/$defs/Identifier"
+    },
+    "state": {
+      "$ref": "#/$defs/ValidationState"
+    },
+    "reasons": {
+      "default": [],
+      "items": {
+        "maxLength": 512,
+        "minLength": 1,
+        "pattern": "\\S",
+        "type": "string"
+      },
+      "maxItems": 20,
+      "title": "Reasons",
+      "type": "array"
+    },
+    "evidence": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EvidenceReference"
+      },
+      "maxItems": 20,
+      "title": "Evidence",
+      "type": "array"
+    }
+  },
+  "required": [
+    "validation_id",
+    "analysis_id",
+    "analysis_sha256",
+    "instance_id",
+    "action_sha256",
+    "validator_version",
+    "renderer_version",
+    "display_profile",
+    "state"
+  ],
+  "title": "ValidationInput",
+  "type": "object"
+}

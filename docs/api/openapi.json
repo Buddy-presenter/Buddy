@@ -32,6 +32,256 @@
         "title": "AccountResponse",
         "type": "object"
       },
+      "ActionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ContentAction"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ValidationState"
+          },
+          "usable": {
+            "title": "Usable",
+            "type": "boolean"
+          },
+          "validation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ValidationInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "action",
+          "state",
+          "usable",
+          "validation"
+        ],
+        "title": "ActionResult",
+        "type": "object"
+      },
+      "AnalysisInput": {
+        "additionalProperties": false,
+        "properties": {
+          "catalog_version": {
+            "const": "1.1",
+            "default": "1.1",
+            "title": "Catalog Version",
+            "type": "string"
+          },
+          "display_profile": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "extraction_id": {
+            "format": "uuid",
+            "title": "Extraction Id",
+            "type": "string"
+          },
+          "extraction_schema_version": {
+            "const": "buddy.extraction.v1",
+            "default": "buddy.extraction.v1",
+            "title": "Extraction Schema Version",
+            "type": "string"
+          },
+          "extractor_version": {
+            "const": "1",
+            "default": "1",
+            "title": "Extractor Version",
+            "type": "string"
+          },
+          "job_id": {
+            "format": "uuid",
+            "title": "Job Id",
+            "type": "string"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/Manifest"
+          },
+          "presentation_summary": {
+            "$ref": "#/components/schemas/Summary"
+          },
+          "renderer_version": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "schema_version": {
+            "const": "buddy.analysis.v1",
+            "default": "buddy.analysis.v1",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "slides": {
+            "items": {
+              "$ref": "#/components/schemas/SlideOutput"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Slides",
+            "type": "array"
+          },
+          "source_revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "title": "Source Revision",
+            "type": "string"
+          },
+          "source_sha256": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "validator_version": {
+            "$ref": "#/components/schemas/Identifier"
+          }
+        },
+        "required": [
+          "extraction_id",
+          "source_revision",
+          "source_sha256",
+          "job_id",
+          "renderer_version",
+          "display_profile",
+          "validator_version",
+          "manifest",
+          "presentation_summary",
+          "slides"
+        ],
+        "title": "AnalysisInput",
+        "type": "object"
+      },
+      "AnalysisResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AnalysisResult"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "request_id"
+        ],
+        "title": "AnalysisResponse",
+        "type": "object"
+      },
+      "AnalysisResult": {
+        "additionalProperties": false,
+        "properties": {
+          "analysis_sha256": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Digest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "deck_id": {
+            "format": "uuid",
+            "title": "Deck Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "inputs": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnalysisInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "publication": {
+            "$ref": "#/components/schemas/Publication"
+          },
+          "slides": {
+            "items": {
+              "$ref": "#/components/schemas/SlideResult"
+            },
+            "title": "Slides",
+            "type": "array"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "deck_id",
+          "version",
+          "publication",
+          "analysis_sha256",
+          "inputs",
+          "slides"
+        ],
+        "title": "AnalysisResult",
+        "type": "object"
+      },
+      "ContentAction": {
+        "additionalProperties": false,
+        "properties": {
+          "deck_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "instance_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "params": {
+            "$ref": "#/components/schemas/RegionParameters"
+          },
+          "purpose": {
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Purpose",
+            "type": "string"
+          },
+          "render_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "slide_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "type": {
+            "enum": [
+              "zoom_region",
+              "highlight_region"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "version": {
+            "const": "1.1",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "instance_id",
+          "purpose",
+          "deck_id",
+          "render_id",
+          "slide_id",
+          "type",
+          "params"
+        ],
+        "title": "ContentAction",
+        "type": "object"
+      },
       "DeckStatus": {
         "enum": [
           "uploaded",
@@ -66,6 +316,10 @@
         ],
         "title": "DependencyStatus",
         "type": "object"
+      },
+      "Digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
       },
       "ErrorData": {
         "additionalProperties": false,
@@ -130,6 +384,36 @@
         "title": "ErrorResponse",
         "type": "object"
       },
+      "EvidenceReference": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "executor_result",
+              "before_image",
+              "after_image",
+              "report"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "sha256": {
+            "$ref": "#/components/schemas/Digest"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "sha256"
+        ],
+        "title": "EvidenceReference",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -173,6 +457,12 @@
         ],
         "title": "HealthResponse",
         "type": "object"
+      },
+      "Identifier": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "\\S",
+        "type": "string"
       },
       "LegacyHealthResponse": {
         "additionalProperties": false,
@@ -294,6 +584,109 @@
         "title": "LibrarySort",
         "type": "string"
       },
+      "Manifest": {
+        "additionalProperties": false,
+        "properties": {
+          "deck_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "render_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "slides": {
+            "items": {
+              "$ref": "#/components/schemas/ManifestSlide"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Slides",
+            "type": "array"
+          },
+          "version": {
+            "const": "1.0",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "deck_id",
+          "render_id",
+          "slides"
+        ],
+        "title": "Manifest",
+        "type": "object"
+      },
+      "ManifestSlide": {
+        "additionalProperties": false,
+        "properties": {
+          "raster": {
+            "$ref": "#/components/schemas/Raster"
+          },
+          "slide_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourcePlane"
+          }
+        },
+        "required": [
+          "slide_id",
+          "source",
+          "raster"
+        ],
+        "title": "ManifestSlide",
+        "type": "object"
+      },
+      "Publication": {
+        "enum": [
+          "legacy",
+          "partial",
+          "awaiting_validation",
+          "published"
+        ],
+        "type": "string"
+      },
+      "Raster": {
+        "additionalProperties": false,
+        "properties": {
+          "height": {
+            "maximum": 8192.0,
+            "minimum": 1.0,
+            "title": "Height",
+            "type": "integer"
+          },
+          "path": {
+            "maxLength": 240,
+            "pattern": "^[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*\\.png$",
+            "title": "Path",
+            "type": "string"
+          },
+          "sha256": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "transform": {
+            "const": "scale",
+            "title": "Transform",
+            "type": "string"
+          },
+          "width": {
+            "maximum": 8192.0,
+            "minimum": 1.0,
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "width",
+          "height",
+          "transform",
+          "sha256"
+        ],
+        "title": "Raster",
+        "type": "object"
+      },
       "ReadyData": {
         "additionalProperties": false,
         "properties": {
@@ -330,6 +723,52 @@
           "request_id"
         ],
         "title": "ReadyResponse",
+        "type": "object"
+      },
+      "Region": {
+        "additionalProperties": false,
+        "properties": {
+          "height": {
+            "exclusiveMinimum": 0.0,
+            "title": "Height",
+            "type": "number"
+          },
+          "width": {
+            "exclusiveMinimum": 0.0,
+            "title": "Width",
+            "type": "number"
+          },
+          "x": {
+            "minimum": 0.0,
+            "title": "X",
+            "type": "number"
+          },
+          "y": {
+            "minimum": 0.0,
+            "title": "Y",
+            "type": "number"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "title": "Region",
+        "type": "object"
+      },
+      "RegionParameters": {
+        "additionalProperties": false,
+        "properties": {
+          "region": {
+            "$ref": "#/components/schemas/Region"
+          }
+        },
+        "required": [
+          "region"
+        ],
+        "title": "RegionParameters",
         "type": "object"
       },
       "ResourceKind": {
@@ -406,6 +845,141 @@
         "title": "ResourceUpdate",
         "type": "object"
       },
+      "SlideOutput": {
+        "additionalProperties": false,
+        "properties": {
+          "actions": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ContentAction"
+            },
+            "maxItems": 100,
+            "title": "Actions",
+            "type": "array"
+          },
+          "slide_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          }
+        },
+        "required": [
+          "slide_id",
+          "summary"
+        ],
+        "title": "SlideOutput",
+        "type": "object"
+      },
+      "SlideResult": {
+        "additionalProperties": false,
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/ActionResult"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "slide_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          }
+        },
+        "required": [
+          "slide_id",
+          "summary",
+          "actions"
+        ],
+        "title": "SlideResult",
+        "type": "object"
+      },
+      "SourcePlane": {
+        "additionalProperties": false,
+        "properties": {
+          "height": {
+            "maximum": 16384.0,
+            "minimum": 1.0,
+            "title": "Height",
+            "type": "integer"
+          },
+          "origin": {
+            "const": "top_left",
+            "title": "Origin",
+            "type": "string"
+          },
+          "units": {
+            "const": "source_pixels",
+            "title": "Units",
+            "type": "string"
+          },
+          "width": {
+            "maximum": 16384.0,
+            "minimum": 1.0,
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "width",
+          "height",
+          "units",
+          "origin"
+        ],
+        "title": "SourcePlane",
+        "type": "object"
+      },
+      "Summary": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "pattern": "\\S",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "available",
+              "unavailable"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "Summary",
+        "type": "object"
+      },
+      "Text": {
+        "maxLength": 16000,
+        "minLength": 1,
+        "pattern": "\\S",
+        "type": "string"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -445,6 +1019,91 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "ValidationInput": {
+        "additionalProperties": false,
+        "properties": {
+          "action_sha256": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "analysis_id": {
+            "format": "uuid",
+            "title": "Analysis Id",
+            "type": "string"
+          },
+          "analysis_sha256": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "display_profile": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "evidence": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/EvidenceReference"
+            },
+            "maxItems": 20,
+            "title": "Evidence",
+            "type": "array"
+          },
+          "instance_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "reasons": {
+            "default": [],
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Reasons",
+            "type": "array"
+          },
+          "renderer_version": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "schema_version": {
+            "const": "buddy.validation.v1",
+            "default": "buddy.validation.v1",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ValidationState"
+          },
+          "validation_id": {
+            "format": "uuid",
+            "title": "Validation Id",
+            "type": "string"
+          },
+          "validator_version": {
+            "$ref": "#/components/schemas/Identifier"
+          }
+        },
+        "required": [
+          "validation_id",
+          "analysis_id",
+          "analysis_sha256",
+          "instance_id",
+          "action_sha256",
+          "validator_version",
+          "renderer_version",
+          "display_profile",
+          "state"
+        ],
+        "title": "ValidationInput",
+        "type": "object"
+      },
+      "ValidationState": {
+        "enum": [
+          "candidate",
+          "validated",
+          "rejected",
+          "needs-review"
+        ],
+        "type": "string"
       },
       "VersionData": {
         "additionalProperties": false,
@@ -499,6 +1158,105 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/analyses/{identifier}": {
+      "get": {
+        "operationId": "read_api_v1_analyses__identifier__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Read",
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
     "/api/v1/auth/me": {
       "get": {
         "operationId": "account_api_v1_auth_me_get",

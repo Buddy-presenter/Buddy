@@ -37,5 +37,6 @@ complete setup, test commands, and macOS equivalents.
 - [Development and testing](docs/development.md)
 - [Deployment and release](docs/deployment.md)
 - [Authorization](docs/authorization.md)
+- [Stored summaries and slide actions](docs/analysis.md)
 - [CI and security checks](docs/ci.md)
 - [Contribution workflow](CONTRIBUTING.md)

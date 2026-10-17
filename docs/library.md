@@ -21,7 +21,7 @@ Bearer header. It uses the same live verification and persisted account resoluti
 other private resources. The server always filters by that verified owner, including
 the total and every joined job/analysis/asset record. It does not accept an owner UUID
 as authorization. Results contain only deck ID, title, creation time, derived status
-and job attempts; no storage keys, graphs, credentials or private provider errors.
+and job attempts; no storage keys, summary/action bodies, credentials or private provider errors.
 Successful responses have Cache-Control: no-store and the normal request-ID envelope.
 
 Query parameters: `search` (up to 256 characters), `sort` (`newest`, `oldest`,

@@ -1,0 +1,43 @@
+{
+  "schema_version": "buddy.analysis.v1",
+  "extraction_id": "00000000-0000-4000-8000-000000000001",
+  "extraction_schema_version": "buddy.extraction.v1",
+  "extractor_version": "1",
+  "source_revision": "fixture-v1",
+  "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "job_id": "00000000-0000-4000-8000-000000000002",
+  "catalog_version": "1.1",
+  "renderer_version": "fixture-renderer-v1",
+  "validator_version": "fixture-validator-v1",
+  "display_profile": "1920x1080-dpr1-v1",
+  "manifest": {
+    "version": "1.0",
+    "deck_id": "00000000-0000-4000-8000-000000000003",
+    "render_id": "fixture-render-v1",
+    "slides": [
+      {
+        "slide_id": "slide-a",
+        "source": {"width": 1920, "height": 1080, "units": "source_pixels", "origin": "top_left"},
+        "raster": {"path": "slide-a.png", "width": 960, "height": 540, "transform": "scale", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+      },
+      {
+        "slide_id": "slide-b",
+        "source": {"width": 1920, "height": 1080, "units": "source_pixels", "origin": "top_left"},
+        "raster": {"path": "slide-b.png", "width": 960, "height": 540, "transform": "scale", "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}
+      }
+    ]
+  },
+  "presentation_summary": {"status": "available", "text": "Synthetic fixture describing a title slide and a revenue slide.", "reason": null},
+  "slides": [
+    {
+      "slide_id": "slide-a",
+      "summary": {"status": "available", "text": "Synthetic title slide introducing quarterly results.", "reason": null},
+      "actions": [{"version": "1.1", "instance_id": "focus-title", "purpose": "Focus on the Quarterly Results title.", "deck_id": "00000000-0000-4000-8000-000000000003", "render_id": "fixture-render-v1", "slide_id": "slide-a", "type": "zoom_region", "params": {"region": {"x": 80, "y": 64, "width": 1760, "height": 200}}}]
+    },
+    {
+      "slide_id": "slide-b",
+      "summary": {"status": "available", "text": "Synthetic revenue slide with a highlighted result.", "reason": null},
+      "actions": [{"version": "1.1", "instance_id": "mark-revenue", "purpose": "Highlight the quarterly revenue figure.", "deck_id": "00000000-0000-4000-8000-000000000003", "render_id": "fixture-render-v1", "slide_id": "slide-b", "type": "highlight_region", "params": {"region": {"x": 200, "y": 300, "width": 100, "height": 40}}}]
+    }
+  ]
+}
