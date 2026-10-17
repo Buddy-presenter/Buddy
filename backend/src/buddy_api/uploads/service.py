@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import ClientDisconnect, Request
 
 from buddy_api.persistence.database import Database
-from buddy_api.persistence.models import Deck, DeckUpload
+from buddy_api.persistence.models import ActionCheck, Deck, DeckUpload
 from buddy_api.uploads.config import UploadSettings
 from buddy_api.uploads.contracts import (
     SOURCE_TYPES,
@@ -56,7 +56,7 @@ class UploadService:
         self.database = database
         self.settings = settings
         self.storage = storage
-        # The deployed API has 1 GiB; do not spawn eight 512-MiB parsers at once.
+        # Share one bounded resource slot with PDF reads and the isolated Qt validator.
         self.parser_slot = asyncio.Semaphore(1)
 
     @asynccontextmanager
@@ -119,9 +119,7 @@ class UploadService:
             }
         )
 
-    async def limits(self, session: AsyncSession, owner: UUID, size: int) -> None:
-        if size > self.settings.max_bytes:
-            raise UploadError(413, "file_too_large", "PPTX exceeds the configured file size limit.")
+    async def storage_usage(self, session: AsyncSession, owner: UUID) -> int:
         reserved = await session.scalar(
             select(func.coalesce(func.sum(DeckUpload.size_bytes), 0)).where(
                 DeckUpload.owner_id == owner,
@@ -131,7 +129,19 @@ class UploadService:
         used = await session.scalar(
             select(func.coalesce(func.sum(Deck.source_size_bytes), 0)).where(Deck.owner_id == owner)
         )
-        if int(reserved or 0) + int(used or 0) + size > self.settings.quota_bytes:
+        evidence = await session.scalar(
+            select(func.coalesce(func.sum(ActionCheck.storage_bytes), 0)).where(
+                ActionCheck.owner_id == owner
+            )
+        )
+        return int(reserved or 0) + int(used or 0) + int(evidence or 0)
+
+    async def limits(self, session: AsyncSession, owner: UUID, size: int) -> None:
+        if size > self.settings.max_bytes:
+            raise UploadError(
+                413, "file_too_large", "Presentation exceeds the configured file size limit."
+            )
+        if await self.storage_usage(session, owner) + size > self.settings.quota_bytes:
             raise UploadError(
                 413,
                 "storage_quota_exceeded",

@@ -46,7 +46,8 @@ not a general antivirus scanner or a promise of rendered visual fidelity.
 
 The existing parser also bounds ZIP entries (10000), XML part size (8 MiB), XML depth/nodes,
 objects, text and serialized output, with a 30-second/512-MiB parser process budget.
-One parser runs at a time per API process to respect the staging API's 1-GiB memory size.
+One parser runs at a time per API process; the same resource slot also bounds action
+validation and private PDF/evidence reads. The validation task template uses 2 GiB.
 The transfer deadline includes waiting for that parser. Cancellation drains any in-flight
 bounded parser/S3 call before removing its temporary source or starting byte cleanup;
 this drain may extend the response deadline by that call's remaining duration. S3 calls

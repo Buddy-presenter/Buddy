@@ -21,7 +21,10 @@ class UploadMetadataLimitMiddleware:
         if (
             scope["type"] != "http"
             or scope["method"] != "POST"
-            or scope["path"].rstrip("/") != "/api/v1/uploads"
+            or (
+                scope["path"].rstrip("/") != "/api/v1/uploads"
+                and not scope["path"].rstrip("/").endswith("/action-validations")
+            )
         ):
             await self.app(scope, receive, send)
             return
@@ -32,7 +35,9 @@ class UploadMetadataLimitMiddleware:
             message = await receive()
             if message["type"] == "http.request":
                 size += len(message.get("body", b""))
-                if size > 8192:
+                if size > (
+                    16384 if scope["path"].rstrip("/").endswith("/action-validations") else 8192
+                ):
                     raise HTTPException(413)
             return message
 

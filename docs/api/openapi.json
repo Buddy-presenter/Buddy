@@ -230,6 +230,42 @@
         "title": "AnalysisResult",
         "type": "object"
       },
+      "ArtifactReference": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "before_image",
+              "after_image",
+              "report"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "sha256": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "size_bytes": {
+            "maximum": 16777216.0,
+            "minimum": 1.0,
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "sha256",
+          "size_bytes"
+        ],
+        "title": "ArtifactReference",
+        "type": "object"
+      },
       "ContentAction": {
         "additionalProperties": false,
         "properties": {
@@ -652,6 +688,117 @@
         "title": "ManifestSlide",
         "type": "object"
       },
+      "ProcessResult": {
+        "additionalProperties": false,
+        "properties": {
+          "action_sha256": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "after": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Snapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "before": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Snapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "profile": {
+            "$ref": "#/components/schemas/Profile"
+          },
+          "qt_version": {
+            "$ref": "#/components/schemas/Identifier",
+            "default": "6.12.0"
+          },
+          "reasons": {
+            "items": {
+              "$ref": "#/components/schemas/Identifier"
+            },
+            "maxItems": 20,
+            "title": "Reasons",
+            "type": "array"
+          },
+          "renderer_version": {
+            "const": "pdfium-5.14.0-144dpi",
+            "default": "pdfium-5.14.0-144dpi",
+            "title": "Renderer Version",
+            "type": "string"
+          },
+          "runtime_platform": {
+            "enum": [
+              "linux",
+              "win32",
+              "darwin"
+            ],
+            "title": "Runtime Platform",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "buddy.action-validation-result.v1",
+            "default": "buddy.action-validation-result.v1",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "semantic_verified": {
+            "const": false,
+            "default": false,
+            "title": "Semantic Verified",
+            "type": "boolean"
+          },
+          "source_revision": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "source_sha256": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "state": {
+            "enum": [
+              "validated",
+              "rejected",
+              "needs-review"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "validator_version": {
+            "const": "qt-executor-1",
+            "default": "qt-executor-1",
+            "title": "Validator Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "reasons",
+          "profile",
+          "runtime_platform",
+          "source_revision",
+          "source_sha256",
+          "action_sha256"
+        ],
+        "title": "ProcessResult",
+        "type": "object"
+      },
+      "Profile": {
+        "enum": [
+          "wide-1x",
+          "standard-1x",
+          "portrait-1x",
+          "wide-2x"
+        ],
+        "type": "string"
+      },
       "Publication": {
         "enum": [
           "legacy",
@@ -910,6 +1057,71 @@
         "title": "SlideResult",
         "type": "object"
       },
+      "Snapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "dpr": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 2.0,
+            "title": "Dpr",
+            "type": "number"
+          },
+          "height": {
+            "maximum": 960.0,
+            "minimum": 1.0,
+            "title": "Height",
+            "type": "integer"
+          },
+          "highlight": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Region"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "offset_x": {
+            "title": "Offset X",
+            "type": "number"
+          },
+          "offset_y": {
+            "title": "Offset Y",
+            "type": "number"
+          },
+          "region": {
+            "$ref": "#/components/schemas/Region"
+          },
+          "scale": {
+            "exclusiveMinimum": 0.0,
+            "title": "Scale",
+            "type": "number"
+          },
+          "slide_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "width": {
+            "maximum": 1280.0,
+            "minimum": 1.0,
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "slide_id",
+          "region",
+          "highlight",
+          "scale",
+          "offset_x",
+          "offset_y",
+          "width",
+          "height",
+          "dpr"
+        ],
+        "title": "Snapshot",
+        "type": "object"
+      },
       "SourcePlane": {
         "additionalProperties": false,
         "properties": {
@@ -943,6 +1155,40 @@
           "origin"
         ],
         "title": "SourcePlane",
+        "type": "object"
+      },
+      "StoredResult": {
+        "additionalProperties": false,
+        "properties": {
+          "deck_id": {
+            "format": "uuid",
+            "title": "Deck Id",
+            "type": "string"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/ArtifactReference"
+            },
+            "maxItems": 3,
+            "title": "Evidence",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/components/schemas/ProcessResult"
+          }
+        },
+        "required": [
+          "id",
+          "deck_id",
+          "result",
+          "evidence"
+        ],
+        "title": "StoredResult",
         "type": "object"
       },
       "Summary": {
@@ -1284,6 +1530,43 @@
         "title": "ValidationInput",
         "type": "object"
       },
+      "ValidationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "additionalProperties": true,
+            "title": "Action",
+            "type": "object"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/Profile",
+            "default": "wide-1x"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "ValidationRequest",
+        "type": "object"
+      },
+      "ValidationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/StoredResult"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "request_id"
+        ],
+        "title": "ValidationResponse",
+        "type": "object"
+      },
       "ValidationState": {
         "enum": [
           "candidate",
@@ -1346,6 +1629,247 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/action-validations/{identifier}": {
+      "get": {
+        "operationId": "read_api_v1_action_validations__identifier__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request Entity Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Read",
+        "tags": [
+          "action-validation"
+        ]
+      }
+    },
+    "/api/v1/action-validations/{identifier}/evidence/{artifact}": {
+      "get": {
+        "operationId": "evidence_api_v1_action_validations__identifier__evidence__artifact__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Artifact",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request Entity Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Evidence",
+        "tags": [
+          "action-validation"
+        ]
+      }
+    },
     "/api/v1/analyses/{identifier}": {
       "get": {
         "operationId": "read_api_v1_analyses__identifier__get",
@@ -1644,6 +2168,145 @@
         "summary": "Listing",
         "tags": [
           "library"
+        ]
+      }
+    },
+    "/api/v1/decks/{deck_id}/action-validations": {
+      "post": {
+        "operationId": "validate_api_v1_decks__deck_id__action_validations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deck_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Deck Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request Entity Too Large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Validate",
+        "tags": [
+          "action-validation"
         ]
       }
     },

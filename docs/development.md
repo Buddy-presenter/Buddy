@@ -81,3 +81,7 @@ The reusable Qt slide surface, six-action executor, standalone input schemas and
 slide-image test/evidence commands are documented in [slide actions](slide-actions.md).
 For launching Buddy and trying every command in Present, follow the
 [manual test guide](slide-actions-manual.md). These local controls need no backend.
+
+The isolated PDF action validation API, private evidence, runtime setup and test commands
+are documented in [action validation](action-validation.md). It uses predefined actions;
+no model generation or document text extraction is required.

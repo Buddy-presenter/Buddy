@@ -124,17 +124,31 @@ class SourceStorage:
                 503, "cleanup_pending", "File cleanup is pending; retry later.", 30
             ) from None
 
-    def read(self, key: str, *, version: str, size: int, sha256: str, source_format: str) -> bytes:
+    def read(
+        self,
+        key: str,
+        *,
+        version: str,
+        size: int,
+        sha256: str,
+        source_format: str,
+        content_type: str | None = None,
+        max_bytes: int | None = None,
+    ) -> bytes:
         """Fetch only an authorized immutable revision; never return unchecked bytes."""
         body = None
         try:
-            if not 1 <= size <= self.settings.max_bytes:
+            if (
+                not 1
+                <= size
+                <= (max_bytes if max_bytes is not None else self.settings.max_bytes)
+                <= 64 * 1024 * 1024
+            ):
                 raise ValueError
             result = self.client().get_object(**self.bucket_arguments, Key=key, VersionId=version)
             body = result["Body"]
-            if (
-                result["ContentLength"] != size
-                or result["ContentType"] != SOURCE_TYPES[source_format]
+            if result["ContentLength"] != size or result["ContentType"] != (
+                content_type or SOURCE_TYPES[source_format]
             ):
                 raise ValueError
             content = body.read(size + 1)

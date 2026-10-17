@@ -108,6 +108,26 @@ class RenderedAsset(OwnedRecord):
     size_bytes: Mapped[int] = mapped_column()
 
 
+class ActionCheck(OwnedRecord):
+    __tablename__ = "action_checks"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["deck_id", "owner_id"], ["decks.id", "decks.owner_id"], ondelete="RESTRICT"
+        ),
+        UniqueConstraint("owner_id", "retry_key"),
+        CheckConstraint("status IN ('pending','complete','cleanup','failed')", name="status"),
+        CheckConstraint("storage_bytes >= 0 AND storage_bytes <= 33554432", name="storage_bytes"),
+    )
+    deck_id: Mapped[UUID] = mapped_column(index=True)
+    retry_key: Mapped[UUID] = mapped_column()
+    request_sha256: Mapped[str] = mapped_column(String(64))
+    storage_bytes: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    status: Mapped[str] = mapped_column(String(16), server_default="pending", index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    artifacts: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, server_default="[]")
+
+
 class DeckExtraction(OwnedRecord):
     __tablename__ = "deck_extractions"
     __table_args__ = (
