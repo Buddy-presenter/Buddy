@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def deployment_config(source: Path | None, *, production: bool = False) -> dict[str, str]:
     from buddy_desktop.config import validate_api_url
-    from buddy_identity.config import IdentityConfig
+    from buddy_identity.config import IdentityConfig, IdentityError
 
     if production and source is None:
         raise ValueError("Production requires an explicit public deployment configuration.")
@@ -38,7 +38,14 @@ def deployment_config(source: Path | None, *, production: bool = False) -> dict[
         raise ValueError("Deployment configuration must contain only public API/identity settings.")
     if not validate_api_url(value["BUDDY_API_URL"]).startswith("https://"):
         raise ValueError("Packaged deployments require HTTPS.")
-    IdentityConfig.from_environment(value)
+    try:
+        identity = IdentityConfig.from_environment(value)
+    except IdentityError:
+        raise ValueError(
+            "Deployment configuration requires valid public identity settings."
+        ) from None
+    if identity is None:
+        raise ValueError("Deployment configuration requires complete public identity settings.")
     staging = json.loads((ROOT / "infra/staging/public-config.json").read_text())
     if production and any(
         value[key] == staging[key]

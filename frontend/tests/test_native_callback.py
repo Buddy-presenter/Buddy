@@ -7,11 +7,12 @@ import sys
 from threading import Event
 
 import pytest
-from PySide6.QtCore import QCoreApplication, QUrl
+from PySide6.QtCore import QCoreApplication, QSettings, QUrl
 from PySide6.QtGui import QFileOpenEvent
 
 from buddy_desktop.auth import browser_code
 from buddy_desktop.native_callback import NativeCallbackServer, PendingCallback, pending_callback
+from buddy_desktop.tasks import TaskRunner
 from buddy_identity.config import CALLBACK, SIGNOUT_CALLBACK, IdentityError
 
 
@@ -106,6 +107,57 @@ assert not server.start(sys.argv[2])
         server.close()
 
 
+def test_standalone_login_worker_receives_fresh_native_callback(qapp, qtbot, tmp_path):
+    """The manual helper must pump Qt while its background OAuth wait is active."""
+    server = NativeCallbackServer(directory=tmp_path)
+    qapp.installEventFilter(server)
+    assert server.start()
+    runner = TaskRunner(qapp)
+    outcomes = []
+    runner.succeeded.connect(lambda _identifier, value: outcomes.append(("success", value)))
+    runner.failed.connect(lambda _identifier, value: outcomes.append(("failure", value)))
+    runner.submit(
+        lambda: browser_code(
+            "https://cognito.example.test/authorize",
+            "standalone-state",
+            Event(),
+            timeout=8,
+            opener=lambda _url: True,
+        )
+    )
+    process = None
+    try:
+        qtbot.waitUntil(lambda: pending_callback.attempt is not None, timeout=3000)
+        script = """
+import sys
+from pathlib import Path
+from PySide6.QtCore import QCoreApplication
+from buddy_desktop.native_callback import NativeCallbackServer
+app = QCoreApplication([])
+server = NativeCallbackServer(directory=Path(sys.argv[1]))
+assert not server.start(sys.argv[2])
+"""
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                script,
+                str(tmp_path),
+                CALLBACK + "?state=standalone-state&code=fresh-login-code",
+            ]
+        )
+        qtbot.waitUntil(lambda: bool(outcomes), timeout=8000)
+        assert outcomes == [("success", "fresh-login-code")]
+        assert process.wait(timeout=5) == 0
+    finally:
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        runner.wait_for_shutdown()
+        qapp.removeEventFilter(server)
+        server.close()
+
+
 def test_preview_public_config_matches_staging_and_macos_registration(tmp_path, monkeypatch):
     from importlib.resources import files
     from pathlib import Path
@@ -128,6 +180,50 @@ def test_preview_public_config_matches_staging_and_macos_registration(tmp_path, 
     assert "--timestamp" in calls[0] and calls[0][-1] == str(bundle)
 
 
+def test_entrypoint_uses_bundled_api_as_default_without_disabling_saved_url(tmp_path, monkeypatch):
+    import buddy_desktop.app as desktop_app
+
+    deployment = {
+        "BUDDY_API_URL": "https://staging.example.test",
+        "BUDDY_AWS_REGION": "eu-central-1",
+        "BUDDY_COGNITO_POOL_ID": "eu-central-1_TestPool",
+        "BUDDY_COGNITO_CLIENT_ID": "client123",
+        "BUDDY_COGNITO_DOMAIN": "https://buddy.auth.eu-central-1.amazoncognito.com",
+    }
+    (tmp_path / "deployment.json").write_text(json.dumps(deployment))
+    monkeypatch.setattr(desktop_app, "files", lambda _package: tmp_path)
+    for name in deployment:
+        monkeypatch.delenv(name, raising=False)
+
+    launches = []
+    monkeypatch.setattr(
+        desktop_app,
+        "run_application",
+        lambda config, *, environment_override: (
+            launches.append((config, environment_override)) or 0
+        ),
+    )
+    assert desktop_app.main() == 0
+    config, environment_override = launches[-1]
+    assert config.api_url == deployment["BUDDY_API_URL"]
+    assert not environment_override
+
+    settings = QSettings(str(tmp_path / "buddy.ini"), QSettings.Format.IniFormat)
+    settings.setValue("connection/api_url", "https://saved.example.test")
+    assert (
+        desktop_app.resolve_config(
+            config, settings, environment_override=environment_override
+        ).api_url
+        == "https://saved.example.test"
+    )
+
+    monkeypatch.setenv("BUDDY_API_URL", "https://operator.example.test")
+    assert desktop_app.main() == 0
+    config, environment_override = launches[-1]
+    assert config.api_url == "https://operator.example.test"
+    assert environment_override
+
+
 def test_production_configuration_cannot_silently_package_staging_or_localhost(tmp_path):
     from frontend.scripts.release.build_desktop import deployment_config
 
@@ -137,6 +233,19 @@ def test_production_configuration_cannot_silently_package_staging_or_localhost(t
     path = tmp_path / "public.json"
     path.write_text(json.dumps(preview))
     with pytest.raises(ValueError, match="staging"):
+        deployment_config(path, production=True)
+    path.write_text(
+        json.dumps(
+            {
+                **preview,
+                "BUDDY_AWS_REGION": "",
+                "BUDDY_COGNITO_POOL_ID": "",
+                "BUDDY_COGNITO_CLIENT_ID": "",
+                "BUDDY_COGNITO_DOMAIN": "",
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="identity"):
         deployment_config(path, production=True)
     path.write_text(json.dumps({**preview, "BUDDY_API_URL": "http://127.0.0.1:8000"}))
     with pytest.raises(ValueError, match="HTTPS"):

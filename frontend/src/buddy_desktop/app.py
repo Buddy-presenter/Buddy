@@ -18,9 +18,13 @@ from buddy_desktop.window import MainWindow
 from buddy_identity.config import IdentityError
 
 
-def resolve_config(config: AppConfig, settings: QSettings) -> AppConfig:
+def resolve_config(
+    config: AppConfig, settings: QSettings, *, environment_override: bool | None = None
+) -> AppConfig:
     """Environment takes precedence; invalid saved preferences remain recoverable."""
-    if "BUDDY_API_URL" in os.environ:
+    if environment_override is None:
+        environment_override = "BUDDY_API_URL" in os.environ
+    if environment_override:
         return config
     value = settings.value("connection/api_url")
     if isinstance(value, str):
@@ -39,22 +43,34 @@ def main() -> int:
         else files("buddy_desktop").joinpath("deployment.json")
     )
     deployment = json.loads(deployment_path.read_text())
-    added = [name for name in deployment if name not in os.environ]
+    # Identity values are consumed by AccountWidget, but the bundled API URL is a
+    # default only. Treating it as an environment override would disable the user's
+    # saved backend selection in Settings.
+    added = [name for name in deployment if name != "BUDDY_API_URL" and name not in os.environ]
+    environment_override = "BUDDY_API_URL" in os.environ
     try:
         for name in added:
             os.environ[name] = deployment[name]
-        return run_application()
+        config = AppConfig.from_environment({**deployment, **os.environ})
+        return run_application(config, environment_override=environment_override)
+    except ConfigurationError as exc:
+        print(f"Buddy configuration error: {exc}", file=sys.stderr)
+        return 2
     finally:
         for name in added:
             os.environ.pop(name, None)
 
 
-def run_application() -> int:
+def run_application(
+    config: AppConfig | None = None, *, environment_override: bool | None = None
+) -> int:
     try:
-        config = AppConfig.from_environment()
+        config = config or AppConfig.from_environment()
     except ConfigurationError as exc:
         print(f"Buddy configuration error: {exc}", file=sys.stderr)
         return 2
+    if environment_override is None:
+        environment_override = "BUDDY_API_URL" in os.environ
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
     if QApplication.instance() is not None:
         print("Buddy already has a Qt application instance.", file=sys.stderr)
@@ -77,9 +93,9 @@ def run_application() -> int:
     app.setStyleSheet(files("buddy_desktop").joinpath("theme.qss").read_text(encoding="utf-8"))
     settings = QSettings()
     window = MainWindow(
-        resolve_config(config, settings),
+        resolve_config(config, settings, environment_override=environment_override),
         settings,
-        environment_override="BUDDY_API_URL" in os.environ,
+        environment_override=environment_override,
     )
     window.show()
 
