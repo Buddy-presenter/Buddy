@@ -23,12 +23,16 @@ jobs:
       - name: Validate all roots without AWS credentials or state access
         shell: bash
         run: |
-          for root in bootstrap modules/environment environments/staging environments/production; do
+          # Validate reusable-module aliases through their real consuming roots.
+          # Standalone `validate` cannot supply a child's aws.edge configuration.
+          for root in bootstrap environments/staging environments/production; do
             terraform -chdir="infra/terraform/$root" init -backend=false -lockfile=readonly
             terraform -chdir="infra/terraform/$root" validate
           done
       - name: Test isolation and failure boundaries with mocked AWS
-        run: terraform -chdir=infra/terraform/modules/environment test
+        run: |
+          terraform -chdir=infra/terraform/modules/environment init -backend=false -lockfile=readonly
+          terraform -chdir=infra/terraform/modules/environment test
 
   container:
     name: API container and database bootstrap

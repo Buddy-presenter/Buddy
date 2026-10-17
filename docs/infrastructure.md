@@ -155,7 +155,6 @@ Local read-only checks:
 ```sh
 terraform -chdir=infra/terraform fmt -check -recursive
 terraform -chdir=infra/terraform/modules/environment init -backend=false -lockfile=readonly
-terraform -chdir=infra/terraform/modules/environment validate
 terraform -chdir=infra/terraform/modules/environment test
 python -m pip install -e ./shared
 python -m pip install -e './backend[api,dev]' boto3==1.40.50
@@ -163,7 +162,9 @@ python -m pytest -p no:pytest-qt infra/tests
 ```
 
 The isolated database integration is enabled only in CI with `BUDDY_BOOTSTRAP_TEST=true`.
-Repeat init/validate for `bootstrap`, `environments/staging` and `environments/production`.
+Run init/validate for `bootstrap`, `environments/staging` and `environments/production`.
+Validate the reusable module through those consuming roots, which supply `aws.edge`;
+its mocked tests supply the regional and edge providers without AWS access.
 No paid providers, real deck material or real AWS secrets belong in validation.
 
 Sources: [Terraform provider mocks](https://developer.hashicorp.com/terraform/language/tests/mocking),

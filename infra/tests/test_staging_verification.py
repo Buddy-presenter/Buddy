@@ -1,6 +1,7 @@
 """Live-verifier failure boundaries; these are not evidence of an AWS deployment."""
 
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -26,6 +27,35 @@ IMAGE = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha25
 def test_readiness_rejects_plaintext_credentials_and_paths(origin):
     with pytest.raises(ValueError, match="HTTPS API origin"):
         verify.ready(origin)
+
+
+@pytest.mark.parametrize(
+    ("status", "dependencies", "passes"),
+    [(200, [{"name": "database", "status": "ready"}], True), (302, [], False), (200, [], False)],
+)
+def test_readiness_requires_verified_tls_and_database(monkeypatch, status, dependencies, passes):
+    def connect(host, *, timeout, context):
+        assert host == "d123.cloudfront.net"
+        assert context.check_hostname
+        assert context.verify_mode == verify.ssl.CERT_REQUIRED
+        assert context.minimum_version >= verify.ssl.TLSVersion.TLSv1_2
+        return SimpleNamespace(
+            request=lambda method, path: None,
+            getresponse=lambda: SimpleNamespace(
+                status=status,
+                read=lambda size: json.dumps(
+                    {"data": {"status": "ready", "dependencies": dependencies}}
+                ).encode(),
+            ),
+            close=lambda: None,
+        )
+
+    monkeypatch.setattr(verify, "HTTPSConnection", connect)
+    if passes:
+        verify.ready("https://d123.cloudfront.net")
+    else:
+        with pytest.raises(ValueError):
+            verify.ready("https://d123.cloudfront.net")
 
 
 @pytest.fixture
