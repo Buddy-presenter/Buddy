@@ -26,11 +26,11 @@ resource "aws_subnet" "database" {
   availability_zone = data.aws_availability_zones.available.names[count.index]
 }
 resource "aws_eip" "nat" {
-  count  = local.production ? 2 : 1
+  count  = local.nat_count
   domain = "vpc"
 }
 resource "aws_nat_gateway" "main" {
-  count         = local.production ? 2 : 1
+  count         = local.nat_count
   allocation_id = aws_eip.nat[count.index].id
   subnet_id     = aws_subnet.public[count.index].id
   depends_on    = [aws_internet_gateway.main]
@@ -50,9 +50,12 @@ resource "aws_route_table_association" "public" {
 resource "aws_route_table" "private" {
   count  = 2
   vpc_id = aws_vpc.main.id
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.main[local.production ? count.index : 0].id
+  dynamic "route" {
+    for_each = local.public_task_ip ? [] : [1]
+    content {
+      cidr_block     = "0.0.0.0/0"
+      nat_gateway_id = aws_nat_gateway.main[local.production ? count.index : 0].id
+    }
   }
 }
 resource "aws_route_table_association" "private" {
@@ -80,7 +83,7 @@ resource "aws_security_group" "database" {
   vpc_id = aws_vpc.main.id
 }
 resource "aws_vpc_security_group_ingress_rule" "public" {
-  for_each          = toset(["80", "443"])
+  for_each          = local.aws_https ? toset([]) : toset(["80", "443"])
   security_group_id = aws_security_group.ingress.id
   cidr_ipv4         = "0.0.0.0/0"
   ip_protocol       = "tcp"
@@ -124,4 +127,19 @@ resource "aws_vpc_security_group_egress_rule" "database" {
   ip_protocol                  = "tcp"
   from_port                    = 5432
   to_port                      = 5432
+}
+
+# AWS requires 55 security-group rule slots for this managed prefix list.
+# The internal ALB remains unreachable from the public internet.
+data "aws_ec2_managed_prefix_list" "cloudfront" {
+  count = local.aws_https ? 1 : 0
+  name  = "com.amazonaws.global.cloudfront.origin-facing"
+}
+resource "aws_vpc_security_group_ingress_rule" "cloudfront" {
+  count             = local.aws_https ? 1 : 0
+  security_group_id = aws_security_group.ingress.id
+  prefix_list_id    = data.aws_ec2_managed_prefix_list.cloudfront[0].id
+  ip_protocol       = "tcp"
+  from_port         = 80
+  to_port           = 80
 }

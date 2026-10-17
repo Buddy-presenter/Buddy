@@ -17,14 +17,14 @@ resource "aws_ecs_cluster" "main" {
   name = local.name
   setting {
     name  = "containerInsights"
-    value = "enabled"
+    value = local.production ? "enabled" : "disabled"
   }
 }
 locals {
   environment = [
     { name = "BUDDY_ENVIRONMENT", value = "production" },
     { name = "BUDDY_BIND_HOST", value = "0.0.0.0" },
-    { name = "BUDDY_ALLOWED_HOSTS", value = "${var.api_domain},localhost,127.0.0.1" },
+    { name = "BUDDY_ALLOWED_HOSTS", value = "${join(",", distinct(compact([var.api_domain, local.api_host, aws_lb.api.dns_name])))},localhost,127.0.0.1" },
     { name = "BUDDY_AWS_REGION", value = var.region },
     { name = "BUDDY_COGNITO_POOL_ID", value = aws_cognito_user_pool.main.id },
     { name = "BUDDY_COGNITO_CLIENT_ID", value = aws_cognito_user_pool_client.desktop.id },
@@ -32,6 +32,7 @@ locals {
     { name = "BUDDY_DATA_BUCKET", value = aws_s3_bucket.private["data"].id },
     { name = "BUDDY_PROCESSING_QUEUE_URL", value = aws_sqs_queue.processing.url },
     { name = "SSL_CERT_FILE", value = "/etc/ssl/certs/ca-certificates.crt" },
+    { name = "PGSSLROOTCERT", value = "/etc/ssl/certs/ca-certificates.crt" },
   ]
   images = merge(var.api_image == null ? {} : { api = var.api_image, migration = var.api_image }, var.worker_image == null ? {} : { worker = var.worker_image })
 }
@@ -48,14 +49,17 @@ resource "aws_ecs_task_definition" "service" {
     name                   = each.key, image = each.value, essential = true,
     readonlyRootFilesystem = true,
     user                   = "10001:10001",
-    linuxParameters        = { initProcessEnabled = true, capabilities = { drop = ["ALL"] } },
+    linuxParameters        = { initProcessEnabled = true, capabilities = { add = [], drop = ["ALL"] } },
+    mountPoints            = [],
+    volumesFrom            = [],
+    systemControls         = [],
     environment            = local.environment,
     secrets                = [{ name = "BUDDY_DATABASE_URL", valueFrom = "${aws_secretsmanager_secret.database[each.key].arn}:url::" }],
     logConfiguration = { logDriver = "awslogs", options = {
       awslogs-group  = aws_cloudwatch_log_group.service[each.key].name,
       awslogs-region = var.region, awslogs-stream-prefix = each.key
     } },
-    portMappings = each.key == "api" ? [{ containerPort = 8000, protocol = "tcp" }] : [],
+    portMappings = each.key == "api" ? [{ containerPort = 8000, hostPort = 8000, protocol = "tcp" }] : [],
     stopTimeout  = 30,
   }, each.key == "migration" ? { command = ["python", "/opt/buddy/migrate_database.py"] } : {})])
 }
@@ -75,16 +79,22 @@ resource "aws_ecs_service" "api" {
     rollback = true
   }
   network_configuration {
-    subnets          = aws_subnet.private[*].id
+    subnets          = local.task_subnets
     security_groups  = [aws_security_group.service["api"].id]
-    assign_public_ip = false
+    assign_public_ip = local.public_task_ip
   }
   load_balancer {
     target_group_arn = aws_lb_target_group.api.arn
     container_name   = "api"
     container_port   = 8000
   }
-  depends_on = [aws_lb_listener.https, aws_iam_role_policy.execution]
+  # The release driver registers and promotes immutable revisions. Terraform owns
+  # the task-definition template above, while ECS service revision ownership stays
+  # with the release driver until the next explicit promotion.
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
+  depends_on = [aws_lb_listener.https, aws_lb_listener.private, aws_iam_role_policy.execution]
 }
 resource "aws_ecs_service" "worker" {
   count            = var.worker_image == null ? 0 : 1
@@ -99,9 +109,13 @@ resource "aws_ecs_service" "worker" {
     rollback = true
   }
   network_configuration {
-    subnets          = aws_subnet.private[*].id
+    subnets          = local.task_subnets
     security_groups  = [aws_security_group.service["worker"].id]
-    assign_public_ip = false
+    assign_public_ip = local.public_task_ip
+  }
+  # Keep active service revisions under the same release-driver ownership as API.
+  lifecycle {
+    ignore_changes = [task_definition]
   }
   depends_on = [aws_iam_role_policy.execution]
 }

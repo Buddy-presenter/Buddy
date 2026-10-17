@@ -69,8 +69,9 @@ resource "aws_db_parameter_group" "main" {
   name   = local.name
   family = "postgres17"
   parameter {
-    name  = "rds.force_ssl"
-    value = "1"
+    name         = "rds.force_ssl"
+    value        = "1"
+    apply_method = "pending-reboot"
   }
 }
 resource "aws_db_instance" "main" {
@@ -92,7 +93,7 @@ resource "aws_db_instance" "main" {
   db_subnet_group_name          = aws_db_subnet_group.main.name
   vpc_security_group_ids        = [aws_security_group.database.id]
   parameter_group_name          = aws_db_parameter_group.main.name
-  backup_retention_period       = local.production ? 35 : 7
+  backup_retention_period       = local.production ? 35 : 1
   backup_window                 = "01:00-02:00"
   maintenance_window            = "sun:03:00-sun:04:00"
   deletion_protection           = true

@@ -62,10 +62,10 @@ async function check({draft=false, state='open', merged=false, events=[], review
       if(q.includes('fields(first:100)')) return {user:{projectV2:{id:'p',fields:{pageInfo,nodes:[{id:'f',name:'Status',options:[{id:'progress',name:'In Progress'},{id:'waiting',name:'Waiting for review'},{id:'reviewed',name:'Reviewed'},{id:'done',name:'Done'}]}]}}}};
       if(q.includes('items(first:100')) {
         const index = v.cursor === null ? 0 : Number(v.cursor);
-        const batches = itemPages ?? [[{id:'item',isArchived:archived,content:{__typename:'Issue',id:'issue',number:46,state:closedIssue?'CLOSED':'OPEN',repository:{nameWithOwner:'HusseinMoukalled/Buddy'}},fieldValueByName:{optionId:'backlog'}}]];
+        const batches = itemPages ?? [[{id:'item',isArchived:archived,content:{__typename:'Issue',id:'issue',number:46,state:closedIssue?'CLOSED':'OPEN',repository:{nameWithOwner:'Buddy-presenter/Buddy'}},fieldValueByName:{optionId:'backlog'}}]];
         return {node:{items:{pageInfo:{hasNextPage:index + 1 < batches.length,endCursor:String(index + 1)},nodes:batches[index]}}};
       }
-      if(q.includes('closingIssuesReferences')) return {repository:{pullRequest:{closingIssuesReferences:{pageInfo,nodes:links ?? [{id:'issue',state:closedIssue?'CLOSED':'OPEN',repository:{nameWithOwner:'HusseinMoukalled/Buddy'}}]}}}};
+      if(q.includes('closingIssuesReferences')) return {repository:{pullRequest:{closingIssuesReferences:{pageInfo,nodes:links ?? [{id:'issue',state:closedIssue?'CLOSED':'OPEN',repository:{nameWithOwner:'Buddy-presenter/Buddy'}}]}}}};
       if(q.includes('reviewRequests(first:100')) return {repository:{pullRequest:{reviewRequests:{pageInfo,nodes:requests ?? (events.some(e=>e.__typename==='ReviewRequestedEvent')?[{requestedReviewer:{__typename:'User'}}]:[])}}}};
       if(q.includes('timelineItems')) return {repository:{pullRequest:{timelineItems:{pageInfo,nodes:events}}}};
       throw Error(q);
@@ -101,7 +101,7 @@ async function check({draft=false, state='open', merged=false, events=[], review
  await check({events:[request],reviews:[review('COMMENTED')],requests:[]},'reviewed');
  await check({events:[request,{...request,createdAt:'2026-10-13T12:00:00Z'}],reviews:[review('APPROVED')],requests:[{requestedReviewer:{__typename:'Team'}}]},'waiting');
  // Unsupported/hidden cards must not prevent later linked issues from updating.
- const issueItem={id:'item',content:{__typename:'Issue',id:'issue',number:46,state:'OPEN',repository:{nameWithOwner:'HusseinMoukalled/Buddy'}},fieldValueByName:{optionId:'backlog'}};
+ const issueItem={id:'item',content:{__typename:'Issue',id:'issue',number:46,state:'OPEN',repository:{nameWithOwner:'Buddy-presenter/Buddy'}},fieldValueByName:{optionId:'backlog'}};
  const prItem={id:'pr-card',content:{__typename:'PullRequest'}};
  const draftItem={id:'draft-card',content:{__typename:'DraftIssue'}};
  await check({itemPages:[[prItem,issueItem]]},'progress');
@@ -115,6 +115,6 @@ async function check({draft=false, state='open', merged=false, events=[], review
  await check({itemPages:[[{...issueItem,fieldValueByName:{optionId:'done'}}]]},null);
  // Even explicit closing links to an already-closed issue cannot affect it.
  const closedItem={...issueItem,id:'completed-item',content:{...issueItem.content,id:'completed',number:1,state:'CLOSED'},fieldValueByName:{optionId:'done'}};
- await check({links:[{id:'completed',state:'CLOSED',repository:{nameWithOwner:'HusseinMoukalled/Buddy'}},{id:'issue',state:'OPEN',repository:{nameWithOwner:'HusseinMoukalled/Buddy'}}],itemPages:[[closedItem,issueItem]]},'progress');
+ await check({links:[{id:'completed',state:'CLOSED',repository:{nameWithOwner:'Buddy-presenter/Buddy'}},{id:'issue',state:'OPEN',repository:{nameWithOwner:'Buddy-presenter/Buddy'}}],itemPages:[[closedItem,issueItem]]},'progress');
  console.log('30 mocked integration scenarios passed; writes restricted to linked open Status');
 })().catch(e=>{console.error(e);process.exitCode=1});

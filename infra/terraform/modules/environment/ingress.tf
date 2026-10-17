@@ -1,25 +1,28 @@
 resource "aws_acm_certificate" "api" {
+  count             = local.aws_https ? 0 : 1
   domain_name       = var.api_domain
   validation_method = "DNS"
   lifecycle { create_before_destroy = true }
 }
 resource "aws_route53_record" "certificate" {
+  count   = local.aws_https ? 0 : 1
   zone_id = var.zone_id
-  name    = one(aws_acm_certificate.api.domain_validation_options).resource_record_name
-  type    = one(aws_acm_certificate.api.domain_validation_options).resource_record_type
+  name    = one(aws_acm_certificate.api[0].domain_validation_options).resource_record_name
+  type    = one(aws_acm_certificate.api[0].domain_validation_options).resource_record_type
   ttl     = 60
-  records = [one(aws_acm_certificate.api.domain_validation_options).resource_record_value]
+  records = [one(aws_acm_certificate.api[0].domain_validation_options).resource_record_value]
 }
 resource "aws_acm_certificate_validation" "api" {
-  certificate_arn         = aws_acm_certificate.api.arn
-  validation_record_fqdns = [aws_route53_record.certificate.fqdn]
+  count                   = local.aws_https ? 0 : 1
+  certificate_arn         = aws_acm_certificate.api[0].arn
+  validation_record_fqdns = [aws_route53_record.certificate[0].fqdn]
 }
 resource "aws_lb" "api" {
   name                       = local.name
-  internal                   = false
+  internal                   = local.aws_https
   load_balancer_type         = "application"
   security_groups            = [aws_security_group.ingress.id]
-  subnets                    = aws_subnet.public[*].id
+  subnets                    = local.aws_https ? aws_subnet.private[*].id : aws_subnet.public[*].id
   enable_deletion_protection = true
   drop_invalid_header_fields = true
   desync_mitigation_mode     = "strictest"
@@ -42,17 +45,19 @@ resource "aws_lb_target_group" "api" {
   }
 }
 resource "aws_lb_listener" "https" {
+  count             = local.aws_https ? 0 : 1
   load_balancer_arn = aws_lb.api.arn
   port              = 443
   protocol          = "HTTPS"
   ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
-  certificate_arn   = aws_acm_certificate_validation.api.certificate_arn
+  certificate_arn   = aws_acm_certificate_validation.api[0].certificate_arn
   default_action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.api.arn
   }
 }
 resource "aws_lb_listener" "redirect" {
+  count             = local.aws_https ? 0 : 1
   load_balancer_arn = aws_lb.api.arn
   port              = 80
   protocol          = "HTTP"
@@ -66,6 +71,7 @@ resource "aws_lb_listener" "redirect" {
   }
 }
 resource "aws_route53_record" "api" {
+  count   = local.aws_https ? 0 : 1
   zone_id = var.zone_id
   name    = var.api_domain
   type    = "A"
@@ -76,6 +82,42 @@ resource "aws_route53_record" "api" {
   }
 }
 resource "aws_wafv2_web_acl_association" "api" {
+  count        = local.aws_https ? 0 : 1
   resource_arn = aws_lb.api.arn
   web_acl_arn  = aws_wafv2_web_acl.main.arn
+}
+
+moved {
+  from = aws_acm_certificate.api
+  to   = aws_acm_certificate.api[0]
+}
+
+moved {
+  from = aws_route53_record.certificate
+  to   = aws_route53_record.certificate[0]
+}
+
+moved {
+  from = aws_acm_certificate_validation.api
+  to   = aws_acm_certificate_validation.api[0]
+}
+
+moved {
+  from = aws_lb_listener.https
+  to   = aws_lb_listener.https[0]
+}
+
+moved {
+  from = aws_lb_listener.redirect
+  to   = aws_lb_listener.redirect[0]
+}
+
+moved {
+  from = aws_route53_record.api
+  to   = aws_route53_record.api[0]
+}
+
+moved {
+  from = aws_wafv2_web_acl_association.api
+  to   = aws_wafv2_web_acl_association.api[0]
 }

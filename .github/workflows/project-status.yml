@@ -18,7 +18,7 @@ concurrency:
 jobs:
   sync:
     if: >-
-      github.repository == 'HusseinMoukalled/Buddy' &&
+      github.repository == 'Buddy-presenter/Buddy' &&
       (github.event_name != 'pull_request' && github.event_name != 'pull_request_review' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
@@ -37,7 +37,7 @@ jobs:
         with:
           github-token: ${{ secrets.PROJECT_TOKEN }}
           script: |
-            const owner = "HusseinMoukalled";
+            const owner = "Buddy-presenter";
             const repo = "Buddy";
             async function pages(query, variables, select) {
               const result = [];
@@ -93,7 +93,7 @@ jobs:
               // Only PRs into the default branch can provide closing links.
               if (pr.base.ref !== context.payload.repository.default_branch) continue;
               const issues = await pages(`query($number:Int!,$cursor:String) {
-                repository(owner:"HusseinMoukalled",name:"Buddy") {
+                repository(owner:"Buddy-presenter",name:"Buddy") {
                   pullRequest(number:$number) { closingIssuesReferences(first:100,after:$cursor) {
                     nodes { id state repository { nameWithOwner } } ${page}
                   } }
@@ -102,7 +102,7 @@ jobs:
               let status = progress;
               if (pr.state === "open" && !pr.draft) {
                 const events = await pages(`query($number:Int!,$cursor:String) {
-                  repository(owner:"HusseinMoukalled",name:"Buddy") {
+                  repository(owner:"Buddy-presenter",name:"Buddy") {
                     pullRequest(number:$number) { timelineItems(first:100,after:$cursor,
                       itemTypes:[REVIEW_REQUESTED_EVENT,CONVERT_TO_DRAFT_EVENT]) {
                       nodes { __typename ... on ReviewRequestedEvent { createdAt }
@@ -122,7 +122,7 @@ jobs:
                   r.submitted_at > lastDraft)
                   .map(r => r.submitted_at).sort().at(-1) || "";
                 const requests = await pages(`query($number:Int!,$cursor:String) {
-                  repository(owner:"HusseinMoukalled",name:"Buddy") {
+                  repository(owner:"Buddy-presenter",name:"Buddy") {
                     pullRequest(number:$number) { reviewRequests(first:100,after:$cursor) {
                       nodes { requestedReviewer { __typename } } ${page}
                     } }

@@ -33,12 +33,18 @@ def validate(config: dict[str, Any], revision: str) -> None:
     if not re.fullmatch(r"https://[a-z0-9.-]+\.[a-z]{2,}", config.get("api_url", "")):
         raise DeploymentError("A verified HTTPS API origin is required.")
     network = config.get("network", {})
+    egress = config.get("egress_mode", "private_nat")
+    expected_public_ip = "ENABLED" if egress == "public_ip" else "DISABLED"
     if (
-        network.get("assignPublicIp") != "DISABLED"
+        egress not in {"private_nat", "public_ip"}
+        or (environment == "production" and egress != "private_nat")
+        or network.get("assignPublicIp") != expected_public_ip
         or not network.get("subnets")
         or not network.get("securityGroups")
     ):
-        raise DeploymentError("Private migration networking is required.")
+        raise DeploymentError(
+            "Migration networking must match the explicit environment egress mode."
+        )
     for name in ("api", "migration"):
         arn = config.get("tasks", {}).get(name, "")
         if not re.fullmatch(

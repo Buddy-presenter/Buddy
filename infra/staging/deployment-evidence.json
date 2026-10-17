@@ -1,0 +1,352 @@
+{
+  "recorded_at": "2026-10-17T15:30:22.874528+00:00",
+  "issue": "https://github.com/Buddy-presenter/Buddy/issues/73",
+  "account_plan": "FREE",
+  "region": "eu-central-1",
+  "infrastructure_revision_applied": "9e5cf3fa63f7ceb39e0bb79007a3204d1f912b15",
+  "image_provenance": {
+    "revision": "dc1bb7743f9fa95e5fd75fe7a488ca5262c06b75",
+    "image": "549327541867.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:f61c966f16ebd4ea59331ae3f54b7034c98b1e91d6716a078ae9f889041a9593",
+    "source": "https://github.com/Buddy-presenter/Buddy",
+    "builder": "AWS CodeBuild",
+    "build_definition_revision": "2800181ab4d773611b40fa36368be9418e4dca37",
+    "base": "python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258"
+  },
+  "public_configuration": {
+    "BUDDY_API_URL": "https://d3n3ijrboj39jr.cloudfront.net",
+    "BUDDY_AWS_REGION": "eu-central-1",
+    "BUDDY_COGNITO_CLIENT_ID": "s2k550ofnk3hipm63nteqte0",
+    "BUDDY_COGNITO_DOMAIN": "https://buddy-staging-549327541867.auth.eu-central-1.amazoncognito.com",
+    "BUDDY_COGNITO_POOL_ID": "eu-central-1_P2n1xJkqp"
+  },
+  "resources": {
+    "cluster": "buddy-staging",
+    "database": "buddy-staging",
+    "cloudfront_distribution": "E2A6Y52U0WIRBN",
+    "vpc_origin": "vo_FWNgL2R4PH3Fs8IVemGfhz",
+    "internal_alb": "buddy-staging",
+    "data_bucket": "buddy-staging-549327541867-data",
+    "release_bucket": "buddy-staging-549327541867-releases",
+    "state_bucket": "buddy-staging-549327541867-tfstate",
+    "operator_evidence_bucket": "buddy-staging-549327541867-operator",
+    "api_task_definition": "arn:aws:ecs:eu-central-1:549327541867:task-definition/buddy-staging-api:1",
+    "api_desired_count": 1,
+    "worker_services": 0,
+    "nat_gateways": 0,
+    "database_backup_retention_days": 1
+  },
+  "read_only_verification": {
+    "checked_at": "2026-10-17T15:29:02.799312+00:00",
+    "result": "passed"
+  },
+  "private_services": {
+    "private_s3_write_read_delete": "passed",
+    "queue_send": "passed",
+    "api_task_secret_isolation": "passed",
+    "marker": "issue73-acceptance-868ce86428364dbd83484a3c4b9aeb1c",
+    "message_id": "748fc0d2-497e-45e3-852c-fb4a095e7009",
+    "queue_observed_and_test_message_deleted": "passed",
+    "test_object_versions_cleaned": true,
+    "anonymous_http_object_request_denied": 403,
+    "anonymous_https_object_request_denied": 403,
+    "task_definition": "arn:aws:ecs:eu-central-1:549327541867:task-definition/buddy-staging-acceptance:2",
+    "task_arn": "arn:aws:ecs:eu-central-1:549327541867:task/buddy-staging/e3a92fd5785f4cf5bf868f555c7eb1ff"
+  },
+  "queue_public_access_boundary": {
+    "encrypted": true,
+    "tls_only_resource_policy": true,
+    "no_public_allow_policy": true,
+    "anonymous_https_denial": {
+      "status": 403,
+      "code": "AccessDenied"
+    },
+    "anonymous_http_denial": {
+      "status": 403,
+      "code": "AccessDenied"
+    },
+    "passed": true
+  },
+  "cognito": {
+    "pool": "eu-central-1_P2n1xJkqp",
+    "client": "s2k550ofnk3hipm63nteqte0",
+    "signup_email_delivery": "not_exercised",
+    "method": "admin-provisioned disposable identity; real USER_SRP_AUTH",
+    "real_srp_and_get_user": "passed",
+    "rotated_refresh_replay_denied": "passed",
+    "revoked_access_token_denied_by_get_user": "passed",
+    "disposable_identity_deleted": true
+  },
+  "https_account_restart": {
+    "api_url": "https://d3n3ijrboj39jr.cloudfront.net",
+    "checks": {
+      "real_cognito_tokens_and_persisted_account_ids": "passed",
+      "database_tls_role_permissions_and_plaintext_denial": "passed",
+      "cross_account_resource_and_stream_denial": "passed",
+      "incremental_sse_and_terminal_event": {
+        "received_seconds": [
+          0.391,
+          5.703,
+          11.687
+        ]
+      },
+      "api_restart_preserves_owned_database_data": {
+        "previous_tasks": [
+          "arn:aws:ecs:eu-central-1:549327541867:task/buddy-staging/d5c578ad6e874f33990ea24015d76849"
+        ],
+        "new_tasks": [
+          "arn:aws:ecs:eu-central-1:549327541867:task/buddy-staging/a716f28822944be2ad7dea6cc5e5eb9c"
+        ]
+      }
+    },
+    "task_arns": [
+      "arn:aws:ecs:eu-central-1:549327541867:task/buddy-staging/034d0a3604ed41ee904dec462117b091"
+    ],
+    "passed": true,
+    "disposable_cognito_identities_deleted": true
+  },
+  "migration_rejection_task": {
+    "passed": true,
+    "task": "arn:aws:ecs:eu-central-1:549327541867:task/buddy-staging/1f677fcc247e4d81a6387d462a695b3f",
+    "definition": "arn:aws:ecs:eu-central-1:549327541867:task-definition/buddy-staging-migration:3",
+    "exit_code": 42,
+    "intentional_alembic_rejection_log_verified": true
+  },
+  "backup_restore_and_rollback": {
+    "started_at": "2026-10-17T14:46:04.394807+00:00",
+    "source_database": "buddy-staging",
+    "reviewed_source_revision": "dc1bb7743f9fa95e5fd75fe7a488ca5262c06b75",
+    "image_a": "549327541867.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:f61c966f16ebd4ea59331ae3f54b7034c98b1e91d6716a078ae9f889041a9593",
+    "image_b": "549327541867.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:b2146f843f8d56495944ac8855f3bbf57bef379f2122f5d4efac5b65c47f0e22",
+    "snapshot": "buddy-staging-acceptance-be534f2ee0d3",
+    "restored_database": "buddy-staging-restore-be534f2ee0d3",
+    "snapshot_arn": "arn:aws:rds:eu-central-1:549327541867:snapshot:buddy-staging-acceptance-be534f2ee0d3",
+    "restored_database_arn": "arn:aws:rds:eu-central-1:549327541867:db:buddy-staging-restore-be534f2ee0d3",
+    "restored_database_host": "buddy-staging-restore-be534f2ee0d3.c14uww20q7uq.eu-central-1.rds.amazonaws.com",
+    "restore_verification_task": "arn:aws:ecs:eu-central-1:549327541867:task/buddy-staging/f1b86c6de0eb411abb0d7a2e5e3180a2",
+    "isolated_restore_schema_and_owned_data": "passed",
+    "intentional_rejection_definition": "arn:aws:ecs:eu-central-1:549327541867:task-definition/buddy-staging-migration:2",
+    "migration_rejection": {
+      "status": "passed",
+      "audit_key": "staging/backend/operations/dc1bb7743f9fa95e5fd75fe7a488ca5262c06b75/1e5adda6aef447baa35786dd3a154098.json",
+      "unchanged_api": {
+        "api": {
+          "taskDefinition": "arn:aws:ecs:eu-central-1:549327541867:task-definition/buddy-staging-api:1",
+          "desiredCount": 1
+        }
+      }
+    },
+    "rollback": {
+      "status": "passed",
+      "first_deploy_audit": "staging/backend/operations/dc1bb7743f9fa95e5fd75fe7a488ca5262c06b75/8f17f2f002d444c5841514abc3ac3b36.json",
+      "second_deploy_audit": "staging/backend/operations/dc1bb7743f9fa95e5fd75fe7a488ca5262c06b75/6b9d6ec3e9b34d5b889057d8c9466e85.json",
+      "restored_audit": "staging/backend/operations/dc1bb7743f9fa95e5fd75fe7a488ca5262c06b75/ad8b39a03615481d936cc8fdd82b6756.json",
+      "restored_api": {
+        "api": {
+          "taskDefinition": "arn:aws:ecs:eu-central-1:549327541867:task-definition/buddy-staging-api:3",
+          "desiredCount": 1
+        }
+      },
+      "note": "Distinct immutable images built from the same reviewed API source, with separately recorded build definitions."
+    },
+    "passed": true,
+    "disposable_restored_instance_deletion_requested": true,
+    "finished_at": "2026-10-17T15:08:20.416269+00:00"
+  },
+  "readiness_recovery": {
+    "passed": true,
+    "started_at": "2026-10-17T15:08:56.133331+00:00",
+    "finished_at": "2026-10-17T15:20:21.815840+00:00",
+    "collected_at": "2026-10-17T15:22:51.084516+00:00",
+    "candidate_definition": "arn:aws:ecs:eu-central-1:549327541867:task-definition/buddy-staging-api:5",
+    "previous_api": {
+      "api": {
+        "taskDefinition": "arn:aws:ecs:eu-central-1:549327541867:task-definition/buddy-staging-api:3",
+        "desiredCount": 1
+      }
+    },
+    "restored_api": {
+      "api": {
+        "taskDefinition": "arn:aws:ecs:eu-central-1:549327541867:task-definition/buddy-staging-api:3",
+        "desiredCount": 1
+      }
+    },
+    "audit_key": "staging/backend/operations/dc1bb7743f9fa95e5fd75fe7a488ca5262c06b75/729563905c4b460ab949c3590cbaa549.json",
+    "rejected_task_definition": "arn:aws:ecs:eu-central-1:549327541867:task-definition/buddy-staging-api:6",
+    "rejected_tasks": [
+      {
+        "task": "arn:aws:ecs:eu-central-1:549327541867:task/buddy-staging/0801966c5820440e94a8bc3d6fba2507",
+        "stopped_reason": "Task failed ELB health checks in (target-group arn:aws:elasticloadbalancing:eu-central-1:549327541867:targetgroup/buddy-staging/b6adde12f956e374)"
+      },
+      {
+        "task": "arn:aws:ecs:eu-central-1:549327541867:task/buddy-staging/6c20e1518098472eaeec8277f922b2f8",
+        "stopped_reason": "Task failed ELB health checks in (target-group arn:aws:elasticloadbalancing:eu-central-1:549327541867:targetgroup/buddy-staging/b6adde12f956e374)"
+      },
+      {
+        "task": "arn:aws:ecs:eu-central-1:549327541867:task/buddy-staging/c8124f8d00d04164b2e250a55d8e00e9",
+        "stopped_reason": "Task failed ELB health checks in (target-group arn:aws:elasticloadbalancing:eu-central-1:549327541867:targetgroup/buddy-staging/b6adde12f956e374)"
+      }
+    ],
+    "actual_elb_observation": {
+      "method": "AWS CLI elbv2 describe-target-health during this deployment; response captured in operator tool session",
+      "target_group": "arn:aws:elasticloadbalancing:eu-central-1:549327541867:targetgroup/buddy-staging/b6adde12f956e374",
+      "observed_at": null,
+      "response": [
+        {
+          "health": "healthy",
+          "reason": null,
+          "detail": null
+        },
+        {
+          "health": "unhealthy",
+          "reason": "Target.ResponseCodeMismatch",
+          "detail": "Health checks failed with these codes: [503]"
+        }
+      ],
+      "public_https_readiness_during_rejection": 200
+    },
+    "collector_correction": "Initial collector expected HTTP access logs, which are disabled. It failed after recovery succeeded. Verification uses actual observed ELB 503s plus stopped-task reasons, stable service/HTTPS and the immutable rolled_back audit; no access-log evidence is claimed.",
+    "rejected_task_arns": [
+      "arn:aws:ecs:eu-central-1:549327541867:task/buddy-staging/0801966c5820440e94a8bc3d6fba2507",
+      "arn:aws:ecs:eu-central-1:549327541867:task/buddy-staging/6c20e1518098472eaeec8277f922b2f8",
+      "arn:aws:ecs:eu-central-1:549327541867:task/buddy-staging/c8124f8d00d04164b2e250a55d8e00e9"
+    ]
+  },
+  "operations": {
+    "checked_at": "2026-10-17T15:26:50.516640+00:00",
+    "account_plan": "FREE",
+    "https_ready_with_hostname_and_certificate_verification": {
+      "status": 200,
+      "tls": "TLSv1.3"
+    },
+    "public_plain_http_denied": 403,
+    "secret_scope_policy_checks": [
+      {
+        "role": "buddy-staging-api-task",
+        "decision": "implicitDeny"
+      },
+      {
+        "role": "buddy-staging-api-execution",
+        "decision": "implicitDeny"
+      },
+      {
+        "role": "buddy-staging-migration-execution",
+        "decision": "implicitDeny"
+      },
+      {
+        "role": "buddy-staging-worker-execution",
+        "decision": "implicitDeny"
+      }
+    ],
+    "github_environments": {
+      "staging": {
+        "reviewers": [
+          "HusseinMoukalled",
+          "yasminahanna"
+        ],
+        "prevent_self_review": true,
+        "allowed_branches": [
+          "main"
+        ],
+        "can_admins_bypass": true
+      },
+      "release-staging": {
+        "reviewers": [
+          "HusseinMoukalled",
+          "yasminahanna"
+        ],
+        "prevent_self_review": true,
+        "allowed_branches": [
+          "main"
+        ],
+        "can_admins_bypass": true
+      }
+    },
+    "budget": {
+      "monthly_gross_usage_usd": 100,
+      "credit_offsets_excluded": true,
+      "actual_cost_alert_thresholds_usd": [
+        25,
+        50,
+        75,
+        100
+      ],
+      "email_subscribers_configured": true,
+      "email_delivery": "not_triggered_or_verified",
+      "hard_spending_cap": false
+    },
+    "passed": true
+  },
+  "cleanup": {
+    "passed": true,
+    "checked_at": "2026-10-17T15:30:12.463262+00:00",
+    "synthetic_database_cleanup_task": "arn:aws:ecs:eu-central-1:549327541867:task/buddy-staging/7ca09d808bac47029890ba4b28ba9b9e",
+    "disposable_restored_database_deleted": "buddy-staging-restore-be534f2ee0d3",
+    "deregistered_disposable_definitions": [
+      "arn:aws:ecs:eu-central-1:549327541867:task-definition/buddy-staging-acceptance-bootstrap:1",
+      "arn:aws:ecs:eu-central-1:549327541867:task-definition/buddy-staging-acceptance-migration:1",
+      "arn:aws:ecs:eu-central-1:549327541867:task-definition/buddy-staging-acceptance-migration:2",
+      "arn:aws:ecs:eu-central-1:549327541867:task-definition/buddy-staging-acceptance-migration:3",
+      "arn:aws:ecs:eu-central-1:549327541867:task-definition/buddy-staging-acceptance-migration:4",
+      "arn:aws:ecs:eu-central-1:549327541867:task-definition/buddy-staging-acceptance:1",
+      "arn:aws:ecs:eu-central-1:549327541867:task-definition/buddy-staging-acceptance:2",
+      "arn:aws:ecs:eu-central-1:549327541867:task-definition/buddy-staging-api:5",
+      "arn:aws:ecs:eu-central-1:549327541867:task-definition/buddy-staging-api:6",
+      "arn:aws:ecs:eu-central-1:549327541867:task-definition/buddy-staging-migration:2",
+      "arn:aws:ecs:eu-central-1:549327541867:task-definition/buddy-staging-migration:3"
+    ],
+    "temporary_codebuild_project_deleted": "buddy-issue73-operator",
+    "temporary_operator_role_and_provisioning_policies_deleted": true,
+    "obsolete_failed_packaging_images_removed": [
+      "sha256:321cc8e0009c6aeaf08aaec1f3314d8c5d9a76f2ca77b7dbf64ece4f1ad5589a",
+      "sha256:bacd303cfe89756dff49afb53dd80d77081e47be2e33304599a189548ef54b29"
+    ],
+    "retained": [
+      "running staging foundation",
+      "encrypted restore snapshot",
+      "private plans/state/evidence",
+      "release audit history and compatible images"
+    ]
+  },
+  "final_state": {
+    "passed": true,
+    "checked_at": "2026-10-17T15:28:46.133225+00:00",
+    "terraform_no_resource_changes": true,
+    "api_task_definition": "arn:aws:ecs:eu-central-1:549327541867:task-definition/buddy-staging-api:1",
+    "terraform_plan_evidence": {
+      "bucket": "buddy-staging-549327541867-operator",
+      "key": "start/start-plan.json",
+      "version_id": "SyxmKjs0QNYKnEQ1cRNj4AkvnvGNjQQM",
+      "build_id": "buddy-issue73-operator:f7cda220-88a8-4ffd-99fa-06dfb30213e0"
+    },
+    "terraform_reconciliation_build_id": "buddy-issue73-operator:a6d06aab-a862-4f3d-b255-14f2d096c001",
+    "exact_selected_image": "549327541867.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:f61c966f16ebd4ea59331ae3f54b7034c98b1e91d6716a078ae9f889041a9593",
+    "running_api_count": 1,
+    "worker_services": 0,
+    "database_available_private_encrypted_protected": true,
+    "database_backup_retention_days": 1,
+    "nat_gateways": 0,
+    "https_ready": true,
+    "ecr_scan_severity_counts": {
+      "HIGH": 7,
+      "MEDIUM": 2,
+      "LOW": 2
+    },
+    "github_public_variables_match_terraform": true
+  },
+  "security_review": {
+    "ecr_scan": {
+      "critical": 0,
+      "high": 7
+    },
+    "high_findings": "Six util-linux findings and CVE-2026-85091 (zlib); retained for reviewer acceptance, not suppressed.",
+    "default_cloudfront_certificate_policy": "TLSv1; actual verified connection TLSv1.3",
+    "origin_transport": "Private HTTP via CloudFront VPC origin/internal ALB"
+  },
+  "not_exercised": [
+    "Desktop managed-login signup/email delivery/PKCE/recovery/vault",
+    "Long-idle desktop SSE reconnect",
+    "Budget notification email receipt",
+    "Normal protected GitHub environment approval run (operator deployment explicitly authorized)",
+    "Production or workers"
+  ]
+}

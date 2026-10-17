@@ -29,7 +29,7 @@ verifies the installer. macOS uses Developer ID hardened-runtime signing, Apple
 notarization, stapling and Gatekeeper assessment. Missing credentials stop publication.
 
 All final bytes have SHA-256/size manifests and GitHub build provenance attestations.
-Verify downloaded artifacts with gh attestation verify <artifact> -R HusseinMoukalled/Buddy
+Verify downloaded artifacts with gh attestation verify <artifact> -R Buddy-presenter/Buddy
 and verify manifest hashes before installation. Private download authorization is a
 separate storage feature; this workflow does not expose a public bucket. Artifacts live
 under <environment>/desktop/<full SHA>/<platform>/; production manifests use stable,
@@ -48,7 +48,10 @@ reviewers, BUDDY_DEPLOY_ROLE_ARN, BUDDY_AWS_REGION, BUDDY_AWS_ACCOUNT_ID and
 BUDDY_DEPLOYMENT_CONFIG. The latter is public JSON containing environment, account_id,
 region, cluster (buddy-staging/production), bucket (the corresponding release bucket),
 api_url (HTTPS origin), tasks (API/migration and optional worker task-definition ARNs),
-and network (private subnet IDs, migration security group IDs, assignPublicIp: DISABLED).
+egress_mode (private_nat or staging-only public_ip), and network (the selected subnet IDs,
+migration security group IDs and matching assignPublicIp: DISABLED/ENABLED). Legacy configs
+without egress_mode require DISABLED. Public task egress does not permit public database
+access or direct inbound API access; use the exact reviewed Terraform outputs.
 Use #27's output identifiers; do not include secret values. Infrastructure bootstrap
 must already have initialized database roles/secrets and task definitions.
 
@@ -68,6 +71,18 @@ Failed readiness restores previous definitions/counts and checks recovery. Failu
 recover records rollback_failed. Migration failure does not promote traffic. No path
 automatically downgrades the database: use expand/contract changes compatible with both
 old/new code, reviewed schema checks and isolated backups before rollout.
+
+Terraform owns the ECS task-definition templates and service infrastructure; the release
+driver owns the API/worker services' active `task_definition` revisions. The service
+resources ignore only that attribute, so a later Terraform apply cannot undo a healthy
+promotion or an audited rollback. Terraform continues to manage desired counts, networking,
+load balancers and the rest of each service. Changes to a task template (roles, secrets,
+environment or container settings) are registered by Terraform and become active at the
+next explicit release promotion, which clones the configured template and replaces only
+the image digest. Review and test template changes before promoting them. A mocked-provider
+Terraform regression test applies a promoted service revision, then runs a plan with the
+older configured revision and verifies the active revision is retained while other service
+settings remain managed.
 
 Promotion outcomes and explicit rollback attempts have immutable audit objects under
 <environment>/backend/operations/<operation SHA>/<unique operation ID>.json. Conditional
@@ -119,4 +134,5 @@ then python frontend/scripts/release/smoke_package.py packaged on a disposable n
 No AWS deployment, Apple notarization or trusted Windows signing is claimed until real
 protected environments, provider access and signing identities are supplied. Live staging
 recovery drills remain pending, as does the real worker implementation. These are
-explicit completion gates for #38; passing simulated tests cannot close that evidence gap.
+explicit completion gates for live staging #73 and production #76. Issue #38 covers the
+reviewed pipeline preparation; simulated tests do not establish deployment acceptance.

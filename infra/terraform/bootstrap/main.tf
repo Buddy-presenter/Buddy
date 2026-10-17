@@ -1,7 +1,7 @@
 terraform {
   required_version = "~> 1.13.0"
   required_providers {
-    aws = { source = "hashicorp/aws", version = "6.19.0" }
+    aws = { source = "hashicorp/aws", version = "6.20.0" }
   }
 }
 variable "account_id" { type = string }
@@ -58,10 +58,27 @@ resource "aws_s3_bucket_policy" "state" {
     Condition = { Bool = { "aws:SecureTransport" = "false" } }
   }] })
 }
+variable "existing_github_oidc_provider_arn" {
+  description = "Reuse the account provider when bootstrapping the second environment."
+  type        = string
+  default     = null
+  validation {
+    condition     = var.existing_github_oidc_provider_arn == null ? true : var.existing_github_oidc_provider_arn == "arn:aws:iam::${var.account_id}:oidc-provider/token.actions.githubusercontent.com"
+    error_message = "The reused GitHub provider must belong to this AWS account."
+  }
+}
 resource "aws_iam_openid_connect_provider" "github" {
+  count          = var.existing_github_oidc_provider_arn == null ? 1 : 0
   url            = "https://token.actions.githubusercontent.com"
   client_id_list = ["sts.amazonaws.com"]
 }
 output "state_bucket" { value = aws_s3_bucket.state.id }
 output "state_key_arn" { value = aws_kms_key.state.arn }
-output "github_oidc_provider_arn" { value = aws_iam_openid_connect_provider.github.arn }
+output "github_oidc_provider_arn" {
+  value = var.existing_github_oidc_provider_arn == null ? aws_iam_openid_connect_provider.github[0].arn : var.existing_github_oidc_provider_arn
+}
+# Preserve existing bootstrap state when adding conditional provider ownership.
+moved {
+  from = aws_iam_openid_connect_provider.github
+  to   = aws_iam_openid_connect_provider.github[0]
+}

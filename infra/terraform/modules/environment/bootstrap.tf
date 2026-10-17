@@ -36,7 +36,11 @@ resource "aws_ecs_task_definition" "bootstrap" {
   container_definitions = jsonencode([{
     name            = "bootstrap", image = var.api_image, essential = true,
     user            = "10001:10001", readonlyRootFilesystem = true,
-    linuxParameters = { initProcessEnabled = true, capabilities = { drop = ["ALL"] } },
+    linuxParameters = { initProcessEnabled = true, capabilities = { add = [], drop = ["ALL"] } },
+    mountPoints     = [],
+    volumesFrom     = [],
+    systemControls  = [],
+    portMappings    = [],
     command         = ["python", "/opt/buddy/bootstrap_database.py"],
     environment = [
       { name = "BUDDY_AWS_REGION", value = var.region },

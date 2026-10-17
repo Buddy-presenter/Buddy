@@ -1,24 +1,31 @@
 terraform {
   required_version = "~> 1.13.0"
   required_providers {
-    aws = { source = "hashicorp/aws", version = "6.19.0" }
+    aws = { source = "hashicorp/aws", version = "6.20.0" }
   }
   backend "s3" {}
 }
 variable "account_id" { type = string }
-variable "other_environment_account_id" {
-  type = string
-  validation {
-    condition     = var.other_environment_account_id != var.account_id
-    error_message = "Staging and production must use separate AWS accounts."
-  }
-}
 variable "region" {
   type    = string
   default = "eu-central-1"
 }
-variable "api_domain" { type = string }
-variable "zone_id" { type = string }
+variable "service_egress_mode" {
+  type    = string
+  default = "public_ip"
+}
+variable "api_domain" {
+  type    = string
+  default = null
+}
+variable "zone_id" {
+  type    = string
+  default = null
+}
+variable "ingress_mode" {
+  type    = string
+  default = "aws_https"
+}
 variable "api_image" {
   type    = string
   default = null
@@ -39,8 +46,19 @@ provider "aws" {
     tags = { Application = "Buddy", Environment = "staging", ManagedBy = "Terraform" }
   }
 }
+provider "aws" {
+  alias               = "edge"
+  region              = "us-east-1"
+  allowed_account_ids = [var.account_id]
+  default_tags {
+    tags = { Application = "Buddy", Environment = "staging", ManagedBy = "Terraform" }
+  }
+}
 module "environment" {
   source                   = "../../modules/environment"
+  providers                = { aws = aws, aws.edge = aws.edge }
+  ingress_mode             = var.ingress_mode
+  service_egress_mode      = var.service_egress_mode
   environment              = "staging"
   account_id               = var.account_id
   region                   = var.region

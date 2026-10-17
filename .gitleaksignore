@@ -1,0 +1,5 @@
+# Public Git source commit dc1bb7743f9fa95e5fd75fe7a488ca5262c06b75,
+# identical to image_provenance.revision. The generic-api-key rule matched the
+# historical reviewed_api_revision metadata label, not a credential. Suppress
+# only this verified finding; full-history scanning and all rules remain enabled.
+ec096de8134d97ccd5871ce3dd149e4f9899b20b:infra/staging/deployment-evidence.json:generic-api-key:117
