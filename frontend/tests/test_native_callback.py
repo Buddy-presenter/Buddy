@@ -253,3 +253,113 @@ def test_production_configuration_cannot_silently_package_staging_or_localhost(t
     path.write_text(json.dumps({**preview, "password": "synthetic-never-package"}))
     with pytest.raises(ValueError, match="public"):
         deployment_config(path)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows protocol registration")
+def test_source_callback_registration_restores_previous_handler(tmp_path):
+    import winreg
+    from uuid import uuid4
+
+    from buddy_desktop.source_callback import windows_source_callback
+
+    scheme = "buddy-test-" + uuid4().hex
+    base = "Software\\Classes\\" + scheme
+    path = base + "\\shell\\open\\command"
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, path) as key:
+        winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "previous-handler")
+    try:
+        with (
+            pytest.raises(RuntimeError, match="application failed"),
+            windows_source_callback([sys.executable, "-m", "buddy_desktop"], scheme=scheme),
+        ):
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as key:
+                command = winreg.QueryValueEx(key, "")[0]
+                assert command.endswith('--auth-callback "%1"')
+                assert sys.executable in command
+            raise RuntimeError("application failed")
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as key:
+            assert winreg.QueryValueEx(key, "")[0] == "previous-handler"
+        with (
+            winreg.OpenKey(winreg.HKEY_CURRENT_USER, base) as key,
+            pytest.raises(FileNotFoundError),
+        ):
+            winreg.QueryValueEx(key, "URL Protocol")
+    finally:
+        for suffix in ("\\shell\\open\\command", "\\shell\\open", "\\shell", ""):
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, base + suffix)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows protocol registration")
+def test_source_callback_registration_preserves_new_installer():
+    import winreg
+    from uuid import uuid4
+
+    from buddy_desktop.source_callback import windows_source_callback
+
+    scheme = "buddy-test-" + uuid4().hex
+    base = "Software\\Classes\\" + scheme
+    path = base + "\\shell\\open\\command"
+    try:
+        with (
+            windows_source_callback([sys.executable], scheme=scheme),
+            winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_SET_VALUE) as key,
+        ):
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "new-installer")
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as key:
+            assert winreg.QueryValueEx(key, "")[0] == "new-installer"
+    finally:
+        for suffix in ("\\shell\\open\\command", "\\shell\\open", "\\shell", ""):
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, base + suffix)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows protocol registration")
+def test_source_callback_older_launcher_exit_keeps_newer_registration():
+    import winreg
+    from contextlib import ExitStack, suppress
+    from uuid import uuid4
+
+    from buddy_desktop.source_callback import windows_source_callback
+
+    scheme = "buddy-test-" + uuid4().hex
+    base = "Software\\Classes\\" + scheme
+    path = base + "\\shell\\open\\command"
+    try:
+        older = ExitStack()
+        older.enter_context(windows_source_callback([sys.executable], scheme=scheme))
+        with windows_source_callback([sys.executable], scheme=scheme):
+            older.close()
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as key:
+                assert winreg.QueryValueEx(key, "")[0].endswith('--auth-callback "%1"')
+    finally:
+        for suffix in ("\\shell\\open\\command", "\\shell\\open", "\\shell", ""):
+            with suppress(OSError):
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, base + suffix)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows shell URL activation")
+def test_windows_shell_launches_source_callback_and_relays_to_pending_login(qapp, qtbot, tmp_path):
+    import os
+    from pathlib import Path
+
+    from buddy_desktop.source_callback import windows_source_callback
+
+    python = Path(sys.executable).with_name("pythonw.exe")
+    server = NativeCallbackServer(directory=tmp_path)
+    assert server.start()
+    script = (
+        "import sys; from pathlib import Path; from PySide6.QtCore import QCoreApplication; "
+        "from buddy_desktop.native_callback import NativeCallbackServer; "
+        "app=QCoreApplication([]); "
+        f"server=NativeCallbackServer(directory=Path({str(tmp_path)!r})); "
+        "assert not server.start(sys.argv[-1])"
+    )
+    try:
+        with (
+            windows_source_callback([str(python), "-c", script]),
+            pending_callback.waiting("shell-source") as attempt,
+        ):
+            os.startfile(CALLBACK + "?state=shell-source&code=synthetic-shell-code")
+            qtbot.waitUntil(attempt.received.is_set, timeout=10000)
+            assert attempt.code == "synthetic-shell-code"
+    finally:
+        server.close()

@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication
 from buddy_desktop import __version__
 from buddy_desktop.config import AppConfig, ConfigurationError, validate_api_url
 from buddy_desktop.native_callback import NativeCallbackServer
+from buddy_desktop.visuals import apply_theme
 from buddy_desktop.window import MainWindow
 from buddy_identity.config import IdentityError
 
@@ -90,7 +91,7 @@ def run_application(
     except IdentityError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    app.setStyleSheet(files("buddy_desktop").joinpath("theme.qss").read_text(encoding="utf-8"))
+    apply_theme(app)
     settings = QSettings()
     window = MainWindow(
         resolve_config(config, settings, environment_override=environment_override),

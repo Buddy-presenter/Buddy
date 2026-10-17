@@ -3,8 +3,10 @@
 Buddy uses an Amazon Cognito user pool and a public desktop app client. Account creation,
 email verification, password validation, recovery codes and recovery errors are handled
 by Cognito's managed login in the system browser. Buddy never collects a password.
-The Home page offers Sign in, Create account, Recover account, Resume session and Sign out.
-Recovery finishes in the browser; continue signing in there to return to Buddy.
+The Home page offers Sign in, Create account, Forgot password, Resume session and Sign out.
+Sign-in requires email and password, not an email code. Signup requires the email
+verification code. Forgot password sends a recovery code; enter that code and a new
+password, then sign in with email/password in the browser to return to Buddy.
 
 ## Configuration
 
@@ -54,9 +56,56 @@ packages declare it in CFBundleURLTypes and are re-signed after metadata generat
 before notarization. Windows launches a second process that
 forwards the callback to the existing instance over a user-only named pipe. macOS sends
 QFileOpenEvent to the application. Unix-domain IPC uses a private user-owned directory;
-there is no HTTP listener. Source-only runs cannot register themselves with the OS:
-install the preview package before exercising browser return. Cold-start/unsolicited
+there is no HTTP listener. Regular source-only runs do not register themselves with the OS:
+install the preview package or use the explicit Windows local launcher below.
+Cold-start/unsolicited
 callbacks never create a session; start a fresh login in Buddy after a restart.
+
+## Local account development (Windows)
+
+The API/database can stay local while Cognito supplies the real managed login and
+email delivery. This does not need AWS CLI credentials, create a local email service,
+or change AWS infrastructure. Both processes must use the same public pool/client
+configuration. Local liveness alone does not prove that identity or the database is ready.
+
+Install the editable shared, desktop and API packages as described in development.
+Configure your local PostgreSQL URL and explicitly migrate it, then start the API:
+
+```powershell
+$env:BUDDY_ENVIRONMENT = 'development'
+$env:BUDDY_DATABASE_URL = 'postgresql://buddy:<password>@127.0.0.1:5432/buddy?sslmode=disable'
+.\.venv\Scripts\python.exe -m buddy_api.persistence.migrate upgrade
+.\.venv\Scripts\python.exe backend/scripts/run_local_accounts.py
+```
+
+In another terminal, close older Buddy windows and launch the desktop:
+
+```powershell
+.\.venv\Scripts\python.exe frontend/scripts/run_local_accounts.py
+```
+
+The backend launcher requires a local database and loopback binding, and loads the
+existing public Cognito configuration when not explicitly overridden. It never migrates
+automatically. The desktop launcher defaults to the local API, overriding the preview's
+staging default for this process, and temporarily registers the current Python environment
+as the Windows callback target. Normal exit or a Python exception restores the previous
+registration; a concurrent installer registration is preserved. Abrupt termination can
+leave the source handler installed; reinstall Buddy to restore the packaged handler.
+A source callback still requires an active single-use
+state/PKCE attempt; launching an unsolicited URL does not sign in.
+
+This registers the source-run return path without requiring an old preview executable.
+Windows shell activation passes automated checks. The requester subsequently confirmed
+that login worked locally. Full signup, password recovery, session renewal and macOS
+acceptance still need their separate live checks.
+On macOS use the packaged app's registered URL scheme. No mocked accounts or email codes
+are used by either launcher. Local upload storage remains unavailable unless the real
+storage service is separately configured; this account setup does not fabricate it.
+
+Check `/api/v1/ready` before logging in. A successful browser login followed by a Buddy
+error can mean an unavailable/unconfigured local API, an unmigrated database, or mismatched
+pool/client configuration. A browser that cannot open Buddy usually means a missing/stale
+protocol registration. Record the exact visible error and whether browser return occurred.
 
 Stable packaging requires `--deployment-config <public-json>` with an explicitly
 validated HTTPS API and Cognito target, distinct from staging. Configure the release

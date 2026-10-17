@@ -72,6 +72,16 @@ def test_supported_browser_flows_use_pkce_and_no_tokens_in_urls(session, monkeyp
     monkeypatch.setattr(auth, "browser_code", lambda url, *args: urls.append(url) or "code")
     assert client.sign_in(action) == identifier
     parameters = parse_qs(urlsplit(urls[0]).query)
+    assert (
+        urlsplit(urls[0]).path
+        == {
+            "signin": "/oauth2/authorize",
+            "signup": "/signup",
+            "recovery": "/forgotPassword",
+        }[action]
+    )
+    assert parameters["redirect_uri"] == ["org.buddy.desktop://oauth/callback"]
+    assert parameters["prompt"] == ["login"]
     exchange = parse_qs(requests[0].data.decode())
     expected = (
         auth.base64.urlsafe_b64encode(
