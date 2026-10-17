@@ -12,6 +12,8 @@ from fastapi.testclient import TestClient
 from pptx import Presentation
 from pptx.util import Inches
 from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSessionTransaction
 from starlette.requests import Request
 
 from buddy_api.app import create_app
@@ -20,7 +22,6 @@ from buddy_api.config import Environment, Settings
 from buddy_api.persistence.models import Deck, DeckUpload, ProcessingJob
 from buddy_api.uploads.config import UploadSettings
 from buddy_api.uploads.contracts import PPTX_TYPE, UploadError, UploadMetadata
-from buddy_api.uploads.service import UploadService
 from buddy_api.uploads.storage import SourceStorage
 from buddy_identity.config import IdentityConfig
 
@@ -217,18 +218,33 @@ def test_storage_failure_cleanup_and_same_key_retry(upload_app, after_put):
 def test_database_commit_failure_never_deletes_an_accepted_source(
     upload_app, monkeypatch, committed
 ):
-    original = UploadService.finalize
+    original = AsyncSessionTransaction.__aexit__
+    injected = False
 
-    async def fail(self, *args):
-        if committed:
-            await original(self, *args)
-        raise UploadError(503, "service_unavailable", "Commit acknowledgement lost.")
+    async def fail_commit(self, exception_type, exception, traceback):
+        nonlocal injected
+        completing_upload = any(
+            isinstance(record, DeckUpload) and record.status == "complete"
+            for record in self.session.identity_map.values()
+        )
+        if not injected and exception_type is None and completing_upload:
+            injected = True
+            if committed:
+                await original(self, None, None, None)
+            else:
+                failure = SQLAlchemyError("private database diagnostics")
+                await original(self, type(failure), failure, None)
+            raise SQLAlchemyError("private commit acknowledgement diagnostics")
+        return await original(self, exception_type, exception, traceback)
 
-    monkeypatch.setattr(UploadService, "finalize", fail)
+    # Inject at SQL transaction I/O; preserve actual service logic and PostgreSQL
+    # writes, constraints and finalization in both failure scenarios.
+    monkeypatch.setattr(AsyncSessionTransaction, "__aexit__", fail_commit)
     with upload_app() as (client, cloud, _):
         key = uuid4()
         identifier = initialize(client, key).json()["data"]["id"]
         assert transfer(client, identifier).status_code == 503
+        assert injected
         assert bool(cloud.objects) is committed
         assert client.get("/api/v1/decks").json()["data"]["total"] == int(committed)
         if committed:
@@ -350,6 +366,38 @@ def test_concurrent_admission_and_double_transfer_claims_are_bounded(upload_app)
 
         client.portal.call(race)
         assert not cloud.objects
+
+
+def test_global_upload_capacity_applies_across_distinct_owners(upload_app):
+    with upload_app(global_concurrency=1) as (client, _, _):
+        assert initialize(client).status_code == 200
+        client.headers["Authorization"] = "Bearer account-b"
+        limited = initialize(client)
+        assert limited.status_code == 429
+        assert limited.headers["Retry-After"] == "30"
+
+
+def test_stale_transfer_cannot_complete_or_cancel_a_newer_retry(upload_app):
+    with upload_app() as (client, _, service):
+        key = uuid4()
+        identifier = UUID(initialize(client, key).json()["data"]["id"])
+        owner = UUID(client.get("/api/v1/auth/me").json()["data"]["id"])
+
+        async def scenario():
+            old = await service.claim(owner, identifier)
+            await service.mark_cleanup(old, "upload_interrupted")
+            await service.cleanup(identifier)
+            await service.initialize(owner, key, UploadMetadata.model_validate(metadata()))
+            new = await service.claim(owner, identifier)
+            assert old.lease_id != new.lease_id
+            with pytest.raises(UploadError) as error:
+                await service.finalize(old, "late-version", 1)
+            assert error.value.status == 409
+            await service.mark_cleanup(old, "storage_unavailable")
+            assert (await service.get(owner, identifier)).status == "receiving"
+
+        client.portal.call(scenario)
+        assert client.get("/api/v1/decks").json()["data"]["total"] == 0
 
 
 @pytest.mark.parametrize("timeout", [False, True])

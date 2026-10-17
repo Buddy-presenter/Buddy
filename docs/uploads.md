@@ -140,3 +140,30 @@ head through an authorized staging route, then record the API image/source SHA a
 - Keep tokens, private filenames/content, bucket keys and raw operator logs out of public
   evidence. Publish only sanitized results and the reviewed revision. Until real S3 and
   owner isolation pass, issue #7 stays incomplete and dependent work must wait.
+
+For the human browser-login/upload checks, close Buddy and run from PowerShell in the
+repository root (this uses the same secure saved-session store as Buddy):
+
+```powershell
+.\.venv\Scripts\python.exe tests/manual_upload.py --file frontend/tests/fixtures/slide_actions/standard.pptx
+```
+
+If no saved session can resume, a browser opens for you to sign in. The helper prints
+only test results and non-secret retry/upload/deck UUIDs. Record those UUIDs. Run it again
+with the same `--file` and `--key <printed-retry-UUID>`; expect the **same deck UUID**.
+A new key deliberately creates a new deck. This is a real upload; accepted deck deletion
+remains issue #35. Use the Buddy-authored fixture or a file you intend to store privately.
+
+To check a second account, first sign out of the first account in Buddy (including its
+browser handoff), close Buddy again, and run:
+
+```powershell
+.\.venv\Scripts\python.exe tests/manual_upload.py --new-login --check-other-upload <first-upload-UUID> --check-other-deck <first-deck-UUID>
+```
+
+Sign in as the **other account**. Both reads must return 403; signing into the same account
+correctly fails this isolation test. The automated staging acceptance must additionally
+check cross-account PUT denial and S3 original-version equality/cleanup as listed above.
+The helper never fetches another account's private file or prints tokens. After the test,
+relaunch Buddy with the staging settings from [accounts](accounts.md) and refresh Library;
+the first account should see its saved deck as Awaiting processing.
