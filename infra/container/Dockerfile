@@ -23,7 +23,7 @@ RUN apt-get update && apt-get upgrade -y \
 COPY --from=builder /wheels /wheels
 RUN python -m pip install --no-cache-dir --no-index --find-links=/wheels 'buddy-backend[api]' boto3 \
     && rm -rf /wheels
-COPY --chmod=0444 infra/container/container_entrypoint.py infra/container/bootstrap_database.py infra/container/migrate_database.py /opt/buddy/
+COPY --chmod=0555 infra/container/container_entrypoint.py infra/container/bootstrap_database.py infra/container/migrate_database.py /opt/buddy/
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 USER 10001:10001
 EXPOSE 8000
