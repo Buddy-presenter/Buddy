@@ -66,6 +66,11 @@ error request IDs. The PostgreSQL smoke writes a real processing job, reads it f
 application instance and checks foreign-owner rejection. Existing API migration/restart,
 identity, error, cancellation and Qt lifecycle tests remain in the suites.
 
+`frontend/tests/test_slide_actions.py` exercises the real slide executor with checked-in,
+Buddy-authored PowerPoint image exports. It checks rendered viewport pixels, coordinate
+mapping, all five catalog actions, malformed/stale inputs and load failure/cancellation
+recovery. See [slide actions](slide-actions.md) for fixture permission and capture commands.
+
 ## Native checks and remaining prerequisite
 
 CI runs the Qt suite and built-wheel GUI smoke on Windows and macOS for Python 3.12/3.14.

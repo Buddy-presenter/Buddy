@@ -1,0 +1,55 @@
+{
+  "version": "1.0",
+  "deck_id": "buddy-authored-fixtures",
+  "render_id": "powerpoint-export-v1",
+  "slides": [
+    {
+      "slide_id": "slide:wide/opaque",
+      "source": {
+        "width": 1920,
+        "height": 1080,
+        "units": "source_pixels",
+        "origin": "top_left"
+      },
+      "raster": {
+        "path": "wide.png",
+        "width": 960,
+        "height": 540,
+        "transform": "scale",
+        "sha256": "5d73e0f3ee527a2799c98980063729648f2ea907f0ff78be733ba257e508ffa7"
+      }
+    },
+    {
+      "slide_id": "slide:standard/opaque",
+      "source": {
+        "width": 1440,
+        "height": 1080,
+        "units": "source_pixels",
+        "origin": "top_left"
+      },
+      "raster": {
+        "path": "standard.png",
+        "width": 720,
+        "height": 540,
+        "transform": "scale",
+        "sha256": "ad34d29b944a6bde07a2e5da52546cde9d6453c067ea1683a29e0f66222e1cf7"
+      }
+    },
+    {
+      "slide_id": "slide:portrait/opaque",
+      "source": {
+        "width": 1080,
+        "height": 1440,
+        "units": "source_pixels",
+        "origin": "top_left"
+      },
+      "raster": {
+        "path": "portrait.png",
+        "width": 540,
+        "height": 720,
+        "transform": "scale",
+        "sha256": "7a9d9b91cbaa3fefc2ebaf33dcee72c0b9ffb1207808422743ff7db12c58b0f3"
+      }
+    }
+  ]
+}

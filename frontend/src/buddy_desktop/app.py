@@ -55,3 +55,4 @@ def main() -> int:
         window.runner.wait_for_shutdown()
         window.account.runner.wait_for_shutdown()
         window.library.runner.wait_for_shutdown()
+        window.present.executor.wait_for_shutdown()

@@ -18,9 +18,10 @@ from PySide6.QtWidgets import (
 from buddy_desktop.account_widget import AccountWidget
 from buddy_desktop.config import AppConfig, ConfigurationError, validate_api_url
 from buddy_desktop.library_widget import LibraryWidget
+from buddy_desktop.present_widget import PresentWidget
 from buddy_desktop.services import Health, HealthService
 from buddy_desktop.tasks import TaskRunner
-from buddy_desktop.views import HomePage, SettingsPage, UnavailablePage
+from buddy_desktop.views import HomePage, SettingsPage
 
 
 class MainWindow(QMainWindow):
@@ -70,6 +71,8 @@ class MainWindow(QMainWindow):
         self.home = HomePage(config.api_url)
         self.account = AccountWidget(config.api_url)
         self.library = LibraryWidget(config, self.account)
+        self.present = PresentWidget()
+        self.present.executor.idle.connect(self._present_idle)
         self.library.activity_changed.connect(self._library_activity)
         self.home.body.insertWidget(self.home.body.count() - 1, self.account)
         self.home.check_requested.connect(self.check_connection)
@@ -79,10 +82,7 @@ class MainWindow(QMainWindow):
         page_widgets = [
             self.home,
             self.library,
-            UnavailablePage(
-                "Present",
-                "Presentation tools will be available when deck processing is connected.",
-            ),
+            self.present,
             self.preferences,
         ]
         for page in page_widgets:
@@ -124,8 +124,15 @@ class MainWindow(QMainWindow):
     @Slot(int)
     def navigate(self, index: int) -> None:
         if 0 <= index < self.pages.count():
+            previous = self.pages.currentIndex()
             self.pages.setCurrentIndex(index)
             self.library.activate(index == 1)
+            if index == 2:
+                self.statusBar().showMessage(
+                    "Present controls use local slide files. No backend connection is needed."
+                )
+            elif previous == 2:
+                self.statusBar().clearMessage()
 
     @Slot()
     def check_connection(self) -> None:
@@ -189,6 +196,11 @@ class MainWindow(QMainWindow):
         if self._closing and not busy:
             self.close()
 
+    @Slot()
+    def _present_idle(self) -> None:
+        if self._closing:
+            self.close()
+
     @Slot(str)
     def save_settings(self, value: str) -> None:
         if (
@@ -233,13 +245,19 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         self.account.shutdown()
         self.library.shutdown()
-        if self.runner.busy or self.account.runner.busy or self.library.runner.busy:
+        self.present.shutdown()
+        if (
+            self.runner.busy
+            or self.account.runner.busy
+            or self.library.runner.busy
+            or self.present.executor.busy
+        ):
             self._closing = True
             self.runner.stop()
             central = self.centralWidget()
             if central is not None:
                 central.setEnabled(False)
-            self.statusBar().showMessage("Closing after the current connection check finishes…")
+            self.statusBar().showMessage("Closing after the current operation finishes…")
             event.ignore()
             return
         self.settings.setValue("window/geometry", self.saveGeometry())
