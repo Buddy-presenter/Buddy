@@ -59,12 +59,14 @@ async def seed(database, subject="synthetic-owner"):
             owner_id=user.id, title="Synthetic deck", source_key="private/synthetic.pptx"
         )
         job = await repos.jobs.create(owner_id=user.id, deck_id=deck.id)
-        analysis = await repos.analyses.create(
+        from backend.tests.support.analysis import create
+
+        analysis = await create(
+            repos,
             owner_id=user.id,
             deck_id=deck.id,
             job_id=job.id,
             version=1,
-            graph={"slides": [{"id": "slide-1"}]},
         )
         session = await repos.sessions.create(
             owner_id=user.id, deck_id=deck.id, analysis_version_id=analysis.id
@@ -104,9 +106,9 @@ def test_data_survives_api_restarts_with_real_readiness(database_settings):
                 await repos.decks.get(deck, owner_id=owner)
             ).source_key == "private/synthetic.pptx"
             assert (await repos.jobs.get(job, owner_id=owner)).status == "pending"
-            assert (await repos.analyses.get(analysis, owner_id=owner)).graph == {
-                "slides": [{"id": "slide-1"}]
-            }
+            result = await repos.analyses.read(analysis, owner_id=owner)
+            assert result.inputs.presentation_summary.status == "available"
+            assert len(result.slides) == 2
             assert (
                 await repos.sessions.get(session, owner_id=owner)
             ).analysis_version_id == analysis
@@ -136,10 +138,15 @@ def test_repository_ownership_and_database_cross_owner_constraints(database_sett
             with pytest.raises(PersistenceConflict):
                 async with db.transaction() as repos:
                     await repos.jobs.create(owner_id=other.id, deck_id=deck)
-            with pytest.raises(PersistenceConflict):
+            with pytest.raises(RecordNotFound):
                 async with db.transaction() as repos:
+                    from backend.tests.support.analysis import document
+
                     await repos.analyses.create(
-                        owner_id=other.id, deck_id=deck, version=2, graph={}
+                        owner_id=other.id,
+                        deck_id=deck,
+                        version=2,
+                        document=document(deck, uuid4(), job),
                     )
             async with db.transaction() as repos:
                 other_deck = await repos.decks.create(owner_id=owner, title="Other deck")
@@ -187,7 +194,9 @@ def test_parameterized_text_and_version_uniqueness(database_settings):
                 assert (await repos.decks.get(literal.id, owner_id=owner)).title == title
             with pytest.raises(PersistenceConflict):
                 async with db.transaction() as repos:
-                    await repos.analyses.create(owner_id=owner, deck_id=deck, version=1, graph={})
+                    from backend.tests.support.analysis import create
+
+                    await create(repos, owner_id=owner, deck_id=deck, version=1)
             await db.check_ready()
         finally:
             await db.close()

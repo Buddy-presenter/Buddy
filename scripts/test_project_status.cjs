@@ -59,7 +59,11 @@ async function check({draft=false, state='open', merged=false, events=[], review
         assert.equal(v.item, 'item');
         mutations.push(v.status);return {};
       }
-      if(q.includes('fields(first:100)')) return {user:{projectV2:{id:'p',fields:{pageInfo,nodes:[{id:'f',name:'Status',options:[{id:'progress',name:'In Progress'},{id:'waiting',name:'Waiting for review'},{id:'reviewed',name:'Reviewed'},{id:'done',name:'Done'}]}]}}}};
+      if(q.includes('fields(first:100)')) {
+        assert.match(q, /organization\(login:"Buddy-presenter"\)/);
+        assert.doesNotMatch(q, /user\(login:/);
+        return {organization:{projectV2:{id:'p',fields:{pageInfo,nodes:[{id:'f',name:'Status',options:[{id:'progress',name:'In Progress'},{id:'waiting',name:'Waiting for review'},{id:'reviewed',name:'Reviewed'},{id:'done',name:'Done'}]}]}}}};
+      }
       if(q.includes('items(first:100')) {
         const index = v.cursor === null ? 0 : Number(v.cursor);
         const batches = itemPages ?? [[{id:'item',isArchived:archived,content:{__typename:'Issue',id:'issue',number:46,state:closedIssue?'CLOSED':'OPEN',repository:{nameWithOwner:'Buddy-presenter/Buddy'}},fieldValueByName:{optionId:'backlog'}}]];

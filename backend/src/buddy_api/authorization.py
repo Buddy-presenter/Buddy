@@ -80,7 +80,10 @@ def resource_data(record: OwnedRecord) -> dict[str, Any]:
     if isinstance(record, Deck):
         data["title"] = record.title
     elif isinstance(record, AnalysisVersion):
-        data.update(deck_id=str(record.deck_id), version=record.version, graph=record.graph)
+        # The generic resource route is metadata only; /analyses/{id} owns the typed payload.
+        data.update(
+            deck_id=str(record.deck_id), version=record.version, publication=record.publication
+        )
     elif isinstance(record, RenderedAsset):
         data.update(
             deck_id=str(record.deck_id),

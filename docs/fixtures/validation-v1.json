@@ -1,0 +1,20 @@
+{
+  "schema_version": "buddy.validation.v1",
+  "validation_id": "00000000-0000-4000-8000-000000000004",
+  "analysis_id": "00000000-0000-4000-8000-000000000005",
+  "analysis_sha256": "fd5bf7fe244ffb45040c3104fd343ace730e6d9adce3f40cc31c3f8d1e9116fb",
+  "instance_id": "focus-title",
+  "action_sha256": "4e72e16ae75d310398d733d9059136092b49d2def8f32862f5bfb208122ea2a7",
+  "validator_version": "fixture-validator-v1",
+  "renderer_version": "fixture-renderer-v1",
+  "display_profile": "1920x1080-dpr1-v1",
+  "state": "validated",
+  "reasons": [],
+  "evidence": [
+    {
+      "id": "00000000-0000-4000-8000-000000000006",
+      "kind": "executor_result",
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    }
+  ]
+}

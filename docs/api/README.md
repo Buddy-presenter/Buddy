@@ -3,7 +3,8 @@
 The API is a separate server process used by the native desktop client and future
 processing workers; it is not a browser frontend. The implemented service includes
 operational health/readiness/version endpoints, Cognito account identity, server-side
-authorization, and persisted library reads. Upload, processing, analysis, and live
+authorization, persisted library reads and [typed summary/action records](../analysis.md).
+Upload, processing, analysis generation, and live
 presentation workflows remain separate issues. [PostgreSQL persistence](../database.md)
 describes the durable records and local database setup.
 

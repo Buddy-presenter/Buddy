@@ -22,7 +22,7 @@ object URL or unprotected download endpoint is introduced here.
 
 GET /api/v1/decks adds the [owner-scoped library](library.md): bounded pagination,
 literal title search, deterministic sorting and persisted processing states. Both the
-result rows and total exclude other accounts, with no source/asset keys or graph data.
+result rows and total exclude other accounts, with no source/asset keys or analysis bodies.
 
 PATCH uses a strict body without owner identifiers. Deck titles can be changed. Session
 activation/end requires the current state_version and uses a locked transaction; stale

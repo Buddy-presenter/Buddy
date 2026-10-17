@@ -1,17 +1,16 @@
 """Internal repositories; owned reads always require an explicit account scope."""
 
 from dataclasses import dataclass
-from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from buddy_api.analysis.store import Analyses
 from buddy_api.extraction.contracts import Extraction
 from buddy_api.persistence.errors import RecordNotFound
 from buddy_api.persistence.models import (
-    AnalysisVersion,
     Deck,
     DeckExtraction,
     OwnedRecord,
@@ -125,23 +124,6 @@ class Extractions(OwnedRepository[DeckExtraction]):
         return value
 
 
-class Analyses(OwnedRepository[AnalysisVersion]):
-    async def create(
-        self,
-        *,
-        owner_id: UUID,
-        deck_id: UUID,
-        version: int,
-        graph: dict[str, Any],
-        job_id: UUID | None = None,
-    ) -> AnalysisVersion:
-        return await self._add(
-            AnalysisVersion(
-                owner_id=owner_id, deck_id=deck_id, version=version, graph=graph, job_id=job_id
-            )
-        )
-
-
 class Sessions(OwnedRepository[PresentationSession]):
     async def create(
         self, *, owner_id: UUID, deck_id: UUID, analysis_version_id: UUID
@@ -168,7 +150,7 @@ class Repositories:
             Users(session),
             Decks(session, Deck),
             Jobs(session, ProcessingJob),
-            Analyses(session, AnalysisVersion),
+            Analyses(session),
             Sessions(session, PresentationSession),
             Extractions(session, DeckExtraction),
         )
