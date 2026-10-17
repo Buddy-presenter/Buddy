@@ -66,8 +66,9 @@ class LibraryWidget(QWidget):
         self.pending = False
         self.account_busy = False
         self.last_page: LibraryPage | None = None
-        self.account_key: tuple[int, str | None] | None = None
+        self.account_key: tuple[int, str | None, str] | None = None
         self.upload_keys: dict[tuple[Path, int, int], UUID] = {}
+        self.upload_request: tuple[tuple[Path, int, int], UUID] | None = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(32, 28, 32, 28)
         heading = QLabel("Library")
@@ -220,9 +221,14 @@ class LibraryWidget(QWidget):
             )
 
     def account_changed(self) -> None:
-        self.private_invalidated.emit()
         self.invalidate()
-        key = (id(self.account.session), self.account.account_id) if self.token() else None
+        key = (
+            (id(self.account.session), self.account.account_id, self.config.api_url)
+            if self.token()
+            else None
+        )
+        if key is None or key != self.account_key:
+            self.private_invalidated.emit()
         if key != self.account_key:
             self.page = 1
             self.upload_keys.clear()
@@ -289,6 +295,12 @@ class LibraryWidget(QWidget):
         return not self.closing and self.active and self.request_generation == self.generation
 
     def completed(self, _identifier: int, result: object) -> None:
+        # A confirmed upload retires its key even if a routine account check or
+        # navigation invalidated the library response while transfer was running.
+        if isinstance(result, SavedPresentation) and self.upload_request:
+            fingerprint, key = self.upload_request
+            if self.upload_keys.get(fingerprint) == key:
+                del self.upload_keys[fingerprint]
         if not self.current():
             return
         if isinstance(result, LibraryAccessExpired):
@@ -373,6 +385,7 @@ class LibraryWidget(QWidget):
             self.state.show_state("Library unavailable", message, retry=True)
 
     def idle(self) -> None:
+        self.upload_request = None
         self.activity_changed.emit(False)
         self.refresh.setEnabled(not self.closing and self.token() is not None)
         self.upload_button.setEnabled(not self.closing and self.token() is not None)
@@ -394,7 +407,9 @@ class LibraryWidget(QWidget):
                 self.state.show_state("File unavailable", "Choose a readable presentation file.")
                 return
             # Keep the same reservation key for retries during this account session.
-            key = self.upload_keys.setdefault((path, info.st_size, info.st_mtime_ns), uuid4())
+            fingerprint = (path, info.st_size, info.st_mtime_ns)
+            key = self.upload_keys.setdefault(fingerprint, uuid4())
+            self.upload_request = (fingerprint, key)
             self.run_presentation(lambda service: service.upload(path, key))
 
     def open_selected(self) -> None:

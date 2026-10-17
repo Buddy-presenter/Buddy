@@ -14,6 +14,11 @@ reservation, checksums, quotas and private API transport. Select a saved PDF and
 a PDF can be presented while its status is Awaiting processing. A saved PPTX explains
 that its playback and processing pipeline are not supported yet.
 
+Interrupted upload retries keep their reservation key until completion is confirmed.
+Selecting the same file again after a successful upload creates a separate deck.
+Routine successful checks of the same account preserve the active presentation and
+full-screen state; loss of access or a change of account/session/backend clears it.
+
 Present also opens local PDFs without an account. Previous, next, go to slide, zoom to
 selection, highlight and reset use the existing six-action executor and top-left page
 coordinates. Existing JSON/PNG manifests remain supported through the secondary file

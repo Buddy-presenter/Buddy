@@ -137,3 +137,73 @@ def test_failed_local_open_does_not_remove_private_account_boundary(desktop_wind
     assert window._private_presentation
     window.account.session_changed.emit()
     assert page.executor.manifest is None and page.surface.slide is None
+
+
+def test_routine_async_account_check_preserves_private_fullscreen(desktop_window, qtbot):
+    import time
+    from threading import Event
+    from types import SimpleNamespace
+
+    from buddy_desktop.auth import Tokens
+
+    window = desktop_window()
+    account = window.account
+    account.account_id = "same-account"
+    account.session = SimpleNamespace(
+        tokens=Tokens("access", "refresh", time.monotonic() + 3600),
+        cancelled=Event(),
+        account=lambda: "same-account",
+    )
+    account.session_changed.emit()
+    window.navigation.setCurrentRow(2)
+    page = window.present
+    page.load_pdf(FIXTURE, deck_id="private-deck", revision="private-v1")
+    qtbot.waitUntil(lambda: not page.executor.busy, timeout=10000)
+    page.send("highlight_region", {"region": {"x": 100, "y": 450, "width": 100, "height": 40}})
+    page.enter_fullscreen()
+    manifest, fullscreen = page.executor.manifest, page.fullscreen
+    account.check_session()
+    qtbot.waitUntil(lambda: not account.runner.busy)
+    assert account.account_id == "same-account"
+    assert page.executor.manifest is manifest
+    assert page.fullscreen is fullscreen and fullscreen.isFullScreen()
+    assert page.surface.highlight == Region(100, 450, 100, 40)
+    assert window._private_presentation
+
+
+@pytest.mark.parametrize("change", ["identity", "backend", "signout", "expired", "session"])
+def test_private_presentation_clears_on_access_boundary_change(desktop_window, qtbot, change):
+    import time
+    from threading import Event
+    from types import SimpleNamespace
+
+    from buddy_desktop.auth import Tokens
+    from buddy_desktop.config import AppConfig
+
+    window = desktop_window()
+    account = window.account
+    account.account_id = "owner"
+    account.session = SimpleNamespace(
+        tokens=Tokens("access", "refresh", time.monotonic() + 3600), cancelled=Event()
+    )
+    account.session_changed.emit()
+    page = window.present
+    page.load_pdf(FIXTURE, deck_id="private-deck", revision="private-v1")
+    qtbot.waitUntil(lambda: not page.executor.busy, timeout=10000)
+    page.enter_fullscreen()
+    if change == "backend":
+        window.library.configure(AppConfig("https://other.example"))
+    else:
+        if change == "identity":
+            account.account_id = "another-owner"
+        elif change == "signout":
+            account.session.tokens = None
+        elif change == "expired":
+            account.session.tokens = Tokens("access", "refresh", time.monotonic() - 1)
+        else:
+            account.session = SimpleNamespace(
+                tokens=Tokens("access", "refresh", time.monotonic() + 3600), cancelled=Event()
+            )
+        account.session_changed.emit()
+    assert page.executor.manifest is None and page.surface.slide is None
+    assert page.fullscreen is None
