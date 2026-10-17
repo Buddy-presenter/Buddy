@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import io
+import zipfile
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
@@ -315,6 +316,40 @@ def test_checksum_size_and_malformed_file_create_no_deck(upload_app):
         assert response.status_code == 422
         assert client.get(f"/api/v1/uploads/{invalid_id}").json()["data"]["retryable"] is False
         assert not cloud.objects
+        assert client.get("/api/v1/decks").json()["data"]["total"] == 0
+
+
+@pytest.mark.parametrize("bypass", ["mixed_case_xml", "embedded_package"])
+def test_parser_validation_bypasses_never_reach_storage_or_create_decks(upload_app, bypass):
+    output = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(SOURCE)) as original,
+        zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as malicious,
+    ):
+        for item in original.infolist():
+            malicious.writestr(item, original.read(item))
+        if bypass == "mixed_case_xml":
+            malicious.writestr("unused.RELS", b"<root>" + b"x" * (9 * 1024 * 1024) + b"</root>")
+        else:
+            malicious.writestr(
+                "ppt/slides/_rels/unused.xml.rels",
+                b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                b'<Relationship Id="attachment" '
+                b'Type="http://schemas.openxmlformats.org/officeDocument/2006/'
+                b'relationships/package" '
+                b'Target="../media/attached.xlsx"/></Relationships>',
+            )
+            malicious.writestr("ppt/media/attached.xlsx", b"unsupported embedded file")
+    content = output.getvalue()
+    with upload_app() as (client, cloud, _):
+        identifier = initialize(client, body=metadata(content)).json()["data"]["id"]
+        response = transfer(client, identifier, content)
+        assert response.status_code == 422
+        expected = "invalid_pptx" if bypass == "mixed_case_xml" else "unsupported_pptx"
+        assert response.json()["error"]["code"] == expected
+        status = client.get(f"/api/v1/uploads/{identifier}").json()["data"]
+        assert status["status"] == "failed" and status["retryable"] is False
+        assert cloud.puts == 0 and not cloud.objects
         assert client.get("/api/v1/decks").json()["data"]["total"] == 0
 
 

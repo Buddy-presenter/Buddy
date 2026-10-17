@@ -19,7 +19,11 @@ Only `.pptx` with content type
 `application/vnd.openxmlformats-officedocument.presentationml.presentation` is accepted.
 Extension/MIME alone are insufficient: the real contained OOXML parser checks package
 structure, relationships, duplicate/traversal/symlink/encrypted ZIP entries, XML security,
-slide count and resource budgets. A bounded additional pass verifies media CRCs.
+slide count and resource budgets. All XML inspection, including mixed-case `.xml` and
+`.rels` suffixes and unused parts, stays inside the isolated parser with its byte,
+node, depth, memory and time limits. A bounded additional pass verifies media CRCs
+without building XML trees in the API process. Embedded-package relationships are
+identified by their type regardless of the target folder or filename.
 Strict OOXML, legacy/encrypted PowerPoint, corrupt archives, macro parts/content types,
 embedded files (including Excel workbooks), OLE and ActiveX are rejected. Ordinary text,
 images and supported PresentationML remain unchanged. Charts containing an embedded

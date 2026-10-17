@@ -4,8 +4,6 @@ import time
 from pathlib import Path
 from zipfile import ZipFile
 
-from defusedxml.ElementTree import fromstring  # type: ignore[import-untyped]
-
 from buddy_api.extraction import extract_pptx
 from buddy_api.extraction.contracts import ExtractionError, Limits
 from buddy_api.uploads.config import UploadSettings
@@ -25,19 +23,13 @@ def validate_source(path: Path, revision: str, settings: UploadSettings) -> int:
         result = extract_pptx(path, source_revision=revision, limits=limits)
         if not result.slides:
             raise ExtractionError("invalid_presentation")
+        if any(warning.code == "embedded_material_not_executed" for warning in result.warnings):
+            raise ExtractionError("unsupported_active_content")
         # Validate CRCs of media too. Only XML parts are read by extraction. The
         # same immutable local file has already passed ZIP count/expanded limits.
         with ZipFile(path) as archive:
             expanded = 0
             for member in archive.infolist():
-                name = member.filename.lower()
-                if (
-                    "vba" in name
-                    or "/embeddings/" in name
-                    or "/activex/" in name
-                    or name.endswith((".exe", ".dll", ".com", ".bat", ".js", ".vbs"))
-                ):
-                    raise ExtractionError("unsupported_active_content")
                 if member.is_dir():
                     continue
                 with archive.open(member) as part:
@@ -47,17 +39,6 @@ def validate_source(path: Path, revision: str, settings: UploadSettings) -> int:
                             raise ExtractionError("archive_limit")
                         if time.monotonic() - start > limits.seconds:
                             raise ExtractionError("time_limit")
-                if name == "[content_types].xml" or name.endswith(".rels"):
-                    # The parser already verified this XML's bounded size/DTD rules.
-                    root = fromstring(archive.read(member), forbid_dtd=True)
-                    for element in root.iter():
-                        for attribute in ("ContentType", "Type"):
-                            value = element.get(attribute, "").lower()
-                            if any(
-                                word in value
-                                for word in ("macroenabled", "vba", "activex", "oleobject")
-                            ):
-                                raise ExtractionError("unsupported_active_content")
         return len(result.slides)
     except UploadError:
         raise

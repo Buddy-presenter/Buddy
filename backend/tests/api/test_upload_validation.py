@@ -101,6 +101,82 @@ def test_unused_xml_entities_are_rejected(source):
         validate_source(source, str(uuid4()), CONFIG)
 
 
+@pytest.mark.parametrize("suffix", ["RELS", "ReLs", "XML", "XmL"])
+@pytest.mark.parametrize("payload", ["size", "depth", "nodes", "entities"])
+def test_unused_mixed_case_xml_cannot_bypass_parser_limits(source, suffix, payload):
+    if payload == "size":
+        data = b"<root>" + b"x" * (9 * 1024 * 1024) + b"</root>"
+    elif payload == "depth":
+        data = b"<node>" * 65 + b"</node>" * 65
+    elif payload == "nodes":
+        data = b"<root>" + b"<n/>" * 1000000 + b"</root>"
+    else:
+        data = b'<!DOCTYPE a [<!ENTITY x "private">]><a>&x;</a>'
+    rewrite(source, [(f"unused.{suffix}", data)])
+    with pytest.raises(UploadError) as error:
+        validate_source(source, str(uuid4()), CONFIG)
+    assert error.value.status == 422
+    assert error.value.code == "invalid_pptx"
+
+
+@pytest.mark.parametrize("suffix", ["RELS", "ReLs", "XML", "XmL"])
+def test_bounded_unused_mixed_case_xml_is_supported(source, suffix):
+    rewrite(source, [(f"unused.{suffix}", b"<root/>")])
+    assert validate_source(source, str(uuid4()), CONFIG) == 1
+
+
+@pytest.mark.parametrize(
+    "relationship_base",
+    [
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/",
+        "http://purl.oclc.org/ooxml/officeDocument/relationships/",
+    ],
+)
+@pytest.mark.parametrize("relationship_part", ["slide1.xml.rels", "unused.xml.RELS"])
+def test_embedded_package_relationship_is_rejected_outside_embeddings(
+    source, relationship_base, relationship_part
+):
+    workbook = io.BytesIO()
+    with zipfile.ZipFile(workbook, "w") as archive:
+        archive.writestr("synthetic.xml", "<workbook/>")
+
+    relationship = (
+        f'<Relationship Id="attachment" Type="{relationship_base}package" '
+        'Target="../media/attached.xlsx"/>'
+    ).encode()
+
+    def replace(name, data):
+        if name == "[Content_Types].xml":
+            return data.replace(
+                b"</Types>",
+                b'<Override PartName="/ppt/media/attached.xlsx" '
+                b'ContentType="application/vnd.openxmlformats-officedocument.'
+                b'spreadsheetml.sheet"/></Types>',
+            )
+        if name == f"ppt/slides/_rels/{relationship_part}":
+            return data.replace(b"</Relationships>", relationship + b"</Relationships>")
+        return data
+
+    # Relationship semantics, not a conventional /embeddings/ path, identify this
+    # unsupported attachment. Also inspect unused/mixed-case relationship parts.
+    additions = [("ppt/media/attached.xlsx", workbook.getvalue())]
+    if relationship_part != "slide1.xml.rels":
+        relationships = (
+            b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            + relationship
+            + b"</Relationships>"
+        )
+        additions.append((f"ppt/slides/_rels/{relationship_part}", relationships))
+    rewrite(
+        source,
+        additions,
+        replace,
+    )
+    with pytest.raises(UploadError) as error:
+        validate_source(source, str(uuid4()), CONFIG)
+    assert error.value.code == "unsupported_pptx"
+
+
 def test_macro_content_type_in_utf16_cannot_bypass_checks(source):
     def replace(name, data):
         if name == "[Content_Types].xml":
