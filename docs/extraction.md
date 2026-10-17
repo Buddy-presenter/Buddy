@@ -89,7 +89,12 @@ apply on every platform. Parent timeout kills/reaps
 the parser. Failure to establish limits fails closed; caller cancellation is not a queue
 cancellation API. The stage accepts only stored/deflated unencrypted ZIP members, rejects
 duplicate/traversal/absolute/symlink entries, parses XML with DTD/entities/external entities
-forbidden, and checks unused XML as well. Node accounting includes repeat parses. No
+forbidden, and checks unused XML as well, including mixed-case `.xml`/`.rels` suffixes.
+Embedded/active material is reported through `embedded_material_not_executed`, using
+both package names and content-type/relationship metadata (including package
+relationships outside the conventional embeddings folder). Upload applies its rejection
+policy to that finding; extraction still never executes the content.
+Node accounting includes repeat parses. No
 archive member is extracted to disk; media/workbooks are never decoded/executed, external
 relationships are never fetched, and bounded part reads prevent XML expansion bombs.
 The parser inherits only basic OS/runtime environment entries, not database/provider

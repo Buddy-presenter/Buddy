@@ -70,6 +70,9 @@ For feature-specific contracts, read the linked guide before editing. Keep tests
 their owning component unless a test intentionally crosses a component boundary; those
 belong in `tests/integration/`.
 
+Authenticated original-PPTX ingestion, storage limits, retry contracts and recovery are
+documented in [private uploads](uploads.md). Desktop upload controls remain issue #37.
+
 The standalone backend PPTX extraction stage and local inspection command are documented
 in [extraction](extraction.md); it requires no upload, worker, renderer or paid provider.
 

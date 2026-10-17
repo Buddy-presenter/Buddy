@@ -53,6 +53,7 @@ class Package:
         self.names = set(self.zip.namelist())
         self.rels_cache: dict[str, dict[str, tuple[str, str | None]]] = {}
         self.external_links = False
+        self.embedded_material = False
 
     def __enter__(self) -> "Package":
         try:
@@ -63,6 +64,7 @@ class Package:
             expanded = 0
             for part in entries:
                 name = part.filename
+                lower_name = name.lower()
                 original = part.orig_filename
                 clean = name.rstrip("/")
                 if (
@@ -85,13 +87,26 @@ class Package:
                 expanded += part.file_size
                 if expanded > self.limits.expanded_bytes:
                     raise ExtractionError("archive_limit")
-                if name.endswith((".xml", ".rels")) and part.file_size > self.limits.part_bytes:
+                if (
+                    lower_name.endswith((".xml", ".rels"))
+                    and part.file_size > self.limits.part_bytes
+                ):
                     raise ExtractionError("xml_limit")
+                if (
+                    "vba" in lower_name
+                    or "/embeddings/" in lower_name
+                    or "/activex/" in lower_name
+                    or lower_name.endswith((".exe", ".dll", ".com", ".bat", ".js", ".vbs"))
+                ):
+                    self.embedded_material = True
             # Check every XML/rels part, including unused parts, for hostile markup.
             for part in entries:
-                if part.filename.endswith((".xml", ".rels")):
+                name = part.filename.lower()
+                if name.endswith((".xml", ".rels")):
                     root = self.xml(part.filename, cache=False)
-                    if part.filename.endswith(".rels"):
+                    if name == "[content_types].xml" or name.endswith(".rels"):
+                        self.inspect_embedded_material(root)
+                    if name.endswith(".rels"):
                         for relation in root:
                             if relation.get("TargetMode") == "External":
                                 self.external_links = True
@@ -102,6 +117,21 @@ class Package:
 
     def __exit__(self, *args: object) -> None:
         self.zip.close()
+
+    def inspect_embedded_material(self, root: Element) -> None:
+        # Report package facts inside the isolated parser. Upload owns the rejection
+        # policy; extraction may still expose cached content without executing it.
+        package_relationships = {
+            (REL + "package").lower(),
+            "http://purl.oclc.org/ooxml/officedocument/relationships/package",
+        }
+        for element in root.iter():
+            for attribute in ("ContentType", "Type"):
+                value = element.get(attribute, "").lower()
+                if value in package_relationships or any(
+                    word in value for word in ("macroenabled", "vba", "activex", "oleobject")
+                ):
+                    self.embedded_material = True
 
     def xml(self, part: str, *, cache: bool = True) -> Element:
         if part in self.cache:
