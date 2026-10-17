@@ -313,7 +313,7 @@ class MainWindow(QMainWindow):
         self.account.configure(url)
         self.library.configure(self.config)
         self.preferences.url.setText(url)
-        self.home.endpoint.setText(url)
+        self.home.set_endpoint(url)
         self.connection_status.setText("Connection not checked")
         self.home.connection.show_state(
             "Connection not checked", "Check the updated backend address."

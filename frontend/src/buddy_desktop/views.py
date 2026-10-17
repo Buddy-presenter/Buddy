@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -123,6 +124,9 @@ class HomePage(Page):
         self.endpoint.setTextFormat(Qt.TextFormat.PlainText)
         self.endpoint.setAccessibleName("Configured backend address")
         self.endpoint.setObjectName("muted")
+        self.endpoint.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self._endpoint_url = api_url
+        self.set_endpoint(api_url)
         self.check = QPushButton("Check connection")
         self.check.setAccessibleName("Check backend connection")
         command(self.check, "wifi")
@@ -150,6 +154,17 @@ class HomePage(Page):
             self.sections.removeWidget(self.connection_section)
             self.sections.addWidget(self.connection_section, 1 if narrow else 0, 0 if narrow else 1)
             self.sections.setColumnStretch(1, 0 if narrow else 2)
+        self.set_endpoint(self._endpoint_url)
+
+    def set_endpoint(self, url: str) -> None:
+        self._endpoint_url = url
+        self.endpoint.setToolTip(url)
+        self.endpoint.setAccessibleDescription(url)
+        self.endpoint.setText(
+            self.endpoint.fontMetrics().elidedText(
+                url, Qt.TextElideMode.ElideMiddle, max(1, self.endpoint.width())
+            )
+        )
 
 
 class UnavailablePage(Page):

@@ -136,3 +136,16 @@ def test_connection_header_tracks_real_request(desktop_window, qtbot, backend, t
     assert not window.activity_mark.active
     window.save_settings("http://127.0.0.1:9000")
     assert window.connection_status.text() == "Connection not checked"
+
+
+def test_long_endpoint_does_not_widen_home(desktop_window, themed):
+    url = "https://buddy.example/" + "x" * 400
+    window = desktop_window(url)
+    window.resize(800, 600)
+    themed.processEvents()
+    themed.processEvents()
+    assert window.width() == 800
+    assert window.pages.currentWidget().horizontalScrollBar().maximum() == 0
+    assert window.home.endpoint.toolTip() == url
+    assert window.home.endpoint.accessibleDescription() == url
+    assert len(window.home.endpoint.text()) < len(url)
