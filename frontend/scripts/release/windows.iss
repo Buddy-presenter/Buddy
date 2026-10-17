@@ -16,5 +16,9 @@ UninstallDisplayIcon={app}\Buddy.exe
 Source: "{#AppSource}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 [Icons]
 Name: "{group}\Buddy"; Filename: "{app}\Buddy.exe"
+[Registry]
+Root: HKCU; Subkey: "Software\Classes\org.buddy.desktop"; ValueType: string; ValueName: ""; ValueData: "URL:Buddy sign-in"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\org.buddy.desktop"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\org.buddy.desktop\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\Buddy.exe"" --auth-callback ""%1"""
 [Run]
 Filename: "{app}\Buddy.exe"; Description: "Open Buddy"; Flags: nowait postinstall skipifsilent

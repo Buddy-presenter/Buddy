@@ -42,7 +42,13 @@ def signed(monkeypatch):
     monkeypatch.setattr(
         auth,
         "request_json",
-        lambda _: {"UserAttributes": [{"Name": "sub", "Value": claims["sub"]}]},
+        lambda _: {
+            "UserAttributes": [
+                {"Name": "sub", "Value": claims["sub"]},
+                {"Name": "email", "Value": "verified@example.test"},
+                {"Name": "email_verified", "Value": "true"},
+            ]
+        },
     )
     return verifier, claims, private
 
@@ -103,3 +109,76 @@ def test_malformed_authorization_is_not_echoed():
         assert result.status_code == 401
         assert "secret-private" not in result.text
         app.state.database = None
+
+
+@pytest.mark.parametrize(
+    "attributes",
+    [
+        None,
+        {},
+        [],
+        [{"Name": "email_verified", "Value": "false"}],
+        [{"Name": "email_verified", "Value": True}],
+        [{"Name": "email_verified", "Value": "TRUE"}],
+        [{"Name": "email_verified", "Value": "true"}],
+        [{"Name": "email_verified", "Value": "true"}, {"Name": "email", "Value": "invalid"}],
+        [
+            {"Name": "email_verified", "Value": "true"},
+            {"Name": "email", "Value": "a@example.test"},
+            {"Name": "email_verified", "Value": "false"},
+        ],
+    ],
+)
+def test_missing_unverified_or_ambiguous_provider_email_rejected(signed, monkeypatch, attributes):
+    verifier, claims, key = signed
+    if isinstance(attributes, list):
+        attributes = [{"Name": "sub", "Value": claims["sub"]}, *attributes]
+    monkeypatch.setattr(auth, "request_json", lambda _: {"UserAttributes": attributes})
+    # Client/token-supplied verified claims cannot override GetUser's live attributes.
+    token = jwt.encode(
+        {**claims, "email_verified": True, "email": "a@example.test"}, key, algorithm="RS256"
+    )
+    with pytest.raises(SessionExpired):
+        verifier.verify(token)
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [
+        ("GET", "/api/v1/auth/me"),
+        ("GET", "/api/v1/decks"),
+        ("GET", "/api/v1/analyses/00000000-0000-4000-8000-000000000001"),
+        ("GET", "/api/v1/resources/decks/00000000-0000-4000-8000-000000000001"),
+        ("GET", "/api/v1/sessions/00000000-0000-4000-8000-000000000001/events"),
+        ("GET", "/api/v1/uploads/00000000-0000-4000-8000-000000000001"),
+        ("PUT", "/api/v1/uploads/00000000-0000-4000-8000-000000000001/content"),
+        ("POST", "/api/v1/uploads"),
+        ("PATCH", "/api/v1/resources/decks/00000000-0000-4000-8000-000000000001"),
+        ("DELETE", "/api/v1/resources/decks/00000000-0000-4000-8000-000000000001"),
+    ],
+)
+def test_unverified_identity_cannot_bypass_any_private_api(signed, monkeypatch, method, path):
+    verifier, claims, key = signed
+    monkeypatch.setattr(
+        auth,
+        "request_json",
+        lambda _: {
+            "UserAttributes": [
+                {"Name": "sub", "Value": claims["sub"]},
+                {"Name": "email", "Value": "unverified@example.test"},
+                {"Name": "email_verified", "Value": "false"},
+            ]
+        },
+    )
+    token = jwt.encode(claims, key, algorithm="RS256")
+    app = create_app(Settings(Environment.TEST, ("testserver",), identity=CONFIG))
+    with TestClient(app) as client:
+        app.state.authentication.verifier = verifier
+        # Any DB call would fail: rejection must happen before account bootstrap/resource access.
+        app.state.database = SimpleNamespace()
+        try:
+            response = client.request(method, path, headers={"Authorization": "Bearer " + token})
+            assert response.status_code == 401
+            assert "unverified@example.test" not in response.text
+        finally:
+            app.state.database = None

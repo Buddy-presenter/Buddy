@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import platform
+import plistlib
 import re
 import shutil
 import subprocess
@@ -13,6 +14,61 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def deployment_config(source: Path | None, *, production: bool = False) -> dict[str, str]:
+    from buddy_desktop.config import validate_api_url
+    from buddy_identity.config import IdentityConfig
+
+    if production and source is None:
+        raise ValueError("Production requires an explicit public deployment configuration.")
+    value = json.loads((source or ROOT / "infra/staging/public-config.json").read_text())
+    if (
+        not isinstance(value, dict)
+        or set(value)
+        != {
+            "BUDDY_API_URL",
+            "BUDDY_AWS_REGION",
+            "BUDDY_COGNITO_POOL_ID",
+            "BUDDY_COGNITO_CLIENT_ID",
+            "BUDDY_COGNITO_DOMAIN",
+        }
+        or not all(isinstance(v, str) for v in value.values())
+    ):
+        raise ValueError("Deployment configuration must contain only public API/identity settings.")
+    if not validate_api_url(value["BUDDY_API_URL"]).startswith("https://"):
+        raise ValueError("Packaged deployments require HTTPS.")
+    IdentityConfig.from_environment(value)
+    staging = json.loads((ROOT / "infra/staging/public-config.json").read_text())
+    if production and any(
+        value[key] == staging[key]
+        for key in (
+            "BUDDY_API_URL",
+            "BUDDY_COGNITO_POOL_ID",
+            "BUDDY_COGNITO_CLIENT_ID",
+            "BUDDY_COGNITO_DOMAIN",
+        )
+    ):
+        raise ValueError("Production must not target staging.")
+    return value
+
+
+def register_macos_callback(bundle: Path, signing_identity: str | None = None) -> None:
+    """Register URL activation before the final bundle signature and notarization."""
+    info = bundle / "Contents/Info.plist"
+    data = plistlib.loads(info.read_bytes())
+    data["CFBundleURLTypes"] = [
+        {
+            "CFBundleURLName": "org.buddy.desktop.oauth",
+            "CFBundleURLSchemes": ["org.buddy.desktop"],
+            "CFBundleTypeRole": "Viewer",
+        }
+    ]
+    info.write_bytes(plistlib.dumps(data))
+    command = ["codesign", "--force", "--sign", signing_identity or "-"]
+    if signing_identity:
+        command += ["--options", "runtime", "--timestamp"]
+    subprocess.run([*command, str(bundle)], check=True)
 
 
 def manifest(folder: Path, revision: str, channel: str) -> dict:
@@ -44,11 +100,18 @@ def manifest(folder: Path, revision: str, channel: str) -> dict:
 
 
 def build(
-    output: Path, revision: str, signing_identity: str | None = None, *, production: bool = False
+    output: Path,
+    revision: str,
+    signing_identity: str | None = None,
+    *,
+    production: bool = False,
+    public_config: Path | None = None,
 ) -> Path:
     if not re.fullmatch(r"[a-f0-9]{40}", revision) or sys.platform not in {"win32", "darwin"}:
         raise ValueError("Native Windows/macOS runner and reviewed revision are required.")
     output.mkdir(parents=True, exist_ok=True)
+    public_settings = output / "buddy-deployment.json"
+    public_settings.write_text(json.dumps(deployment_config(public_config, production=production)))
     bundle = output / "bundle"
     command = [
         sys.executable,
@@ -64,6 +127,8 @@ def build(
         str(ROOT),
         "--collect-data",
         "buddy_desktop",
+        "--add-data",
+        str(public_settings) + os.pathsep + ".",
         "--collect-submodules",
         "keyring.backends",
         "--distpath",
@@ -93,6 +158,8 @@ def build(
             ]
         )
     subprocess.run(command, cwd=ROOT, check=True, env=build_environment)
+    if sys.platform == "darwin":
+        register_macos_callback(bundle / "Buddy.app", signing_identity)
     executable = bundle / (
         "Buddy/Buddy.exe" if sys.platform == "win32" else "Buddy.app/Contents/MacOS/Buddy"
     )
@@ -137,6 +204,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--revision", required=True)
     parser.add_argument("--signing-identity")
+    parser.add_argument("--deployment-config", type=Path)
     parser.add_argument("--manifest-only", action="store_true")
     parser.add_argument("--channel", choices=["preview", "stable"], default="preview")
     args = parser.parse_args()
@@ -146,6 +214,7 @@ def main() -> int:
             args.revision,
             args.signing_identity,
             production=args.channel == "stable",
+            public_config=args.deployment_config,
         )
     if sys.platform == "darwin" and not args.manifest_only:
         subprocess.run(

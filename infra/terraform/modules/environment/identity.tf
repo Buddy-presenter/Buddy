@@ -4,6 +4,9 @@ resource "aws_cognito_user_pool" "main" {
   user_pool_tier           = "ESSENTIALS"
   username_attributes      = ["email"]
   auto_verified_attributes = ["email"]
+  verification_message_template {
+    default_email_option = "CONFIRM_WITH_CODE"
+  }
   username_configuration { case_sensitive = false }
   account_recovery_setting {
     recovery_mechanism {
@@ -28,8 +31,8 @@ resource "aws_cognito_user_pool_client" "desktop" {
   allowed_oauth_flows                  = ["code"]
   allowed_oauth_scopes                 = ["openid", "email", "aws.cognito.signin.user.admin"]
   supported_identity_providers         = ["COGNITO"]
-  callback_urls                        = ["http://localhost:8765/callback"]
-  logout_urls                          = ["http://localhost:8765/callback"]
+  callback_urls                        = ["org.buddy.desktop://oauth/callback"]
+  logout_urls                          = ["org.buddy.desktop://oauth/signed-out"]
   explicit_auth_flows                  = ["ALLOW_USER_SRP_AUTH"]
   enable_token_revocation              = true
   prevent_user_existence_errors        = "ENABLED"

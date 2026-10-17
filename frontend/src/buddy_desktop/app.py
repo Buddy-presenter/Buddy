@@ -1,17 +1,21 @@
 """Validated startup, native platform preferences, and a single Qt event loop."""
 
+import json
 import logging
 import os
 import sys
 from dataclasses import replace
 from importlib.resources import files
+from pathlib import Path
 
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 
 from buddy_desktop import __version__
 from buddy_desktop.config import AppConfig, ConfigurationError, validate_api_url
+from buddy_desktop.native_callback import NativeCallbackServer
 from buddy_desktop.window import MainWindow
+from buddy_identity.config import IdentityError
 
 
 def resolve_config(config: AppConfig, settings: QSettings) -> AppConfig:
@@ -28,6 +32,24 @@ def resolve_config(config: AppConfig, settings: QSettings) -> AppConfig:
 
 
 def main() -> int:
+    # Public deployment identifiers only. Explicit environment values always win.
+    deployment_path = (
+        Path(sys.__dict__["_MEIPASS"]) / "buddy-deployment.json"
+        if getattr(sys, "frozen", False)
+        else files("buddy_desktop").joinpath("deployment.json")
+    )
+    deployment = json.loads(deployment_path.read_text())
+    added = [name for name in deployment if name not in os.environ]
+    try:
+        for name in added:
+            os.environ[name] = deployment[name]
+        return run_application()
+    finally:
+        for name in added:
+            os.environ.pop(name, None)
+
+
+def run_application() -> int:
     try:
         config = AppConfig.from_environment()
     except ConfigurationError as exc:
@@ -41,6 +63,17 @@ def main() -> int:
     app.setOrganizationName("Buddy")
     app.setApplicationName("BuddyDesktop")
     app.setApplicationVersion(__version__)
+    activation = NativeCallbackServer(app)
+    app.installEventFilter(activation)
+    arguments = sys.argv[1:]
+    try:
+        if arguments and (len(arguments) != 2 or arguments[0] != "--auth-callback"):
+            raise IdentityError("Unsupported launch arguments. Open Buddy normally.")
+        if not activation.start(arguments[1] if arguments else None):
+            return 0
+    except IdentityError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     app.setStyleSheet(files("buddy_desktop").joinpath("theme.qss").read_text(encoding="utf-8"))
     settings = QSettings()
     window = MainWindow(
@@ -49,6 +82,14 @@ def main() -> int:
         environment_override="BUDDY_API_URL" in os.environ,
     )
     window.show()
+
+    def activate() -> None:
+        if window.isMinimized():
+            window.showNormal()
+        window.raise_()
+        window.activateWindow()
+
+    activation.activated.connect(activate)
     try:
         return app.exec()
     finally:
@@ -56,3 +97,4 @@ def main() -> int:
         window.account.runner.wait_for_shutdown()
         window.library.runner.wait_for_shutdown()
         window.present.executor.wait_for_shutdown()
+        activation.close()

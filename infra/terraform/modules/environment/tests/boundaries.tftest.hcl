@@ -18,6 +18,14 @@ variables {
 run "private_staging_before_images_exist" {
   command = plan
   assert {
+    condition     = aws_cognito_user_pool_client.desktop.callback_urls == toset(["org.buddy.desktop://oauth/callback"]) && aws_cognito_user_pool_client.desktop.logout_urls == toset(["org.buddy.desktop://oauth/signed-out"])
+    error_message = "Native application callbacks must not use localhost or raw IP addresses."
+  }
+  assert {
+    condition     = aws_cognito_user_pool.main.verification_message_template[0].default_email_option == "CONFIRM_WITH_CODE" && aws_cognito_user_pool.main.auto_verified_attributes == toset(["email"])
+    error_message = "Email verification must use confirmation codes."
+  }
+  assert {
     condition     = !aws_db_instance.main.publicly_accessible && aws_db_instance.main.storage_encrypted && aws_db_instance.main.deletion_protection
     error_message = "Database must be private, encrypted and protected."
   }

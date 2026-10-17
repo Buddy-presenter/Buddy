@@ -9,17 +9,24 @@ import webbrowser
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Event
 from typing import Protocol, cast
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import urlencode
 from urllib.request import Request
 
 from keyring.backend import KeyringBackend
 
 from buddy_desktop.config import validate_api_url
-from buddy_identity.config import CALLBACK, SCOPES, IdentityConfig, IdentityError, SessionExpired
+from buddy_desktop.native_callback import pending_callback
+from buddy_identity.config import (
+    CALLBACK,
+    SCOPES,
+    SIGNOUT_CALLBACK,
+    IdentityConfig,
+    IdentityError,
+    SessionExpired,
+)
 from buddy_identity.transport import request_json
 
 
@@ -171,62 +178,19 @@ def browser_code(
     opener: Callable[[str], bool] = webbrowser.open,
     logout: bool = False,
 ) -> str:
-    outcome: list[str] = []
-
-    class Callback(BaseHTTPRequestHandler):
-        def log_message(self, *_args: object) -> None:
-            pass
-
-        def do_GET(self) -> None:
-            valid = False
-            try:
-                parts = urlsplit(self.path)
-                values = parse_qs(parts.query, max_num_fields=8)
-                valid = (
-                    len(self.path) < 8192
-                    and parts.path == "/callback"
-                    and self.headers.get("Host") == "localhost:8765"
-                    and (
-                        (logout and not values)
-                        or (
-                            not logout
-                            and values.get("state") == [state]
-                            and (len(values.get("code", [])) == 1 or "error" in values)
-                        )
-                    )
-                )
-                if valid:
-                    outcome.append(
-                        "signedout" if logout else ("" if "error" in values else values["code"][0])
-                    )
-            except ValueError:
-                pass
-            self.send_response(200 if valid else 400)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Referrer-Policy", "no-referrer")
-            self.end_headers()
-            self.wfile.write(b"Return to Buddy." if valid else b"Callback rejected.")
-
-        def setup(self) -> None:
-            self.request.settimeout(2)
-            super().setup()
-
-    try:
-        with HTTPServer(("127.0.0.1", 8765), Callback) as server:
-            server.timeout = 0.2
-            if not opener(url):
-                raise IdentityError("Cannot open the system browser. Check your default browser.")
-            deadline = time.monotonic() + timeout
-            while not outcome and not cancelled.is_set() and time.monotonic() < deadline:
-                server.handle_request()
-    except OSError:
-        raise IdentityError(
-            "Cannot start sign-in. Close another Buddy sign-in and retry."
-        ) from None
-    if cancelled.is_set() or not outcome or not outcome[0]:
-        raise IdentityError("Sign-in was cancelled, rejected, or timed out.")
-    return outcome[0]
+    # No TCP listener. The OS URL handler forwards the single-use code over native IPC.
+    with pending_callback.waiting(state, logout=logout) as attempt:
+        if cancelled.is_set():
+            raise IdentityError("Sign-in was cancelled.")
+        if not opener(url):
+            raise IdentityError("Cannot open the system browser. Check your default browser.")
+        deadline = time.monotonic() + timeout
+        while not cancelled.is_set() and time.monotonic() < deadline:
+            if attempt.received.wait(min(0.1, max(0, deadline - time.monotonic()))):
+                break
+        if cancelled.is_set() or not attempt.received.is_set() or not attempt.code:
+            raise IdentityError("Sign-in was cancelled, rejected, or timed out.")
+        return attempt.code
 
 
 @dataclass(repr=False)
@@ -422,7 +386,7 @@ class AccountSession:
             + urlencode(
                 {
                     "client_id": self.config.client_id,
-                    "logout_uri": CALLBACK,
+                    "logout_uri": SIGNOUT_CALLBACK,
                 }
             ),
             "",

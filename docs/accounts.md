@@ -1,4 +1,4 @@
-# Account lifecycle (#5)
+# Verified account lifecycle (#5, #74)
 
 Buddy uses an Amazon Cognito user pool and a public desktop app client. Account creation,
 email verification, password validation, recovery codes and recovery errors are handled
@@ -34,25 +34,41 @@ Configure the Cognito client with:
 - Authorization code grant only, no implicit grant, `COGNITO` provider, no secret.
 - `openid`, `email`, and `aws.cognito.signin.user.admin` scopes. The last is required
   for Cognito `GetUser` to check whether a token was revoked; it is not an AWS IAM grant.
-- Callback and sign-out URL `http://localhost:8765/callback`.
+- Callback URL `org.buddy.desktop://oauth/callback`.
+- Sign-out URL `org.buddy.desktop://oauth/signed-out`. Neither route uses TCP or localhost.
 - Access/ID lifetime 5 minutes; refresh lifetime 1 day; refresh rotation and revocation
   enabled, with no refresh replay grace period. Never enable `ALLOW_REFRESH_TOKEN_AUTH`
   alongside rotation. Updated refresh tokens are mandatory in Buddy's token responses.
 - Email recovery and verification, user-existence error suppression, password policy,
   and an associated WAF rate limit as provisioned by #27.
 
-AWS documents HTTP localhost callbacks as an exception intended for testing. This
-checkout uses that supported development flow with a listener bound only to 127.0.0.1.
-A production installer needs the team's reviewed native callback registration or HTTPS
-handoff before release (#38); this PR does not claim that installer integration exists.
+The preview desktop includes the public HTTPS staging configuration from
+`infra/staging/public-config.json`; no customer-owned domain or raw IP is required.
+Cognito hosts login over its AWS HTTPS hostname; the API uses CloudFront HTTPS.
+Environment overrides remain available for operators/development. Passwords and codes
+stay in the managed browser UI, never in Buddy's widgets, API, logs or database.
+
+Windows installation registers the `org.buddy.desktop` URL protocol under HKCU, without
+administrator rights. macOS packages declare it in CFBundleURLTypes and are re-signed
+after metadata generation, before notarization. Windows launches a second process that
+forwards the callback to the existing instance over a user-only named pipe. macOS sends
+QFileOpenEvent to the application. Unix-domain IPC uses a private user-owned directory;
+there is no HTTP listener. Source-only runs cannot register themselves with the OS:
+install the preview package before exercising browser return. Cold-start/unsolicited
+callbacks never create a session; start a fresh login in Buddy after a restart.
+
+Stable packaging requires `--deployment-config <public-json>` with an explicitly
+validated HTTPS API and Cognito target, distinct from staging. Configure the release
+production environment variable `BUDDY_DESKTOP_PUBLIC_CONFIG` with those five public
+settings. It contains no credentials. The existing staging-acceptance and callback
+release-approval gates remain in force; native code does not establish live acceptance.
 
 ## Sessions and failure behavior
 
-Sign-in uses a fresh random state and S256 PKCE verifier. The loopback listener checks
-the exact path, Host and state; invalid requests do not complete login. It waits at most
+Sign-in uses a fresh random state and S256 PKCE verifier. The native callback broker checks
+the exact URI, single state and exactly one code/error; invalid requests do not complete login. It waits at most
 five minutes and is cancellable, including on window close. Only the single-use OAuth
-code travels through the callback URL; access, ID and refresh tokens never do. Callback
-logs are disabled, pages have no-store/no-referrer headers, and remote requests reject
+code travels through the callback URL; access, ID and refresh tokens never do. No callback URL or code is logged or written to disk. Remote requests reject
 redirects and oversized responses. ID tokens are discarded, not used as identity proof.
 
 Only refresh tokens persist, through the explicit Windows Credential Manager or macOS
@@ -85,13 +101,36 @@ revocation if a device is lost. If both local storage and network fail, close Bu
 repair the credential store/revoke the session before relying on sign-out.
 
 The API validates RS256 signature, fixed issuer, app client, token type, expiry and subject.
-It then makes an uncached Cognito `GetUser` request: offline JWT verification alone cannot
+It then makes an uncached Cognito `GetUser` request and requires a matching subject,
+nonempty email and exactly `email_verified="true"` from provider attributes (never client
+profile or access-token email claims). Missing, duplicate, malformed or unverified
+attributes deny access before user bootstrap, resource reads/writes or subscriptions.
+This applies through the shared principal boundary to every private API.
+The live provider check is required because offline JWT verification alone cannot
 detect Cognito revocation. Provider/network failure denies account access (503). Missing,
-invalid and revoked credentials produce 401. A bounded limiter permits 30 checks per
-direct peer per minute per API process, with 429/Retry-After. Deployment WAF provides the
+invalid and revoked credentials produce 401. A bounded limiter permits 30 bootstrap checks per
+credential digest per minute per API process, with 429/Retry-After. Deployment WAF provides the
 shared per-client-IP limit and protects managed login. Do not enable arbitrary forwarded
 headers; the local limit can also constrain users behind the same proxy. Neither limiter
 is a substitute for provider-level login throttling.
+
+## Verification and recovery controls
+
+Terraform explicitly selects CONFIRM_WITH_CODE and verified-email recovery, with
+user-existence suppression on the app client. Cognito issues and validates the six-digit
+email codes, their expiration, replay/attempt limits, resend throttling and password
+policy; Buddy does not duplicate code storage or promise a locally enforced timer.
+The managed pages own wrong/expired-code, resend, recovery and delivery-error feedback.
+Reset finishes in the browser, then login uses the new password and a fresh PKCE attempt.
+The app's five-minute callback timeout/cancellation can require restarting the browser
+flow; it does not change Cognito's code lifetime. Service delivery/attempt quotas can
+produce recoverable throttling and must be exercised against the actual staging pool.
+
+Staging currently uses COGNITO_DEFAULT email delivery, not an approved SES sender. SES
+production access is not enabled. Before production, configure an approved SES identity,
+permissions and appropriate quotas and rerun real delivery acceptance. Do not silently
+assume that a default sender or mocked email response proves production deliverability.
+
 
 ## Validation and deployment limits
 
@@ -135,11 +174,11 @@ The existing PostgreSQL CI job also exercises persisted account IDs across API r
 Run `python scripts/quality.py all check`, `python -m mypy`, schema compatibility, build,
 and both startup smoke checks before review.
 
-No AWS account, pool, credentials or domains were available while implementing this PR.
-After #27 is provisioned, staging acceptance must verify actual signup/verification,
+Issue #73 provisioned staging; its retained evidence did not exercise signup email
+delivery. Issue #74 staging acceptance must verify actual signup/verification,
 invalid credentials, valid/invalid recovery codes, native vault behavior, refresh rotation,
 online sign-out, and denial of the revoked access token. Passing local tests does not
-replace that live provider acceptance or production callback integration.
+replace that live provider acceptance or installed OS callback integration.
 
 References: [Cognito authorization/PKCE](https://docs.aws.amazon.com/cognito/latest/developerguide/authorization-endpoint.html),
 [token rotation](https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-the-refresh-token.html),

@@ -5,7 +5,8 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-CALLBACK = "http://localhost:8765/callback"
+CALLBACK = "org.buddy.desktop://oauth/callback"
+SIGNOUT_CALLBACK = "org.buddy.desktop://oauth/signed-out"
 SCOPES = "openid email aws.cognito.signin.user.admin"
 
 

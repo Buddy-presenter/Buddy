@@ -1,0 +1,7 @@
+{
+  "BUDDY_API_URL": "https://d3n3ijrboj39jr.cloudfront.net",
+  "BUDDY_AWS_REGION": "eu-central-1",
+  "BUDDY_COGNITO_CLIENT_ID": "s2k550ofnk3hipm63nteqte0",
+  "BUDDY_COGNITO_DOMAIN": "https://buddy-staging-549327541867.auth.eu-central-1.amazoncognito.com",
+  "BUDDY_COGNITO_POOL_ID": "eu-central-1_P2n1xJkqp"
+}

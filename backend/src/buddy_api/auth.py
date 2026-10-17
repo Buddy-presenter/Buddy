@@ -97,12 +97,25 @@ class CognitoVerifier:
                 },
             )
         )
-        attributes = result.get("UserAttributes", [])
-        if not isinstance(attributes, list) or not any(
-            isinstance(item, dict)
-            and item.get("Name") == "sub"
-            and item.get("Value") == claims["sub"]
-            for item in attributes
+        attributes = result.get("UserAttributes")
+        # GetUser is trusted provider state; access tokens need not carry email claims.
+        # Reject duplicate/malformed attributes instead of accepting an ambiguous value.
+        values: dict[str, str] = {}
+        if not isinstance(attributes, list):
+            raise SessionExpired("Sign-in expired or was rejected. Please sign in again.")
+        for item in attributes:
+            if (
+                not isinstance(item, dict)
+                or not isinstance(item.get("Name"), str)
+                or not isinstance(item.get("Value"), str)
+                or item["Name"] in values
+            ):
+                raise SessionExpired("Sign-in expired or was rejected. Please sign in again.")
+            values[item["Name"]] = item["Value"]
+        if (
+            values.get("sub") != claims["sub"]
+            or values.get("email_verified") != "true"
+            or not re.fullmatch(r"[^\s@]+@[^\s@]+", values.get("email", ""))
         ):
             raise SessionExpired("Sign-in expired or was rejected. Please sign in again.")
         return self.config.issuer + "#" + str(claims["sub"])

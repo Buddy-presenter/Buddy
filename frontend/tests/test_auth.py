@@ -2,10 +2,8 @@
 
 import hashlib
 import time
-from threading import Event, Thread
-from urllib.error import HTTPError
+from threading import Event
 from urllib.parse import parse_qs, urlsplit
-from urllib.request import Request, urlopen
 from uuid import uuid4
 
 import pytest
@@ -166,44 +164,24 @@ def test_native_store_deletion_failure_leaves_nonsecret_restart_block(tmp_path, 
     assert "sensitive" not in store.marker.read_text()
 
 
-def test_loopback_callback_rejects_wrong_state_and_accepts_single_use_code():
-    from buddy_desktop.auth import browser_code
-
-    responses = []
-    threads = []
-    state = str(uuid4())
-
-    def callback_request(query):
-        return Request(
-            "http://127.0.0.1:8765/callback?" + query, headers={"Host": "localhost:8765"}
-        )
+def test_native_callback_rejects_wrong_state_and_accepts_single_use_code():
+    from buddy_desktop.native_callback import pending_callback
+    from buddy_identity.config import CALLBACK
 
     def open_browser(_url):
-        def callbacks():
-            try:
-                urlopen(callback_request("state=wrong&code=untrusted"), timeout=3)
-            except HTTPError as exc:
-                responses.append(exc.code)
-                exc.close()
-            with urlopen(callback_request(f"state={state}&code=valid"), timeout=3) as response:
-                responses.append(response.status)
-                assert response.headers["Cache-Control"] == "no-store"
-
-        thread = Thread(target=callbacks)
-        threads.append(thread)
-        thread.start()
+        assert not pending_callback.deliver(CALLBACK + "?state=wrong&code=untrusted")
+        assert pending_callback.deliver(CALLBACK + "?state=expected&code=valid")
+        assert not pending_callback.deliver(CALLBACK + "?state=expected&code=replay")
         return True
 
-    try:
-        assert (
-            browser_code("https://example.com", state, Event(), timeout=10, opener=open_browser)
-            == "valid"
+    assert (
+        auth.browser_code(
+            "https://example.com", "expected", Event(), timeout=1, opener=open_browser
         )
-    finally:
-        for thread in threads:
-            thread.join(timeout=7)
-            assert not thread.is_alive()
-    assert responses == [400, 200]
+        == "valid"
+    )
+    assert pending_callback.attempt is None
+    assert not pending_callback.deliver(CALLBACK + "?state=expected&code=late")
 
 
 def test_callback_cancellation_is_bounded():
@@ -214,34 +192,17 @@ def test_callback_cancellation_is_bounded():
 
 
 def test_rejected_browser_recovery_never_creates_a_session():
-    state = str(uuid4())
-    threads = []
+    from buddy_desktop.native_callback import pending_callback
+    from buddy_identity.config import CALLBACK
 
     def open_browser(_url):
-        def callback():
-            with urlopen(
-                Request(
-                    f"http://127.0.0.1:8765/callback?state={state}&error=access_denied",
-                    headers={"Host": "localhost:8765"},
-                ),
-                timeout=3,
-            ):
-                pass
-
-        thread = Thread(target=callback)
-        threads.append(thread)
-        thread.start()
+        assert pending_callback.deliver(CALLBACK + "?state=expected&error=access_denied")
         return True
 
-    try:
-        with pytest.raises(IdentityError, match="rejected"):
-            auth.browser_code(
-                "https://example.com", state, Event(), timeout=10, opener=open_browser
-            )
-    finally:
-        for thread in threads:
-            thread.join(timeout=4)
-            assert not thread.is_alive()
+    with pytest.raises(IdentityError, match="rejected"):
+        auth.browser_code(
+            "https://example.com", "expected", Event(), timeout=1, opener=open_browser
+        )
 
 
 @pytest.mark.parametrize(
