@@ -18,7 +18,7 @@ database capacity. Verify the account accepts this setting and execute the isola
 restore drill before claiming acceptance. Never silently disable backups to bypass an
 account-plan restriction.
 
-The issue PR prepares deployment and stays open until live checks and retained recovery
+The issue PR implements deployment and stays open until live checks and retained recovery
 evidence pass. Its closing link drives Project status; do not merge it or close #73 while
 these gates are pending. Build the API image only from reviewed main with passing checks.
 For #73, the requester has authorized staging deployment from the exact PR head before
@@ -39,8 +39,9 @@ production deployment or bypass GitHub environment protections.
 - Install Terraform 1.13.5, AWS CLI v2 and Docker where permitted. Local HashiCorp downloads
   may be region-restricted. Existing GitHub infrastructure CI can validate changes; it
   does not provision resources, export a live plan or grant permission to bypass restrictions.
-- A repository administrator must configure protected `staging`/`production` and
-  `release-staging`/`release-production` environments: reviewers, prevent self-review,
+- A repository administrator must configure protected `staging` and `release-staging`
+  environments (their production counterparts before any production deployment):
+  reviewers, prevent self-review,
   protected-main deployment rules, and the public variables in [releases](releases.md).
   AWS AdministratorAccess does not grant GitHub repository administration.
 
@@ -121,14 +122,19 @@ It verifies account, exact stable task/image/revision-tag agreement, available p
 encrypted protected RDS, private ALB, private versioned encrypted buckets, deployed
 CloudFront with uncached HTTPS/WAF, and HTTPS readiness including the migrated database.
 It exits nonzero on failure and never retrieves secret values or mutates resources.
-Its JSON explicitly lists the **remaining** acceptance work; it is not a completion stamp.
-Keep output in the single local `.codex-temp` folder and attach sanitized evidence to #73.
+Its `remaining_acceptance` array names checks outside this command's coverage; it does
+not read the separate completed-drill evidence or assert those drills are still pending.
+Consult the retained deployment record for their actual results. The verifier alone is
+not a completion stamp. Keep output in the single local `.codex-temp` folder and attach
+sanitized evidence to #73.
 
-## Required live evidence (all pending until executed)
+## Required foundation evidence
 
-- **Identity/TLS:** actual signup, verified email, code/PKCE login, recovery, rotation and
-  revocation from the desktop against staging. Verify wrong issuer/client and missing
-  authentication fail. Record public configuration; retain no passwords or tokens.
+- **Identity/TLS:** exercise real Cognito credentials against the deployed API, account
+  ownership and missing-authentication rejection. Record the actual provider flow tested
+  and public configuration; retain no passwords or tokens. Full desktop signup/email,
+  PKCE, recovery and credential-vault acceptance belongs to the account/release features
+  and must not be inferred from foundation checks.
   Verify certificate hostname/trust and negotiated TLS 1.2+ from supported clients;
   record the AWS default-certificate minimum-policy limitation for reviewer acceptance.
 - **Private service access:** run an operator-controlled disposable task using the actual
@@ -140,8 +146,9 @@ Keep output in the single local `.codex-temp` folder and attach sanitized eviden
 - **Durability/streaming:** create synthetic account-owned persisted data, replace the
   running API task without deleting the database, wait for readiness, then verify the
   same data with its owner. Verify a second account is denied. Test authenticated SSE
-  incrementally through CloudFront, including inactivity/reconnect behavior and terminal
-  events; a buffered final response is not a streaming pass. Clean the synthetic records.
+  incrementally through CloudFront, including terminal events; a buffered final response
+  is not a streaming pass. Record long-idle/desktop-reconnect coverage separately rather
+  than infer it from a short stream. Clean the synthetic records.
 - **Migration rejection:** run a disposable, reviewed intentionally failing migration
   task against an isolated acceptance DB/schema. Run the actual promotion failure path;
   require nonzero exit, unchanged healthy service definition/count and retained immutable
@@ -149,18 +156,25 @@ Keep output in the single local `.codex-temp` folder and attach sanitized eviden
   migrations into main merely to manufacture a failure.
 - **Rollback:** make two compatible reviewed API deployments, retain definitions, counts
   and audit keys, then use the real rollback driver to restore the previous deployment.
-  Require stable tasks and verified HTTPS readiness plus a `restored` immutable record.
+  Require stable tasks and verified HTTPS readiness plus a `rolled_back` immutable record.
   Never downgrade the database automatically. Exercise readiness failure/recovery too.
 - **Restore:** create a snapshot or use available PITR after synthetic data exists;
   restore to a uniquely named isolated private encrypted RDS instance with restricted
   security groups. Verify schema and the synthetic owned data over verified TLS before
   deleting the disposable restored instance under the reviewed cleanup plan. Never
   point the staging application at the restored DB as part of the drill.
-- **Operations:** verify actual protected-environment approval, main-only deployment,
-  gross-spend/credit alerts and alert receipt. Record resource IDs, UTC timestamps,
+- **Operations:** inspect protected-environment reviewer/self-review and main-only branch
+  rules, deployment variables, and gross-spend alerts. Distinguish configuration from an
+  actual GitHub approval run or email delivery. The first normal GitHub deployment follows
+  PR review/merge; this authorized operator deployment does not exercise that approval UI.
+  Do not create spending merely to trigger an alert. Record resource IDs, UTC timestamps,
   reviewed SHA/digest, commands with sensitive arguments omitted, actual outcomes,
   failure/recovery audit keys, costs and resource retention decisions.
 
 Only after every applicable check has real evidence and teammate review may #73 be
 completed. Missing access, spending approval, failed checks or unexecuted drills remain
 explicit blockers; mocked tests and this checklist cannot replace them.
+
+The retained deployment record is [staging deployment evidence](staging-deployment-evidence.md).
+Provider-native desktop/email acceptance and notification delivery remain explicitly
+unclaimed there; they are not additional infrastructure completion criteria for #73.

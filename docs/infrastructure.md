@@ -219,4 +219,8 @@ and requires an explicit staging-only `egress_mode = "public_ip"` to accept ENAB
 Optional Container Insights is disabled in staging. Standard Fargate service CPU/memory
 metrics, task logs, load-balancer health checks and deployment rollback are retained.
 Workers remain absent, and production is not provisioned by staging. No Spot capacity,
-CPU/memory downsizing, database consolidation or backup reduction is used for savings.
+CPU/memory downsizing or database consolidation is used for savings. Separately, the
+requester's decision to retain the AWS Free account plan requires one-day staging RDS
+automated-backup retention instead of seven days; production remains 35 days. The actual
+isolated restore drill and retained snapshot are recorded in the
+[deployment evidence](staging-deployment-evidence.md).
