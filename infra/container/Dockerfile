@@ -1,4 +1,4 @@
-FROM python:3.12.12-slim-bookworm AS builder
+FROM python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258 AS builder
 WORKDIR /build
 COPY shared/pyproject.toml ./shared/pyproject.toml
 COPY shared/src ./shared/src
@@ -9,8 +9,9 @@ RUN python -m pip wheel --no-cache-dir --wheel-dir /wheels --no-deps ./shared ./
     && python -m pip wheel --no-cache-dir --wheel-dir /wheels \
        --find-links=/wheels 'buddy-backend[api]' boto3==1.40.50
 
-FROM python:3.12.12-slim-bookworm
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+FROM python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
     && curl --fail --silent --show-error --proto '=https' \
        https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem \
        -o /tmp/rds-bundle.pem \
@@ -22,7 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY --from=builder /wheels /wheels
 RUN python -m pip install --no-cache-dir --no-index --find-links=/wheels 'buddy-backend[api]' boto3 \
     && rm -rf /wheels
-COPY infra/container/container_entrypoint.py infra/container/bootstrap_database.py infra/container/migrate_database.py /opt/buddy/
+COPY --chmod=0444 infra/container/container_entrypoint.py infra/container/bootstrap_database.py infra/container/migrate_database.py /opt/buddy/
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 USER 10001:10001
 EXPOSE 8000
