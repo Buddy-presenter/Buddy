@@ -31,7 +31,7 @@ output "deployment_configuration" {
     bucket      = aws_s3_bucket.private["releases"].id
     api_url     = local.api_url
     tasks       = { for name, task in aws_ecs_task_definition.service : name => task.arn }
-    network     = {
+    network = {
       subnets        = local.task_subnets
       securityGroups = [aws_security_group.service["migration"].id]
       assignPublicIp = local.public_task_ip ? "ENABLED" : "DISABLED"

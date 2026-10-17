@@ -44,14 +44,14 @@ resource "aws_ecs_task_definition" "service" {
   memory                   = each.key == "worker" ? 2048 : 1024
   execution_role_arn       = aws_iam_role.execution[each.key].arn
   task_role_arn            = aws_iam_role.task[each.key].arn
-  container_definitions    = jsonencode([merge({
+  container_definitions = jsonencode([merge({
     name                   = each.key, image = each.value, essential = true,
     readonlyRootFilesystem = true,
     user                   = "10001:10001",
     linuxParameters        = { initProcessEnabled = true, capabilities = { drop = ["ALL"] } },
     environment            = local.environment,
     secrets                = [{ name = "BUDDY_DATABASE_URL", valueFrom = "${aws_secretsmanager_secret.database[each.key].arn}:url::" }],
-    logConfiguration       = { logDriver = "awslogs", options = {
+    logConfiguration = { logDriver = "awslogs", options = {
       awslogs-group  = aws_cloudwatch_log_group.service[each.key].name,
       awslogs-region = var.region, awslogs-stream-prefix = each.key
     } },
