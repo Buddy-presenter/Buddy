@@ -183,9 +183,63 @@ run "reject_public_task_addresses_in_production" {
 }
 
 run "private_upload_runtime_and_version_cleanup" {
-  command = apply
+  command = plan
   variables {
     api_image = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+  # Supply only external computed identities needed to evaluate the API template.
+  # Keep its mount, environment and IAM policy expressions under test unchanged.
+  override_resource {
+    target = aws_lb.api
+    values = {
+      dns_name = "private.example.internal"
+      arn      = "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/app/test/1111111111111111"
+    }
+    override_during = plan
+  }
+  override_resource {
+    target = aws_kms_key.data
+    values = {
+      arn = "arn:aws:kms:eu-central-1:123456789012:key/11111111-1111-1111-1111-111111111111"
+    }
+    override_during = plan
+  }
+  override_resource {
+    target = aws_s3_bucket.private["data"]
+    values = {
+      id  = "buddy-staging-123456789012-data"
+      arn = "arn:aws:s3:::buddy-staging-123456789012-data"
+    }
+    override_during = plan
+  }
+  override_resource {
+    target = aws_cognito_user_pool.main
+    values = {
+      id  = "eu-central-1_Example"
+      arn = "arn:aws:cognito-idp:eu-central-1:123456789012:userpool/eu-central-1_Example"
+    }
+    override_during = plan
+  }
+  override_resource {
+    target = aws_cognito_user_pool_client.desktop
+    values = {
+      id = "client123"
+    }
+    override_during = plan
+  }
+  override_resource {
+    target = aws_sqs_queue.processing
+    values = {
+      url = "https://sqs.eu-central-1.amazonaws.com/123456789012/buddy-staging"
+    }
+    override_during = plan
+  }
+  override_resource {
+    target = aws_secretsmanager_secret.database["api"]
+    values = {
+      arn = "arn:aws:secretsmanager:eu-central-1:123456789012:secret:buddy-staging-api-test12"
+    }
+    override_during = plan
   }
   assert {
     condition = (
