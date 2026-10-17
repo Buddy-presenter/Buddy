@@ -1,0 +1,393 @@
+"""Real PostgreSQL/auth boundaries; injected failures are confined to S3/provider I/O."""
+
+import asyncio
+import hashlib
+import io
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
+from uuid import UUID, uuid4
+
+import pytest
+from fastapi.testclient import TestClient
+from pptx import Presentation
+from pptx.util import Inches
+from sqlalchemy import func, select
+from starlette.requests import Request
+
+from buddy_api.app import create_app
+from buddy_api.auth import CognitoVerifier
+from buddy_api.config import Environment, Settings
+from buddy_api.persistence.models import Deck, DeckUpload, ProcessingJob
+from buddy_api.uploads.config import UploadSettings
+from buddy_api.uploads.contracts import PPTX_TYPE, UploadError, UploadMetadata
+from buddy_api.uploads.service import UploadService
+from buddy_api.uploads.storage import SourceStorage
+from buddy_identity.config import IdentityConfig
+
+pytestmark = pytest.mark.postgres
+presentation = Presentation()
+slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+slide.shapes.add_textbox(Inches(1), Inches(1), Inches(5), Inches(1)).text = "Buddy upload fixture"
+source_stream = io.BytesIO()
+presentation.save(source_stream)
+SOURCE = source_stream.getvalue()
+
+
+class Cloud:
+    def __init__(self):
+        self.objects = {}
+        self.puts = 0
+        self.fail_put = False
+        self.fail_after_put = False
+        self.fail_delete = False
+
+    def put_object(self, **kwargs):
+        self.puts += 1
+        if self.fail_put:
+            raise OSError("private-storage-key-and-credentials")
+        key = kwargs["Key"]
+        if key in self.objects:
+            raise OSError("precondition failed")
+        assert kwargs["IfNoneMatch"] == "*"
+        assert kwargs["ServerSideEncryption"] == "aws:kms"
+        assert "ACL" not in kwargs
+        content = kwargs["Body"].read()
+        assert len(content) == kwargs["ContentLength"]
+        assert hashlib.sha256(content).hexdigest() == kwargs["Metadata"]["sha256"]
+        version = str(uuid4())
+        self.objects[key] = (version, content)
+        if self.fail_after_put:
+            raise OSError("acknowledgement lost")
+        return {"VersionId": version}
+
+    def list_object_versions(self, **kwargs):
+        return {
+            "Versions": [
+                {"Key": key, "VersionId": value[0]}
+                for key, value in self.objects.items()
+                if key.startswith(kwargs["Prefix"])
+            ],
+            "IsTruncated": False,
+        }
+
+    def delete_object(self, **kwargs):
+        if self.fail_delete:
+            raise OSError("private cleanup diagnostics")
+        self.objects.pop(kwargs["Key"], None)
+        return {}
+
+    def head_bucket(self, **kwargs):
+        return {}
+
+    def close(self):
+        pass
+
+
+@pytest.fixture
+def upload_app(migrated_database, monkeypatch):
+    cloud = Cloud()
+    subjects = {"account-a": str(uuid4()), "account-b": str(uuid4())}
+    monkeypatch.setattr(CognitoVerifier, "verify", lambda self, token: subjects[token])
+    identity = IdentityConfig(
+        "eu-central-1",
+        "eu-central-1_Example",
+        "client123",
+        "https://buddy.auth.eu-central-1.amazoncognito.com",
+    )
+
+    @contextmanager
+    def launch(**overrides):
+        config = UploadSettings(
+            bucket="buddy-test-private",
+            region="eu-central-1",
+            kms_key="arn:aws:kms:eu-central-1:123456789012:key/11111111-1111-1111-1111-111111111111",
+            **overrides,
+        )
+        app = create_app(
+            Settings(
+                Environment.TEST,
+                ("testserver",),
+                database=migrated_database,
+                identity=identity,
+                uploads=config,
+            ),
+            upload_storage=SourceStorage(config, cloud),
+        )
+        with TestClient(app) as client:
+            client.headers["Authorization"] = "Bearer account-a"
+            yield client, cloud, app.state.uploads
+
+    return launch
+
+
+def metadata(content=SOURCE):
+    return {
+        "filename": "sample.pptx",
+        "title": "Private sample",
+        "size_bytes": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+        "content_type": PPTX_TYPE,
+    }
+
+
+def initialize(client, key=None, body=None):
+    return client.post(
+        "/api/v1/uploads", headers={"Idempotency-Key": str(key or uuid4())}, json=body or metadata()
+    )
+
+
+def transfer(client, identifier, content=SOURCE):
+    return client.put(
+        f"/api/v1/uploads/{identifier}/content",
+        content=content,
+        headers={"Content-Type": PPTX_TYPE},
+    )
+
+
+def test_original_bytes_private_identity_and_complete_retry_survive_restart(upload_app):
+    key = uuid4()
+    with upload_app() as (client, cloud, service):
+        first = initialize(client, key)
+        assert first.status_code == 200, first.text
+        identifier = first.json()["data"]["id"]
+        completed = transfer(client, identifier)
+        assert completed.status_code == 200, completed.text
+        deck = completed.json()["data"]["deck"]
+        assert deck["status"] == "uploaded"
+        assert deck["sha256"] == hashlib.sha256(SOURCE).hexdigest()
+        assert list(cloud.objects.values())[0][1] == SOURCE
+        assert "sources/" not in completed.text
+        assert "storage_key" not in completed.text
+        assert client.get("/api/v1/decks").json()["data"]["items"][0]["status"] == "uploaded"
+        assert initialize(client, key).json()["data"]["deck"]["id"] == deck["id"]
+        assert transfer(client, identifier).json()["data"]["deck"]["id"] == deck["id"]
+        assert cloud.puts == 1
+
+        async def persisted():
+            async with service.transaction() as session:
+                stored = await session.get(Deck, deck["id"])
+                assert stored.source_revision == deck["source_revision"]
+                assert stored.source_size_bytes == len(SOURCE)
+                assert stored.source_version_id
+                assert await session.scalar(select(func.count()).select_from(ProcessingJob)) == 0
+
+        client.portal.call(persisted)
+        client.headers["Authorization"] = "Bearer account-b"
+        assert client.get(f"/api/v1/uploads/{identifier}").status_code == 403
+        assert transfer(client, identifier).status_code == 403
+        assert client.get("/api/v1/decks").json()["data"]["total"] == 0
+    with upload_app() as (client, cloud, _):
+        assert initialize(client, key).json()["data"]["deck"]["id"] == deck["id"]
+        assert cloud.puts == 1
+
+
+def test_same_key_conflicts_but_deliberate_duplicate_is_a_new_deck(upload_app):
+    with upload_app() as (client, cloud, _):
+        key = uuid4()
+        identifier = initialize(client, key).json()["data"]["id"]
+        first = transfer(client, identifier).json()["data"]["deck"]["id"]
+        changed = metadata()
+        changed["title"] = "Other request"
+        assert initialize(client, key, changed).status_code == 409
+        second_id = initialize(client).json()["data"]["id"]
+        second = transfer(client, second_id).json()["data"]["deck"]["id"]
+        assert second != first
+        assert len(cloud.objects) == 2
+
+
+@pytest.mark.parametrize("after_put", [False, True])
+def test_storage_failure_cleanup_and_same_key_retry(upload_app, after_put):
+    with upload_app() as (client, cloud, _):
+        key = uuid4()
+        identifier = initialize(client, key).json()["data"]["id"]
+        cloud.fail_after_put, cloud.fail_put = after_put, not after_put
+        failed = transfer(client, identifier)
+        assert failed.status_code == 503
+        assert "private-storage" not in failed.text
+        assert not cloud.objects
+        assert client.get("/api/v1/decks").json()["data"]["total"] == 0
+        cloud.fail_after_put = cloud.fail_put = False
+        retry = initialize(client, key)
+        assert retry.json()["data"]["id"] == identifier
+        assert transfer(client, identifier).json()["data"]["status"] == "complete"
+        assert client.get("/api/v1/decks").json()["data"]["total"] == 1
+
+
+@pytest.mark.parametrize("committed", [False, True])
+def test_database_commit_failure_never_deletes_an_accepted_source(
+    upload_app, monkeypatch, committed
+):
+    original = UploadService.finalize
+
+    async def fail(self, *args):
+        if committed:
+            await original(self, *args)
+        raise UploadError(503, "service_unavailable", "Commit acknowledgement lost.")
+
+    monkeypatch.setattr(UploadService, "finalize", fail)
+    with upload_app() as (client, cloud, _):
+        key = uuid4()
+        identifier = initialize(client, key).json()["data"]["id"]
+        assert transfer(client, identifier).status_code == 503
+        assert bool(cloud.objects) is committed
+        assert client.get("/api/v1/decks").json()["data"]["total"] == int(committed)
+        if committed:
+            assert initialize(client, key).json()["data"]["status"] == "complete"
+            assert cloud.puts == 1
+
+
+def test_failed_cleanup_is_durable_and_reconciled_after_restart(upload_app):
+    with upload_app() as (client, cloud, _):
+        key = uuid4()
+        identifier = initialize(client, key).json()["data"]["id"]
+        cloud.fail_after_put = cloud.fail_delete = True
+        assert transfer(client, identifier).status_code == 503
+        assert client.get(f"/api/v1/uploads/{identifier}").json()["data"]["status"] == "cleanup"
+        assert cloud.objects
+        cloud.fail_after_put = cloud.fail_delete = False
+    with upload_app() as (client, cloud, service):
+        client.portal.call(service.reconcile)
+        status = client.get(f"/api/v1/uploads/{identifier}").json()["data"]
+        assert status["status"] == "failed" and status["retryable"]
+        assert not cloud.objects
+        assert initialize(client, key).json()["data"]["id"] == identifier
+        assert transfer(client, identifier).status_code == 200
+
+
+def test_owner_quota_counts_completed_sources_and_reserved_bytes(upload_app):
+    with upload_app(quota_bytes=len(SOURCE) * 2) as (client, _, _):
+        identifier = initialize(client).json()["data"]["id"]
+        assert transfer(client, identifier).status_code == 200
+        assert initialize(client).status_code == 200
+        rejected = initialize(client)
+        assert rejected.status_code == 413
+        assert rejected.json()["error"]["code"] == "storage_quota_exceeded"
+        client.headers["Authorization"] = "Bearer account-b"
+        assert initialize(client).status_code == 200
+
+
+def test_concurrency_pending_duplicate_and_expired_reservations(upload_app):
+    with upload_app(owner_concurrency=1) as (client, _, service):
+        key = uuid4()
+        identifier = initialize(client, key).json()["data"]["id"]
+        assert initialize(client, key).status_code == 200
+        assert initialize(client).status_code == 429
+
+        async def expire():
+            async with service.transaction() as session:
+                record = await session.get(DeckUpload, identifier)
+                record.status = "receiving"
+                record.lease_id = uuid4()
+                record.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+            await service.reconcile()
+
+        client.portal.call(expire)
+        assert client.get(f"/api/v1/uploads/{identifier}").json()["data"]["status"] == "failed"
+        assert initialize(client, key).json()["data"]["status"] == "pending"
+
+
+def test_checksum_size_and_malformed_file_create_no_deck(upload_app):
+    with upload_app() as (client, cloud, _):
+        key = uuid4()
+        identifier = initialize(client, key).json()["data"]["id"]
+        assert transfer(client, identifier, SOURCE[:-1]).status_code == 422
+        assert initialize(client, key).json()["data"]["status"] == "pending"
+        assert transfer(client, identifier, SOURCE + b"extra").status_code == 413
+        bad = b"This is not OOXML"
+        invalid_id = initialize(client, body=metadata(bad)).json()["data"]["id"]
+        response = transfer(client, invalid_id, bad)
+        assert response.status_code == 422
+        assert client.get(f"/api/v1/uploads/{invalid_id}").json()["data"]["retryable"] is False
+        assert not cloud.objects
+        assert client.get("/api/v1/decks").json()["data"]["total"] == 0
+
+
+def test_authentication_owner_overrides_and_metadata_limits(upload_app):
+    with upload_app() as (client, _, _):
+        client.headers.pop("Authorization")
+        assert initialize(client).status_code == 401
+        client.headers["Authorization"] = "Bearer account-a"
+        body = {**metadata(), "owner_id": str(uuid4())}
+        assert initialize(client, body=body).status_code == 422
+        assert (
+            initialize(client, body={**metadata(), "filename": "../sample.pptx"}).status_code == 422
+        )
+        assert client.post("/api/v1/uploads", json=metadata()).status_code == 422
+        large = client.post(
+            "/api/v1/uploads",
+            content=b" " * 9000,
+            headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid4())},
+        )
+        assert large.status_code == 413
+
+
+def test_concurrent_admission_and_double_transfer_claims_are_bounded(upload_app):
+    with upload_app(owner_concurrency=1) as (client, cloud, service):
+        owner = UUID(client.get("/api/v1/auth/me").json()["data"]["id"])
+
+        async def race():
+            results = await asyncio.gather(
+                *(
+                    service.initialize(owner, uuid4(), UploadMetadata.model_validate(metadata()))
+                    for _ in range(4)
+                ),
+                return_exceptions=True,
+            )
+            accepted = [result for result in results if not isinstance(result, Exception)]
+            assert len(accepted) == 1
+            rejected = [result for result in results if isinstance(result, UploadError)]
+            assert len(rejected) == 3 and all(result.status == 429 for result in rejected)
+            identifier = accepted[0].id
+            claims = await asyncio.gather(
+                service.claim(owner, identifier),
+                service.claim(owner, identifier),
+                return_exceptions=True,
+            )
+            assert (
+                sum(isinstance(result, UploadError) and result.status == 409 for result in claims)
+                == 1
+            )
+
+        client.portal.call(race)
+        assert not cloud.objects
+
+
+@pytest.mark.parametrize("timeout", [False, True])
+def test_interrupted_stream_or_deadline_leaves_retryable_durable_state(upload_app, timeout):
+    with upload_app() as (client, cloud, service):
+        key = uuid4()
+        identifier = UUID(initialize(client, key).json()["data"]["id"])
+        owner = UUID(client.get("/api/v1/auth/me").json()["data"]["id"])
+
+        async def scenario():
+            messages = iter(
+                [
+                    {"type": "http.request", "body": SOURCE[:128], "more_body": True},
+                    {"type": "http.disconnect"},
+                ]
+            )
+
+            async def receive():
+                if timeout:
+                    await asyncio.sleep(1)
+                return next(messages)
+
+            if timeout:
+                service.settings = service.settings.model_copy(update={"seconds": 0.01})
+            request = Request(
+                {
+                    "type": "http",
+                    "method": "PUT",
+                    "headers": [(b"content-type", PPTX_TYPE.encode())],
+                },
+                receive,
+            )
+            with pytest.raises(UploadError) as error:
+                await service.receive(owner, identifier, request)
+            assert error.value.status == 408
+            assert error.value.code == ("upload_timeout" if timeout else "upload_interrupted")
+
+        client.portal.call(scenario)
+        assert not cloud.objects
+        assert client.get(f"/api/v1/uploads/{identifier}").json()["data"]["retryable"]
+        assert initialize(client, key).json()["data"]["id"] == str(identifier)

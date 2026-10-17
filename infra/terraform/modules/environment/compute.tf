@@ -30,6 +30,8 @@ locals {
     { name = "BUDDY_COGNITO_CLIENT_ID", value = aws_cognito_user_pool_client.desktop.id },
     { name = "BUDDY_COGNITO_DOMAIN", value = "https://${aws_cognito_user_pool_domain.main.domain}.auth.${var.region}.amazoncognito.com" },
     { name = "BUDDY_DATA_BUCKET", value = aws_s3_bucket.private["data"].id },
+    { name = "BUDDY_DATA_KMS_KEY_ARN", value = aws_kms_key.data.arn },
+    { name = "BUDDY_UPLOADS_ENABLED", value = "true" },
     { name = "BUDDY_PROCESSING_QUEUE_URL", value = aws_sqs_queue.processing.url },
     { name = "SSL_CERT_FILE", value = "/etc/ssl/certs/ca-certificates.crt" },
     { name = "PGSSLROOTCERT", value = "/etc/ssl/certs/ca-certificates.crt" },
@@ -45,12 +47,15 @@ resource "aws_ecs_task_definition" "service" {
   memory                   = each.key == "worker" ? 2048 : 1024
   execution_role_arn       = aws_iam_role.execution[each.key].arn
   task_role_arn            = aws_iam_role.task[each.key].arn
+  volume {
+    name = "upload-scratch"
+  }
   container_definitions = jsonencode([merge({
     name                   = each.key, image = each.value, essential = true,
     readonlyRootFilesystem = true,
     user                   = "10001:10001",
     linuxParameters        = { initProcessEnabled = true, capabilities = { add = [], drop = ["ALL"] } },
-    mountPoints            = [],
+    mountPoints            = each.key == "api" ? [{ sourceVolume = "upload-scratch", containerPath = "/var/lib/buddy-upload", readOnly = false }] : [],
     volumesFrom            = [],
     systemControls         = [],
     environment            = local.environment,

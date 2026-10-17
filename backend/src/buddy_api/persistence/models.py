@@ -5,6 +5,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -53,6 +54,39 @@ class Deck(OwnedRecord):
     )
     title: Mapped[str] = mapped_column(String(256))
     source_key: Mapped[str | None] = mapped_column(String(1024))
+    source_revision: Mapped[str | None] = mapped_column(String(128))
+    source_sha256: Mapped[str | None] = mapped_column(String(64))
+    source_size_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    source_version_id: Mapped[str | None] = mapped_column(String(1024))
+    source_slide_count: Mapped[int | None] = mapped_column()
+
+
+class DeckUpload(OwnedRecord):
+    __tablename__ = "deck_uploads"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "idempotency_key"),
+        ForeignKeyConstraint(
+            ["deck_id", "owner_id"], ["decks.id", "decks.owner_id"], ondelete="RESTRICT"
+        ),
+        CheckConstraint(
+            "status IN ('pending','receiving','cleanup','failed','complete')", name="status"
+        ),
+        CheckConstraint("size_bytes > 0 AND size_bytes <= 67108864", name="size_bounds"),
+        CheckConstraint("sha256 ~ '^[0-9a-f]{64}$'", name="sha256"),
+        CheckConstraint("status != 'complete' OR deck_id IS NOT NULL", name="completed_deck"),
+    )
+    idempotency_key: Mapped[UUID] = mapped_column()
+    filename: Mapped[str] = mapped_column(String(255))
+    title: Mapped[str] = mapped_column(String(256))
+    size_bytes: Mapped[int] = mapped_column(BigInteger)
+    sha256: Mapped[str] = mapped_column(String(64))
+    source_revision: Mapped[str] = mapped_column(String(128), unique=True)
+    storage_key: Mapped[str] = mapped_column(String(1024), unique=True)
+    status: Mapped[str] = mapped_column(String(16), server_default="pending", index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    lease_id: Mapped[UUID | None] = mapped_column()
+    deck_id: Mapped[UUID | None] = mapped_column()
 
 
 class RenderedAsset(OwnedRecord):

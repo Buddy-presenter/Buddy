@@ -1,7 +1,8 @@
 """Factory for a small real service; no private domain workflows in this increment."""
 
+import asyncio
 from collections.abc import AsyncIterator, Sequence
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, Query, Request
@@ -29,6 +30,10 @@ from buddy_api.library import library_router
 from buddy_api.middleware import RequestContextMiddleware
 from buddy_api.persistence.database import Database, DatabaseProbe
 from buddy_api.readiness import DependencyProbe, check_dependencies, validate_probes
+from buddy_api.uploads.contracts import UploadError
+from buddy_api.uploads.router import UploadMetadataLimitMiddleware, upload_router
+from buddy_api.uploads.service import UploadService
+from buddy_api.uploads.storage import SourceStorage, StorageProbe
 
 ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     400: {"model": ErrorResponse, "description": "Malformed or disallowed request."},
@@ -46,11 +51,24 @@ def request_id(request: Request) -> str:
 
 
 def create_app(
-    settings: Settings | None = None, *, probes: Sequence[DependencyProbe] = ()
+    settings: Settings | None = None,
+    *,
+    probes: Sequence[DependencyProbe] = (),
+    upload_storage: SourceStorage | None = None,
 ) -> FastAPI:
     config = settings if settings is not None else Settings.from_environment()
     database = Database(config.database) if config.database is not None else None
-    dependencies = (DatabaseProbe(database), *probes)
+    storage = upload_storage or (SourceStorage(config.uploads) if config.uploads else None)
+    uploads = (
+        UploadService(database, config.uploads, storage)
+        if database and config.uploads and storage
+        else None
+    )
+    dependencies = (
+        DatabaseProbe(database),
+        *((StorageProbe(storage),) if storage else ()),
+        *probes,
+    )
     validate_probes(dependencies)
     started = False
 
@@ -58,10 +76,17 @@ def create_app(
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         nonlocal started
         started = True
+        reconciler = asyncio.create_task(uploads.run_reconciliation()) if uploads else None
         try:
             yield
         finally:
             started = False
+            if reconciler:
+                reconciler.cancel()
+                with suppress(asyncio.CancelledError):
+                    await reconciler
+            if storage:
+                await asyncio.to_thread(storage.close)
             if database is not None:
                 await database.close()
 
@@ -74,12 +99,22 @@ def create_app(
         redoc_url=None,
         openapi_url="/openapi.json" if config.environment is not Environment.PRODUCTION else None,
     )
+    app.add_middleware(UploadMetadataLimitMiddleware)
     app.add_middleware(RequestContextMiddleware, allowed_hosts=config.allowed_hosts)
     app.state.database = database
     app.state.authentication = Authentication(config.identity)
+    app.state.uploads = uploads
     app.include_router(auth_router(config.identity))
     app.include_router(private_router())
     app.include_router(library_router())
+    app.include_router(upload_router())
+
+    @app.exception_handler(UploadError)
+    async def upload_error(request: Request, exc: UploadError) -> JSONResponse:
+        headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after is not None else {}
+        return JSONResponse(
+            exc.body(request_id(request)).model_dump(), status_code=exc.status, headers=headers
+        )
 
     @app.exception_handler(HTTPException)
     async def http_error(request: Request, exc: HTTPException) -> JSONResponse:
