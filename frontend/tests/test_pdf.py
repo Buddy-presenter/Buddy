@@ -30,6 +30,7 @@ def test_pdf_navigation_zoom_highlight_reset_and_private_clear(desktop_window, q
     page = window.present
     page.load_pdf(FIXTURE)
     qtbot.waitUntil(lambda: not page.executor.busy, timeout=10000)
+    assert page.executor.manifest is not None, page.feedback.text()
     assert page.counter.text() == "Slide 1 of 3"
     page.send("zoom_region", {"region": {"x": 96, "y": 410, "width": 480, "height": 240}})
     page.send("highlight_region", {"region": {"x": 100, "y": 450, "width": 100, "height": 40}})
@@ -66,6 +67,17 @@ def test_invalid_pdf_leaves_previous_committed_presentation(desktop_window, qtbo
 def test_pdf_byte_limit():
     with pytest.raises(ContractError):
         render(b"%PDF-" + b" " * (64 * 1024 * 1024))
+
+
+def test_finished_pdf_worker_before_monitor_attachment_is_accepted(monkeypatch):
+    import buddy_desktop.pdf_document as module
+
+    def finished(pid):
+        raise module.psutil.NoSuchProcess(pid)
+
+    monkeypatch.setattr(module.psutil, "Process", finished)
+    manifest, image = open_pdf(FIXTURE)
+    assert len(manifest.slides) == 3 and not image.isNull()
 
 
 def test_native_fullscreen_navigation_highlight_zoom_and_restore(
@@ -118,6 +130,7 @@ def test_failed_local_open_does_not_remove_private_account_boundary(desktop_wind
     page = window.present
     page.load_pdf(FIXTURE, deck_id="private-deck", revision="private-v1")
     qtbot.waitUntil(lambda: not page.executor.busy, timeout=10000)
+    assert page.executor.manifest is not None, page.feedback.text()
     assert window._private_presentation
     page.load_pdf(b"not a valid PDF")
     qtbot.waitUntil(lambda: not page.executor.busy, timeout=10000)

@@ -55,15 +55,20 @@ def render(content: bytes, index: int = 0) -> tuple[dict[str, Any], QImage]:
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             try:
-                monitor = psutil.Process(process.pid)
+                try:
+                    monitor = psutil.Process(process.pid)
+                except psutil.NoSuchProcess:
+                    # A small page may finish before psutil attaches on macOS.
+                    process.wait(timeout=1)
+                    monitor = None
                 deadline = time.monotonic() + 20
                 while process.poll() is None:
+                    assert monitor is not None
                     try:
                         rss = monitor.memory_info().rss
                     except psutil.NoSuchProcess:
-                        if process.poll() is not None:
-                            break
-                        raise
+                        process.wait(timeout=1)
+                        break
                     if time.monotonic() > deadline or rss > 512 * 1024 * 1024:
                         raise ContractError("PDF exceeds the rendering time or memory limit.")
                     time.sleep(0.01)
@@ -114,7 +119,7 @@ def render(content: bytes, index: int = 0) -> tuple[dict[str, Any], QImage]:
             return metadata, image
     except ContractError:
         raise
-    except (OSError, ValueError, KeyError, psutil.Error):
+    except (OSError, ValueError, KeyError, psutil.Error, subprocess.TimeoutExpired):
         raise ContractError(
             "PDF rendering is unavailable. Try another file or repair Buddy."
         ) from None
