@@ -4,13 +4,13 @@ import logging
 import os
 import sys
 from dataclasses import replace
-from importlib.resources import files
 
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 
 from buddy_desktop import __version__
 from buddy_desktop.config import AppConfig, ConfigurationError, validate_api_url
+from buddy_desktop.visuals import apply_theme
 from buddy_desktop.window import MainWindow
 
 
@@ -41,7 +41,7 @@ def main() -> int:
     app.setOrganizationName("Buddy")
     app.setApplicationName("BuddyDesktop")
     app.setApplicationVersion(__version__)
-    app.setStyleSheet(files("buddy_desktop").joinpath("theme.qss").read_text(encoding="utf-8"))
+    apply_theme(app)
     settings = QSettings()
     window = MainWindow(
         resolve_config(config, settings),

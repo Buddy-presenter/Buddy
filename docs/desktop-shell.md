@@ -26,11 +26,11 @@ preferences survive restarts; malformed saved addresses fall back to the validat
 default. An explicit environment URL always wins. HTTP is restricted to loopback,
 redirects are disabled, and service bodies are never displayed as markup or error text.
 
-The shell includes account controls (#5) and the [deck library](library.md) (#6).
-It leaves upload/processing (#7–#12),
-presentation (#13 onward), and the security baseline (#46) to their owners. This does
-not claim those workflows are implemented. The included CI is the minimal desktop
-foundation required by #1; #30 owns broader desktop/API security and CI policy.
+The shell includes account controls (#5), the [deck library](library.md) (#6),
+private [PDF/PPTX uploads](uploads.md), and [PDF presentations](pdf-presentations.md)
+with the six catalog controls and full-screen playback. Automatic processing and
+PPTX playback/conversion remain unsupported. Feature guides own their contracts;
+this guide describes the desktop shell.
 
 Platform references:
 
@@ -41,3 +41,33 @@ Platform references:
 
 Use this wheel as the input to the future release pipeline. It does not package an API,
 provider secrets, or an embedded browser.
+
+## Visual system (#90)
+
+`visuals.py` installs the packaged charcoal/warm-white palette and QSS once per
+application. Coral/amber is reserved for primary commands, navigation, and focus;
+mint, red, and lavender distinguish processing statuses alongside their text labels.
+Lucide icons and the original transparent Buddy character ship inside the wheel;
+rendering never downloads assets. Attribution/provenance lives in `assets/README.md`.
+
+The shell has persistent navigation, a connection-status header, responsive Home
+account/connection sections, a searchable table library with format/status columns,
+PDF/PPTX upload and saved-PDF opening, and local PDF/slide-manifest Present controls.
+Home shortcuts navigate to real views. Present's
+numeric region fields are available through the checkable Coordinates control;
+drag selection and all six executor commands retain the same contracts. This is
+not native PowerPoint playback, an agent, or a microphone. Full screen retains the
+same live slide surface and controls. Routine same-account checks preserve private
+presentations; account/backend/access changes clear them.
+
+Settings stores `appearance/reduce_motion` in native `QSettings`. This suppresses
+the mascot activity arc's animation, not actual work. Hidden mascots stop their
+timers; the header activity indicator reflects concurrent account/library/health
+work without implying that Buddy is listening. Connection health is the last
+explicit check, not continuous connectivity monitoring.
+
+Validate at 800x600 and 1200x800, including high-DPI scaling, keyboard focus,
+signed-out/loading/error states and loaded slides. `test_visuals.py` covers asset
+loading, contrast, responsive geometry, motion persistence and command access.
+`frontend/scripts/smoke_desktop.py --screenshot build/buddy.png` captures the real
+Qt application in an isolated settings profile, without provider calls.
