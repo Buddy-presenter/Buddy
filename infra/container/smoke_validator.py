@@ -50,6 +50,8 @@ def main() -> int:
                 "run",
                 "--rm",
                 "-i",
+                "--user",
+                f"{os.getuid()}:{os.getgid()}",
                 "--network=none",
                 "--read-only",
                 "--cap-drop=ALL",
