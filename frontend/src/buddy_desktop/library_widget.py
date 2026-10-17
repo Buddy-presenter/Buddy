@@ -4,6 +4,7 @@ import time
 from math import ceil
 
 from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -12,6 +13,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
     QStyle,
     QTableWidget,
     QTableWidgetItem,
@@ -24,6 +26,7 @@ from buddy_desktop.config import AppConfig
 from buddy_desktop.library_service import LibraryAccessExpired, LibraryPage, LibraryService
 from buddy_desktop.tasks import TaskRunner
 from buddy_desktop.views import StatePanel
+from buddy_desktop.visuals import command, icon
 
 STATUS_TEXT = {
     "uploaded": ("Awaiting processing", "No processing job has been scheduled yet."),
@@ -61,7 +64,8 @@ class LibraryWidget(QWidget):
         self.last_page: LibraryPage | None = None
         self.account_key: tuple[int, str | None] | None = None
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 28, 32, 28)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(18)
         heading = QLabel("Library")
         heading.setObjectName("pageTitle")
         layout.addWidget(heading)
@@ -71,6 +75,7 @@ class LibraryWidget(QWidget):
         self.search.setMaxLength(256)
         self.search.setPlaceholderText("Search decks")
         self.search.setAccessibleName("Search decks")
+        self.search.addAction(icon("search"), QLineEdit.ActionPosition.LeadingPosition)
         search_label.setBuddy(self.search)
         controls.addWidget(search_label)
         controls.addWidget(self.search, 1)
@@ -89,10 +94,13 @@ class LibraryWidget(QWidget):
         self.refresh.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
         self.refresh.setToolTip("Refresh library")
         self.refresh.setAccessibleName("Refresh library")
+        command(self.refresh, "refresh-cw", compact=True)
+        self.refresh.setToolTip("Refresh library")
         self.refresh.clicked.connect(self.reload)
         controls.addWidget(self.refresh)
         layout.addLayout(controls)
         self.state = StatePanel()
+        self.state.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self.state.retry.setAccessibleName("Retry library request")
         self.state.retry_requested.connect(self.reload)
         layout.addWidget(self.state)
@@ -113,6 +121,10 @@ class LibraryWidget(QWidget):
             2, QHeaderView.ResizeMode.ResizeToContents
         )
         self.table.setMinimumHeight(220)
+        self.table.verticalHeader().setDefaultSectionSize(58)
+        self.table.setShowGrid(False)
+        self.table.setAlternatingRowColors(True)
+        self.table.horizontalHeader().setHighlightSections(False)
         layout.addWidget(self.table, 1)
         self.detail = QPlainTextEdit()
         self.detail.setReadOnly(True)
@@ -121,18 +133,24 @@ class LibraryWidget(QWidget):
         self.detail.setFrameShape(QPlainTextEdit.Shape.NoFrame)
         self.detail.setAccessibleName("Selected deck processing status")
         layout.addWidget(self.detail)
+        self.empty_space = QWidget()
+        layout.addWidget(self.empty_space, 1)
         pager = QHBoxLayout()
         self.previous = QPushButton("&Previous")
         self.next = QPushButton("&Next")
-        for button, icon, tooltip in [
+        for button, standard_icon, tooltip in [
             (self.previous, QStyle.StandardPixmap.SP_ArrowBack, "Previous page"),
             (self.next, QStyle.StandardPixmap.SP_ArrowForward, "Next page"),
         ]:
             button.setText("")
-            button.setIcon(self.style().standardIcon(icon))
+            button.setIcon(self.style().standardIcon(standard_icon))
             button.setToolTip(tooltip)
         self.previous.setAccessibleName("Previous library page")
         self.next.setAccessibleName("Next library page")
+        command(self.previous, "chevron-left", compact=True)
+        command(self.next, "chevron-right", compact=True)
+        self.previous.setToolTip("Previous page")
+        self.next.setToolTip("Next page")
         self.previous.clicked.connect(lambda: self.move_page(-1))
         self.next.clicked.connect(lambda: self.move_page(1))
         self.count = QLabel()
@@ -166,6 +184,8 @@ class LibraryWidget(QWidget):
         self.table.setRowCount(0)
         self.table.hide()
         self.detail.clear()
+        self.detail.hide()
+        self.empty_space.show()
         self.count.clear()
         self.last_page = None
         self.total = 0
@@ -301,8 +321,23 @@ class LibraryWidget(QWidget):
                     item.setToolTip(
                         deck.title if column == 0 else guidance if column == 1 else text
                     )
+                    if column == 0:
+                        item.setIcon(icon("presentation"))
+                    elif column == 1:
+                        item.setForeground(
+                            QColor(
+                                {
+                                    "ready": "#8ED5B6",
+                                    "failed": "#FF9B94",
+                                    "processing": "#FFB477",
+                                    "queued": "#C4B9F3",
+                                }.get(deck.status, "#B9B9C4")
+                            )
+                        )
                     self.table.setItem(row, column, item)
             self.table.show()
+            self.detail.show()
+            self.empty_space.hide()
             self.table.selectRow(0)
             self.selection_changed()
             if any(item.status in {"queued", "processing"} for item in result.items):

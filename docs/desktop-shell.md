@@ -41,3 +41,30 @@ Platform references:
 
 Use this wheel as the input to the future release pipeline. It does not package an API,
 provider secrets, or an embedded browser.
+
+## Visual system (#90)
+
+`visuals.py` installs the packaged charcoal/warm-white palette and QSS once per
+application. Coral/amber is reserved for primary commands, navigation, and focus;
+mint, red, and lavender distinguish processing statuses alongside their text labels.
+Lucide icons and the original transparent Buddy character ship inside the wheel;
+rendering never downloads assets. Attribution/provenance lives in `assets/README.md`.
+
+The shell has persistent navigation, a connection-status header, responsive Home
+account/connection sections, a searchable table library, and the existing local
+rendered-slide Present controls. Home shortcuts navigate to real views. Present's
+numeric region fields are available through the checkable Coordinates control;
+drag selection and all six executor commands retain the same contracts. This is
+not native PowerPoint playback, an agent, a microphone, or an upload UI.
+
+Settings stores `appearance/reduce_motion` in native `QSettings`. This suppresses
+the mascot activity arc's animation, not actual work. Hidden mascots stop their
+timers; the header activity indicator reflects concurrent account/library/health
+work without implying that Buddy is listening. Connection health is the last
+explicit check, not continuous connectivity monitoring.
+
+Validate at 800x600 and 1200x800, including high-DPI scaling, keyboard focus,
+signed-out/loading/error states and loaded slides. `test_visuals.py` covers asset
+loading, contrast, responsive geometry, motion persistence and command access.
+`frontend/scripts/smoke_desktop.py --screenshot build/buddy.png` captures the real
+Qt application in an isolated settings profile, without provider calls.

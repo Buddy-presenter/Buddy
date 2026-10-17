@@ -3,11 +3,12 @@
 from pathlib import Path
 
 from PySide6.QtCore import QStandardPaths, Qt, QTimer, Signal
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QGridLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from buddy_desktop.auth import AccountSession, NativeTokenStore
 from buddy_desktop.services import ServiceError
 from buddy_desktop.tasks import TaskRunner
+from buddy_desktop.visuals import command
 from buddy_identity.config import IdentityConfig, IdentityError
 
 
@@ -17,6 +18,7 @@ class AccountWidget(QWidget):
 
     def __init__(self, api_url: str) -> None:
         super().__init__()
+        self.setObjectName("accountPanel")
         self.session: AccountSession | None = None
         self.account_id: str | None = None
         self.runner = TaskRunner(self)
@@ -26,28 +28,50 @@ class AccountWidget(QWidget):
         self.operation = ""
         self.closing = False
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+        heading = QLabel("Account")
+        heading.setObjectName("sectionTitle")
+        layout.addWidget(heading)
         self.message = QLabel("Sign in to your Buddy account.")
         self.message.setTextFormat(Qt.TextFormat.PlainText)
         self.message.setWordWrap(True)
+        self.message.setObjectName("muted")
         layout.addWidget(self.message)
-        buttons = QHBoxLayout()
+        buttons = QGridLayout()
+        buttons.setSpacing(8)
         self.buttons: dict[str, QPushButton] = {}
-        for action, title in [
-            ("signin", "Sign in"),
-            ("signup", "Create account"),
-            ("recovery", "Recover account"),
-            ("resume", "Resume session"),
-            ("signout", "Sign out"),
-        ]:
+        for index, (action, title) in enumerate(
+            [
+                ("signin", "Sign in"),
+                ("signup", "Create account"),
+                ("recovery", "Recover account"),
+                ("resume", "Resume session"),
+                ("signout", "Sign out"),
+            ]
+        ):
             button = QPushButton(title)
+            command(
+                button,
+                {
+                    "signin": "log-in",
+                    "signup": "user-plus",
+                    "recovery": "key-round",
+                    "resume": "rotate-ccw",
+                    "signout": "log-out",
+                }[action],
+                primary=action == "signin",
+            )
             button.clicked.connect(lambda checked=False, name=action: self.start(name))
-            buttons.addWidget(button)
+            buttons.addWidget(button, index // 2, index % 2)
             self.buttons[action] = button
         layout.addLayout(buttons)
         self.cancel = QPushButton("Cancel sign-in")
+        command(self.cancel, "x")
         self.cancel.clicked.connect(self.cancel_operation)
         self.cancel.setEnabled(False)
-        layout.addWidget(self.cancel)
+        buttons.addWidget(self.cancel, 2, 1)
+        layout.addStretch()
         self.timer = QTimer(self)
         self.timer.setInterval(60000)
         self.timer.timeout.connect(self.check_session)

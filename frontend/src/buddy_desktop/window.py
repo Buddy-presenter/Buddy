@@ -2,13 +2,15 @@
 
 from dataclasses import replace
 
-from PySide6.QtCore import QByteArray, QSettings, Slot
+from PySide6.QtCore import QByteArray, QSettings, QSize, Slot
 from PySide6.QtGui import QAction, QCloseEvent, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
+    QPushButton,
     QScrollArea,
     QStackedWidget,
     QVBoxLayout,
@@ -22,6 +24,7 @@ from buddy_desktop.present_widget import PresentWidget
 from buddy_desktop.services import Health, HealthService
 from buddy_desktop.tasks import TaskRunner
 from buddy_desktop.views import HomePage, SettingsPage
+from buddy_desktop.visuals import BuddyMark, command, icon
 
 
 class MainWindow(QMainWindow):
@@ -38,35 +41,55 @@ class MainWindow(QMainWindow):
         self.environment_override = environment_override
         self._closing = False
         self._active_task: int | None = None
+        self._account_busy = False
+        self._library_busy = False
         self.runner = TaskRunner(self)
         self.runner.succeeded.connect(self._health_succeeded)
         self.runner.failed.connect(self._health_failed)
         self.runner.idle.connect(self._task_idle)
         self.setWindowTitle("Buddy")
         self.setMinimumSize(800, 600)
-        self.resize(1120, 760)
+        self.resize(1200, 800)
+        self.setWindowIcon(icon("presentation", "#FF9F61"))
         root = QWidget()
         layout = QHBoxLayout(root)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         sidebar = QWidget()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(200)
+        sidebar.setFixedWidth(184)
         sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(16, 24, 16, 16)
+        sidebar_layout.setContentsMargins(14, 24, 14, 18)
+        wordmark = QHBoxLayout()
+        wordmark.setSpacing(6)
+        wordmark.addWidget(BuddyMark(36))
         brand = QLabel("Buddy")
         brand.setObjectName("brand")
-        subtitle = QLabel("Presenter companion")
-        subtitle.setWordWrap(True)
-        sidebar_layout.addWidget(brand)
-        sidebar_layout.addWidget(subtitle)
+        wordmark.addWidget(brand)
+        wordmark.addStretch()
+        sidebar_layout.addLayout(wordmark)
+        sidebar_layout.addSpacing(32)
+        workspace_label = QLabel("WORKSPACE")
+        workspace_label.setObjectName("muted")
+        sidebar_layout.addWidget(workspace_label)
         self.navigation = QListWidget()
+        self.navigation.setObjectName("navigation")
+        self.navigation.setIconSize(QSize(18, 18))
         self.navigation.setAccessibleName("Workspace navigation")
-        self.navigation.addItems(["Home", "Library", "Present", "Settings"])
+        self.navigation.setFixedHeight(208)
+        for name, image in (
+            ("Home", "house"),
+            ("Library", "library-big"),
+            ("Present", "presentation"),
+            ("Settings", "settings-2"),
+        ):
+            self.navigation.addItem(QListWidgetItem(icon(image), name))
         sidebar_layout.addWidget(self.navigation)
-        help_label = QLabel("Alt+1–4: switch workspace\nTab: move between controls")
-        help_label.setWordWrap(True)
-        sidebar_layout.addWidget(help_label)
+        sidebar_layout.addStretch()
+        self.sidebar_status = QLabel("Local workspace")
+        self.sidebar_status.setObjectName("muted")
+        self.sidebar_status.setWordWrap(True)
+        sidebar_layout.addWidget(self.sidebar_status)
         self.pages = QStackedWidget()
         self.home = HomePage(config.api_url)
         self.account = AccountWidget(config.api_url)
@@ -74,10 +97,15 @@ class MainWindow(QMainWindow):
         self.present = PresentWidget()
         self.present.executor.idle.connect(self._present_idle)
         self.library.activity_changed.connect(self._library_activity)
-        self.home.body.insertWidget(self.home.body.count() - 1, self.account)
+        self.home.account_layout.addWidget(self.account)
+        self.home.route_requested.connect(self._select_route)
         self.home.check_requested.connect(self.check_connection)
         self.preferences = SettingsPage(config.api_url, environment_override=environment_override)
         self.preferences.save_requested.connect(self.save_settings)
+        self.preferences.reduce_motion.setChecked(
+            bool(settings.value("appearance/reduce_motion", False, type=bool))
+        )
+        self.preferences.reduce_motion.toggled.connect(self._motion_changed)
         self.account.activity_changed.connect(self._account_activity)
         page_widgets = [
             self.home,
@@ -92,13 +120,37 @@ class MainWindow(QMainWindow):
             scroll.setWidget(page)
             self.pages.addWidget(scroll)
         layout.addWidget(sidebar)
-        layout.addWidget(self.pages, 1)
+        workspace = QWidget()
+        workspace_layout = QVBoxLayout(workspace)
+        workspace_layout.setContentsMargins(0, 0, 0, 0)
+        workspace_layout.setSpacing(0)
+        header = QWidget()
+        header.setObjectName("workspaceHeader")
+        header.setFixedHeight(60)
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(28, 0, 24, 0)
+        self.route_title = QLabel("Home")
+        header_layout.addWidget(self.route_title)
+        header_layout.addStretch()
+        self.connection_status = QLabel("Connection not checked")
+        self.connection_status.setObjectName("connectionStatus")
+        header_layout.addWidget(self.connection_status)
+        self.activity_mark = BuddyMark(24)
+        header_layout.addWidget(self.activity_mark)
+        self.account_button = QPushButton("Account")
+        command(self.account_button, "circle-user-round", compact=True)
+        self.account_button.clicked.connect(lambda: self._select_route(0))
+        header_layout.addWidget(self.account_button)
+        workspace_layout.addWidget(header)
+        workspace_layout.addWidget(self.pages, 1)
+        layout.addWidget(workspace, 1)
         self.setCentralWidget(root)
+        self._motion_changed(self.preferences.reduce_motion.isChecked())
         self.navigation.currentRowChanged.connect(self.navigate)
         self.navigation.setCurrentRow(0)
         self._create_menu()
         self.statusBar().setAccessibleName("Application status")
-        self.statusBar().showMessage("Ready. Check your backend connection to get started.")
+        self.statusBar().showMessage("Ready")
         geometry = settings.value("window/geometry")
         if isinstance(geometry, QByteArray):
             self.restoreGeometry(geometry)
@@ -126,6 +178,7 @@ class MainWindow(QMainWindow):
         if 0 <= index < self.pages.count():
             previous = self.pages.currentIndex()
             self.pages.setCurrentIndex(index)
+            self.route_title.setText(("Home", "Library", "Present", "Settings")[index])
             self.library.activate(index == 1)
             if index == 2:
                 self.statusBar().showMessage(
@@ -134,11 +187,21 @@ class MainWindow(QMainWindow):
             elif previous == 2:
                 self.statusBar().clearMessage()
 
+    @Slot(bool)
+    def _motion_changed(self, reduced: bool) -> None:
+        self.settings.setValue("appearance/reduce_motion", reduced)
+        for mark in self.findChildren(BuddyMark):
+            mark.reduced_motion = reduced
+            mark.set_activity(mark.active)
+
     @Slot()
     def check_connection(self) -> None:
         if self.runner.busy or self._closing:
             return
         self.home.connection.show_state("Connecting…", "Checking your Buddy backend.")
+        self.connection_status.setText("Checking connection")
+        self.activity_mark.set_activity(True)
+        self.home.mascot.set_activity(True)
         self.home.check.setEnabled(False)
         self.preferences.save.setEnabled(False)
         self.statusBar().showMessage("Checking backend connection…")
@@ -152,6 +215,7 @@ class MainWindow(QMainWindow):
             self._health_failed(identifier, "The service returned an unsupported result.")
             return
         self.home.connection.show_state("Backend connected", "Your Buddy service reports healthy.")
+        self.connection_status.setText("Backend connected")
         self.statusBar().showMessage("Backend connected.")
 
     @Slot(int, str)
@@ -159,11 +223,14 @@ class MainWindow(QMainWindow):
         if identifier != self._active_task or self._closing:
             return
         self.home.connection.show_state("Connection unavailable", message, retry=True)
+        self.connection_status.setText("Connection unavailable")
         self.statusBar().showMessage(message)
 
     @Slot()
     def _task_idle(self) -> None:
         self._active_task = None
+        self._update_activity()
+        self.home.mascot.set_activity(False)
         if self._closing:
             self.close()
         else:
@@ -176,6 +243,8 @@ class MainWindow(QMainWindow):
 
     @Slot(bool)
     def _account_activity(self, busy: bool) -> None:
+        self._account_busy = busy
+        self._update_activity()
         self.preferences.save.setEnabled(
             not busy
             and not self.runner.busy
@@ -187,6 +256,8 @@ class MainWindow(QMainWindow):
 
     @Slot(bool)
     def _library_activity(self, busy: bool) -> None:
+        self._library_busy = busy
+        self._update_activity()
         self.preferences.save.setEnabled(
             not busy
             and not self.runner.busy
@@ -196,8 +267,15 @@ class MainWindow(QMainWindow):
         if self._closing and not busy:
             self.close()
 
+    def _update_activity(self) -> None:
+        self.activity_mark.set_activity(
+            self._active_task is not None or self._account_busy or self._library_busy
+        )
+
     @Slot()
     def _present_idle(self) -> None:
+        if self.present.surface.slide is not None:
+            self.home.workspace_state.setText(self.present.counter.text())
         if self._closing:
             self.close()
 
@@ -229,6 +307,7 @@ class MainWindow(QMainWindow):
         self.library.configure(self.config)
         self.preferences.url.setText(url)
         self.home.endpoint.setText(url)
+        self.connection_status.setText("Connection not checked")
         self.home.connection.show_state(
             "Connection not checked", "Check the updated backend address."
         )

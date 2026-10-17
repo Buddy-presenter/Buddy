@@ -12,12 +12,15 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QVBoxLayout,
+    QWidget,
 )
 
 from buddy_desktop.slide_contract import Region
 from buddy_desktop.slide_executor import Completion, SlideExecutor
 from buddy_desktop.slide_surface import SlideSurface
 from buddy_desktop.views import Page
+from buddy_desktop.visuals import BuddyMark, command
 
 
 class SelectionSurface(SlideSurface):
@@ -30,6 +33,15 @@ class SelectionSurface(SlideSurface):
         self._anchor: QPointF | None = None
         self.setMinimumSize(240, 180)
         self.setAccessibleName("Slide preview; use the region fields for keyboard selection")
+        self.empty = QWidget(self)
+        empty_layout = QVBoxLayout(self.empty)
+        empty_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_layout.addWidget(BuddyMark(64), alignment=Qt.AlignmentFlag.AlignCenter)
+        empty_title = QLabel("No slides loaded")
+        empty_title.setObjectName("sectionTitle")
+        empty_layout.addWidget(empty_title, alignment=Qt.AlignmentFlag.AlignCenter)
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.empty)
 
     def clear_selection(self) -> None:
         self._anchor = None
@@ -90,9 +102,7 @@ class PresentWidget(Page):
     """Open local manifests explicitly; no fabricated library or processing integration."""
 
     def __init__(self) -> None:
-        super().__init__(
-            "Present", "Open rendered slides, select any area, and control your presentation."
-        )
+        super().__init__("Present", "")
         self.body.setSpacing(10)
         self._closing = False
         self._instance = 0
@@ -102,14 +112,18 @@ class PresentWidget(Page):
         self.executor.completed.connect(self._completed)
         self.executor.idle.connect(self._refresh)
         self.open_button = QPushButton("Open rendered slides…")
+        command(self.open_button, "folder-open", primary=True)
         self.open_button.clicked.connect(self._choose_manifest)
         self.previous_button = QPushButton("Previous")
+        command(self.previous_button, "chevron-left", compact=True)
         self.previous_button.clicked.connect(lambda: self.send("previous_slide"))
         self.next_button = QPushButton("Next")
+        command(self.next_button, "chevron-right", compact=True)
         self.next_button.clicked.connect(lambda: self.send("next_slide"))
         self.target = QComboBox()
         self.target.setAccessibleName("Slide to go to")
         self.go_button = QPushButton("Go to slide")
+        command(self.go_button, "arrow-right", compact=True)
         self.go_button.clicked.connect(self._go)
         self.counter = QLabel("No slides loaded")
         opening = QHBoxLayout()
@@ -127,13 +141,16 @@ class PresentWidget(Page):
             navigation.addWidget(widget)
         self.body.addLayout(navigation)
         self.body.addWidget(self.surface, 1)
-        hint = QLabel(
-            "Drag a rectangle around a word, phrase, formula, or any content. "
-            "You can also enter the region below using the keyboard."
+        self.surface.setToolTip(
+            "Drag to select a region, or open Coordinates for numeric selection"
         )
-        hint.setWordWrap(True)
-        self.body.addWidget(hint)
-        form = QGridLayout()
+        self.coordinates_button = QPushButton("Coordinates")
+        command(self.coordinates_button, "scan")
+        self.coordinates_button.setCheckable(True)
+        self.coordinates_button.setAccessibleName("Show region coordinates")
+        self.coordinate_panel = QWidget()
+        form = QGridLayout(self.coordinate_panel)
+        form.setContentsMargins(0, 0, 0, 0)
         self.fields: dict[str, QDoubleSpinBox] = {}
         for column, (name, label) in enumerate(
             (
@@ -150,23 +167,28 @@ class PresentWidget(Page):
             field.valueChanged.connect(self._fields_changed)
             caption = QLabel(label)
             caption.setBuddy(field)
-            form.addWidget(caption, 0, column)
-            form.addWidget(field, 1, column)
+            row, pair = divmod(column, 2)
+            form.addWidget(caption, row, pair * 2)
+            form.addWidget(field, row, pair * 2 + 1)
             self.fields[name] = field
-        self.body.addLayout(form)
+        self.body.addWidget(self.coordinate_panel)
+        self.coordinate_panel.hide()
+        self.coordinates_button.toggled.connect(self.coordinate_panel.setVisible)
         commands = QHBoxLayout()
         self.zoom_button = QPushButton("Zoom to selection")
+        command(self.zoom_button, "scan")
         self.zoom_button.clicked.connect(lambda: self._region_action("zoom_region"))
         self.highlight_button = QPushButton("Highlight selection")
+        command(self.highlight_button, "highlighter", primary=True)
         self.highlight_button.clicked.connect(lambda: self._region_action("highlight_region"))
         self.reset_button = QPushButton("Reset")
+        command(self.reset_button, "rotate-ccw", compact=True)
         self.reset_button.clicked.connect(lambda: self.send("reset_view"))
         for button in (self.zoom_button, self.highlight_button, self.reset_button):
             commands.addWidget(button)
+        commands.addWidget(self.coordinates_button)
         self.body.addLayout(commands)
-        self.feedback = QLabel(
-            "Open a slide manifest (.json) to begin. No backend connection is needed."
-        )
+        self.feedback = QLabel("No slides loaded")
         self.feedback.setWordWrap(True)
         self.feedback.setTextFormat(Qt.TextFormat.PlainText)
         self.feedback.setAccessibleName("Presentation status")
@@ -277,6 +299,7 @@ class PresentWidget(Page):
     @Slot()
     def _refresh(self) -> None:
         loaded = self.executor.manifest is not None and not self._closing
+        self.surface.empty.setVisible(self.surface.slide is None)
         ready = loaded and not self.executor.busy
         self.open_button.setEnabled(not self.executor.busy and not self._closing)
         for widget in (self.previous_button, self.next_button, self.target, self.go_button):
