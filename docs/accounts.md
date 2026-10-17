@@ -111,7 +111,7 @@ detect Cognito revocation. Provider/network failure denies account access (503).
 invalid and revoked credentials produce 401. A bounded limiter permits 30 bootstrap checks per
 credential digest per minute per API process, with 429/Retry-After. Deployment WAF provides the
 shared per-client-IP limit and protects managed login. Do not enable arbitrary forwarded
-headers; the local limit can also constrain users behind the same proxy. Neither limiter
+headers. Neither limiter
 is a substitute for provider-level login throttling.
 
 ## Verification and recovery controls
@@ -184,3 +184,14 @@ References: [Cognito authorization/PKCE](https://docs.aws.amazon.com/cognito/lat
 [token rotation](https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-the-refresh-token.html),
 [revocation](https://docs.aws.amazon.com/cognito/latest/developerguide/token-revocation.html),
 [GetUser](https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_GetUser.html).
+
+
+## Issue #74 acceptance record
+
+See [account acceptance](account-acceptance.md) for the current observed results and
+remaining live checks. `frontend/scripts/staging_accounts.py` is an opt-in Windows
+operator helper using the real shell, OS vault, staging API and installed URL handler.
+It prints a public authorization URL for opening in a controlled browser; passwords,
+verification codes, PKCE verifiers and session tokens are never printed. Close any
+other native-callback Buddy instance first. macOS acceptance must use the installed
+.app, because OS URL dispatch targets its registered bundle.
