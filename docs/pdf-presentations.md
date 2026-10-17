@@ -83,28 +83,21 @@ or server-rendered asset completion. The original PDF is stored in S3; per-page 
 rasters are generated locally and are not persisted as server PNG assets. Queue workers,
 provider calls, server preview caches and automatic analysis remain their own issues.
 
-## Extraction and summaries/actions
+## Page metadata and action coordinates
 
-`extract_pdf` uses the existing backend subprocess deadline/memory containment and emits
-the existing extraction shape with an additive `source_format` field. `extract_and_store`
-selects the parser from the owned deck's saved format. Existing summary/action storage
-remains reusable; PDF support does not fabricate summaries or execute paid providers.
+PDF inspection reads page count, order, stable IDs and dimensions for validation and
+rendering. It does not extract text, text positions, shapes or speaker notes. Existing
+metadata records use empty text/objects and an explicit `pdf_content_not_extracted`
+warning. PPTX extraction remains unchanged.
 
-PDF canonical page sizes are `ceil(points * 2)` at 144 dpi. Extraction normalizes these
-to EMU by multiplying by 6350, maintaining the existing extraction coordinate contract.
-Text rectangles are mapped through PDFium's crop/rotation-aware page-to-device transform
-into that same top-left plane. Convert EMU to display coordinates by dividing by 6350.
-This is a documented page-pixel quantization, not raw PDF point geometry. Page IDs are
-UUIDv5 over source digest, immutable revision, format and zero-based page index; the
-desktop uses the same derivation. IDs do not imply order.
-
-PDFs have no PowerPoint speaker notes or reliable original shape hierarchy. Extracted
-objects are text rectangles, not PowerPoint shapes. Missing text emits
-`text_unavailable_no_ocr`; no OCR or invented summary is substituted. Static-content and
-missing-notes warnings are explicit. Same revision retries are immutable/idempotent.
+Canonical page sizes are `ceil(points * 2)` at 144 dpi. Metadata stores these dimensions
+in the existing EMU plane by multiplying by 6350; divide by 6350 for display coordinates.
+Page IDs are UUIDv5 over source digest, immutable revision, format and zero-based page
+index, matching the desktop. Zoom/highlight actions use this defined page coordinate
+system; they do not require extracted text rectangles. Sending the original PDF to a
+PDF-capable model and generating summaries/actions remains future pipeline work.
 
 ```sh
-python -m buddy_api.extraction.cli tests/fixtures/slides/Buddy_PDF_Geometry.pdf --source-revision pdf-v1 --output build/pdf-extraction.json
 python scripts/quality.py all check
 python scripts/test.py all
 ```

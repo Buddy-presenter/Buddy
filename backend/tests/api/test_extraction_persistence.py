@@ -18,7 +18,7 @@ FIXTURE = (
 )
 
 
-def test_pdf_extraction_uses_saved_format_and_persists_idempotently(migrated_database):
+def test_pdf_page_metadata_uses_saved_format_and_persists_idempotently(migrated_database):
     pdf = FIXTURE.with_name("Buddy_PDF_Geometry.pdf")
 
     async def scenario():
@@ -34,7 +34,9 @@ def test_pdf_extraction_uses_saved_format_and_persists_idempotently(migrated_dat
             again = await extract_and_store(db, pdf, **kwargs)
             assert first.id == again.id
             assert first.document["source_format"] == "pdf"
-            assert "Buddy PDF" in first.document["slides"][0]["text"]
+            assert all(
+                slide["text"] == "" and slide["objects"] == [] for slide in first.document["slides"]
+            )
             with pytest.raises(ValueError, match="format"):
                 await extract_and_store(db, pdf, source_format="pptx", **kwargs)
             await db.close()

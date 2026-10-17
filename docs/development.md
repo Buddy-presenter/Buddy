@@ -72,7 +72,7 @@ belong in `tests/integration/`.
 
 Authenticated original-PPTX ingestion, storage limits, retry contracts and recovery are
 documented in [private uploads](uploads.md). Library includes PDF/PPTX upload controls.
-See [PDF presentations](pdf-presentations.md) for the built-in PDF viewer and extraction.
+See [PDF presentations](pdf-presentations.md) for the built-in PDF viewer and page validation.
 
 The standalone backend PPTX extraction stage and local inspection command are documented
 in [extraction](extraction.md); it requires no upload, worker, renderer or paid provider.
