@@ -72,3 +72,6 @@ belong in `tests/integration/`.
 
 The standalone backend PPTX extraction stage and local inspection command are documented
 in [extraction](extraction.md); it requires no upload, worker, renderer or paid provider.
+
+The reusable Qt slide surface, five-action executor, standalone input schemas and real
+slide-image test/evidence commands are documented in [slide actions](slide-actions.md).

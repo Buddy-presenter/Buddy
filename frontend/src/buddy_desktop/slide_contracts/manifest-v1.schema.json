@@ -1,0 +1,115 @@
+{
+  "type": "object",
+  "properties": {
+    "version": {
+      "const": "1.0"
+    },
+    "deck_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "\\S"
+    },
+    "render_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "\\S"
+    },
+    "slides": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "properties": {
+          "slide_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "\\S"
+          },
+          "source": {
+            "type": "object",
+            "properties": {
+              "width": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16384
+              },
+              "height": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16384
+              },
+              "units": {
+                "const": "source_pixels"
+              },
+              "origin": {
+                "const": "top_left"
+              }
+            },
+            "required": [
+              "width",
+              "height",
+              "units",
+              "origin"
+            ],
+            "additionalProperties": false
+          },
+          "raster": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 5,
+                "maxLength": 240,
+                "pattern": "^[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*\\.png$"
+              },
+              "width": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 8192
+              },
+              "height": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 8192
+              },
+              "transform": {
+                "const": "scale"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            },
+            "required": [
+              "path",
+              "width",
+              "height",
+              "transform",
+              "sha256"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "slide_id",
+          "source",
+          "raster"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "version",
+    "deck_id",
+    "render_id",
+    "slides"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Buddy slide image manifest v1"
+}
