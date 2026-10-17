@@ -161,9 +161,9 @@ browser handoff), close Buddy again, and run:
 .\.venv\Scripts\python.exe tests/manual_upload.py --new-login --check-other-upload <first-upload-UUID> --check-other-deck <first-deck-UUID>
 ```
 
-Sign in as the **other account**. Both reads must return 403; signing into the same account
-correctly fails this isolation test. The automated staging acceptance must additionally
-check cross-account PUT denial and S3 original-version equality/cleanup as listed above.
+Sign in as the **other account**. Both reads and an empty transfer attempt must return 403;
+signing into the same account correctly fails this isolation test. Operator acceptance
+must additionally check S3 original-version equality/cleanup as listed above.
 The helper never fetches another account's private file or prints tokens. After the test,
 relaunch Buddy with the staging settings from [accounts](accounts.md) and refresh Library;
 the first account should see its saved deck as Awaiting processing.

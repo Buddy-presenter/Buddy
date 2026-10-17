@@ -2,6 +2,7 @@
 
 import argparse
 import hashlib
+import http.client
 import json
 from pathlib import Path
 from urllib.error import HTTPError
@@ -87,6 +88,15 @@ def main() -> int:
                     "FAIL: expected another account's upload to return HTTP 403; received", status
                 )
                 return 1
+            status, _ = send(
+                f"/api/v1/uploads/{args.check_other_upload}/content",
+                data=b"",
+                method="PUT",
+                headers={"Content-Type": PPTX_TYPE},
+            )
+            if status != 403:
+                print("FAIL: another account's upload transfer was not denied; received", status)
+                return 1
             if args.check_other_deck:
                 status, _ = send(f"/api/v1/resources/decks/{args.check_other_deck}")
                 if status != 403:
@@ -159,7 +169,7 @@ def main() -> int:
             str(error)
         )  # IdentityError messages are explicitly sanitized by the account boundary.
         return 1
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, http.client.HTTPException):
         print(
             "Manual upload check could not complete; "
             "verify login, file, connectivity and deployment."
