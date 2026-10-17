@@ -7,29 +7,28 @@ phrase, expression and formula.
 
 ## Start the app
 
-On this Windows checkout, open PowerShell and run:
+Open PowerShell in your Buddy repository folder (the folder containing `frontend/` and
+`backend/`). On a fresh checkout, first follow the [desktop setup](development.md#desktop).
+Then run:
 
 ```powershell
-Set-Location 'C:\Users\Administrator\Desktop\Buddy'
+(Resolve-Path .\frontend\tests\fixtures\slide_actions\manual-manifest.json).Path
 .\.venv\Scripts\python.exe -m buddy_desktop
 ```
 
-The environment has already been installed for this work. On a fresh checkout, first
-follow the [desktop setup](development.md#desktop). The normal macOS launch command is
+The first command prints the sample manifest's full path for your checkout; keep it for
+the file chooser below. The macOS launch command, from the same repository folder, is
 `.venv/bin/python -m buddy_desktop`. Use the native Qt platform for manual testing; unset
 `QT_QPA_PLATFORM=offscreen` if you previously enabled it for automated tests.
 
 1. Select **Present** in the sidebar, or use **Alt+3**.
 2. Click **Open rendered slides…**.
-3. In the file chooser, open this prepared manifest:
+3. In the file chooser, open `frontend/tests/fixtures/slide_actions/manual-manifest.json`
+   inside your checkout. On Windows, you can paste the full path printed by the first
+   command above.
 
-   ```text
-   C:\Users\Administrator\Desktop\Buddy\frontend\tests\fixtures\slide_actions\manual-manifest.json
-   ```
-
-   On another checkout, use `frontend/tests/fixtures/slide_actions/manual-manifest.json`
-   beneath its repository directory. Choose the JSON file; it points at the real slide
-   images beside it. The current local player opens rendered slide manifests, rather than
+   Choose the JSON file; it points at the real slide images beside it. The current local
+   player opens rendered slide manifests, rather than
    converting an arbitrary PPTX from this button.
 
 4. Confirm the counter says **Slide 1 of 4**. The app's Home connection message can remain
