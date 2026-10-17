@@ -49,14 +49,17 @@ resource "aws_ecs_task_definition" "service" {
     name                   = each.key, image = each.value, essential = true,
     readonlyRootFilesystem = true,
     user                   = "10001:10001",
-    linuxParameters        = { initProcessEnabled = true, capabilities = { drop = ["ALL"] } },
+    linuxParameters        = { initProcessEnabled = true, capabilities = { add = [], drop = ["ALL"] } },
+    mountPoints            = [],
+    volumesFrom            = [],
+    systemControls         = [],
     environment            = local.environment,
     secrets                = [{ name = "BUDDY_DATABASE_URL", valueFrom = "${aws_secretsmanager_secret.database[each.key].arn}:url::" }],
     logConfiguration = { logDriver = "awslogs", options = {
       awslogs-group  = aws_cloudwatch_log_group.service[each.key].name,
       awslogs-region = var.region, awslogs-stream-prefix = each.key
     } },
-    portMappings = each.key == "api" ? [{ containerPort = 8000, protocol = "tcp" }] : [],
+    portMappings = each.key == "api" ? [{ containerPort = 8000, hostPort = 8000, protocol = "tcp" }] : [],
     stopTimeout  = 30,
   }, each.key == "migration" ? { command = ["python", "/opt/buddy/migrate_database.py"] } : {})])
 }
