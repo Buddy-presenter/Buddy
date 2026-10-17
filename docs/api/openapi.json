@@ -1238,7 +1238,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Request validation failed."
           },
           "503": {
             "content": {

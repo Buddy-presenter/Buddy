@@ -24,7 +24,10 @@ def analysis_router() -> APIRouter:
     router = APIRouter(
         prefix="/api/v1/analyses",
         tags=["analysis"],
-        responses={code: {"model": ErrorResponse} for code in (401, 403, 404, 422, 503)},
+        responses={
+            **{code: {"model": ErrorResponse} for code in (401, 403, 404, 503)},
+            422: {"model": ErrorResponse, "description": "Request validation failed."},
+        },
     )
 
     @router.get("/{identifier}", response_model=AnalysisResponse)
