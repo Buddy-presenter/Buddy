@@ -7,7 +7,7 @@ import sys
 from threading import Event
 
 import pytest
-from PySide6.QtCore import QCoreApplication, QObject, QSettings, QUrl
+from PySide6.QtCore import QCoreApplication, QSettings, QUrl
 from PySide6.QtGui import QFileOpenEvent
 
 from buddy_desktop.auth import browser_code
@@ -59,37 +59,6 @@ def test_timeout_cancel_browser_failure_and_concurrent_attempt_cleanup():
         assert attempt.code == "signedout"
 
 
-def test_url_event_filter_accepts_only_the_current_attempt(qapp, qtbot, tmp_path):
-    # Exercise real Qt event dispatch without installing a global macOS URL
-    # handler over unrelated windows in the Windows test process.
-    receiver = QObject()
-    server = NativeCallbackServer(directory=tmp_path)
-    receiver.installEventFilter(server)
-    activations = []
-    server.activated.connect(lambda: activations.append(True))
-
-    def deliver(uri):
-        event = QFileOpenEvent(QUrl(uri))
-        assert QCoreApplication.sendEvent(receiver, event)
-
-    try:
-        deliver(CALLBACK + "?state=expected&code=unsolicited")
-        assert not activations
-        with pending_callback.waiting("expected") as attempt:
-            deliver(CALLBACK + "?state=wrong&code=invalid")
-            assert not attempt.received.is_set() and not activations
-            deliver(CALLBACK + "?state=expected&code=accepted")
-            assert attempt.code == "accepted" and activations == [True]
-            deliver(CALLBACK + "?state=expected&code=replayed")
-            assert attempt.code == "accepted" and activations == [True]
-        deliver(CALLBACK + "?state=expected&code=expired")
-        assert activations == [True]
-    finally:
-        receiver.removeEventFilter(server)
-        server.close()
-
-
-@pytest.mark.skipif(sys.platform != "darwin", reason="macOS application URL delivery")
 def test_macos_url_event_reaches_only_the_pending_attempt(qapp, qtbot, tmp_path):
     server = NativeCallbackServer(directory=tmp_path)
     qapp.installEventFilter(server)

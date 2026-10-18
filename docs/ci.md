@@ -17,12 +17,12 @@ both database URLs and runs them against a real service. No job-level skips are 
 The cross-platform API smoke/unit coverage is retained even though Backend also runs API
 tests on Linux. All previous build and startup checks remain present.
 
-Native callback tests dispatch real Qt events to an isolated QObject on every platform,
-including wrong-state, unsolicited, replayed and expired returns. The application-wide
-QFileOpenEvent integration runs on macOS, where Buddy uses that OS delivery path; it must
-not install a synthetic macOS handler over unrelated Windows test windows. Windows keeps
-its real separate-process IPC and shell/protocol activation coverage. This isolation fixes
-the post-#89 Windows event-loop abort without retries or weakening the required CI gate.
+Qt test teardown explicitly flushes deferred widget deletion and collects Python wrapper
+cycles on the GUI thread before another test starts. Processing ordinary events alone
+does not flush `DeferredDelete`; deferring cleanup across tests can interfere with later
+native callback tests. Native diagnostics remain visible through tee-sys capture if the
+interpreter aborts. Callback, native IPC and shell/protocol coverage remains unchanged;
+there are no retries or weakened CI gates.
 The browser-script harness separately allows 30 seconds for the Node process to start
 and a one-second VM execution limit, so a slow Windows cold start is not mistaken for
 a hung finish-page script. Assertions and process failures still fail the suite.
