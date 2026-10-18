@@ -80,10 +80,48 @@ class Deployment:
         s3: Any,
         sts: Any,
         readiness: Callable[[str], None] = healthy,
+        compatibility_report: dict[str, Any] | None = None,
     ):
         self.config, self.ecs, self.s3, self.readiness = config, ecs, s3, readiness
+        self.compatibility_report = compatibility_report
         if sts.get_caller_identity()["Account"] != config["account_id"]:
             raise DeploymentError("AWS identity does not match deployment account.")
+
+    def compatible(
+        self, candidate: str, rollback: dict[str, dict[str, Any]], before: dict[str, dict[str, Any]]
+    ) -> None:
+        """Bind tested container results to the actual immediate rollback target."""
+        if self.config["environment"] != "staging":
+            return  # This transition does not replace production's acceptance policy.
+        proof = self.compatibility_report or {}
+        required = {
+            "readiness",
+            "analysis",
+            "legacy_writes",
+            "sessions",
+            "owner_isolation",
+            "immutability",
+        }
+        checks = proof.get("checks")
+        if (
+            set(rollback) != {"api"}
+            or set(before) != {"api"}
+            or not isinstance(checks, dict)
+            or proof.get("passed") is not True
+            or proof.get("before") != before
+            or proof.get("candidate_image") != candidate
+            or proof.get("rollback") != rollback
+            or set(checks) != required
+            or not all(value is True for value in checks.values())
+        ):
+            raise DeploymentError("Staging requires exact-image rollback compatibility evidence.")
+        source = self.ecs.describe_task_definition(
+            taskDefinition=rollback["api"]["taskDefinition"]
+        )["taskDefinition"]
+        containers = source.get("containerDefinitions", [])
+        if len(containers) != 1 or containers[0]["image"] != proof.get("rollback_image"):
+            raise DeploymentError("Rollback image drifted from compatibility evidence.")
+        image_digest(self.config, proof["rollback_image"], "api")
 
     def states(self, services: list[str]) -> dict[str, dict[str, Any]]:
         response = self.ecs.describe_services(cluster=self.config["cluster"], services=services)
@@ -233,6 +271,10 @@ class Deployment:
         try:
             previous = self.states(services)
             audit["previous"] = previous
+            audit["stage"] = "compatibility"
+            self.compatible(api_image, previous, previous)
+            audit["compatibility"] = self.compatibility_report
+            audit["stage"] = "definition_setup"
             definitions = {"api": self.task("api", api_image)}
             audit["stage"] = "migration_setup"
             definitions["migration"] = self.task("migration", api_image)
@@ -252,6 +294,10 @@ class Deployment:
             }
             audit["target"] = target
             audit["stage"] = "migration"
+            if self.states(services) != previous:
+                raise DeploymentError(
+                    "Service changed after compatibility testing; no migration started."
+                )
             self.migrate(definitions["migration"])
         except Exception:
             migration_failed = audit["stage"] in {"migration_setup", "migration"}
@@ -330,6 +376,14 @@ class Deployment:
             audit["target"] = previous
             audit["target_audit_key"] = value.get("audit_key")
             audit["before"] = self.states(list(previous))
+            audit["stage"] = "compatibility"
+            current = self.ecs.describe_task_definition(
+                taskDefinition=audit["before"]["api"]["taskDefinition"]
+            )["taskDefinition"]
+            self.compatible(current["containerDefinitions"][0]["image"], previous, audit["before"])
+            audit["compatibility"] = self.compatibility_report
+            if self.states(list(previous)) != audit["before"]:
+                raise DeploymentError("Service changed after rollback compatibility testing.")
             audit["stage"] = "restore"
             self.restore(previous)
             audit["restored"] = previous
@@ -356,6 +410,7 @@ def main() -> int:
     parser.add_argument("--api-image")
     parser.add_argument("--worker-image")
     parser.add_argument("--rollback-revision")
+    parser.add_argument("--compatibility-report")
     args = parser.parse_args()
     try:
         import os
@@ -364,11 +419,25 @@ def main() -> int:
 
         config = json.loads(os.environ["BUDDY_DEPLOYMENT_CONFIG"])
         validate(config, args.revision)
+        proof = None
+        if args.compatibility_report:
+            from pathlib import Path
+
+            proof = json.loads(Path(args.compatibility_report).read_text())
+            if (
+                proof.get("revision") != args.revision
+                or proof.get("account_id") != config["account_id"]
+                or proof.get("environment") != config["environment"]
+            ):
+                raise DeploymentError(
+                    "Compatibility evidence belongs to another release/environment."
+                )
         deployment = Deployment(
             config,
             boto3.client("ecs", region_name=config["region"]),
             boto3.client("s3", region_name=config["region"]),
             boto3.client("sts", region_name=config["region"]),
+            compatibility_report=proof,
         )
         if args.rollback_revision:
             result = deployment.rollback(args.revision, args.rollback_revision)

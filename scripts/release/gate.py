@@ -29,6 +29,13 @@ def approved_checks(checks: list[dict], revision: str) -> bool:
 def main() -> int:
     revision = os.environ["GITHUB_SHA"]
     target = os.environ["RELEASE_TARGET"]
+    phase = os.environ.get("ROLLOUT_PHASE", "feature")
+    if phase not in {"feature", "compatibility"} or (
+        phase == "compatibility" and target != "staging"
+    ):
+        raise ValueError("The compatibility bridge is a staging-only transition.")
+    if target == "staging" and os.environ.get("WORKER_IMAGE"):
+        raise ValueError("Staging worker promotion needs its own image compatibility contract.")
     if (
         not re.fullmatch(r"[a-f0-9]{40}", revision)
         or os.environ["GITHUB_REF"] != "refs/heads/main"
