@@ -24,8 +24,10 @@ native callback tests. Native diagnostics remain visible through tee-sys capture
 interpreter aborts. Callback, native IPC and shell/protocol coverage remains unchanged;
 there are no retries or weakened CI gates.
 The browser-script harness separately allows 30 seconds for the Node process to start
-and a one-second VM execution limit, so a slow Windows cold start is not mistaken for
-a hung finish-page script. Assertions and process failures still fail the suite.
+and a one-second VM execution limit for both initial evaluation and load-handler dispatch
+in the same context, so a slow Windows cold start is not mistaken for a hung finish-page
+script. Regression tests deliberately hang each phase and require Node's VM-timeout error.
+Assertions and process failures still fail the suite.
 
 ## Security and required checks
 

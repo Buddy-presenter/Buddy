@@ -55,7 +55,7 @@ def test_callback_query_is_removed_from_access_log_scope():
     assert observed == [b""] and scope["query_string"] == b""
 
 
-def run_browser(query, *, signed_out=False, fragment=""):
+def run_browser(query, *, signed_out=False, fragment="", script=SCRIPT):
     node = shutil.which("node")
     if node is None:
         pytest.skip("JavaScript behavior checks need Node.js, available on repository CI runners.")
@@ -76,16 +76,17 @@ const window = {
   history: { replaceState: (...args) => history.push(args[2]) },
   addEventListener: (event, callback) => { events[event] = callback; }
 };
-vm.runInNewContext(data.script, {window, URLSearchParams,
-  document: { getElementById: key => nodes[key] }}, {timeout: 1000});
+const context = vm.createContext({window, URLSearchParams, events,
+  document: { getElementById: key => nodes[key] }});
+vm.runInContext(data.script, context, {timeout: 1000});
 const beforeLoad = [...navigations];
-if (events.load) events.load();
+vm.runInContext('if (events.load) events.load();', context, {timeout: 1000});
 process.stdout.write(JSON.stringify({nodes, history, beforeLoad, navigations}));
 """
     result = subprocess.run(
         [node, "-e", harness],
         input=json.dumps(
-            {"script": SCRIPT, "query": query, "signed_out": signed_out, "fragment": fragment}
+            {"script": script, "query": query, "signed_out": signed_out, "fragment": fragment}
         ),
         text=True,
         capture_output=True,
@@ -95,6 +96,22 @@ process.stdout.write(JSON.stringify({nodes, history, beforeLoad, navigations}));
         check=True,
     )
     return json.loads(result.stdout)
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "while (true) {}",
+        "window.addEventListener('load', () => { while (true) {} });",
+    ],
+    ids=["initial-evaluation", "load-handler"],
+)
+def test_browser_script_hangs_hit_vm_limit_in_each_phase(script):
+    with pytest.raises(subprocess.CalledProcessError) as error:
+        run_browser("", script=script)
+    # A host-context callback would instead hit subprocess.TimeoutExpired after
+    # 30 seconds. Require Node's VM error, without a fragile wall-clock assertion.
+    assert "ERR_SCRIPT_EXECUTION_TIMEOUT" in error.value.stderr
 
 
 def test_real_script_scrubs_url_then_opens_only_native_app_after_document_load():
