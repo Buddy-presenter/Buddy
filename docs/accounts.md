@@ -90,6 +90,11 @@ of deployment. Cognito allowlist additions preserve existing installed clients. 
 callback setting retains direct native behavior for compatibility. Production uses HTTPS;
 the localhost exception below is staging-only. No public bucket or new hosting service is needed.
 
+When overriding Cognito identity settings through environment variables, an omitted
+`BUDDY_COGNITO_CALLBACK_URL` uses the native callback, rather than inheriting the bundled
+staging browser page. Supply your own registered browser callback explicitly to use one.
+Overriding only `BUDDY_API_URL` retains the bundled identity and its matching browser page.
+
 ## Local account development (Windows)
 
 The API/database can stay local while Cognito supplies the real managed login and

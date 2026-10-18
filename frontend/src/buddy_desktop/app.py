@@ -47,7 +47,24 @@ def main() -> int:
     # Identity values are consumed by AccountWidget, but the bundled API URL is a
     # default only. Treating it as an environment override would disable the user's
     # saved backend selection in Settings.
-    added = [name for name in deployment if name != "BUDDY_API_URL" and name not in os.environ]
+    identity_override = any(
+        name in os.environ
+        for name in (
+            "BUDDY_AWS_REGION",
+            "BUDDY_COGNITO_POOL_ID",
+            "BUDDY_COGNITO_CLIENT_ID",
+            "BUDDY_COGNITO_DOMAIN",
+        )
+    )
+    # An operator's identity provider must not inherit the preview's browser return.
+    # Without an explicit callback, IdentityConfig retains its native URI default.
+    added = [
+        name
+        for name in deployment
+        if name != "BUDDY_API_URL"
+        and name not in os.environ
+        and not (identity_override and name == "BUDDY_COGNITO_CALLBACK_URL")
+    ]
     environment_override = "BUDDY_API_URL" in os.environ
     try:
         for name in added:

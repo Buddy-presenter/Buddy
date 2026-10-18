@@ -13,7 +13,7 @@ from PySide6.QtGui import QFileOpenEvent
 from buddy_desktop.auth import browser_code
 from buddy_desktop.native_callback import NativeCallbackServer, PendingCallback, pending_callback
 from buddy_desktop.tasks import TaskRunner
-from buddy_identity.config import CALLBACK, SIGNOUT_CALLBACK, IdentityError
+from buddy_identity.config import CALLBACK, SIGNOUT_CALLBACK, IdentityConfig, IdentityError
 
 
 @pytest.mark.parametrize(
@@ -222,6 +222,83 @@ def test_entrypoint_uses_bundled_api_as_default_without_disabling_saved_url(tmp_
     config, environment_override = launches[-1]
     assert config.api_url == "https://operator.example.test"
     assert environment_override
+
+
+@pytest.mark.parametrize("frozen", [False, True])
+@pytest.mark.parametrize(
+    "override",
+    ["none", "api", "identity", "identity_callback", "callback", "single_identity"],
+)
+def test_entrypoint_keeps_callback_default_with_its_identity(
+    tmp_path, monkeypatch, frozen, override
+):
+    import os
+
+    import buddy_desktop.app as desktop_app
+
+    deployment = {
+        "BUDDY_API_URL": "https://staging.example.test",
+        "BUDDY_AWS_REGION": "eu-central-1",
+        "BUDDY_COGNITO_POOL_ID": "eu-central-1_Staging",
+        "BUDDY_COGNITO_CLIENT_ID": "staging123",
+        "BUDDY_COGNITO_DOMAIN": "https://staging.auth.eu-central-1.amazoncognito.com",
+        "BUDDY_COGNITO_CALLBACK_URL": "https://staging.example.test/auth/desktop/callback",
+    }
+    for name in deployment:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(sys, "frozen", frozen, raising=False)
+    if frozen:
+        monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
+        (tmp_path / "buddy-deployment.json").write_text(json.dumps(deployment))
+    else:
+        monkeypatch.setattr(desktop_app, "files", lambda _package: tmp_path)
+        (tmp_path / "deployment.json").write_text(json.dumps(deployment))
+    identity = {
+        "BUDDY_AWS_REGION": "us-east-1",
+        "BUDDY_COGNITO_POOL_ID": "us-east-1_Custom",
+        "BUDDY_COGNITO_CLIENT_ID": "custom123",
+        "BUDDY_COGNITO_DOMAIN": "https://custom.auth.us-east-1.amazoncognito.com",
+    }
+    if override.startswith("identity"):
+        for name, value in identity.items():
+            monkeypatch.setenv(name, value)
+    elif override == "single_identity":
+        monkeypatch.setenv("BUDDY_COGNITO_CLIENT_ID", "custom123")
+    elif override == "api":
+        monkeypatch.setenv("BUDDY_API_URL", "https://custom-api.example.test")
+    callback = "https://custom.example.test/auth/desktop/callback"
+    if override in {"identity_callback", "callback"}:
+        monkeypatch.setenv("BUDDY_COGNITO_CALLBACK_URL", callback)
+    before = {name: os.environ.get(name) for name in deployment}
+    observed = []
+
+    def launch(config, *, environment_override):
+        observed.append(IdentityConfig.from_environment())
+        return 0
+
+    monkeypatch.setattr(desktop_app, "run_application", launch)
+    assert desktop_app.main() == 0
+    config = observed[0]
+    assert config is not None
+    expected = (
+        callback
+        if override in {"identity_callback", "callback"}
+        else CALLBACK
+        if override in {"identity", "single_identity"}
+        else deployment["BUDDY_COGNITO_CALLBACK_URL"]
+    )
+    assert config.callback_url == expected
+    assert config.logout_url == (
+        SIGNOUT_CALLBACK
+        if expected == CALLBACK
+        else expected.removesuffix("callback") + "signed-out"
+    )
+    if override.startswith("identity"):
+        assert config.region == identity["BUDDY_AWS_REGION"]
+        assert config.pool_id == identity["BUDDY_COGNITO_POOL_ID"]
+        assert config.client_id == identity["BUDDY_COGNITO_CLIENT_ID"]
+        assert config.domain == identity["BUDDY_COGNITO_DOMAIN"]
+    assert {name: os.environ.get(name) for name in deployment} == before
 
 
 def test_production_configuration_cannot_silently_package_staging_or_localhost(tmp_path):
