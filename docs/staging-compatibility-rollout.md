@@ -36,7 +36,7 @@ roles are used. No staging database, user data, Cognito session or AWS credentia
 these test containers.
 
 The check seeds the old schema, migrates the disposable database, and verifies readiness,
-old analysis reads/writes, original payload preservation, session references, owner
+old and typed analysis reads/writes, original payload preservation, session references, owner
 isolation and immutability. The feature reader must still recognize legacy results as
 legacy. Bridge preparation also tests both database heads. The workflow retains a
 credential-free JSON report as `staging-rollback-compatibility` and embeds it in the

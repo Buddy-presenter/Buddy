@@ -66,6 +66,16 @@ async def run() -> None:
                     owner_id=OWNER, deck_id=DECK, version=3, graph=GRAPH
                 )
                 assert (await repos.analyses.get(extra.id, owner_id=OWNER)).graph == GRAPH
+        if mode == "typed":
+            # Only synthetic fixture data is loaded; create/read still execute
+            # the packaged image's real extraction and analysis repositories.
+            fixture = runpy.run_path("/support/analysis.py")
+            fixture["document"].__globals__["FIXTURE"] = Path("/fixtures/analysis-v1.json")
+            async with db.transaction() as repos:
+                created = await fixture["create"](repos, owner_id=OWNER, deck_id=DECK, version=4)
+                assert created.graph == {}
+                result = await repos.analyses.read(created.id, owner_id=OWNER)
+                assert result.inputs is not None and result.publication != "legacy"
         async with db.transaction() as repos:
             record = await repos.analyses.get(ANALYSIS, owner_id=OWNER)
             assert record.graph == GRAPH
@@ -89,11 +99,20 @@ async def run() -> None:
                     {"id": created.id},
                 )
                 assert archived == GRAPH
+                resumed = await repos.sessions.create(
+                    owner_id=OWNER, deck_id=DECK, analysis_version_id=created.id
+                )
+                assert (
+                    await repos.sessions.get(resumed.id, owner_id=OWNER)
+                ).analysis_version_id == created.id
             # New readers must continue treating archived legacy data as legacy.
             if hasattr(repos.analyses, "read"):
                 for row in await repos.analyses.list(owner_id=OWNER):
                     result = await repos.analyses.read(row.id, owner_id=OWNER)
-                    assert result.publication == "legacy" and result.inputs is None
+                    if row.version == 4:
+                        assert result.publication != "legacy" and result.inputs is not None
+                    else:
+                        assert result.publication == "legacy" and result.inputs is None
         if mode not in {"seed", "baseline"}:
             try:
                 async with db.transaction() as repos:

@@ -81,6 +81,10 @@ def verify_images(
             "BUDDY_DATABASE_URL=" + url,
             "-v",
             str(CHECKS) + ":/checks:ro",
+            "-v",
+            str(CHECKS.parents[2] / "backend/tests/support") + ":/support:ro",
+            "-v",
+            str(CHECKS.parents[2] / "docs/fixtures") + ":/fixtures:ro",
             image,
         ]
 
@@ -174,10 +178,12 @@ for attempt in range(30):
             # Bridge must work before the expansion and after the feature schema.
             probe(candidate, "baseline")
             migrate(future)
+            probe(future, "typed")
             probe(candidate, "write")
             probe(future, "read")
         else:
             migrate(schema_image or candidate)
+            probe(schema_image or candidate, "typed")
             probe(previous, "write")
             probe(candidate, "read")
         return {
