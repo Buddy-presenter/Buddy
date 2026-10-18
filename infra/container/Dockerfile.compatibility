@@ -1,0 +1,6 @@
+# Temporary, staging-only bridge from the exact currently running immutable image.
+# No dependency refresh or replacement application is introduced in this step.
+ARG PREVIOUS_IMAGE=549327541867.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:f61c966f16ebd4ea59331ae3f54b7034c98b1e91d6716a078ae9f889041a9593
+FROM ${PREVIOUS_IMAGE}
+COPY --chmod=0555 backend/scripts/release/compatibility_bridge.py /opt/buddy/compatibility_bridge.py
+CMD ["python", "/opt/buddy/compatibility_bridge.py"]

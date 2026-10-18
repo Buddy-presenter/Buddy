@@ -1,0 +1,68 @@
+{
+  "tested_at_utc": "2026-10-18T13:09:15.235345+00:00",
+  "scope": "Local disposable Docker only; no staging deployment or live database access",
+  "initial_image_source_revision": "dc1bb7743f9fa95e5fd75fe7a488ca5262c06b75",
+  "candidate_build": "Unmodified infra/container/Dockerfile from this PR; local image IDs are not published ECR digests",
+  "local_image_ids": {
+    "bridge": "sha256:2e4de385bf86bf86cc77ccf9071fdb50435442e6619065e495cd0b02e390bcd0",
+    "feature": "sha256:caf06a6a9b7e5ed20cf9fdef8f8d45d36c5ddf14f372fea62999d3dee2d0384a"
+  },
+  "script_and_fixture_sha256": {
+    "backend/scripts/release/image_compatibility.py": "bb7d3070658b5d7626daa537298f3222201d3ac6709583519a4ebb468ca162eb",
+    "backend/scripts/release/rollback_probe.py": "47a665329a456af0fa892c899b6695e834e3076314854b20942cc9a7dd6550ee",
+    "backend/tests/support/analysis.py": "4dab511fbe967983a71791fbab2d3ddad909798a838cbb1872d265e3a7593491",
+    "docs/fixtures/analysis-v1.json": "75ddb61091eafdf6f8418614c8f822a400ecc57b9446a811e3a6cf3e8c3342f2"
+  },
+  "reports": {
+    "bridge": {
+      "passed": true,
+      "checks": {
+        "readiness": true,
+        "analysis": true,
+        "legacy_writes": true,
+        "sessions": true,
+        "owner_isolation": true,
+        "immutability": true
+      },
+      "rollback_image": "549327541867.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:f61c966f16ebd4ea59331ae3f54b7034c98b1e91d6716a078ae9f889041a9593",
+      "candidate_image": "buddy-issue96-bridge:local",
+      "future_image": "buddy-issue96-feature:local",
+      "schema_image": "buddy-issue96-feature:local"
+    },
+    "feature": {
+      "passed": true,
+      "checks": {
+        "readiness": true,
+        "analysis": true,
+        "legacy_writes": true,
+        "sessions": true,
+        "owner_isolation": true,
+        "immutability": true
+      },
+      "rollback_image": "buddy-issue96-bridge:local",
+      "candidate_image": "buddy-issue96-feature:local",
+      "future_image": null,
+      "schema_image": "buddy-issue96-feature:local"
+    },
+    "recovery": {
+      "passed": true,
+      "checks": {
+        "readiness": true,
+        "analysis": true,
+        "legacy_writes": true,
+        "sessions": true,
+        "owner_isolation": true,
+        "immutability": true
+      },
+      "rollback_image": "buddy-issue96-bridge:local",
+      "candidate_image": "buddy-issue96-bridge:local",
+      "future_image": null,
+      "schema_image": "buddy-issue96-feature:local"
+    },
+    "negative": {
+      "passed": true,
+      "original_image_rejected_on_feature_schema": true,
+      "original_image": "549327541867.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:f61c966f16ebd4ea59331ae3f54b7034c98b1e91d6716a078ae9f889041a9593"
+    }
+  }
+}

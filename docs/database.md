@@ -160,3 +160,7 @@ security gates, and is not implemented or closed by this PR.
 Implementation references: [SQLAlchemy async I/O](https://docs.sqlalchemy.org/en/21/orm/extensions/asyncio.html),
 [Alembic migrations](https://alembic.sqlalchemy.org/en/latest/tutorial.html),
 [asyncpg](https://magicstack.github.io/asyncpg/current/).
+
+## Initial staging rollback compatibility
+
+Forward migration 0008 restores the legacy graph compatibility column and preserves legacy writes after rollback. The normal API still requires its packaged migration head. Only the pinned temporary staging bridge accepts the two explicitly tested heads; see the [two-step rollout](staging-compatibility-rollout.md).

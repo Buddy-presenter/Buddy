@@ -17,6 +17,7 @@ approved_checks = release_gate["approved_checks"]
 SHA = "a" * 40
 ACCOUNT = "123456789012"
 PREFIX = f"arn:aws:ecs:eu-central-1:{ACCOUNT}:task-definition/buddy-staging-"
+OLD_IMAGE = f"{ACCOUNT}.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:" + "d" * 64
 IMAGE = f"{ACCOUNT}.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:" + "b" * 64
 CONFIG = {
     "environment": "staging",
@@ -72,7 +73,22 @@ class Ecs:
 
     def describe_services(self, **kwargs):
         return {
-            "services": [{"serviceName": name, **self.state[name]} for name in kwargs["services"]]
+            "services": [
+                {
+                    "serviceName": name,
+                    **self.state[name],
+                    "runningCount": self.state[name]["desiredCount"],
+                    "pendingCount": 0,
+                    "deployments": [
+                        {
+                            "status": "PRIMARY",
+                            "rolloutState": "COMPLETED",
+                            "taskDefinition": self.state[name]["taskDefinition"],
+                        }
+                    ],
+                }
+                for name in kwargs["services"]
+            ]
         }
 
     def describe_task_definition(self, **kwargs):
@@ -81,7 +97,12 @@ class Ecs:
         return {
             "taskDefinition": {
                 "family": family,
-                "containerDefinitions": [{"name": name, "image": "old"}],
+                "containerDefinitions": [
+                    {
+                        "name": name,
+                        "image": IMAGE if kwargs["taskDefinition"].endswith(":2") else OLD_IMAGE,
+                    }
+                ],
                 "requiresCompatibilities": ["FARGATE"],
             }
         }
@@ -120,6 +141,49 @@ class Ecs:
         }
 
 
+class PreparedDeployment(Deployment):
+    """Supply the synthetic external Docker-verifier result before each unit operation.
+
+    These existing tests exercise ECS/S3 failure paths. Separate preflight tests use
+    Deployment directly to reject missing, stale, mismatched and drifted evidence.
+    """
+
+    def evidence(self, candidate, rollback):
+        self.compatibility_report = {
+            "passed": True,
+            "candidate_image": candidate,
+            "rollback_image": OLD_IMAGE
+            if rollback["api"]["taskDefinition"].endswith(":1")
+            else IMAGE,
+            "before": copy.deepcopy(self.ecs.state),
+            "rollback": copy.deepcopy(rollback),
+            "checks": dict.fromkeys(
+                [
+                    "readiness",
+                    "analysis",
+                    "legacy_writes",
+                    "sessions",
+                    "owner_isolation",
+                    "immutability",
+                ],
+                True,
+            ),
+        }
+
+    def deploy(self, revision, api_image, worker_image=None):
+        self.evidence(api_image, self.ecs.state)
+        return super().deploy(revision, api_image, worker_image)
+
+    def rollback(self, revision, previous_revision):
+        raw = self.s3.records.get(f"staging/backend/{previous_revision}.json", b"{}")
+        target = json.loads(raw).get("previous", self.ecs.state)
+        if not isinstance(target, dict) or not isinstance(target.get("api"), dict):
+            target = self.ecs.state
+        candidate = IMAGE if self.ecs.state["api"]["taskDefinition"].endswith(":2") else OLD_IMAGE
+        self.evidence(candidate, target)
+        return super().rollback(revision, previous_revision)
+
+
 def test_migration_failure_never_changes_live_service(monkeypatch, capsys):
     ecs, s3 = Ecs(migration_exit=1), S3()
     before = copy.deepcopy(ecs.state)
@@ -137,7 +201,7 @@ def test_migration_failure_never_changes_live_service(monkeypatch, capsys):
 
     monkeypatch.setattr(ecs, "run_task", audited_run)
     with pytest.raises(DeploymentError, match="Migration failed"):
-        Deployment(CONFIG, ecs, s3, Sts()).deploy(SHA, IMAGE)
+        PreparedDeployment(CONFIG, ecs, s3, Sts()).deploy(SHA, IMAGE)
     assert ecs.updates == []
     assert ecs.state == before
     audit = next(iter(operation_records(s3).values()))
@@ -182,7 +246,7 @@ def test_migration_setup_rejection_and_wait_failures_retain_sanitized_outcomes(
     else:
         monkeypatch.setattr(ecs, "wait", unavailable)
     with pytest.raises(DeploymentError, match="no traffic promoted") as error:
-        Deployment(CONFIG, ecs, s3, Sts()).deploy(SHA, IMAGE)
+        PreparedDeployment(CONFIG, ecs, s3, Sts()).deploy(SHA, IMAGE)
     assert ecs.updates == [] and ecs.state == before
     audit = next(iter(operation_records(s3).values()))
     assert audit["status"] == "migration_failed"
@@ -203,7 +267,7 @@ def test_missing_durable_intent_prevents_migration_or_registration(monkeypatch):
 
     monkeypatch.setattr(s3, "put_object", denied)
     with pytest.raises(RuntimeError, match="audit unavailable"):
-        Deployment(CONFIG, ecs, s3, Sts()).deploy(SHA, IMAGE)
+        PreparedDeployment(CONFIG, ecs, s3, Sts()).deploy(SHA, IMAGE)
     assert ecs.runs == [] and ecs.registered == [] and ecs.updates == []
 
 
@@ -216,7 +280,7 @@ def test_readiness_failure_restores_previous_task_and_records_outcome():
             raise RuntimeError("unhealthy")
 
     with pytest.raises(DeploymentError):
-        Deployment(CONFIG, ecs, s3, Sts(), readiness).deploy(SHA, IMAGE)
+        PreparedDeployment(CONFIG, ecs, s3, Sts(), readiness).deploy(SHA, IMAGE)
     assert ecs.state["api"]["taskDefinition"] == PREFIX + "api:1"
     assert next(iter(operation_records(s3).values()))["status"] == "rolled_back"
     assert len(ecs.updates) == 2
@@ -224,7 +288,7 @@ def test_readiness_failure_restores_previous_task_and_records_outcome():
 
 def test_healthy_deployment_is_auditable_and_explicit_rollback_works():
     ecs, s3 = Ecs(), S3()
-    deployment = Deployment(CONFIG, ecs, s3, Sts(), lambda _: None)
+    deployment = PreparedDeployment(CONFIG, ecs, s3, Sts(), lambda _: None)
     assert deployment.deploy(SHA, IMAGE)["status"] == "healthy"
     assert ecs.state["api"]["taskDefinition"] == PREFIX + "api:2"
     lookup = copy.deepcopy(s3.records[f"staging/backend/{SHA}.json"])
@@ -248,7 +312,7 @@ def test_healthy_deployment_is_auditable_and_explicit_rollback_works():
 @pytest.mark.parametrize("failure", ["update", "readiness"])
 def test_explicit_rollback_failure_leaves_durable_audit_without_claiming_recovery(failure, capsys):
     ecs, s3 = Ecs(), S3()
-    deployment = Deployment(CONFIG, ecs, s3, Sts(), lambda _: None)
+    deployment = PreparedDeployment(CONFIG, ecs, s3, Sts(), lambda _: None)
     deployed = deployment.deploy(SHA, IMAGE)
     lookup = copy.deepcopy(s3.records[f"staging/backend/{SHA}.json"])
     capsys.readouterr()
@@ -282,7 +346,7 @@ def test_explicit_rollback_failure_leaves_durable_audit_without_claiming_recover
 
 def test_repeated_same_revision_attempts_retain_each_deployment_and_rollback_record():
     ecs, s3 = Ecs(), S3()
-    deployment = Deployment(CONFIG, ecs, s3, Sts(), lambda _: None)
+    deployment = PreparedDeployment(CONFIG, ecs, s3, Sts(), lambda _: None)
     first = deployment.deploy(SHA, IMAGE)
     deployment.rollback(SHA, SHA)
     second = deployment.deploy(SHA, IMAGE)
@@ -300,19 +364,21 @@ def test_repeated_same_revision_attempts_retain_each_deployment_and_rollback_rec
 
 def test_partial_api_worker_rollback_records_observed_state_and_supports_legacy_lookup():
     ecs, s3 = Ecs(), S3()
+    config = json.loads(json.dumps(CONFIG).replace("staging", "production"))
+    prefix = PREFIX.replace("staging", "production")
     ecs.state = {
-        "api": {"taskDefinition": PREFIX + "api:2", "desiredCount": 2},
-        "worker": {"taskDefinition": PREFIX + "worker:2", "desiredCount": 2},
+        "api": {"taskDefinition": prefix + "api:2", "desiredCount": 2},
+        "worker": {"taskDefinition": prefix + "worker:2", "desiredCount": 2},
     }
     previous = {
-        "api": {"taskDefinition": PREFIX + "api:1", "desiredCount": 1},
-        "worker": {"taskDefinition": PREFIX + "worker:1", "desiredCount": 1},
+        "api": {"taskDefinition": prefix + "api:1", "desiredCount": 1},
+        "worker": {"taskDefinition": prefix + "worker:1", "desiredCount": 1},
     }
-    s3.records[f"staging/backend/{SHA}.json"] = json.dumps(
+    s3.records[f"production/backend/{SHA}.json"] = json.dumps(
         {
             "schema": 1,
             "revision": SHA,
-            "environment": "staging",
+            "environment": "production",
             "account_id": ACCOUNT,
             "status": "healthy",
             "previous": previous,
@@ -327,15 +393,15 @@ def test_partial_api_worker_rollback_records_observed_state_and_supports_legacy_
 
     ecs.update_service = partial
     with pytest.raises(DeploymentError, match="Rollback failed"):
-        Deployment(CONFIG, ecs, s3, Sts(), lambda _: None).rollback("c" * 40, SHA)
+        Deployment(config, ecs, s3, Sts(), lambda _: None).rollback("c" * 40, SHA)
     audit = next(iter(operation_records(s3).values()))
     assert audit["status"] == "rollback_failed"
-    assert audit["before"]["api"]["taskDefinition"] == PREFIX + "api:2"
+    assert audit["before"]["api"]["taskDefinition"] == prefix + "api:2"
     assert audit["target"] == previous
     assert audit["target_audit_key"] is None  # old schema-1 records still work
     assert audit["observed"] == ecs.state
     assert audit["observed"]["api"] == previous["api"]
-    assert audit["observed"]["worker"]["taskDefinition"] == PREFIX + "worker:2"
+    assert audit["observed"]["worker"]["taskDefinition"] == prefix + "worker:2"
     assert audit["restored"] is None
     assert "tasks_stopped" not in ecs.waits
 
@@ -343,7 +409,7 @@ def test_partial_api_worker_rollback_records_observed_state_and_supports_legacy_
 @pytest.mark.parametrize("failure", ["readiness", "migration"])
 def test_failed_later_deployment_does_not_overwrite_healthy_revision_lookup(failure):
     ecs, s3 = Ecs(), S3()
-    deployment = Deployment(CONFIG, ecs, s3, Sts(), lambda _: None)
+    deployment = PreparedDeployment(CONFIG, ecs, s3, Sts(), lambda _: None)
     first = deployment.deploy(SHA, IMAGE)
     lookup = copy.deepcopy(s3.records[f"staging/backend/{SHA}.json"])
 
@@ -371,7 +437,7 @@ def test_failed_rollback_is_not_reported_as_success():
         raise RuntimeError("unhealthy")
 
     with pytest.raises(DeploymentError):
-        Deployment(CONFIG, ecs, s3, Sts(), readiness).deploy(SHA, IMAGE)
+        PreparedDeployment(CONFIG, ecs, s3, Sts(), readiness).deploy(SHA, IMAGE)
     assert next(iter(operation_records(s3).values()))["status"] == "rollback_failed"
 
 
@@ -398,7 +464,7 @@ def test_explicit_staging_public_egress_runs_real_deployment_driver():
     }
     validate(config, SHA)
     ecs, s3 = Ecs(expected_public_ip="ENABLED"), S3()
-    Deployment(config, ecs, s3, Sts(), lambda _: None).deploy(SHA, IMAGE)
+    PreparedDeployment(config, ecs, s3, Sts(), lambda _: None).deploy(SHA, IMAGE)
     assert len(ecs.runs) == 1
     assert ecs.updates
 
@@ -431,7 +497,7 @@ def test_only_private_environment_pinned_images_are_allowed(image):
 
 def test_cross_environment_rollback_record_is_rejected():
     ecs, s3 = Ecs(), S3()
-    deployment = Deployment(CONFIG, ecs, s3, Sts(), lambda _: None)
+    deployment = PreparedDeployment(CONFIG, ecs, s3, Sts(), lambda _: None)
     deployment.deploy(SHA, IMAGE)
     key = f"staging/backend/{SHA}.json"
     value = json.loads(s3.records[key])

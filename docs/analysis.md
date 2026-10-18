@@ -14,7 +14,7 @@ conversion (#10), visual validation (#49) and the review page (#23) consume this
 | `analysis_slides` | Every slide once in extraction/manifest order, with summary text/state/reason. |
 | `slide_actions` | Stable instance ID, position, catalog version/type, purpose, JSONB parameters and immutable action hash. |
 | `action_validations` | Append-only candidate/validated/rejected/needs-review history and versioned JSONB evidence. |
-| `legacy_analysis_payloads` | Migration-only archive of old untyped payloads; never current results or returned to clients. |
+| `legacy_analysis_payloads` | Compatibility archive of old untyped payloads (including legacy writes after rollback); never current results or returned to clients. |
 
 Composite foreign keys preserve owner/deck/analysis consistency. Repository callers must
 derive owner scope from verified identity or an authorized backend job. The source

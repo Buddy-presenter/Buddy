@@ -136,3 +136,5 @@ protected environments, provider access and signing identities are supplied. Liv
 recovery drills remain pending, as does the real worker implementation. These are
 explicit completion gates for live staging #73 and production #76. Issue #38 covers the
 reviewed pipeline preparation; simulated tests do not establish deployment acceptance.
+
+The initial staging schema transition requires the [two-step compatibility rollout](staging-compatibility-rollout.md): a separately approved bridge release before the feature migration. Every staging promotion and explicit rollback requires fresh exact-image compatibility evidence before live changes.

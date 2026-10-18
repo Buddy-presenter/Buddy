@@ -195,6 +195,8 @@ class AnalysisVersion(OwnedRecord):
     deck_id: Mapped[UUID] = mapped_column(index=True)
     job_id: Mapped[UUID | None] = mapped_column()
     version: Mapped[int] = mapped_column()
+    # Compatibility only; typed results never interpret or expose this payload.
+    graph: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
     extraction_id: Mapped[UUID | None] = mapped_column()
     provenance: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     content_sha256: Mapped[str | None] = mapped_column(String(64))
@@ -205,7 +207,7 @@ class AnalysisVersion(OwnedRecord):
 
 
 class LegacyAnalysisPayload(Base):
-    """Migration-only archive; never interpreted or returned as current analysis."""
+    """Legacy compatibility archive; never returned as current typed analysis."""
 
     __tablename__ = "legacy_analysis_payloads"
     analysis_id: Mapped[UUID] = mapped_column(

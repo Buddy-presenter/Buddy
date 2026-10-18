@@ -1,0 +1,186 @@
+"""Real release guards; only ECS/S3 and container-proof inputs are external fakes."""
+
+import copy
+
+import pytest
+from backend.scripts.release.deploy import Deployment, DeploymentError
+from test_release import CONFIG, IMAGE, OLD_IMAGE, PREFIX, S3, SHA, Ecs, Sts
+
+
+def proof(ecs):
+    return {
+        "passed": True,
+        "before": copy.deepcopy(ecs.state),
+        "rollback": copy.deepcopy(ecs.state),
+        "rollback_image": OLD_IMAGE,
+        "candidate_image": IMAGE,
+        "checks": dict.fromkeys(
+            [
+                "readiness",
+                "analysis",
+                "legacy_writes",
+                "sessions",
+                "owner_isolation",
+                "immutability",
+            ],
+            True,
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "missing",
+        "failed",
+        "candidate",
+        "rollback",
+        "image",
+        "before",
+        "missing_check",
+        "malformed_checks",
+    ],
+)
+def test_invalid_proof_stops_before_definition_registration_or_live_ddl(failure):
+    ecs, s3 = Ecs(), S3()
+    report = proof(ecs)
+    if failure == "missing":
+        report = None
+    elif failure == "failed":
+        report["checks"]["legacy_writes"] = False
+    elif failure == "candidate":
+        report["candidate_image"] = OLD_IMAGE
+    elif failure == "rollback":
+        report["rollback"]["api"]["taskDefinition"] = PREFIX + "api:9"
+    elif failure == "image":
+        report["rollback_image"] = IMAGE
+    elif failure == "before":
+        report["before"]["api"]["desiredCount"] = 2
+    elif failure == "malformed_checks":
+        report["checks"] = ["readiness"]
+    else:
+        del report["checks"]["analysis"]
+    driver = Deployment(CONFIG, ecs, s3, Sts(), lambda _: None, compatibility_report=report)
+    with pytest.raises(DeploymentError):
+        driver.deploy(SHA, IMAGE)
+    assert not ecs.registered and not ecs.runs and not ecs.updates
+
+
+def test_service_drift_after_preflight_never_runs_migrations():
+    ecs, s3 = Ecs(), S3()
+    driver = Deployment(CONFIG, ecs, s3, Sts(), lambda _: None, compatibility_report=proof(ecs))
+    original = ecs.register_task_definition
+
+    def drift(**kwargs):
+        result = original(**kwargs)
+        ecs.state["api"]["taskDefinition"] = PREFIX + "api:7"
+        return result
+
+    ecs.register_task_definition = drift
+    with pytest.raises(DeploymentError):
+        driver.deploy(SHA, IMAGE)
+    assert not ecs.runs and not ecs.updates
+
+
+def test_explicit_rollback_requires_a_fresh_test_of_its_actual_target():
+    ecs, s3 = Ecs(), S3()
+    driver = Deployment(CONFIG, ecs, s3, Sts(), lambda _: None, compatibility_report=proof(ecs))
+    driver.deploy(SHA, IMAGE)
+    ecs.updates.clear()
+    # The deploy proof has the pre-promotion state. Reusing it for a later
+    # rollback cannot silently authorize another target/current service state.
+    with pytest.raises(DeploymentError):
+        driver.rollback("c" * 40, SHA)
+    assert not ecs.updates
+
+
+@pytest.mark.parametrize(
+    "target,phase,worker",
+    [
+        ("production", "compatibility", ""),
+        ("staging", "unknown", ""),
+        ("staging", "feature", IMAGE),
+    ],
+)
+def test_transition_gate_rejects_unsupported_operations(monkeypatch, target, phase, worker):
+    from test_release import release_gate
+
+    monkeypatch.setenv("GITHUB_SHA", SHA)
+    monkeypatch.setenv("RELEASE_TARGET", target)
+    monkeypatch.setenv("ROLLOUT_PHASE", phase)
+    monkeypatch.setenv("WORKER_IMAGE", worker)
+    with pytest.raises(ValueError):
+        release_gate["main"]()
+
+
+def test_rollback_preflight_uses_retained_feature_schema_after_app_rollback(monkeypatch, tmp_path):
+    import json
+    import sys
+
+    from backend.scripts.release import prepare_compatibility as preflight
+
+    ecs, s3 = Ecs(), S3()
+    s3.records[f"staging/backend/{SHA}.json"] = json.dumps(
+        {
+            "status": "healthy",
+            "environment": "staging",
+            "account_id": CONFIG["account_id"],
+            "revision": SHA,
+            "previous": copy.deepcopy(ecs.state),
+            "compatibility": {"schema_image": IMAGE},
+        }
+    ).encode()
+    clients = {"ecs": ecs, "s3": s3, "sts": Sts()}
+    monkeypatch.setattr(preflight.boto3, "client", lambda service, **kw: clients[service])
+    observed = {}
+
+    def verify(previous, candidate, **kwargs):
+        observed.update(previous=previous, candidate=candidate, **kwargs)
+        return {"passed": True}
+
+    monkeypatch.setattr(preflight, "verify_images", verify)
+    monkeypatch.setenv("BUDDY_DEPLOYMENT_CONFIG", json.dumps(CONFIG))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "preflight",
+            "--revision",
+            "c" * 40,
+            "--rollback-revision",
+            SHA,
+            "--output",
+            str(tmp_path / "proof.json"),
+        ],
+    )
+    preflight.main()
+    assert observed["candidate"] == OLD_IMAGE  # app already restored
+    assert observed["schema_image"] == IMAGE  # database still expanded
+
+
+@pytest.mark.parametrize("state", ["draining", "pending", "in_progress"])
+@pytest.mark.parametrize("when", ["before_registration", "before_migration"])
+def test_unfinished_source_rollout_blocks_migration(state, when):
+    ecs, s3 = Ecs(), S3()
+    describe = ecs.describe_services
+
+    def unfinished(**kwargs):
+        result = describe(**kwargs)
+        if when == "before_migration" and not ecs.registered:
+            return result
+        service = result["services"][0]
+        if state == "draining":
+            service["deployments"].append({"status": "ACTIVE"})
+        elif state == "pending":
+            service["pendingCount"] = 1
+        else:
+            service["deployments"][0]["rolloutState"] = "IN_PROGRESS"
+        return result
+
+    ecs.describe_services = unfinished
+    driver = Deployment(CONFIG, ecs, s3, Sts(), lambda _: None, compatibility_report=proof(ecs))
+    with pytest.raises(DeploymentError):
+        driver.deploy(SHA, IMAGE)
+    if when == "before_registration":
+        assert not ecs.registered
+    assert not ecs.runs and not ecs.updates

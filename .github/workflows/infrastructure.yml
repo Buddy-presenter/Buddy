@@ -55,6 +55,8 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
@@ -67,6 +69,17 @@ jobs:
           BUDDY_BOOTSTRAP_TEST: 'true'
         run: python -m pytest -p no:pytest-qt infra/tests
       - run: docker build -f infra/container/Dockerfile -t buddy-api:ci .
+      - name: Build the previous source contract and compatibility bridge without AWS credentials
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/buddy-previous-source"
+          git archive dc1bb7743f9fa95e5fd75fe7a488ca5262c06b75 | tar -x -C "$RUNNER_TEMP/buddy-previous-source"
+          docker build -f "$RUNNER_TEMP/buddy-previous-source/infra/container/Dockerfile" -t buddy-previous:ci "$RUNNER_TEMP/buddy-previous-source"
+          docker build -f infra/container/Dockerfile.compatibility --build-arg PREVIOUS_IMAGE=buddy-previous:ci -t buddy-bridge:ci .
+      - name: Exercise both rollout phases against disposable PostgreSQL
+        run: |
+          python -m backend.scripts.release.image_compatibility --local-images --initial-image buddy-previous:ci --previous-image buddy-previous:ci --candidate-image buddy-bridge:ci --future-image buddy-api:ci --output bridge-compatibility.json
+          python -m backend.scripts.release.image_compatibility --local-images --initial-image buddy-previous:ci --previous-image buddy-bridge:ci --candidate-image buddy-api:ci --output feature-compatibility.json
       - name: Execute the packaged PDF validator without networking
         run: python infra/container/smoke_validator.py --image buddy-api:ci
       - name: Start the real read-only API container
