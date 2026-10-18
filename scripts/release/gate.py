@@ -27,7 +27,7 @@ def approved_checks(checks: list[dict], revision: str) -> bool:
 
 
 def main() -> int:
-    revision = os.environ["GITHUB_SHA"]
+    revision = os.environ.get("RELEASE_REVISION", os.environ["GITHUB_SHA"])
     target = os.environ["RELEASE_TARGET"]
     phase = os.environ.get("ROLLOUT_PHASE", "feature")
     if phase not in {"feature", "compatibility"} or (
@@ -42,6 +42,21 @@ def main() -> int:
         or target not in {"staging", "production"}
     ):
         raise ValueError("Release requires an exact main revision and known environment.")
+    if os.environ.get("AUTOMATIC_STAGING") == "true":
+        if (
+            target != "staging"
+            or phase != "feature"
+            or os.environ.get("RELEASE_OPERATION") == "rollback"
+        ):
+            raise ValueError("Automatic releases may only promote staging features.")
+        current = subprocess.run(
+            ["gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/git/ref/heads/main"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        if json.loads(current.stdout)["object"]["sha"] != revision:
+            raise ValueError("Automatic staging revision has been superseded on main.")
     if os.environ.get("RELEASE_OPERATION") == "rollback":
         # Recovery restores an independently validated healthy audit record, not this build.
         return 0

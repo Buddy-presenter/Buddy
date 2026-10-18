@@ -18,12 +18,9 @@ SCRIPT = r"""(() => {
   window.history.replaceState(null, '', window.location.pathname);
   const title = document.getElementById('title');
   const message = document.getElementById('message');
-  const open = document.getElementById('open-buddy');
   const invalid = () => {
     title.textContent = 'Start sign-in from Buddy';
     message.textContent = 'This browser return is missing or expired. Open Buddy and try again.';
-    open.hidden = true;
-    open.removeAttribute('href');
   };
   if (fragment || search.length > 8192) { invalid(); return; }
   const params = new URLSearchParams(search);
@@ -58,10 +55,8 @@ SCRIPT = r"""(() => {
       : 'The browser step is complete. Return to Buddy and close this tab. ' +
         'Buddy will finish checking your account.';
   }
-  open.href = target;
-  open.hidden = false;
   // Commit a real HTTPS page before asking the browser to launch another app.
-  // Browsers that require a user gesture can use the visible fallback button.
+  // The finish page asks users to return to Buddy themselves.
   window.addEventListener('load', () => { window.location.assign(target); }, {once: true});
   window.addEventListener('pageshow', event => { if (event.persisted) invalid(); });
 })();"""
@@ -72,10 +67,7 @@ display: grid; place-items: center;} main {max-width: 34rem; margin: 2rem; paddi
 border: 1px solid #34343B; border-radius: 20px; background: #0E1019;}
 .brand {color: #F6A142; font-weight: 700; letter-spacing: .12em; font-size: .8rem;}
 h1 {font-size: 2rem; line-height: 1.2; letter-spacing: -.02em; margin: 1rem 0;}
-p {color: #B5B8BA;} a {display: inline-block; padding: .8rem 1.3rem; border-radius: 10px;
-background: #B45032; color: white; text-decoration: none; font-weight: 600;}
-a:hover {background: #CA5938;} a:focus-visible {outline: 3px solid #F6A142; outline-offset: 5px;}
-[hidden] {display: none;} .hint {font-size: .85rem; margin-top: 1.5rem;}"""
+p {color: #B5B8BA;}"""
 
 
 def csp_hash(content: str) -> str:
@@ -88,9 +80,8 @@ HTML = (
     '<meta name="referrer" content="no-referrer"><title>Return to Buddy</title>'
     f"<style>{STYLE}</style></head><body><main>"
     '<div class="brand">BUDDY</div><h1 id="title">Return to Buddy</h1>'
-    '<p id="message" role="status">Use Buddy to complete your account check.</p>'
-    '<a id="open-buddy" hidden>Open Buddy</a>'
-    '<p class="hint">Your browser may ask permission to open the app.</p>'
+    '<p id="message" role="status">Return to Buddy to complete your account check. '
+    "You can close this tab.</p>"
     "<noscript><p>JavaScript is needed to return to the app. Enable it, then start sign-in "
     "again from Buddy.</p></noscript></main>"
     f"<script>{SCRIPT}</script></body></html>"
