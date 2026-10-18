@@ -228,6 +228,7 @@ def test_production_configuration_cannot_silently_package_staging_or_localhost(t
     from frontend.scripts.release.build_desktop import deployment_config
 
     preview = deployment_config(None)
+    assert preview["BUDDY_COGNITO_CALLBACK_URL"].startswith("https://")
     with pytest.raises(ValueError, match="explicit"):
         deployment_config(None, production=True)
     path = tmp_path / "public.json"
@@ -248,6 +249,13 @@ def test_production_configuration_cannot_silently_package_staging_or_localhost(t
     with pytest.raises(ValueError, match="identity"):
         deployment_config(path, production=True)
     path.write_text(json.dumps({**preview, "BUDDY_API_URL": "http://127.0.0.1:8000"}))
+    with pytest.raises(ValueError, match="HTTPS"):
+        deployment_config(path)
+    path.write_text(
+        json.dumps(
+            {**preview, "BUDDY_COGNITO_CALLBACK_URL": "http://localhost:8000/auth/desktop/callback"}
+        )
+    )
     with pytest.raises(ValueError, match="HTTPS"):
         deployment_config(path)
     path.write_text(json.dumps({**preview, "password": "synthetic-never-package"}))

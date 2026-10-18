@@ -20,9 +20,7 @@ from keyring.backend import KeyringBackend
 from buddy_desktop.config import validate_api_url
 from buddy_desktop.native_callback import pending_callback
 from buddy_identity.config import (
-    CALLBACK,
     SCOPES,
-    SIGNOUT_CALLBACK,
     IdentityConfig,
     IdentityError,
     SessionExpired,
@@ -295,7 +293,7 @@ class AccountSession:
         parameters = {
             "client_id": self.config.client_id,
             "response_type": "code",
-            "redirect_uri": CALLBACK,
+            "redirect_uri": self.config.callback_url,
             "scope": SCOPES,
             "state": state,
             "code_challenge_method": "S256",
@@ -310,7 +308,7 @@ class AccountSession:
                 {
                     "grant_type": "authorization_code",
                     "code": code,
-                    "redirect_uri": CALLBACK,
+                    "redirect_uri": self.config.callback_url,
                     "code_verifier": verifier,
                 }
             ),
@@ -386,7 +384,7 @@ class AccountSession:
             + urlencode(
                 {
                     "client_id": self.config.client_id,
-                    "logout_uri": SIGNOUT_CALLBACK,
+                    "logout_uri": self.config.logout_url,
                 }
             ),
             "",

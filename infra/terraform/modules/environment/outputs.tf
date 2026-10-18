@@ -13,11 +13,12 @@ output "release_channel" {
 }
 output "desktop_configuration" {
   value = {
-    BUDDY_API_URL           = local.api_url
-    BUDDY_AWS_REGION        = var.region
-    BUDDY_COGNITO_POOL_ID   = aws_cognito_user_pool.main.id
-    BUDDY_COGNITO_CLIENT_ID = aws_cognito_user_pool_client.desktop.id
-    BUDDY_COGNITO_DOMAIN    = "https://${aws_cognito_user_pool_domain.main.domain}.auth.${var.region}.amazoncognito.com"
+    BUDDY_API_URL              = local.api_url
+    BUDDY_AWS_REGION           = var.region
+    BUDDY_COGNITO_POOL_ID      = aws_cognito_user_pool.main.id
+    BUDDY_COGNITO_CLIENT_ID    = aws_cognito_user_pool_client.desktop.id
+    BUDDY_COGNITO_DOMAIN       = "https://${aws_cognito_user_pool_domain.main.domain}.auth.${var.region}.amazoncognito.com"
+    BUDDY_COGNITO_CALLBACK_URL = "${local.api_url}/auth/desktop/callback"
   }
 }
 

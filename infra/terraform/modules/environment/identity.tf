@@ -31,8 +31,15 @@ resource "aws_cognito_user_pool_client" "desktop" {
   allowed_oauth_flows                  = ["code"]
   allowed_oauth_scopes                 = ["openid", "email", "aws.cognito.signin.user.admin"]
   supported_identity_providers         = ["COGNITO"]
-  callback_urls                        = ["org.buddy.desktop://oauth/callback"]
-  logout_urls                          = ["org.buddy.desktop://oauth/signed-out"]
+  # Retain the native URLs during rollout so already-installed clients keep working.
+  callback_urls = concat(
+    ["org.buddy.desktop://oauth/callback", "${local.api_url}/auth/desktop/callback"],
+    local.production ? [] : ["http://localhost:8000/auth/desktop/callback"]
+  )
+  logout_urls = concat(
+    ["org.buddy.desktop://oauth/signed-out", "${local.api_url}/auth/desktop/signed-out"],
+    local.production ? [] : ["http://localhost:8000/auth/desktop/signed-out"]
+  )
   explicit_auth_flows                  = ["ALLOW_USER_SRP_AUTH"]
   enable_token_revocation              = true
   prevent_user_existence_errors        = "ENABLED"

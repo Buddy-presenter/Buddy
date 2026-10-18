@@ -17,6 +17,9 @@ def run() -> int:
         raise SystemExit("Use the installed macOS app for native browser return.")
     # Explicit local development overrides the preview's remote API default.
     os.environ.setdefault("BUDDY_API_URL", "http://127.0.0.1:8000")
+    os.environ.setdefault(
+        "BUDDY_COGNITO_CALLBACK_URL", "http://localhost:8000/auth/desktop/callback"
+    )
     python = Path(sys.executable).with_name("pythonw.exe")
     if not python.is_file():
         python = Path(sys.executable)

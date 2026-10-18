@@ -14,6 +14,7 @@ from buddy_api import __version__
 from buddy_api.analysis.api import analysis_router
 from buddy_api.auth import Authentication, auth_router
 from buddy_api.authorization import private_router
+from buddy_api.browser_return import browser_return_router
 from buddy_api.config import Environment, Settings
 from buddy_api.contracts import (
     ErrorData,
@@ -127,6 +128,7 @@ def create_app(
     app.state.uploads = uploads
     app.state.validator = validator
     app.include_router(auth_router(config.identity))
+    app.include_router(browser_return_router())
     app.include_router(private_router())
     app.include_router(library_router())
     app.include_router(analysis_router())

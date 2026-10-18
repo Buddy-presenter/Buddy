@@ -9,6 +9,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from buddy_api.contracts import ErrorData, ErrorResponse
+from buddy_identity.config import BROWSER_CALLBACK_PATH, BROWSER_SIGNOUT_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,11 @@ class RequestContextMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+        if scope["path"] in {BROWSER_CALLBACK_PATH, BROWSER_SIGNOUT_PATH}:
+            # The static page reads OAuth parameters from the browser's URL, not
+            # the server request. Strip them from the ASGI access-log scope, even
+            # when an operator runs Uvicorn with access logging enabled.
+            scope["query_string"] = b""
         request_id = str(uuid4())
         scope.setdefault("state", {})["request_id"] = request_id
         started = False

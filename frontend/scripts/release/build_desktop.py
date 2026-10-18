@@ -25,7 +25,7 @@ def deployment_config(source: Path | None, *, production: bool = False) -> dict[
     value = json.loads((source or ROOT / "infra/staging/public-config.json").read_text())
     if (
         not isinstance(value, dict)
-        or set(value)
+        or set(value) - {"BUDDY_COGNITO_CALLBACK_URL"}
         != {
             "BUDDY_API_URL",
             "BUDDY_AWS_REGION",
@@ -46,6 +46,8 @@ def deployment_config(source: Path | None, *, production: bool = False) -> dict[
         ) from None
     if identity is None:
         raise ValueError("Deployment configuration requires complete public identity settings.")
+    if identity.callback_url.startswith("http:"):
+        raise ValueError("Packaged browser return pages require HTTPS.")
     staging = json.loads((ROOT / "infra/staging/public-config.json").read_text())
     if production and any(
         value[key] == staging[key]

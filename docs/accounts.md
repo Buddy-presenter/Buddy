@@ -38,6 +38,10 @@ Configure the Cognito client with:
   for Cognito `GetUser` to check whether a token was revoked; it is not an AWS IAM grant.
 - Callback URL `org.buddy.desktop://oauth/callback`.
 - Sign-out URL `org.buddy.desktop://oauth/signed-out`. Neither route uses TCP or localhost.
+- New clients use `BUDDY_COGNITO_CALLBACK_URL`, for example
+  `https://<Buddy-API-host>/auth/desktop/callback`, as their Cognito redirect URI. Register
+  that URL and `https://<Buddy-API-host>/auth/desktop/signed-out` on the Cognito client.
+  Keep the native URLs above registered during rollout for existing installations.
 - Access/ID lifetime 5 minutes; refresh lifetime 1 day; refresh rotation and revocation
   enabled, with no refresh replay grace period. Never enable `ALLOW_REFRESH_TOKEN_AUTH`
   alongside rotation. Updated refresh tokens are mandatory in Buddy's token responses.
@@ -61,6 +65,31 @@ install the preview package or use the explicit Windows local launcher below.
 Cold-start/unsolicited
 callbacks never create a session; start a fresh login in Buddy after a restart.
 
+## Browser completion and app return
+
+Direct native returns can open Buddy while leaving the Cognito tab looking as though it
+is still loading. The new redirect first loads a real finish page on Buddy's existing API.
+After the document loads, it opens the fixed native app link automatically and keeps an
+**Open Buddy** button available if the browser requires a click. The page says the browser
+step is complete; only Buddy can confirm the account check. Provider errors and sign-out
+have their own messages, without claiming a failed login succeeded.
+
+The page uses only its own HTML, CSS and JavaScript: no cookies, analytics, external assets
+or network calls. It removes the callback query from browser history immediately, uses
+no-store/no-referrer and a hash-based CSP, and excludes OAuth query parameters from the
+API access-log scope. Edge/ALB logging must remain disabled or redact these parameters.
+Only the one-use code/state are relayed to the native handler. PKCE verifier, passwords
+and session tokens never pass through the page. The existing broker still checks state,
+cancellation and single use. Ambiguous, oversized, token-bearing or unexpected parameters
+do not launch the app. Reloading a scrubbed callback requires a new login from Buddy;
+the page does not persist a session or code.
+
+Deploy the reviewed API pages before shipping desktop settings that select its HTTPS
+callback. The checked-in staging desktop settings select that page; they are not evidence
+of deployment. Cognito allowlist additions preserve existing installed clients. An unset
+callback setting retains direct native behavior for compatibility. Production uses HTTPS;
+the localhost exception below is staging-only. No public bucket or new hosting service is needed.
+
 ## Local account development (Windows)
 
 The API/database can stay local while Cognito supplies the real managed login and
@@ -83,6 +112,12 @@ In another terminal, close older Buddy windows and launch the desktop:
 ```powershell
 .\.venv\Scripts\python.exe frontend/scripts/run_local_accounts.py
 ```
+
+The local launcher selects `http://localhost:8000/auth/desktop/callback` as the browser
+return page, served by the **same local API** above, plus `/auth/desktop/signed-out` for
+logout. Both must be registered on the staging Cognito client. This is the explicit
+development HTTP-localhost exception supported by Cognito; it is not a production URL
+or a second HTTP callback listener. Restart an older local API after updating this branch.
 
 The backend launcher requires a local database and loopback binding, and loads the
 existing public Cognito configuration when not explicitly overridden. It never migrates

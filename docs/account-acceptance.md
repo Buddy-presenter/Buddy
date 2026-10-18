@@ -4,6 +4,32 @@ This record separates automated regressions, actual staging configuration and us
 acceptance. Pending entries are not proof of issue completion or production readiness.
 No passwords, email codes, refresh/access tokens or private mailbox address belongs here.
 
+Browser-return follow-up: the implementation now includes an API-hosted finish page and
+an explicit local-development page, then hands the one-use code to the existing native
+broker. Browser completion, real provider login and app confirmation are distinct checks.
+See [browser completion](accounts.md#browser-completion-and-app-return) for rollout order.
+The historical results below do not establish deployment of these new pages.
+
+## Browser-return follow-up (2026-10-18)
+
+- Staging account `549327541867`, region `eu-central-1`: added the CloudFront HTTPS
+  and `http://localhost:8000` callback/sign-out pages to the existing public Cognito
+  client's allowlists. Before/after comparison confirmed that only `CallbackURLs`,
+  `LogoutURLs` and `LastModifiedDate` changed. Existing native URLs, refresh rotation,
+  token revocation and all other client settings were preserved. No service was deployed.
+- API/repository tests: 331 passed, four optional external-deck tests skipped. Desktop
+  tests: 304 passed excluding the native-callback file; the focused auth/native group
+  passed 52 tests. Combined Qt runs aborted in pytest-qt event processing on this host;
+  the separate groups passed. Current-head Windows/macOS CI remains required.
+- The cross-component finish-page/native-broker/PKCE test passed. Provider HTTP and
+  credential storage were mocked; it does not establish real account acceptance.
+- A real browser loaded the local finish page with synthetic parameters: the document
+  completed, removed its query from the address bar, and displayed the fallback button
+  without console errors. No real credentials or account session were used.
+- New HTTPS pages are **not deployed**. Real Cognito login through the new page, installed
+  Windows/macOS acceptance, signup/recovery email delivery and session restart remain
+  pending. Deploy reviewed backend pages before shipping the new desktop configuration.
+
 | Check | Observed result |
 | --- | --- |
 | Full local suite with disposable PostgreSQL | 615 passed; 5 existing optional corpus/symlink skips. |

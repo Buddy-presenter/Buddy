@@ -2,6 +2,7 @@
 
 import hashlib
 import time
+from dataclasses import replace
 from threading import Event
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
@@ -105,6 +106,64 @@ def test_restart_and_expiration_rotate_saved_token(session):
     assert parse_qs(requests[-2].data.decode())["grant_type"] == ["refresh_token"]
     restored.tokens.expires = time.monotonic()
     assert restored.account() == identifier
+
+
+@pytest.mark.parametrize(
+    "callback",
+    [
+        "https://api.example.com/auth/desktop/callback",
+        "http://localhost:8000/auth/desktop/callback",
+    ],
+)
+def test_browser_finish_uri_matches_pkce_exchange_and_logout(session, monkeypatch, callback):
+    client, requests, identifier = session
+    client.config = replace(CONFIG, callback_url=callback)
+    urls = []
+    monkeypatch.setattr(
+        auth, "browser_code", lambda url, *args, **kwargs: urls.append(url) or "one-use-code"
+    )
+    assert client.sign_in() == identifier
+    start = parse_qs(urlsplit(urls[0]).query)
+    exchange = parse_qs(requests[0].data.decode())
+    assert start["redirect_uri"] == exchange["redirect_uri"] == [callback]
+    assert start["code_challenge_method"] == ["S256"]
+    assert "code_verifier" not in start and "code_verifier" in exchange
+    client.sign_out()
+    assert parse_qs(urlsplit(urls[-1]).query)["logout_uri"] == [
+        callback.removesuffix("/callback") + "/signed-out"
+    ]
+
+
+@pytest.mark.parametrize(
+    "callback",
+    [
+        "https://api.example.com/auth/desktop/callback?next=evil",
+        "https://api.example.com/auth/desktop/callback#token",
+        "https://user:password@api.example.com/auth/desktop/callback",
+        "https://api.example.com/other",
+        "https://api.example.com:8443/auth/desktop/callback",
+        "http://evil.test/auth/desktop/callback",
+        "http://localhost:9000/auth/desktop/callback",
+        "org.other.app://oauth/callback",
+        "",
+    ],
+)
+def test_unapproved_or_ambiguous_browser_return_configuration_is_rejected(callback):
+    with pytest.raises(IdentityError):
+        replace(CONFIG, callback_url=callback)
+
+
+def test_optional_browser_return_configuration_keeps_legacy_native_clients_compatible():
+    values = {
+        "BUDDY_AWS_REGION": CONFIG.region,
+        "BUDDY_COGNITO_POOL_ID": CONFIG.pool_id,
+        "BUDDY_COGNITO_CLIENT_ID": CONFIG.client_id,
+        "BUDDY_COGNITO_DOMAIN": CONFIG.domain,
+    }
+    assert IdentityConfig.from_environment(values) == CONFIG
+    callback = "https://api.example.com/auth/desktop/callback"
+    configured = IdentityConfig.from_environment({**values, "BUDDY_COGNITO_CALLBACK_URL": callback})
+    assert configured is not None and configured.callback_url == callback
 
 
 def test_invalid_refresh_blocks_restore(session, monkeypatch):
