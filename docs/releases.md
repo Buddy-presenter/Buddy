@@ -147,8 +147,12 @@ A read-only job verifies that the event is a successful same-repository main pus
 waits up to 30 minutes for CI, Terraform, container/database and both native package checks
 on that exact SHA. Missing checks time out; failed/cancelled/skipped checks stop deployment.
 Superseded main revisions are skipped. The deploy job checks out the selected SHA and
-rechecks its evidence and current main before obtaining AWS credentials. A newer merge
-while a deployment is already migrating does not interrupt it; environment-wide concurrency
+rechecks its evidence and current main before obtaining AWS credentials. The deployment
+driver rechecks main immediately before starting the migration and again before promoting
+traffic, after the image build and compatibility preflight. Lookup failures fail closed and
+retain an audit record. A newer merge during migration lets that migration finish safely
+but prevents stale traffic promotion; the tested compatible previous app stays active.
+Environment-wide concurrency
 serializes automatic and manual staging operations. The next checked revision follows.
 No PR code runs with AWS access. Production, compatibility transitions and audited rollback
 remain manual workflow_dispatch operations; rollback safety checks remain mandatory.

@@ -150,6 +150,7 @@ jobs:
           path: compatibility-report.json
       - name: Migrate then promote, or restore an audited deployment
         env:
+          GH_TOKEN: ${{ github.token }}
           BUDDY_DEPLOYMENT_CONFIG: ${{ vars.BUDDY_DEPLOYMENT_CONFIG }}
           API_IMAGE: ${{ steps.image.outputs.api_image }}
           WORKER_IMAGE: ${{ inputs.worker_image }}

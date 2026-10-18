@@ -2,7 +2,9 @@
 
 import argparse
 import json
+import os
 import re
+import subprocess
 import sys
 from collections.abc import Callable
 from contextlib import suppress
@@ -14,6 +16,23 @@ from uuid import uuid4
 
 class DeploymentError(Exception):
     pass
+
+
+def require_current_main(environment: str, revision: str) -> None:
+    """Revalidate automatic staging at each live boundary, not just before build."""
+    if os.environ.get("AUTOMATIC_STAGING") != "true":
+        return
+    if environment != "staging":
+        raise DeploymentError("Automatic promotion is staging-only.")
+    result = subprocess.run(
+        ["gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/git/ref/heads/main"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if json.loads(result.stdout)["object"]["sha"] != revision:
+        raise DeploymentError("Automatic staging revision has been superseded on main.")
 
 
 def validate(config: dict[str, Any], revision: str) -> None:
@@ -323,7 +342,14 @@ class Deployment:
                     "Service changed after compatibility testing; no migration started."
                 )
             self.require_stable_source(previous)
+            audit["stage"] = "migration_freshness"
+            require_current_main(self.config["environment"], revision)
+            audit["stage"] = "migration"
             self.migrate(definitions["migration"])
+            # Let an already-started migration finish safely, but do not promote
+            # stale traffic if main advanced while that migration was running.
+            audit["stage"] = "promotion_freshness"
+            require_current_main(self.config["environment"], revision)
         except Exception:
             migration_failed = audit["stage"] in {"migration_setup", "migration"}
             audit["status"] = "migration_failed" if migration_failed else "setup_failed"

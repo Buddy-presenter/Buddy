@@ -587,3 +587,42 @@ def test_production_and_branch_gates_fail_before_credentials_or_network(monkeypa
     monkeypatch.setenv("GITHUB_REF", "refs/pull/1/merge")
     with pytest.raises(ValueError, match="main revision"):
         release_gate["main"]()
+
+
+@pytest.mark.parametrize(
+    "boundary", ["before-migration", "during-migration", "unchanged", "lookup-failure"]
+)
+def test_automatic_deploy_rechecks_main_at_live_boundaries(monkeypatch, boundary):
+    from types import SimpleNamespace
+
+    from backend.scripts.release import deploy as driver
+
+    monkeypatch.setenv("AUTOMATIC_STAGING", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "Buddy-presenter/Buddy")
+    ecs, s3 = Ecs(), S3()
+    lookups = []
+
+    def lookup(command, **kwargs):
+        lookups.append(command)
+        assert kwargs["timeout"] == 30
+        if boundary == "lookup-failure":
+            raise RuntimeError("GitHub unavailable")
+        stale = boundary == "before-migration" or (boundary == "during-migration" and ecs.runs)
+        return SimpleNamespace(stdout=json.dumps({"object": {"sha": "b" * 40 if stale else SHA}}))
+
+    monkeypatch.setattr(driver.subprocess, "run", lookup)
+    deployment = PreparedDeployment(CONFIG, ecs, s3, Sts(), lambda _: None)
+    if boundary == "unchanged":
+        assert deployment.deploy(SHA, IMAGE)["status"] == "healthy"
+        assert len(lookups) == 2 and len(ecs.runs) == 1 and ecs.updates
+        return
+    with pytest.raises(DeploymentError, match="no traffic promoted"):
+        deployment.deploy(SHA, IMAGE)
+    assert ecs.updates == []
+    assert len(ecs.runs) == (1 if boundary == "during-migration" else 0)
+    audit = next(iter(operation_records(s3).values()))
+    assert audit["status"] == "setup_failed"
+    assert audit["stage"] == (
+        "promotion_freshness" if boundary == "during-migration" else "migration_freshness"
+    )
+    assert audit["started_audit_key"]
