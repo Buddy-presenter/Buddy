@@ -77,7 +77,7 @@ const window = {
   addEventListener: (event, callback) => { events[event] = callback; }
 };
 vm.runInNewContext(data.script, {window, URLSearchParams,
-  document: { getElementById: key => nodes[key] }});
+  document: { getElementById: key => nodes[key] }}, {timeout: 1000});
 const beforeLoad = [...navigations];
 if (events.load) events.load();
 process.stdout.write(JSON.stringify({nodes, history, beforeLoad, navigations}));
@@ -89,7 +89,9 @@ process.stdout.write(JSON.stringify({nodes, history, beforeLoad, navigations}));
         ),
         text=True,
         capture_output=True,
-        timeout=5,
+        # Hosted Windows can take several seconds to cold-start Node. Bound the
+        # actual script separately above instead of timing startup as page work.
+        timeout=30,
         check=True,
     )
     return json.loads(result.stdout)

@@ -23,6 +23,9 @@ QFileOpenEvent integration runs on macOS, where Buddy uses that OS delivery path
 not install a synthetic macOS handler over unrelated Windows test windows. Windows keeps
 its real separate-process IPC and shell/protocol activation coverage. This isolation fixes
 the post-#89 Windows event-loop abort without retries or weakening the required CI gate.
+The browser-script harness separately allows 30 seconds for the Node process to start
+and a one-second VM execution limit, so a slow Windows cold start is not mistaken for
+a hung finish-page script. Assertions and process failures still fail the suite.
 
 ## Security and required checks
 
