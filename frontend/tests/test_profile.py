@@ -164,3 +164,66 @@ def test_signed_out_profile_has_account_guidance(desktop_window, qtbot):
     assert window.profile.email.text() == "" and not window.profile.refresh.isEnabled()
     window.profile.controls.click()
     assert window.pages.currentIndex() == 0
+
+
+@pytest.mark.parametrize("action", ["signin", "signup", "recovery", "resume"])
+@pytest.mark.parametrize("outcome", ["success", "failure", "cancel", "navigate"])
+def test_open_profile_during_authentication_tracks_completion(
+    profile, monkeypatch, qtbot, action, outcome
+):
+    window, response, _ = profile
+    account = window.account
+    session = account.session
+    session.tokens = None
+    account.account_id = None
+    session.store.save("saved-synthetic-refresh")
+    entered, release = Event(), Event()
+    loaded = []
+    account.profile_loaded.connect(lambda *args: loaded.append(args))
+    monkeypatch.setattr(auth, "browser_code", lambda *args, **kwargs: "synthetic-code")
+
+    def respond(request, **kwargs):
+        if request.full_url.endswith("/token"):
+            entered.set()
+            assert release.wait(5), "Authentication response was not released"
+            if outcome == "failure":
+                raise SessionExpired("Sign-in was rejected. Please sign in again.")
+            return {
+                "access_token": "synthetic-access",
+                "refresh_token": "synthetic-refresh",
+                "token_type": "Bearer",
+                "expires_in": 300,
+            }
+        if request.full_url.endswith("/me"):
+            return response
+        return {}
+
+    monkeypatch.setattr(auth, "request_json", respond)
+    account.start(action)
+    try:
+        qtbot.waitUntil(entered.is_set)
+        window._show_account()
+        assert window.profile.email.text() == ""
+        if outcome == "success":
+            assert window.profile.state.title.text() == "Checking account"
+        elif outcome == "cancel":
+            account.cancel_operation()
+        elif outcome == "navigate":
+            window.navigation.setCurrentRow(0)
+        release.set()
+        qtbot.waitUntil(lambda: not account.runner.busy)
+        if outcome == "success":
+            assert window.profile.email.text() == response["data"]["email"]
+            assert window.profile.verification.text() == "Email verified"
+            assert len(loaded) == 1  # No manual refresh and no duplicate follow-up request.
+        else:
+            assert loaded == [] and window.profile.email.text() == ""
+            if outcome in {"failure", "cancel"}:
+                assert account.account_id is None
+                assert window.profile.state.title.text() == "Sign in to view your profile"
+            else:
+                assert account.account_id == response["data"]["id"]
+                assert not window.profile.active
+    finally:
+        release.set()
+        account.runner.wait_for_shutdown()

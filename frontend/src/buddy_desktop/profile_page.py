@@ -79,12 +79,8 @@ class ProfilePage(Page):
         self.clear()
         if not self.active:
             return
-        if not self.account.account_id:
-            self.state.show_state(
-                "Sign in to view your profile", "Open Account controls to sign in."
-            )
-            self.refresh.setEnabled(False)
-            return
+        # Sign-in and resume deliberately clear account_id until authorization
+        # completes. Queue the active page before classifying it as signed out.
         if self.account.runner.busy:
             self.waiting = True
             self.refresh.setEnabled(False)
@@ -93,6 +89,12 @@ class ProfilePage(Page):
             )
             return
         self.waiting = False
+        if not self.account.account_id:
+            self.state.show_state(
+                "Sign in to view your profile", "Open Account controls to sign in."
+            )
+            self.refresh.setEnabled(False)
+            return
         self.refresh.setEnabled(False)
         self.state.show_state("Loading profile", "Checking your account information securely…")
         self.request_id = self.account.start("profile")

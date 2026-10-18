@@ -339,6 +339,10 @@ foreach ($property in $config.PSObject.Properties) {
    controls to reach Home, then complete real sign-in or Resume session.
 2. Click Account: briefly expect Loading profile, then your own email and Email verified.
    Refresh profile should show the same account and keep navigation responsive.
+   Also start sign-in or Resume session and open Account before it finishes: expect
+   Checking account, then the profile to appear automatically after success, without
+   clicking Refresh. Failed/cancelled sign-in must leave no email; navigating away
+   during sign-in must not refill the hidden profile.
 3. Resize to 800x600 and a larger size; use Tab/Space and Alt+5. Expect readable text,
    visible controls and no horizontal scrolling. Account controls must return to Home.
 4. Leave the page and reopen it: a fresh request loads the profile. Sign out through
