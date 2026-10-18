@@ -37,6 +37,8 @@ def main() -> None:
     s3 = boto3.client("s3", region_name=config["region"])
     driver = Deployment(config, ecs, s3, boto3.client("sts", region_name=config["region"]))
     before = driver.states(["api"])
+    if not args.rollback_revision:
+        driver.require_stable_source(before)
     rollback = before
     candidate = args.candidate_image
     schema_image = None

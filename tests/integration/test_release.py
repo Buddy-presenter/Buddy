@@ -73,7 +73,22 @@ class Ecs:
 
     def describe_services(self, **kwargs):
         return {
-            "services": [{"serviceName": name, **self.state[name]} for name in kwargs["services"]]
+            "services": [
+                {
+                    "serviceName": name,
+                    **self.state[name],
+                    "runningCount": self.state[name]["desiredCount"],
+                    "pendingCount": 0,
+                    "deployments": [
+                        {
+                            "status": "PRIMARY",
+                            "rolloutState": "COMPLETED",
+                            "taskDefinition": self.state[name]["taskDefinition"],
+                        }
+                    ],
+                }
+                for name in kwargs["services"]
+            ]
         }
 
     def describe_task_definition(self, **kwargs):

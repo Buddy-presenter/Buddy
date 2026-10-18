@@ -156,3 +156,31 @@ def test_rollback_preflight_uses_retained_feature_schema_after_app_rollback(monk
     preflight.main()
     assert observed["candidate"] == OLD_IMAGE  # app already restored
     assert observed["schema_image"] == IMAGE  # database still expanded
+
+
+@pytest.mark.parametrize("state", ["draining", "pending", "in_progress"])
+@pytest.mark.parametrize("when", ["before_registration", "before_migration"])
+def test_unfinished_source_rollout_blocks_migration(state, when):
+    ecs, s3 = Ecs(), S3()
+    describe = ecs.describe_services
+
+    def unfinished(**kwargs):
+        result = describe(**kwargs)
+        if when == "before_migration" and not ecs.registered:
+            return result
+        service = result["services"][0]
+        if state == "draining":
+            service["deployments"].append({"status": "ACTIVE"})
+        elif state == "pending":
+            service["pendingCount"] = 1
+        else:
+            service["deployments"][0]["rolloutState"] = "IN_PROGRESS"
+        return result
+
+    ecs.describe_services = unfinished
+    driver = Deployment(CONFIG, ecs, s3, Sts(), lambda _: None, compatibility_report=proof(ecs))
+    with pytest.raises(DeploymentError):
+        driver.deploy(SHA, IMAGE)
+    if when == "before_registration":
+        assert not ecs.registered
+    assert not ecs.runs and not ecs.updates

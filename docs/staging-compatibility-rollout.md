@@ -44,7 +44,10 @@ private deployment audit.
 
 The deployment driver binds proof to the candidate digest, actual previous task/image,
 service counts, environment, account and workflow revision. Missing/failed proof or
-service drift stops before live migration. Explicit rollback requires fresh proof of
+service drift stops before live migration. A promotion also requires one completed
+source deployment with matching running/desired counts and no pending tasks, both
+before testing and immediately before DDL, so older containers cannot still be draining.
+Explicit recovery remains available when the current application is unhealthy. Explicit rollback requires fresh proof of
 its audited target against the retained feature-schema image, even when the current
 application has already rolled back to the bridge. Recovery never infers the database
 head from an old application. This conservatively forbids restoring the original

@@ -123,6 +123,29 @@ class Deployment:
             raise DeploymentError("Rollback image drifted from compatibility evidence.")
         image_digest(self.config, proof["rollback_image"], "api")
 
+    def require_stable_source(self, expected: dict[str, dict[str, Any]]) -> None:
+        """Do not migrate while incompatible tasks from an earlier rollout still drain."""
+        if self.config["environment"] != "staging":
+            return
+        response = self.ecs.describe_services(cluster=self.config["cluster"], services=["api"])
+        services = response.get("services", [])
+        if response.get("failures") or len(services) != 1:
+            raise DeploymentError("The staging rollback source is unavailable.")
+        service = services[0]
+        deployments = service.get("deployments", [])
+        target = expected["api"]
+        if (
+            service.get("taskDefinition") != target["taskDefinition"]
+            or service.get("desiredCount") != target["desiredCount"]
+            or service.get("runningCount") != target["desiredCount"]
+            or service.get("pendingCount") != 0
+            or len(deployments) != 1
+            or deployments[0].get("status") != "PRIMARY"
+            or deployments[0].get("rolloutState") != "COMPLETED"
+            or deployments[0].get("taskDefinition") != target["taskDefinition"]
+        ):
+            raise DeploymentError("Staging must finish its previous rollout before migration.")
+
     def states(self, services: list[str]) -> dict[str, dict[str, Any]]:
         response = self.ecs.describe_services(cluster=self.config["cluster"], services=services)
         if response.get("failures") or len(response.get("services", [])) != len(services):
@@ -272,6 +295,7 @@ class Deployment:
             previous = self.states(services)
             audit["previous"] = previous
             audit["stage"] = "compatibility"
+            self.require_stable_source(previous)
             self.compatible(api_image, previous, previous)
             audit["compatibility"] = self.compatibility_report
             audit["stage"] = "definition_setup"
@@ -298,6 +322,7 @@ class Deployment:
                 raise DeploymentError(
                     "Service changed after compatibility testing; no migration started."
                 )
+            self.require_stable_source(previous)
             self.migrate(definitions["migration"])
         except Exception:
             migration_failed = audit["stage"] in {"migration_setup", "migration"}
