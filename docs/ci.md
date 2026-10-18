@@ -17,6 +17,13 @@ both database URLs and runs them against a real service. No job-level skips are 
 The cross-platform API smoke/unit coverage is retained even though Backend also runs API
 tests on Linux. All previous build and startup checks remain present.
 
+Native callback tests dispatch real Qt events to an isolated QObject on every platform,
+including wrong-state, unsolicited, replayed and expired returns. The application-wide
+QFileOpenEvent integration runs on macOS, where Buddy uses that OS delivery path; it must
+not install a synthetic macOS handler over unrelated Windows test windows. Windows keeps
+its real separate-process IPC and shell/protocol activation coverage. This isolation fixes
+the post-#89 Windows event-loop abort without retries or weakening the required CI gate.
+
 ## Security and required checks
 
 Keep the existing required check **CI** in the main branch ruleset/protection. Because
