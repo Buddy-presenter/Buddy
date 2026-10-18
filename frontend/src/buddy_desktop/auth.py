@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import re
 import secrets
 import sys
 import time
@@ -11,7 +12,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Event
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 from urllib.parse import urlencode
 from urllib.request import Request
 
@@ -198,6 +199,19 @@ class Tokens:
     expires: float
 
 
+@dataclass(frozen=True, repr=False)
+class AccountProfile:
+    id: str
+    email: str
+    email_verified: bool
+
+
+@dataclass(frozen=True)
+class ProfileFailure:
+    message: str
+    expired: bool = False
+
+
 class AccountSession:
     def __init__(self, config: IdentityConfig, api_url: str, store: TokenStore) -> None:
         self.config = config
@@ -331,11 +345,16 @@ class AccountSession:
             raise
 
     def account(self) -> str:
+        return str(self._account_data()["id"])
+
+    def _account_data(self) -> dict[str, Any]:
         if self.tokens is None:
             raise SessionExpired("Please sign in.")
         if time.monotonic() >= self.tokens.expires - 30:
             self.tokens = None
-            return self.resume()
+            self.resume()
+        if self.tokens is None:
+            raise SessionExpired("Please sign in again.")
         result = request_json(
             Request(
                 self.api_url.rstrip("/") + "/api/v1/auth/me",
@@ -348,9 +367,27 @@ class AccountSession:
         try:
             from uuid import UUID
 
-            return str(UUID(result["data"]["id"]))
+            data = result["data"]
+            if not isinstance(data, dict) or not isinstance(data.get("id"), str):
+                raise ValueError
+            data["id"] = str(UUID(data["id"]))
+            return cast(dict[str, Any], data)
         except (KeyError, TypeError, ValueError):
             raise IdentityError("Account service returned an invalid account.") from None
+
+    def profile(self, expected_id: str) -> AccountProfile:
+        data = self._account_data()
+        if data["id"] != expected_id:
+            raise SessionExpired("Account changed. Please sign in again.")
+        email = data.get("email")
+        if (
+            not isinstance(email, str)
+            or not 1 <= len(email) <= 2048
+            or not re.fullmatch(r"[^\s@]+@[^\s@]+", email)
+            or data.get("email_verified") is not True
+        ):
+            raise IdentityError("Profile information is unavailable. Please try again later.")
+        return AccountProfile(data["id"], email, True)
 
     def sign_out(self) -> str:
         refresh = self.tokens.refresh if self.tokens else self.pending_revocation

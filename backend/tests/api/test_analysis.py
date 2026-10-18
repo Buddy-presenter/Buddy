@@ -12,7 +12,7 @@ from sqlalchemy import select, text
 
 from buddy_api.analysis.catalog import CATALOG, general_controls, generation_schema
 from buddy_api.analysis.contracts import AnalysisInput, ValidationInput, digest
-from buddy_api.auth import CognitoVerifier
+from buddy_api.auth import CognitoVerifier, VerifiedIdentity
 from buddy_api.config import Environment, Settings
 from buddy_api.persistence.database import Database
 from buddy_api.persistence.errors import PersistenceConflict, RecordNotFound
@@ -203,7 +203,11 @@ def test_partial_summaries_and_legacy_analysis_never_make_library_ready(
     asyncio.run(scenario())
     from backend.tests.api.test_library import CONFIG
 
-    monkeypatch.setattr(CognitoVerifier, "verify", lambda self, token: token)
+    monkeypatch.setattr(
+        CognitoVerifier,
+        "verify",
+        lambda self, token: VerifiedIdentity(token, "verified@example.test"),
+    )
     client = api_client_factory(
         Settings(Environment.TEST, ("testserver",), database=migrated_database, identity=CONFIG)
     )
@@ -483,7 +487,11 @@ def test_typed_api_auth_restart_no_public_validation_writes(
             await db.close()
 
     identifier = asyncio.run(seed())
-    monkeypatch.setattr(CognitoVerifier, "verify", lambda self, token: token)
+    monkeypatch.setattr(
+        CognitoVerifier,
+        "verify",
+        lambda self, token: VerifiedIdentity(token, "verified@example.test"),
+    )
     from backend.tests.api.test_library import CONFIG
 
     settings = Settings(

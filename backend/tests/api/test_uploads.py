@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSessionTransaction
 from starlette.requests import Request
 
 from buddy_api.app import create_app
-from buddy_api.auth import CognitoVerifier
+from buddy_api.auth import CognitoVerifier, VerifiedIdentity
 from buddy_api.config import Environment, Settings
 from buddy_api.persistence.models import Deck, DeckUpload, ProcessingJob
 from buddy_api.uploads.config import UploadSettings
@@ -101,7 +101,11 @@ class Cloud:
 def upload_app(migrated_database, monkeypatch):
     cloud = Cloud()
     subjects = {"account-a": str(uuid4()), "account-b": str(uuid4())}
-    monkeypatch.setattr(CognitoVerifier, "verify", lambda self, token: subjects[token])
+    monkeypatch.setattr(
+        CognitoVerifier,
+        "verify",
+        lambda self, token: VerifiedIdentity(subjects[token], f"{token}@example.test"),
+    )
     identity = IdentityConfig(
         "eu-central-1",
         "eu-central-1_Example",

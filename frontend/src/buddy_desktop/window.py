@@ -22,6 +22,7 @@ from buddy_desktop.config import AppConfig, ConfigurationError, validate_api_url
 from buddy_desktop.library_widget import LibraryWidget
 from buddy_desktop.present_widget import PresentWidget
 from buddy_desktop.presentation_service import DownloadedPDF
+from buddy_desktop.profile_page import ProfilePage
 from buddy_desktop.services import Health, HealthService
 from buddy_desktop.slide_executor import Completion
 from buddy_desktop.tasks import TaskRunner
@@ -95,6 +96,8 @@ class MainWindow(QMainWindow):
         self.pages = QStackedWidget()
         self.home = HomePage(config.api_url)
         self.account = AccountWidget(config.api_url)
+        self.profile = ProfilePage(self.account)
+        self.profile.controls_requested.connect(self._show_account_controls)
         self.library = LibraryWidget(config, self.account)
         self.present = PresentWidget()
         self._private_presentation = False
@@ -118,6 +121,7 @@ class MainWindow(QMainWindow):
             self.library,
             self.present,
             self.preferences,
+            self.profile,
         ]
         for page in page_widgets:
             scroll = QScrollArea()
@@ -170,6 +174,10 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda checked=False, row=index: self._select_route(row))
             workspace_menu.addAction(action)
         workspace_menu.addSeparator()
+        account_action = QAction("&Account profile", self)
+        account_action.setShortcut(QKeySequence("Alt+5"))
+        account_action.triggered.connect(self._show_account)
+        workspace_menu.addAction(account_action)
         fullscreen_action = QAction("Presentation &full screen", self)
         fullscreen_action.setShortcut(QKeySequence("F11"))
         fullscreen_action.triggered.connect(self.present.enter_fullscreen)
@@ -206,6 +214,12 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _show_account(self) -> None:
+        self.navigation.setCurrentRow(-1)
+        self.navigate(4)
+        self.profile.controls.setFocus()
+
+    @Slot()
+    def _show_account_controls(self) -> None:
         self._select_route(0)
         scroll = self.pages.widget(0)
         if isinstance(scroll, QScrollArea):
@@ -216,7 +230,8 @@ class MainWindow(QMainWindow):
         if 0 <= index < self.pages.count():
             previous = self.pages.currentIndex()
             self.pages.setCurrentIndex(index)
-            self.route_title.setText(("Home", "Library", "Present", "Settings")[index])
+            self.route_title.setText(("Home", "Library", "Present", "Settings", "Profile")[index])
+            self.profile.activate(index == 4)
             self.library.activate(index == 1)
             if index == 2:
                 self.statusBar().showMessage(
@@ -360,6 +375,7 @@ class MainWindow(QMainWindow):
             self.move(screens[0].availableGeometry().topLeft())
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self.profile.activate(False)
         self.account.shutdown()
         self.library.shutdown()
         self.present.shutdown()

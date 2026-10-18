@@ -22,7 +22,8 @@ Set these public values for both the desktop and API (Terraform in #27 supplies 
 The API also needs its existing database settings and completed migrations. No auth
 tables or additional migration are needed: verified users map into the existing `users`
 table with an issuer-qualified subject. Repeated login and API restarts preserve the
-same UUID. `/api/v1/auth/me` returns only that UUID in the existing request-ID envelope.
+same UUID. `/api/v1/auth/me` retains that UUID and adds the provider-verified `email`
+and `email_verified` fields in the existing request-ID envelope.
 It requires a Bearer access token in a header; query-string tokens are never accepted.
 Account identity is the boundary delivered here; resource-level authorization is #31.
 
@@ -287,3 +288,70 @@ It prints a public authorization URL for opening in a controlled browser; passwo
 verification codes, PKCE verifiers and session tokens are never printed. Close any
 other native-callback Buddy instance first. macOS acceptance must use the installed
 .app, because OS URL dispatch targets its registered bundle.
+
+
+## Read-only account profile (#75)
+
+Open the top-right **Account** button (keyboard: Tab then Space, or Workspace > Account
+profile / Alt+5). The existing sidebar stays unchanged. A signed-in account sees its
+email and **Email verified**. Signed-out users get a link to the existing account controls
+on Home; the same controls provide Sign in, Sign out and Forgot password. No editing,
+avatars or administrative controls are added.
+
+Refresh profile makes one normal authenticated `/api/v1/auth/me` request through the
+existing account background queue, serialized with sign-in, refresh and session checks.
+The API reuses its uncached Cognito GetUser verification to return only the verified
+email and status alongside the durable UUID. It does not persist another copy of the
+email or trust token email claims, query parameters or client-selected account IDs.
+The response remains no-store. Additive fields are optional in the compatibility schema;
+this API always supplies verified values after successful authorization. An older API
+that returns only the UUID still supports sign-in, but the new page reports profile
+unavailable until that API is upgraded.
+
+Leaving the page, signing out, changing accounts/backends or closing the window clears
+the displayed profile. Late results cannot refill a hidden page or restore an expired
+account. Network/provider failures clear profile data and offer retry without pretending
+the session was revoked; an authentication failure clears signed-in state and directs
+the user to sign in again. The page does not save email in preferences or the OS vault.
+
+### Manual profile test
+
+Before merge, use the updated local API **and** desktop on this issue branch. Follow
+Local account development above to install dependencies, configure/migrate a disposable
+local database, and launch `backend/scripts/run_local_accounts.py` in one terminal and
+`frontend/scripts/run_local_accounts.py` in another. The database and Cognito must be
+reachable; there are no fake accounts. Do not deploy the implementation branch.
+
+After approval/merge, main's automatic CD deploys the API to staging. Wait for a successful
+Backend promotion and rollback run, pull main, install the editable packages from the
+Development guide, close older Buddy windows, then launch the updated source app with
+these public staging settings from PowerShell in the repository root:
+
+```powershell
+$config = Get-Content .\infra\staging\public-config.json -Raw | ConvertFrom-Json
+foreach ($property in $config.PSObject.Properties) {
+    [Environment]::SetEnvironmentVariable($property.Name, $property.Value, 'Process')
+}
+.\.venv\Scripts\python.exe frontend/scripts/run_local_accounts.py
+```
+
+1. Before signing in, click Account: expect sign-in guidance and no email. Use Account
+   controls to reach Home, then complete real sign-in or Resume session.
+2. Click Account: briefly expect Loading profile, then your own email and Email verified.
+   Refresh profile should show the same account and keep navigation responsive.
+3. Resize to 800x600 and a larger size; use Tab/Space and Alt+5. Expect readable text,
+   visible controls and no horizontal scrolling. Account controls must return to Home.
+4. Leave the page and reopen it: a fresh request loads the profile. Sign out through
+   Account controls, then reopen Profile: no old email should remain. Sign in with a
+   different account and confirm only that account's email appears.
+5. Disconnect networking and refresh: expect Profile unavailable and no cached email.
+   Reconnect and retry. For a revoked/expired session, expect sign-in guidance; a normal
+   short access-token expiry may rotate a valid refresh token automatically.
+6. With a local configurable backend (no BUDDY_API_URL environment override), change
+   Settings to another backend: old profile data must disappear. Backend changes wait
+   until the bounded current account request ends. Start a request and navigate away
+   or close Buddy; a late response must not restore private text.
+
+No new AWS resource, migration or Cognito setting is needed. Native browser-handler
+problems are separate from this profile feature; returning manually from a blocked
+browser handoff does not authenticate the desktop.
