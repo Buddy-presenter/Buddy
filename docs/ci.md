@@ -17,6 +17,21 @@ both database URLs and runs them against a real service. No job-level skips are 
 The cross-platform API smoke/unit coverage is retained even though Backend also runs API
 tests on Linux. All previous build and startup checks remain present.
 
+Qt test teardown explicitly flushes deferred widget deletion and collects Python wrapper
+cycles on the GUI thread before another test starts. Processing ordinary events alone
+does not flush `DeferredDelete`; deferring cleanup across tests can interfere with later
+native callback tests. Native diagnostics remain visible through tee-sys capture if the
+interpreter aborts. Callback, native IPC and shell/protocol coverage remains unchanged;
+there are no retries or weakened CI gates.
+The application-wide synthetic `QFileOpenEvent` test runs in a fresh Qt subprocess on
+every platform, so its native application state cannot leak into the other window tests.
+Child assertions, crashes and startup/execution timeouts fail the parent test.
+The browser-script harness separately allows 30 seconds for the Node process to start
+and a one-second VM execution limit for both initial evaluation and load-handler dispatch
+in the same context, so a slow Windows cold start is not mistaken for a hung finish-page
+script. Regression tests deliberately hang each phase and require Node's VM-timeout error.
+Assertions and process failures still fail the suite.
+
 ## Security and required checks
 
 Keep the existing required check **CI** in the main branch ruleset/protection. Because

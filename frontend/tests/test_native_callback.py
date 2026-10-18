@@ -7,8 +7,7 @@ import sys
 from threading import Event
 
 import pytest
-from PySide6.QtCore import QCoreApplication, QSettings, QUrl
-from PySide6.QtGui import QFileOpenEvent
+from PySide6.QtCore import QSettings
 
 from buddy_desktop.auth import browser_code
 from buddy_desktop.native_callback import NativeCallbackServer, PendingCallback, pending_callback
@@ -59,17 +58,40 @@ def test_timeout_cancel_browser_failure_and_concurrent_attempt_cleanup():
         assert attempt.code == "signedout"
 
 
-def test_macos_url_event_reaches_only_the_pending_attempt(qapp, qtbot, tmp_path):
-    server = NativeCallbackServer(directory=tmp_path)
-    qapp.installEventFilter(server)
-    try:
-        with pending_callback.waiting("expected") as attempt:
-            event = QFileOpenEvent(QUrl(CALLBACK + "?state=expected&code=from-macos"))
-            QCoreApplication.sendEvent(qapp, event)
-            assert attempt.code == "from-macos"
-    finally:
-        qapp.removeEventFilter(server)
-        server.close()
+def test_macos_url_event_reaches_only_the_pending_attempt(tmp_path):
+    # QFileOpenEvent is an application-wide OS event. Give it a fresh Qt process
+    # rather than sharing native application state with earlier window tests.
+    script = """
+import sys
+from pathlib import Path
+from PySide6.QtCore import QCoreApplication, QUrl
+from PySide6.QtGui import QFileOpenEvent
+from PySide6.QtWidgets import QApplication
+from buddy_desktop.native_callback import NativeCallbackServer, pending_callback
+from buddy_identity.config import CALLBACK
+
+app = QApplication([])
+server = NativeCallbackServer(app, directory=Path(sys.argv[1]))
+app.installEventFilter(server)
+try:
+    with pending_callback.waiting("expected") as attempt:
+        event = QFileOpenEvent(QUrl(CALLBACK + "?state=expected&code=from-macos"))
+        assert QCoreApplication.sendEvent(app, event)
+        app.processEvents()
+        assert attempt.code == "from-macos"
+finally:
+    app.removeEventFilter(server)
+    server.close()
+app.processEvents()
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_second_process_relays_callback_over_native_ipc(qapp, qtbot, tmp_path):

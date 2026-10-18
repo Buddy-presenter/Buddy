@@ -7,6 +7,23 @@ from threading import Event, Thread
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def reclaim_qt_objects_on_gui_thread(request):
+    """Finish deferred widget destruction before another test can collect wrappers."""
+    if "qapp" not in request.fixturenames:
+        yield
+        return
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    request.getfixturevalue("qapp")
+    yield
+    # pytest-qt closes widgets and queues deleteLater before fixture teardown.
+    # processEvents alone does not flush DeferredDelete events. Leaving those
+    # widgets/cycles around lets later work collect GUI wrappers at unsafe times.
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    gc.collect()
+
+
 @pytest.fixture
 def desktop_window(qtbot, tmp_path, monkeypatch):
     """Isolated settings, no native vault/device access, and bounded Qt teardown."""

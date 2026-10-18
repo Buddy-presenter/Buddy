@@ -47,6 +47,9 @@ jobs:
       - name: API schema snapshot and backwards compatibility
         run: python -m buddy_api.schema --check --compare-ref origin/main
       - name: Behavior and Qt lifecycle tests
+        env:
+          # Keep native Qt diagnostics visible even if the interpreter aborts.
+          PYTEST_ADDOPTS: --capture=tee-sys
         run: python scripts/test.py all
       - name: Build distributions
         run: python -m build frontend
