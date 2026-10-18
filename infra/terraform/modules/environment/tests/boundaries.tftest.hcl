@@ -278,3 +278,97 @@ run "private_upload_runtime_and_version_cleanup" {
     error_message = "Upload workload configuration must use this environment's private KMS key."
   }
 }
+
+run "immutable_staging_repository_identity" {
+  command = plan
+  variables {
+    github_oidc_subject_prefix = "repo:Buddy-presenter@343976635/Buddy@1408836773"
+  }
+  # Resolve only external computed ARNs; keep the generated IAM policy intact.
+  override_resource {
+    target          = aws_ecs_cluster.main
+    values          = { arn = "arn:aws:ecs:eu-central-1:123456789012:cluster/buddy-staging" }
+    override_during = plan
+  }
+  override_resource {
+    target          = aws_ecr_repository.service["api"]
+    values          = { arn = "arn:aws:ecr:eu-central-1:123456789012:repository/buddy-staging/api" }
+    override_during = plan
+  }
+  override_resource {
+    target          = aws_s3_bucket.private["releases"]
+    values          = { arn = "arn:aws:s3:::buddy-staging-123456789012-releases" }
+    override_during = plan
+  }
+  override_resource {
+    target          = aws_kms_key.data
+    values          = { arn = "arn:aws:kms:eu-central-1:123456789012:key/11111111-1111-1111-1111-111111111111" }
+    override_during = plan
+  }
+  override_resource {
+    target          = aws_iam_role.execution["api"]
+    values          = { arn = "arn:aws:iam::123456789012:role/buddy-staging-api-execution" }
+    override_during = plan
+  }
+  override_resource {
+    target          = aws_iam_role.execution["migration"]
+    values          = { arn = "arn:aws:iam::123456789012:role/buddy-staging-migration-execution" }
+    override_during = plan
+  }
+  override_resource {
+    target          = aws_iam_role.execution["worker"]
+    values          = { arn = "arn:aws:iam::123456789012:role/buddy-staging-worker-execution" }
+    override_during = plan
+  }
+  override_resource {
+    target          = aws_iam_role.task["api"]
+    values          = { arn = "arn:aws:iam::123456789012:role/buddy-staging-api-task" }
+    override_during = plan
+  }
+  override_resource {
+    target          = aws_iam_role.task["migration"]
+    values          = { arn = "arn:aws:iam::123456789012:role/buddy-staging-migration-task" }
+    override_during = plan
+  }
+  override_resource {
+    target          = aws_iam_role.task["worker"]
+    values          = { arn = "arn:aws:iam::123456789012:role/buddy-staging-worker-task" }
+    override_during = plan
+  }
+  assert {
+    condition = (
+      jsondecode(aws_iam_role.github["deploy"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:Buddy-presenter@343976635/Buddy@1408836773:environment:staging" &&
+      jsondecode(aws_iam_role.github["release"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:Buddy-presenter@343976635/Buddy@1408836773:environment:release-staging" &&
+      jsondecode(aws_iam_role.github["deploy"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:aud"] == "sts.amazonaws.com"
+    )
+    error_message = "Immutable repository IDs must retain exact, separate protected-environment and audience boundaries."
+  }
+  assert {
+    condition     = alltrue([for statement in jsondecode(aws_iam_role_policy.deploy.policy).Statement : statement.Resource == aws_ecr_repository.service["api"].arn if contains(statement.Action, "ecr:BatchGetImage") || contains(statement.Action, "ecr:GetDownloadUrlForLayer")]) && anytrue([for statement in jsondecode(aws_iam_role_policy.deploy.policy).Statement : contains(statement.Action, "ecr:BatchGetImage") && contains(statement.Action, "ecr:GetDownloadUrlForLayer")])
+    error_message = "Deployment image-pull permissions must exist and stay scoped to this environment's API repository."
+  }
+}
+
+run "reject_wildcard_identity" {
+  command = plan
+  variables { github_oidc_subject_prefix = "repo:Buddy-presenter@*/Buddy@1408836773" }
+  expect_failures = [var.github_oidc_subject_prefix]
+}
+
+run "reject_foreign_repository_identity" {
+  command = plan
+  variables { github_oidc_subject_prefix = "repo:AnotherOwner@343976635/Buddy@1408836773" }
+  expect_failures = [var.github_oidc_subject_prefix]
+}
+
+run "reject_environment_in_repository_prefix" {
+  command = plan
+  variables { github_oidc_subject_prefix = "repo:Buddy-presenter@343976635/Buddy@1408836773:environment:production" }
+  expect_failures = [var.github_oidc_subject_prefix]
+}
+
+run "reject_incomplete_immutable_identity" {
+  command = plan
+  variables { github_oidc_subject_prefix = "repo:Buddy-presenter/Buddy@1408836773" }
+  expect_failures = [var.github_oidc_subject_prefix]
+}

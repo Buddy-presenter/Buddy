@@ -54,7 +54,7 @@ resource "aws_iam_role" "github" {
     Principal = { Federated = var.github_oidc_provider_arn },
     Condition = { StringEquals = {
       "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com",
-      "token.actions.githubusercontent.com:sub" = "repo:${var.github_repository}:environment:${each.key == "release" ? "release-" : ""}${var.environment}"
+      "token.actions.githubusercontent.com:sub" = "${coalesce(var.github_oidc_subject_prefix, "repo:${var.github_repository}")}:environment:${each.key == "release" ? "release-" : ""}${var.environment}"
     } }
   }] })
 }
@@ -74,7 +74,7 @@ resource "aws_iam_role_policy" "deploy" {
     { Effect = "Allow", Action = ["ecs:DescribeTasks"], Resource = "arn:aws:ecs:${var.region}:${var.account_id}:task/${local.name}/*" },
     { Effect = "Allow", Action = ["ecs:DescribeTaskDefinition"], Resource = "*" },
     { Effect = "Allow", Action = ["ecr:GetAuthorizationToken"], Resource = "*" },
-    { Effect = "Allow", Action = ["ecr:BatchCheckLayerAvailability", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage", "ecr:DescribeImages"], Resource = aws_ecr_repository.service["api"].arn },
+    { Effect = "Allow", Action = ["ecr:BatchCheckLayerAvailability", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage", "ecr:DescribeImages", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], Resource = aws_ecr_repository.service["api"].arn },
     { Effect = "Allow", Action = ["ecs:RegisterTaskDefinition"], Resource = "*", Condition = { StringEquals = { "aws:RequestTag/Application" = "Buddy", "aws:RequestTag/Environment" = var.environment } } },
     { Effect = "Allow", Action = ["ecs:TagResource"], Resource = "arn:aws:ecs:${var.region}:${var.account_id}:task-definition/${local.name}-*:*", Condition = { StringEquals = { "ecs:CreateAction" = "RegisterTaskDefinition" } } },
     { Effect = "Allow", Action = ["s3:PutObject", "s3:GetObject"], Resource = "${aws_s3_bucket.private["releases"].arn}/${var.environment}/backend/*" },

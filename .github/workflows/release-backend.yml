@@ -50,7 +50,13 @@ jobs:
         with:
           role-to-assume: ${{ vars.BUDDY_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.BUDDY_AWS_REGION }}
-          allowed-account-ids: ${{ vars.BUDDY_AWS_ACCOUNT_ID }}
+      - name: Verify AWS account before publishing or deploying
+        shell: bash
+        env:
+          EXPECTED_AWS_ACCOUNT: ${{ vars.BUDDY_AWS_ACCOUNT_ID }}
+        run: |
+          actual_account=$(aws sts get-caller-identity --query Account --output text)
+          test "$actual_account" = "$EXPECTED_AWS_ACCOUNT"
       - run: python -m pip install boto3==1.40.50
       - name: Build and push this exact reviewed revision
         if: inputs.rollback_revision == ''
