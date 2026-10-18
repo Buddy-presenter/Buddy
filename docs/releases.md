@@ -1,6 +1,7 @@
 # Desktop and backend releases
 
-Releases are explicit operator actions from reviewed main. Pull requests only build
+Backend staging releases follow successful checks on reviewed main automatically;
+production and desktop releases remain explicit operator actions. Pull requests only build
 unsigned preview packages and test the real installed/extracted application. They never
 receive AWS, signing or notarization credentials. No silent updater is installed.
 
@@ -43,8 +44,8 @@ database or overwrite user settings. Installation/reinstallation is user initiat
 
 ## Backend promotion and rollback
 
-Configure protected staging/production GitHub environments with main-only branch rules,
-reviewers, BUDDY_DEPLOY_ROLE_ARN, BUDDY_AWS_REGION, BUDDY_AWS_ACCOUNT_ID and
+Configure staging/production GitHub environments with main-only branch rules,
+required reviewers for production only, BUDDY_DEPLOY_ROLE_ARN, BUDDY_AWS_REGION, BUDDY_AWS_ACCOUNT_ID and
 BUDDY_DEPLOYMENT_CONFIG. The latter is public JSON containing environment, account_id,
 region, cluster (buddy-staging/production), bucket (the corresponding release bucket),
 api_url (HTTPS origin), tasks (API/migration and optional worker task-definition ARNs),
@@ -113,8 +114,8 @@ build as production-ready. Audit-write failures fail the command rather than rep
 fully recorded release; operators must inspect service state if a write fails after a
 service change. AWS/bootstrap/signing credentials and real sessions never enter records.
 
-Every new promotion requires successful CI and infrastructure checks on exactly the
-current main SHA. Production also requires environment variables
+Every new promotion requires successful CI, infrastructure/container and native package
+checks on exactly the selected main SHA. Production also requires environment variables
 BUDDY_STAGING_ACCEPTED_REVISION equal to that SHA and BUDDY_CALLBACK_RELEASE_APPROVED=true.
 Set these only after actual staging provider/recovery acceptance and #5's production
 callback integration review. An operator must exercise migration failure, readiness
@@ -138,3 +139,40 @@ explicit completion gates for live staging #73 and production #76. Issue #38 cov
 reviewed pipeline preparation; simulated tests do not establish deployment acceptance.
 
 The initial staging schema transition requires the [two-step compatibility rollout](staging-compatibility-rollout.md): a separately approved bridge release before the feature migration. Every staging promotion and explicit rollback requires fresh exact-image compatibility evidence before live changes.
+
+## Automatic staging after merge (#93)
+
+`release-backend.yml` runs after the main push's Continuous integration workflow completes.
+A read-only job verifies that the event is a successful same-repository main push and
+waits up to 30 minutes for CI, Terraform, container/database and both native package checks
+on that exact SHA. Missing checks time out; failed/cancelled/skipped checks stop deployment.
+Superseded main revisions are skipped. The deploy job checks out the selected SHA and
+rechecks its evidence and current main before obtaining AWS credentials. The deployment
+driver rechecks main immediately before starting the migration and again before promoting
+traffic, after the image build and compatibility preflight. Lookup failures fail closed and
+retain an audit record. A newer merge during migration lets that migration finish safely
+but prevents stale traffic promotion; the tested compatible previous app stays active.
+Environment-wide concurrency
+serializes automatic and manual staging operations. The next checked revision follows.
+No PR code runs with AWS access. Production, compatibility transitions and audited rollback
+remain manual workflow_dispatch operations; rollback safety checks remain mandatory.
+
+One-time enablement: in repository Settings â†’ Environments â†’ staging, remove only required
+reviewers and retain the main-only deployment branch policy, existing variables and secrets.
+Production and release-production approvals, branch review/CI protection, AWS trust and
+account boundaries must remain intact. This environment setting is outside Git and must be
+verified separately; a run waiting for approval means it has not yet been enabled.
+Do not dispatch an unmerged implementation branch. No automatic desktop publishing,
+installation or updater is added: restart a source checkout pulled from main, or install
+a separately built desktop package to test desktop changes.
+
+After merge, follow Actions â†’ Backend promotion and rollback. Verify the selected SHA,
+all upstream checks, compatibility report, successful migration, healthy deployment audit
+and `/api/v1/ready` before testing sign-in. The finish page should contain only instructions
+to return to Buddy (no Open Buddy button); test login, provider cancellation, sign-out and
+a scrubbed-page reload. A browser that cannot find the OS protocol handler still needs a
+correct Buddy installation/registration; returning to the app manually cannot relay a
+blocked authorization code. Failed automatic deployments stay failed with their audit and
+recovery evidence; inspect the failure, fix through review, or use the existing manual
+rollback rather than bypassing the gates. Re-running a successful CI workflow can request
+another audited deployment of the same SHA; immutable run tags keep attempts separate.

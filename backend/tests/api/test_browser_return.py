@@ -19,6 +19,8 @@ def test_finish_page_is_public_fixed_and_uncacheable(api_client, path):
     assert plain.status_code == with_code.status_code == 200
     assert plain.content == with_code.content
     assert "synthetic-private-code" not in with_code.text
+    assert "<a " not in plain.text and "<button" not in plain.text
+    assert 'id="open-buddy"' not in plain.text
     assert plain.headers["content-type"].startswith("text/html")
     assert plain.headers["cache-control"] == "no-store"
     assert plain.headers["referrer-policy"] == "no-referrer"
@@ -63,7 +65,7 @@ def run_browser(query, *, signed_out=False, fragment="", script=SCRIPT):
 const fs = require('node:fs');
 const vm = require('node:vm');
 const data = JSON.parse(fs.readFileSync(0, 'utf8'));
-const nodes = Object.fromEntries(['title','message','open-buddy'].map(key => [key, {
+const nodes = Object.fromEntries(['title','message'].map(key => [key, {
   hidden: true, textContent: '', removeAttribute(key) { delete this[key]; }
 }]));
 const events = {};
@@ -118,14 +120,14 @@ def test_real_script_scrubs_url_then_opens_only_native_app_after_document_load()
     result = run_browser("?state=synthetic-state&code=one%2Buse%2Fcode")
     assert result["history"] == [BROWSER_CALLBACK_PATH]
     assert result["beforeLoad"] == []
-    target = result["nodes"]["open-buddy"]["href"]
+    target = result["navigations"][0]
     assert target.startswith("org.buddy.desktop://oauth/callback?")
     assert parse_qs(urlsplit(target).query) == {
         "state": ["synthetic-state"],
         "code": ["one+use/code"],
     }
     assert result["navigations"] == [target]
-    assert not result["nodes"]["open-buddy"]["hidden"]
+    assert "Return to Buddy" in result["nodes"]["message"]["textContent"]
 
 
 @pytest.mark.parametrize(
@@ -149,8 +151,7 @@ def test_real_script_scrubs_url_then_opens_only_native_app_after_document_load()
 def test_ambiguous_or_malicious_returns_never_launch_an_app(query):
     result = run_browser(query)
     assert result["navigations"] == []
-    assert result["nodes"]["open-buddy"]["hidden"]
-    assert "href" not in result["nodes"]["open-buddy"]
+    assert "try again" in result["nodes"]["message"]["textContent"]
 
 
 def test_error_return_and_signout_keep_fixed_native_targets():

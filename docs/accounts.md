@@ -69,9 +69,11 @@ callbacks never create a session; start a fresh login in Buddy after a restart.
 
 Direct native returns can open Buddy while leaving the Cognito tab looking as though it
 is still loading. The new redirect first loads a real finish page on Buddy's existing API.
-After the document loads, it opens the fixed native app link automatically and keeps an
-**Open Buddy** button available if the browser requires a click. The page says the browser
-step is complete; only Buddy can confirm the account check. Provider errors and sign-out
+After the document loads, it attempts the fixed native app handoff automatically.
+The page has no button and asks the user to return to Buddy and close the tab.
+If the browser blocks the handoff or cannot find the OS handler, returning manually
+does not deliver the code: install/register Buddy correctly and start a fresh sign-in.
+The page says the browser step is complete; only Buddy can confirm the account check. Provider errors and sign-out
 have their own messages, without claiming a failed login succeeded.
 
 The page uses only its own HTML, CSS and JavaScript: no cookies, analytics, external assets
