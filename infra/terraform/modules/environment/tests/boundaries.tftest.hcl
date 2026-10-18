@@ -278,3 +278,46 @@ run "private_upload_runtime_and_version_cleanup" {
     error_message = "Upload workload configuration must use this environment's private KMS key."
   }
 }
+
+run "immutable_staging_repository_identity" {
+  command = plan
+  variables {
+    github_oidc_subject_prefix = "repo:Buddy-presenter@343976635/Buddy@1408836773"
+  }
+  assert {
+    condition = (
+      jsondecode(aws_iam_role.github["deploy"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:Buddy-presenter@343976635/Buddy@1408836773:environment:staging" &&
+      jsondecode(aws_iam_role.github["release"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:Buddy-presenter@343976635/Buddy@1408836773:environment:release-staging" &&
+      jsondecode(aws_iam_role.github["deploy"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:aud"] == "sts.amazonaws.com"
+    )
+    error_message = "Immutable repository IDs must retain exact, separate protected-environment and audience boundaries."
+  }
+  assert {
+    condition     = alltrue([for statement in jsondecode(aws_iam_role_policy.deploy.policy).Statement : statement.Resource == aws_ecr_repository.service["api"].arn if contains(statement.Action, "ecr:BatchGetImage") || contains(statement.Action, "ecr:GetDownloadUrlForLayer")]) && anytrue([for statement in jsondecode(aws_iam_role_policy.deploy.policy).Statement : contains(statement.Action, "ecr:BatchGetImage") && contains(statement.Action, "ecr:GetDownloadUrlForLayer")])
+    error_message = "Deployment image-pull permissions must exist and stay scoped to this environment's API repository."
+  }
+}
+
+run "reject_wildcard_identity" {
+  command = plan
+  variables { github_oidc_subject_prefix = "repo:Buddy-presenter@*/Buddy@1408836773" }
+  expect_failures = [var.github_oidc_subject_prefix]
+}
+
+run "reject_foreign_repository_identity" {
+  command = plan
+  variables { github_oidc_subject_prefix = "repo:AnotherOwner@343976635/Buddy@1408836773" }
+  expect_failures = [var.github_oidc_subject_prefix]
+}
+
+run "reject_environment_in_repository_prefix" {
+  command = plan
+  variables { github_oidc_subject_prefix = "repo:Buddy-presenter@343976635/Buddy@1408836773:environment:production" }
+  expect_failures = [var.github_oidc_subject_prefix]
+}
+
+run "reject_incomplete_immutable_identity" {
+  command = plan
+  variables { github_oidc_subject_prefix = "repo:Buddy-presenter/Buddy@1408836773" }
+  expect_failures = [var.github_oidc_subject_prefix]
+}

@@ -77,6 +77,18 @@ variable "github_repository" {
   type    = string
   default = "Buddy-presenter/Buddy"
 }
+variable "github_oidc_subject_prefix" {
+  description = "Exact repository OIDC prefix; null preserves the legacy name-only identity."
+  type        = string
+  default     = null
+  validation {
+    condition = var.github_oidc_subject_prefix == null ? true : (
+      can(regex("^repo:[A-Za-z0-9_.-]+@[1-9][0-9]*/[A-Za-z0-9_.-]+@[1-9][0-9]*$", var.github_oidc_subject_prefix)) &&
+      replace(var.github_oidc_subject_prefix, "/@[0-9]+/", "") == "repo:${var.github_repository}"
+    )
+    error_message = "Use this repository's exact immutable repo:owner@ID/name@ID prefix, without wildcards or environment suffix."
+  }
+}
 variable "github_oidc_provider_arn" {
   type = string
   validation {

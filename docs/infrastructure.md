@@ -224,3 +224,40 @@ requester's decision to retain the AWS Free account plan requires one-day stagin
 automated-backup retention instead of seven days; production remains 35 days. The actual
 isolated restore drill and retained snapshot are recorded in the
 [deployment evidence](staging-deployment-evidence.md).
+
+## GitHub immutable OIDC subjects and staging recovery (#98)
+
+The repository uses GitHub's immutable subject format. Read the public configuration
+with `gh api repos/Buddy-presenter/Buddy/actions/oidc/customization/sub`; verify the
+repository and owner IDs with `gh api repos/Buddy-presenter/Buddy`. The observed prefix
+is `repo:Buddy-presenter@343976635/Buddy@1408836773`. Staging defaults to that exact prefix;
+Terraform appends `:environment:staging` for deployment and
+`:environment:release-staging` for desktop publication. Neither uses wildcard matching.
+The module's null default preserves legacy callers, including the existing production
+root. Other immutable repositories must explicitly supply their verified prefix.
+
+Run 39136941932 failed at STS authentication before image build or migration because AWS
+still trusted the name-only subject. CloudTrail confirmed the permanent-ID subject was
+rejected. GitHub's environment approval succeeded; it does not replace AWS role trust.
+Keep immutable subjects enabled and update the narrow IAM configuration instead.
+
+After this fix is reviewed and merged, use the existing staging state and approved AWS
+profile to prepare a saved plan targeting only
+`module.environment.aws_iam_role.github["deploy"]` and
+`module.environment.aws_iam_role_policy.deploy`. Inspect its complete action list:
+only the deployment role trust and its inline policy may change. Retain audience,
+provider/account, exact repository identity and protected staging environment. The
+policy adds only API-repository image reads needed by the compatibility preflight;
+no production, service, database, networking or secret change is part of this repair.
+Do not apply a broader plan to resolve this authentication failure. If the state or
+required inputs are unavailable, recover the existing approved configuration first.
+
+The pinned credentials action does not accept `allowed-account-ids`. The backend workflow
+now explicitly compares STS's actual account to the protected environment's expected
+account immediately after authentication, before publishing images or invoking migrations.
+The deployment driver also retains its independent account validation.
+
+After applying the reviewed IAM plan, dispatch a new compatibility run on current reviewed
+main, obtain a new staging environment approval, verify its compatibility report and
+healthy bridge deployment, then dispatch and separately approve the feature phase.
+A successful application PR or environment approval alone does not establish AWS access.
