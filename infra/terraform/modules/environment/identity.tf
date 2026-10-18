@@ -40,12 +40,12 @@ resource "aws_cognito_user_pool_client" "desktop" {
     ["org.buddy.desktop://oauth/signed-out", "${local.api_url}/auth/desktop/signed-out"],
     local.production ? [] : ["http://localhost:8000/auth/desktop/signed-out"]
   )
-  explicit_auth_flows                  = ["ALLOW_USER_SRP_AUTH"]
-  enable_token_revocation              = true
-  prevent_user_existence_errors        = "ENABLED"
-  access_token_validity                = 5
-  id_token_validity                    = 5
-  refresh_token_validity               = 1
+  explicit_auth_flows           = ["ALLOW_USER_SRP_AUTH"]
+  enable_token_revocation       = true
+  prevent_user_existence_errors = "ENABLED"
+  access_token_validity         = 5
+  id_token_validity             = 5
+  refresh_token_validity        = 1
   token_validity_units {
     access_token  = "minutes"
     id_token      = "minutes"
