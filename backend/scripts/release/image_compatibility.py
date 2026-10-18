@@ -82,9 +82,10 @@ def verify_images(
             "-v",
             str(CHECKS) + ":/checks:ro",
             "-v",
-            str(CHECKS.parents[2] / "backend/tests/support") + ":/support:ro",
+            str(CHECKS.parents[2] / "backend/tests/support")
+            + ":/test-support/backend/tests/support:ro",
             "-v",
-            str(CHECKS.parents[2] / "docs/fixtures") + ":/fixtures:ro",
+            str(CHECKS.parents[2] / "docs/fixtures") + ":/test-support/docs/fixtures:ro",
             image,
         ]
 
@@ -162,7 +163,8 @@ for attempt in range(30):
             pg,
             "sh",
             "-c",
-            "until pg_isready -U buddy_migration -d buddy_rollback_test; do sleep 1; done",
+            "until pg_isready -h 127.0.0.1 -U buddy_migration -d buddy_rollback_test; "
+            "do sleep 1; done",
             timeout=30,
         )
         psql(

@@ -69,8 +69,7 @@ async def run() -> None:
         if mode == "typed":
             # Only synthetic fixture data is loaded; create/read still execute
             # the packaged image's real extraction and analysis repositories.
-            fixture = runpy.run_path("/support/analysis.py")
-            fixture["document"].__globals__["FIXTURE"] = Path("/fixtures/analysis-v1.json")
+            fixture = runpy.run_path("/test-support/backend/tests/support/analysis.py")
             async with db.transaction() as repos:
                 created = await fixture["create"](repos, owner_id=OWNER, deck_id=DECK, version=4)
                 assert created.graph == {}
