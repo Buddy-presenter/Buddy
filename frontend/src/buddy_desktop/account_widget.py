@@ -45,7 +45,7 @@ class AccountWidget(QWidget):
             [
                 ("signin", "Sign in"),
                 ("signup", "Create account"),
-                ("recovery", "Recover account"),
+                ("recovery", "Forgot password"),
                 ("resume", "Resume session"),
                 ("signout", "Sign out"),
             ]
@@ -112,9 +112,18 @@ class AccountWidget(QWidget):
         session.cancelled.clear()
         self.timer.stop()
         self.message.setText(
-            "Continue in your browser. You can cancel here."
-            if action in {"signin", "signup", "recovery"}
-            else "Checking account session…"
+            {
+                "signin": (
+                    "Sign in with your email and password in the browser. You can cancel here."
+                ),
+                "signup": (
+                    "Create your account and enter the email verification code in the browser."
+                ),
+                "recovery": (
+                    "Request an email code, then enter it with your new password in the browser. "
+                    "Sign in there afterward to return to Buddy."
+                ),
+            }.get(action, "Checking account session…")
         )
         for button in self.buttons.values():
             button.setEnabled(False)
@@ -139,8 +148,13 @@ class AccountWidget(QWidget):
         if self.closing or (self.session and self.session.cancelled.is_set()):
             self.message.setText("Sign-in was cancelled.")
             return
+        # Cognito's page keeps its spinner after handing off the callback URL.
         self.message.setText(
-            "Signed out." if self.operation == "signout" else "Signed in to Buddy."
+            "Signed out."
+            if self.operation == "signout"
+            else "Signed in to Buddy. You can close the browser tab."
+            if self.operation in {"signin", "signup", "recovery"}
+            else "Signed in to Buddy."
         )
         if self.session and self.session.tokens:
             self.account_id = str(result)

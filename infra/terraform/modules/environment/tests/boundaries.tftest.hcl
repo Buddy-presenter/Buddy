@@ -18,6 +18,14 @@ variables {
 run "private_staging_before_images_exist" {
   command = plan
   assert {
+    condition     = aws_cognito_user_pool_client.desktop.callback_urls == toset(["org.buddy.desktop://oauth/callback", "https://staging.example.com/auth/desktop/callback", "http://localhost:8000/auth/desktop/callback"]) && aws_cognito_user_pool_client.desktop.logout_urls == toset(["org.buddy.desktop://oauth/signed-out", "https://staging.example.com/auth/desktop/signed-out", "http://localhost:8000/auth/desktop/signed-out"])
+    error_message = "Staging must support the HTTPS browser return, existing native clients and the explicit localhost development callback."
+  }
+  assert {
+    condition     = aws_cognito_user_pool.main.verification_message_template[0].default_email_option == "CONFIRM_WITH_CODE" && aws_cognito_user_pool.main.auto_verified_attributes == toset(["email"])
+    error_message = "Email verification must use confirmation codes."
+  }
+  assert {
     condition     = !aws_db_instance.main.publicly_accessible && aws_db_instance.main.storage_encrypted && aws_db_instance.main.deletion_protection
     error_message = "Database must be private, encrypted and protected."
   }
@@ -54,6 +62,10 @@ run "production_redundancy" {
     api_image      = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-production/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     worker_image   = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-production/worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     start_services = true
+  }
+  assert {
+    condition     = aws_cognito_user_pool_client.desktop.callback_urls == toset(["org.buddy.desktop://oauth/callback", "https://api.example.com/auth/desktop/callback"]) && aws_cognito_user_pool_client.desktop.logout_urls == toset(["org.buddy.desktop://oauth/signed-out", "https://api.example.com/auth/desktop/signed-out"])
+    error_message = "Production browser returns require HTTPS; localhost development callbacks must remain staging-only."
   }
   assert {
     condition     = aws_db_instance.main.multi_az && aws_db_instance.main.backup_retention_period == 35 && length(aws_nat_gateway.main) == 2

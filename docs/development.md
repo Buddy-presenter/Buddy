@@ -24,9 +24,14 @@ python3.12 -m venv .venv
 .venv/bin/python -m buddy_desktop
 ```
 
-The installed GUI command is `buddy`. The desktop defaults to `http://127.0.0.1:8000`;
-set `BUDDY_API_URL` to use another valid backend URL. Local account actions require the
-Cognito values documented in [accounts](accounts.md). No account or demo data is fabricated.
+The installed GUI command is `buddy`. Normal application startup loads the public
+HTTPS staging defaults bundled with the preview; environment variables override them.
+For local API development, explicitly set `BUDDY_API_URL=http://127.0.0.1:8000`.
+Browser sign-in uses the OS-registered callback from the installed Windows/macOS package,
+not a localhost HTTP listener. Windows source-only account testing can use
+`python frontend/scripts/run_local_accounts.py` with the matching local API launcher;
+see [local account development](accounts.md#local-account-development-windows).
+No account or demo data is fabricated.
 
 ## API and database
 

@@ -1,10 +1,12 @@
-# Account lifecycle (#5)
+# Verified account lifecycle (#5, #74)
 
 Buddy uses an Amazon Cognito user pool and a public desktop app client. Account creation,
 email verification, password validation, recovery codes and recovery errors are handled
 by Cognito's managed login in the system browser. Buddy never collects a password.
-The Home page offers Sign in, Create account, Recover account, Resume session and Sign out.
-Recovery finishes in the browser; continue signing in there to return to Buddy.
+The Home page offers Sign in, Create account, Forgot password, Resume session and Sign out.
+Sign-in requires email and password, not an email code. Signup requires the email
+verification code. Forgot password sends a recovery code; enter that code and a new
+password, then sign in with email/password in the browser to return to Buddy.
 
 ## Configuration
 
@@ -34,25 +36,129 @@ Configure the Cognito client with:
 - Authorization code grant only, no implicit grant, `COGNITO` provider, no secret.
 - `openid`, `email`, and `aws.cognito.signin.user.admin` scopes. The last is required
   for Cognito `GetUser` to check whether a token was revoked; it is not an AWS IAM grant.
-- Callback and sign-out URL `http://localhost:8765/callback`.
+- Callback URL `org.buddy.desktop://oauth/callback`.
+- Sign-out URL `org.buddy.desktop://oauth/signed-out`. Neither route uses TCP or localhost.
+- New clients use `BUDDY_COGNITO_CALLBACK_URL`, for example
+  `https://<Buddy-API-host>/auth/desktop/callback`, as their Cognito redirect URI. Register
+  that URL and `https://<Buddy-API-host>/auth/desktop/signed-out` on the Cognito client.
+  Keep the native URLs above registered during rollout for existing installations.
 - Access/ID lifetime 5 minutes; refresh lifetime 1 day; refresh rotation and revocation
   enabled, with no refresh replay grace period. Never enable `ALLOW_REFRESH_TOKEN_AUTH`
   alongside rotation. Updated refresh tokens are mandatory in Buddy's token responses.
 - Email recovery and verification, user-existence error suppression, password policy,
   and an associated WAF rate limit as provisioned by #27.
 
-AWS documents HTTP localhost callbacks as an exception intended for testing. This
-checkout uses that supported development flow with a listener bound only to 127.0.0.1.
-A production installer needs the team's reviewed native callback registration or HTTPS
-handoff before release (#38); this PR does not claim that installer integration exists.
+The preview desktop includes the public HTTPS staging configuration from
+`infra/staging/public-config.json`; no customer-owned domain or raw IP is required.
+Cognito hosts login over its AWS HTTPS hostname; the API uses CloudFront HTTPS.
+Environment overrides remain available for operators/development. Passwords and codes
+stay in the managed browser UI, never in Buddy's widgets, API, logs or database.
+
+Windows installation registers the `org.buddy.desktop` URL protocol under HKCU, without
+administrator rights and notifies Windows that protocol associations changed. macOS
+packages declare it in CFBundleURLTypes and are re-signed after metadata generation,
+before notarization. Windows launches a second process that
+forwards the callback to the existing instance over a user-only named pipe. macOS sends
+QFileOpenEvent to the application. Unix-domain IPC uses a private user-owned directory;
+there is no HTTP listener. Regular source-only runs do not register themselves with the OS:
+install the preview package or use the explicit Windows local launcher below.
+Cold-start/unsolicited
+callbacks never create a session; start a fresh login in Buddy after a restart.
+
+## Browser completion and app return
+
+Direct native returns can open Buddy while leaving the Cognito tab looking as though it
+is still loading. The new redirect first loads a real finish page on Buddy's existing API.
+After the document loads, it opens the fixed native app link automatically and keeps an
+**Open Buddy** button available if the browser requires a click. The page says the browser
+step is complete; only Buddy can confirm the account check. Provider errors and sign-out
+have their own messages, without claiming a failed login succeeded.
+
+The page uses only its own HTML, CSS and JavaScript: no cookies, analytics, external assets
+or network calls. It removes the callback query from browser history immediately, uses
+no-store/no-referrer and a hash-based CSP, and excludes OAuth query parameters from the
+API access-log scope. Edge/ALB logging must remain disabled or redact these parameters.
+Only the one-use code/state are relayed to the native handler. PKCE verifier, passwords
+and session tokens never pass through the page. The existing broker still checks state,
+cancellation and single use. Ambiguous, oversized, token-bearing or unexpected parameters
+do not launch the app. Reloading a scrubbed callback requires a new login from Buddy;
+the page does not persist a session or code.
+
+Deploy the reviewed API pages before shipping desktop settings that select its HTTPS
+callback. The checked-in staging desktop settings select that page; they are not evidence
+of deployment. Cognito allowlist additions preserve existing installed clients. An unset
+callback setting retains direct native behavior for compatibility. Production uses HTTPS;
+the localhost exception below is staging-only. No public bucket or new hosting service is needed.
+
+When overriding Cognito identity settings through environment variables, an omitted
+`BUDDY_COGNITO_CALLBACK_URL` uses the native callback, rather than inheriting the bundled
+staging browser page. Supply your own registered browser callback explicitly to use one.
+Overriding only `BUDDY_API_URL` retains the bundled identity and its matching browser page.
+
+## Local account development (Windows)
+
+The API/database can stay local while Cognito supplies the real managed login and
+email delivery. This does not need AWS CLI credentials, create a local email service,
+or change AWS infrastructure. Both processes must use the same public pool/client
+configuration. Local liveness alone does not prove that identity or the database is ready.
+
+Install the editable shared, desktop and API packages as described in development.
+Configure your local PostgreSQL URL and explicitly migrate it, then start the API:
+
+```powershell
+$env:BUDDY_ENVIRONMENT = 'development'
+$env:BUDDY_DATABASE_URL = 'postgresql://buddy:<password>@127.0.0.1:5432/buddy?sslmode=disable'
+.\.venv\Scripts\python.exe -m buddy_api.persistence.migrate upgrade
+.\.venv\Scripts\python.exe backend/scripts/run_local_accounts.py
+```
+
+In another terminal, close older Buddy windows and launch the desktop:
+
+```powershell
+.\.venv\Scripts\python.exe frontend/scripts/run_local_accounts.py
+```
+
+The local launcher selects `http://localhost:8000/auth/desktop/callback` as the browser
+return page, served by the **same local API** above, plus `/auth/desktop/signed-out` for
+logout. Both must be registered on the staging Cognito client. This is the explicit
+development HTTP-localhost exception supported by Cognito; it is not a production URL
+or a second HTTP callback listener. Restart an older local API after updating this branch.
+
+The backend launcher requires a local database and loopback binding, and loads the
+existing public Cognito configuration when not explicitly overridden. It never migrates
+automatically. The desktop launcher defaults to the local API, overriding the preview's
+staging default for this process, and temporarily registers the current Python environment
+as the Windows callback target. Normal exit or a Python exception restores the previous
+registration; a concurrent installer registration is preserved. Abrupt termination can
+leave the source handler installed; reinstall Buddy to restore the packaged handler.
+A source callback still requires an active single-use
+state/PKCE attempt; launching an unsolicited URL does not sign in.
+
+This registers the source-run return path without requiring an old preview executable.
+Windows shell activation passes automated checks. The requester subsequently confirmed
+that login worked locally. Full signup, password recovery, session renewal and macOS
+acceptance still need their separate live checks.
+On macOS use the packaged app's registered URL scheme. No mocked accounts or email codes
+are used by either launcher. Local upload storage remains unavailable unless the real
+storage service is separately configured; this account setup does not fabricate it.
+
+Check `/api/v1/ready` before logging in. A successful browser login followed by a Buddy
+error can mean an unavailable/unconfigured local API, an unmigrated database, or mismatched
+pool/client configuration. A browser that cannot open Buddy usually means a missing/stale
+protocol registration. Record the exact visible error and whether browser return occurred.
+
+Stable packaging requires `--deployment-config <public-json>` with an explicitly
+validated HTTPS API and Cognito target, distinct from staging. Configure the release
+production environment variable `BUDDY_DESKTOP_PUBLIC_CONFIG` with those five public
+settings. It contains no credentials. The existing staging-acceptance and callback
+release-approval gates remain in force; native code does not establish live acceptance.
 
 ## Sessions and failure behavior
 
-Sign-in uses a fresh random state and S256 PKCE verifier. The loopback listener checks
-the exact path, Host and state; invalid requests do not complete login. It waits at most
+Sign-in uses a fresh random state and S256 PKCE verifier. The native callback broker checks
+the exact URI, single state and exactly one code/error; invalid requests do not complete login. It waits at most
 five minutes and is cancellable, including on window close. Only the single-use OAuth
-code travels through the callback URL; access, ID and refresh tokens never do. Callback
-logs are disabled, pages have no-store/no-referrer headers, and remote requests reject
+code travels through the callback URL; access, ID and refresh tokens never do. No callback URL or code is logged or written to disk. Remote requests reject
 redirects and oversized responses. ID tokens are discarded, not used as identity proof.
 
 Only refresh tokens persist, through the explicit Windows Credential Manager or macOS
@@ -85,13 +191,36 @@ revocation if a device is lost. If both local storage and network fail, close Bu
 repair the credential store/revoke the session before relying on sign-out.
 
 The API validates RS256 signature, fixed issuer, app client, token type, expiry and subject.
-It then makes an uncached Cognito `GetUser` request: offline JWT verification alone cannot
+It then makes an uncached Cognito `GetUser` request and requires a matching subject,
+nonempty email and exactly `email_verified="true"` from provider attributes (never client
+profile or access-token email claims). Missing, duplicate, malformed or unverified
+attributes deny access before user bootstrap, resource reads/writes or subscriptions.
+This applies through the shared principal boundary to every private API.
+The live provider check is required because offline JWT verification alone cannot
 detect Cognito revocation. Provider/network failure denies account access (503). Missing,
-invalid and revoked credentials produce 401. A bounded limiter permits 30 checks per
-direct peer per minute per API process, with 429/Retry-After. Deployment WAF provides the
+invalid and revoked credentials produce 401. A bounded limiter permits 30 bootstrap checks per
+credential digest per minute per API process, with 429/Retry-After. Deployment WAF provides the
 shared per-client-IP limit and protects managed login. Do not enable arbitrary forwarded
-headers; the local limit can also constrain users behind the same proxy. Neither limiter
+headers. Neither limiter
 is a substitute for provider-level login throttling.
+
+## Verification and recovery controls
+
+Terraform explicitly selects CONFIRM_WITH_CODE and verified-email recovery, with
+user-existence suppression on the app client. Cognito issues and validates the six-digit
+email codes, their expiration, replay/attempt limits, resend throttling and password
+policy; Buddy does not duplicate code storage or promise a locally enforced timer.
+The managed pages own wrong/expired-code, resend, recovery and delivery-error feedback.
+Reset finishes in the browser, then login uses the new password and a fresh PKCE attempt.
+The app's five-minute callback timeout/cancellation can require restarting the browser
+flow; it does not change Cognito's code lifetime. Service delivery/attempt quotas can
+produce recoverable throttling and must be exercised against the actual staging pool.
+
+Staging currently uses COGNITO_DEFAULT email delivery, not an approved SES sender. SES
+production access is not enabled. Before production, configure an approved SES identity,
+permissions and appropriate quotas and rerun real delivery acceptance. Do not silently
+assume that a default sender or mocked email response proves production deliverability.
+
 
 ## Validation and deployment limits
 
@@ -135,13 +264,24 @@ The existing PostgreSQL CI job also exercises persisted account IDs across API r
 Run `python scripts/quality.py all check`, `python -m mypy`, schema compatibility, build,
 and both startup smoke checks before review.
 
-No AWS account, pool, credentials or domains were available while implementing this PR.
-After #27 is provisioned, staging acceptance must verify actual signup/verification,
+Issue #73 provisioned staging; its retained evidence did not exercise signup email
+delivery. Issue #74 staging acceptance must verify actual signup/verification,
 invalid credentials, valid/invalid recovery codes, native vault behavior, refresh rotation,
 online sign-out, and denial of the revoked access token. Passing local tests does not
-replace that live provider acceptance or production callback integration.
+replace that live provider acceptance or installed OS callback integration.
 
 References: [Cognito authorization/PKCE](https://docs.aws.amazon.com/cognito/latest/developerguide/authorization-endpoint.html),
 [token rotation](https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-the-refresh-token.html),
 [revocation](https://docs.aws.amazon.com/cognito/latest/developerguide/token-revocation.html),
 [GetUser](https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_GetUser.html).
+
+
+## Issue #74 acceptance record
+
+See [account acceptance](account-acceptance.md) for the current observed results and
+remaining live checks. `frontend/scripts/staging_accounts.py` is an opt-in Windows
+operator helper using the real shell, OS vault, staging API and installed URL handler.
+It prints a public authorization URL for opening in a controlled browser; passwords,
+verification codes, PKCE verifiers and session tokens are never printed. Close any
+other native-callback Buddy instance first. macOS acceptance must use the installed
+.app, because OS URL dispatch targets its registered bundle.

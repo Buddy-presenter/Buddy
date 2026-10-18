@@ -55,10 +55,12 @@ jobs:
           WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
           WINDOWS_SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PASSWORD }}
           RELEASE_TARGET: ${{ inputs.target }}
+          DESKTOP_PUBLIC_CONFIG: ${{ vars.BUDDY_DESKTOP_PUBLIC_CONFIG }}
         run: |
           args=(--output packaged --revision "$GITHUB_SHA")
           if [ "$RELEASE_TARGET" = production ]; then
-            args+=(--channel stable)
+            python -c 'import os,pathlib; pathlib.Path("desktop-public.json").write_text(os.environ["DESKTOP_PUBLIC_CONFIG"])'
+            args+=(--channel stable --deployment-config desktop-public.json)
             if [ "$RUNNER_OS" = macOS ]; then args+=(--signing-identity "$MAC_SIGNING_IDENTITY"); fi
           fi
           python frontend/scripts/release/build_desktop.py "${args[@]}"

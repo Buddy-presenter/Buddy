@@ -2,10 +2,9 @@
 
 import hashlib
 import time
-from threading import Event, Thread
-from urllib.error import HTTPError
+from dataclasses import replace
+from threading import Event
 from urllib.parse import parse_qs, urlsplit
-from urllib.request import Request, urlopen
 from uuid import uuid4
 
 import pytest
@@ -74,6 +73,16 @@ def test_supported_browser_flows_use_pkce_and_no_tokens_in_urls(session, monkeyp
     monkeypatch.setattr(auth, "browser_code", lambda url, *args: urls.append(url) or "code")
     assert client.sign_in(action) == identifier
     parameters = parse_qs(urlsplit(urls[0]).query)
+    assert (
+        urlsplit(urls[0]).path
+        == {
+            "signin": "/oauth2/authorize",
+            "signup": "/signup",
+            "recovery": "/forgotPassword",
+        }[action]
+    )
+    assert parameters["redirect_uri"] == ["org.buddy.desktop://oauth/callback"]
+    assert parameters["prompt"] == ["login"]
     exchange = parse_qs(requests[0].data.decode())
     expected = (
         auth.base64.urlsafe_b64encode(
@@ -97,6 +106,64 @@ def test_restart_and_expiration_rotate_saved_token(session):
     assert parse_qs(requests[-2].data.decode())["grant_type"] == ["refresh_token"]
     restored.tokens.expires = time.monotonic()
     assert restored.account() == identifier
+
+
+@pytest.mark.parametrize(
+    "callback",
+    [
+        "https://api.example.com/auth/desktop/callback",
+        "http://localhost:8000/auth/desktop/callback",
+    ],
+)
+def test_browser_finish_uri_matches_pkce_exchange_and_logout(session, monkeypatch, callback):
+    client, requests, identifier = session
+    client.config = replace(CONFIG, callback_url=callback)
+    urls = []
+    monkeypatch.setattr(
+        auth, "browser_code", lambda url, *args, **kwargs: urls.append(url) or "one-use-code"
+    )
+    assert client.sign_in() == identifier
+    start = parse_qs(urlsplit(urls[0]).query)
+    exchange = parse_qs(requests[0].data.decode())
+    assert start["redirect_uri"] == exchange["redirect_uri"] == [callback]
+    assert start["code_challenge_method"] == ["S256"]
+    assert "code_verifier" not in start and "code_verifier" in exchange
+    client.sign_out()
+    assert parse_qs(urlsplit(urls[-1]).query)["logout_uri"] == [
+        callback.removesuffix("/callback") + "/signed-out"
+    ]
+
+
+@pytest.mark.parametrize(
+    "callback",
+    [
+        "https://api.example.com/auth/desktop/callback?next=evil",
+        "https://api.example.com/auth/desktop/callback#token",
+        "https://user:password@api.example.com/auth/desktop/callback",
+        "https://api.example.com/other",
+        "https://api.example.com:8443/auth/desktop/callback",
+        "http://evil.test/auth/desktop/callback",
+        "http://localhost:9000/auth/desktop/callback",
+        "org.other.app://oauth/callback",
+        "",
+    ],
+)
+def test_unapproved_or_ambiguous_browser_return_configuration_is_rejected(callback):
+    with pytest.raises(IdentityError):
+        replace(CONFIG, callback_url=callback)
+
+
+def test_optional_browser_return_configuration_keeps_legacy_native_clients_compatible():
+    values = {
+        "BUDDY_AWS_REGION": CONFIG.region,
+        "BUDDY_COGNITO_POOL_ID": CONFIG.pool_id,
+        "BUDDY_COGNITO_CLIENT_ID": CONFIG.client_id,
+        "BUDDY_COGNITO_DOMAIN": CONFIG.domain,
+    }
+    assert IdentityConfig.from_environment(values) == CONFIG
+    callback = "https://api.example.com/auth/desktop/callback"
+    configured = IdentityConfig.from_environment({**values, "BUDDY_COGNITO_CALLBACK_URL": callback})
+    assert configured is not None and configured.callback_url == callback
 
 
 def test_invalid_refresh_blocks_restore(session, monkeypatch):
@@ -166,44 +233,24 @@ def test_native_store_deletion_failure_leaves_nonsecret_restart_block(tmp_path, 
     assert "sensitive" not in store.marker.read_text()
 
 
-def test_loopback_callback_rejects_wrong_state_and_accepts_single_use_code():
-    from buddy_desktop.auth import browser_code
-
-    responses = []
-    threads = []
-    state = str(uuid4())
-
-    def callback_request(query):
-        return Request(
-            "http://127.0.0.1:8765/callback?" + query, headers={"Host": "localhost:8765"}
-        )
+def test_native_callback_rejects_wrong_state_and_accepts_single_use_code():
+    from buddy_desktop.native_callback import pending_callback
+    from buddy_identity.config import CALLBACK
 
     def open_browser(_url):
-        def callbacks():
-            try:
-                urlopen(callback_request("state=wrong&code=untrusted"), timeout=3)
-            except HTTPError as exc:
-                responses.append(exc.code)
-                exc.close()
-            with urlopen(callback_request(f"state={state}&code=valid"), timeout=3) as response:
-                responses.append(response.status)
-                assert response.headers["Cache-Control"] == "no-store"
-
-        thread = Thread(target=callbacks)
-        threads.append(thread)
-        thread.start()
+        assert not pending_callback.deliver(CALLBACK + "?state=wrong&code=untrusted")
+        assert pending_callback.deliver(CALLBACK + "?state=expected&code=valid")
+        assert not pending_callback.deliver(CALLBACK + "?state=expected&code=replay")
         return True
 
-    try:
-        assert (
-            browser_code("https://example.com", state, Event(), timeout=10, opener=open_browser)
-            == "valid"
+    assert (
+        auth.browser_code(
+            "https://example.com", "expected", Event(), timeout=1, opener=open_browser
         )
-    finally:
-        for thread in threads:
-            thread.join(timeout=7)
-            assert not thread.is_alive()
-    assert responses == [400, 200]
+        == "valid"
+    )
+    assert pending_callback.attempt is None
+    assert not pending_callback.deliver(CALLBACK + "?state=expected&code=late")
 
 
 def test_callback_cancellation_is_bounded():
@@ -214,34 +261,17 @@ def test_callback_cancellation_is_bounded():
 
 
 def test_rejected_browser_recovery_never_creates_a_session():
-    state = str(uuid4())
-    threads = []
+    from buddy_desktop.native_callback import pending_callback
+    from buddy_identity.config import CALLBACK
 
     def open_browser(_url):
-        def callback():
-            with urlopen(
-                Request(
-                    f"http://127.0.0.1:8765/callback?state={state}&error=access_denied",
-                    headers={"Host": "localhost:8765"},
-                ),
-                timeout=3,
-            ):
-                pass
-
-        thread = Thread(target=callback)
-        threads.append(thread)
-        thread.start()
+        assert pending_callback.deliver(CALLBACK + "?state=expected&error=access_denied")
         return True
 
-    try:
-        with pytest.raises(IdentityError, match="rejected"):
-            auth.browser_code(
-                "https://example.com", state, Event(), timeout=10, opener=open_browser
-            )
-    finally:
-        for thread in threads:
-            thread.join(timeout=4)
-            assert not thread.is_alive()
+    with pytest.raises(IdentityError, match="rejected"):
+        auth.browser_code(
+            "https://example.com", "expected", Event(), timeout=1, opener=open_browser
+        )
 
 
 @pytest.mark.parametrize(

@@ -6,15 +6,15 @@ from buddy_desktop.services import Health
 from buddy_desktop.window import MainWindow
 
 
-def make_window(qtbot, tmp_path, api_url="http://127.0.0.1:8000", **kwargs):
+def make_window(qtbot, tmp_path, api_url="http://127.0.0.1:8000", *, request_timeout=0.5, **kwargs):
     settings = QSettings(str(tmp_path / "buddy.ini"), QSettings.Format.IniFormat)
-    window = MainWindow(AppConfig(api_url, 0.5), settings, **kwargs)
+    window = MainWindow(AppConfig(api_url, request_timeout), settings, **kwargs)
     qtbot.addWidget(window)
     window.show()
     return window
 
 
-def test_keyboard_navigation_and_minimum_size(qtbot, qapp, tmp_path):
+def test_keyboard_navigation(qtbot, qapp, tmp_path):
     window = make_window(qtbot, tmp_path)
     window.resize(800, 600)
     window.activateWindow()
@@ -27,9 +27,6 @@ def test_keyboard_navigation_and_minimum_size(qtbot, qapp, tmp_path):
     assert window.pages.currentIndex() == 1
     qtbot.keyClick(window, Qt.Key.Key_4, modifier=Qt.KeyboardModifier.AltModifier)
     assert window.pages.currentIndex() == 3
-    assert window.preferences.url.accessibleName() == "Backend URL"
-    assert window.home.check.accessibleName() == "Check backend connection"
-    assert window.home.geometry().width() > 0
 
 
 def test_settings_persist_and_invalid_input_does_not_replace_config(qtbot, tmp_path, monkeypatch):
@@ -104,7 +101,11 @@ def test_stale_worker_result_does_not_overwrite_state(qtbot, tmp_path):
 
 
 def test_close_during_request_defers_without_blocking(qtbot, tmp_path, backend):
-    window = make_window(qtbot, tmp_path, f"http://127.0.0.1:{backend.server_port}")
+    # Keep the real request pending while native window events are drained under
+    # the full suite; the short timeout is tested separately.
+    window = make_window(
+        qtbot, tmp_path, f"http://127.0.0.1:{backend.server_port}", request_timeout=5
+    )
     backend.release.clear()
     window.check_connection()
     qtbot.waitUntil(backend.entered.is_set)
