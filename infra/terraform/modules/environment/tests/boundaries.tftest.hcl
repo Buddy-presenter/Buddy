@@ -280,7 +280,9 @@ run "private_upload_runtime_and_version_cleanup" {
 }
 
 run "immutable_staging_repository_identity" {
-  command = plan
+  # Both AWS aliases are mocked. Apply resolves computed ARNs so the real
+  # generated policy can be checked without replacing its expression.
+  command = apply
   variables {
     github_oidc_subject_prefix = "repo:Buddy-presenter@343976635/Buddy@1408836773"
   }
