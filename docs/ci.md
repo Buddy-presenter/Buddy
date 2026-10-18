@@ -23,6 +23,9 @@ does not flush `DeferredDelete`; deferring cleanup across tests can interfere wi
 native callback tests. Native diagnostics remain visible through tee-sys capture if the
 interpreter aborts. Callback, native IPC and shell/protocol coverage remains unchanged;
 there are no retries or weakened CI gates.
+The application-wide synthetic `QFileOpenEvent` test runs in a fresh Qt subprocess on
+every platform, so its native application state cannot leak into the other window tests.
+Child assertions, crashes and startup/execution timeouts fail the parent test.
 The browser-script harness separately allows 30 seconds for the Node process to start
 and a one-second VM execution limit for both initial evaluation and load-handler dispatch
 in the same context, so a slow Windows cold start is not mistaken for a hung finish-page
