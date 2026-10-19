@@ -68,9 +68,7 @@ def test_model_output_is_bound_to_verified_manifest_and_stable_action_ids():
     ("action_type", "x", "y", "width", "height"),
     [("zoom_region", 0, 0, "page_width", 20), ("zoom_region", 0, 0, 1, 1)],
 )
-def test_unsafe_model_action_is_dropped_without_losing_analysis(
-    action_type, x, y, width, height
-):
+def test_unsafe_model_action_is_dropped_without_losing_analysis(action_type, x, y, width, height):
     content = PDF.read_bytes()
     deck_id, job_id, extraction_id = uuid4(), uuid4(), uuid4()
     extraction = extract_pdf(BytesIO(content), source_revision="fixture-revision")
