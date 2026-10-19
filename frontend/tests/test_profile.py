@@ -172,9 +172,7 @@ def test_signed_out_profile_has_account_guidance(desktop_window, qtbot):
     assert window.pages.currentIndex() == 4
 
 
-def test_browser_sign_in_remains_cancellable_after_popup_dismisses(
-    profile, monkeypatch, qtbot
-):
+def test_browser_sign_in_remains_cancellable_after_popup_dismisses(profile, monkeypatch, qtbot):
     window, _, _ = profile
     account = window.account
     assert account.session is not None
