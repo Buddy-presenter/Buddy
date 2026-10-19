@@ -3,11 +3,13 @@
 from pathlib import Path
 
 from PySide6.QtCore import QStandardPaths, Qt, QTimer, Signal
-from PySide6.QtWidgets import QGridLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import QHBoxLayout, QPushButton, QVBoxLayout, QWidget
 
 from buddy_desktop.auth import AccountProfile, AccountSession, NativeTokenStore, ProfileFailure
 from buddy_desktop.services import ServiceError
 from buddy_desktop.tasks import TaskRunner
+from buddy_desktop.views import StatusLabel
 from buddy_desktop.visuals import command
 from buddy_identity.config import IdentityConfig, IdentityError, SessionExpired
 
@@ -31,49 +33,51 @@ class AccountWidget(QWidget):
         self.closing = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
-        heading = QLabel("Account")
-        heading.setObjectName("sectionTitle")
-        layout.addWidget(heading)
-        self.message = QLabel("Sign in to your Buddy account.")
+        layout.setSpacing(10)
+        self.message = StatusLabel()
         self.message.setTextFormat(Qt.TextFormat.PlainText)
         self.message.setWordWrap(True)
         self.message.setObjectName("muted")
         layout.addWidget(self.message)
-        buttons = QGridLayout()
-        buttons.setSpacing(8)
         self.buttons: dict[str, QPushButton] = {}
-        for index, (action, title) in enumerate(
-            [
-                ("signin", "Sign in"),
-                ("signup", "Create account"),
-                ("recovery", "Forgot password"),
-                ("resume", "Resume session"),
-                ("signout", "Sign out"),
-            ]
-        ):
+        for action, title, tip in [
+            ("signin", "Sign in", "Sign in with your email in the browser"),
+            ("signup", "Create account", "Create a Buddy account in the browser"),
+            ("recovery", "Forgot password?", "Reset your password in the browser"),
+            ("resume", "Use saved sign-in", "Sign back in with the session saved on this device"),
+            ("signout", "Sign out", "Sign out of Buddy on this device"),
+        ]:
             button = QPushButton(title)
-            command(
-                button,
-                {
-                    "signin": "log-in",
-                    "signup": "user-plus",
-                    "recovery": "key-round",
-                    "resume": "rotate-ccw",
-                    "signout": "log-out",
-                }[action],
-                primary=action == "signin",
-            )
+            button.setAccessibleName(title.rstrip("?"))
+            button.setToolTip(tip)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.clicked.connect(lambda checked=False, name=action: self.start(name))
-            buttons.addWidget(button, index // 2, index % 2)
             self.buttons[action] = button
-        layout.addLayout(buttons)
+        command(self.buttons["signin"], "log-in", primary=True)
+        self.buttons["signin"].setIcon(QIcon())
+        self.buttons["signin"].setToolTip("Sign in with your email in the browser")
+        for action in ("signin", "signup"):
+            layout.addWidget(self.buttons[action])
+        links = QHBoxLayout()
+        links.setContentsMargins(0, 2, 0, 0)
+        # Alignment rather than a spacer, so the row collapses when both links are hidden.
+        for action, side in (
+            ("recovery", Qt.AlignmentFlag.AlignLeft),
+            ("resume", Qt.AlignmentFlag.AlignRight),
+        ):
+            self.buttons[action].setObjectName("linkButton")
+            links.addWidget(self.buttons[action], alignment=side)
+        layout.addLayout(links)
+        command(self.buttons["signout"], "log-out")
+        self.buttons["signout"].setObjectName("menuItem")
+        self.buttons["signout"].setToolTip("Sign out of Buddy on this device")
+        layout.addWidget(self.buttons["signout"])
         self.cancel = QPushButton("Cancel sign-in")
         command(self.cancel, "x")
         self.cancel.clicked.connect(self.cancel_operation)
         self.cancel.setEnabled(False)
-        buttons.addWidget(self.cancel, 2, 1)
-        layout.addStretch()
+        layout.addWidget(self.cancel)
+        self.cancel.hide()
         self.timer = QTimer(self)
         self.timer.setInterval(60000)
         self.timer.timeout.connect(self.check_session)
@@ -97,7 +101,7 @@ class AccountWidget(QWidget):
                 self.session = AccountSession(
                     config, api_url, NativeTokenStore(identity, directory)
                 )
-                self.message.setText("Sign in, create an account, or resume your saved session.")
+                self.message.setText("")
             else:
                 self.message.setText("Account access is not configured for this installation.")
         except IdentityError as exc:
@@ -133,6 +137,7 @@ class AccountWidget(QWidget):
         for button in self.buttons.values():
             button.setEnabled(False)
         self.cancel.setEnabled(action in {"signin", "signup", "recovery"})
+        self.cancel.setVisible(action in {"signin", "signup", "recovery"})
         self.activity_changed.emit(True)
 
         def work() -> str | AccountProfile | ProfileFailure:
@@ -165,7 +170,8 @@ class AccountWidget(QWidget):
         if self.operation == "profile":
             if isinstance(result, AccountProfile) and result.id == self.account_id:
                 self.profile_loaded.emit(_identifier, result)
-                self.message.setText("Signed in to Buddy.")
+                # The verified email in the account menu already says who is signed in.
+                self.message.setText("")
                 self.timer.start()
             else:
                 if isinstance(result, ProfileFailure) and result.expired:
@@ -228,7 +234,10 @@ class AccountWidget(QWidget):
                 and not self.closing
                 and (action == "signout" or not signed_in)
             )
+        for action, button in self.buttons.items():
+            button.setVisible((action == "signout") == signed_in)
         self.cancel.setEnabled(False)
+        self.cancel.hide()
         self.activity_changed.emit(False)
         self.session_changed.emit()
 

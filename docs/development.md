@@ -94,3 +94,5 @@ no model generation or document text extraction is required.
 
 Durable PDF metadata scheduling, SQS workers, owner job controls and opt-in staging
 verification are documented in [PDF workers](pdf-workers.md).
+
+Desktop navigation and account placement are described in the [usability revision](ui-usability.md).

@@ -24,7 +24,7 @@ from buddy_desktop.slide_contract import Region
 from buddy_desktop.slide_executor import Completion, SlideExecutor
 from buddy_desktop.slide_surface import SlideSurface
 from buddy_desktop.tasks import TaskRunner
-from buddy_desktop.views import Page
+from buddy_desktop.views import Page, StatusLabel
 from buddy_desktop.visuals import BuddyMark, command
 
 
@@ -41,10 +41,15 @@ class SelectionSurface(SlideSurface):
         self.empty = QWidget(self)
         empty_layout = QVBoxLayout(self.empty)
         empty_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_layout.setSpacing(6)
         empty_layout.addWidget(BuddyMark(64), alignment=Qt.AlignmentFlag.AlignCenter)
-        empty_title = QLabel("No slides loaded")
+        empty_layout.addSpacing(8)
+        empty_title = QLabel("Open a PDF to start presenting")
         empty_title.setObjectName("sectionTitle")
         empty_layout.addWidget(empty_title, alignment=Qt.AlignmentFlag.AlignCenter)
+        empty_hint = QLabel("Or use desktop PowerPoint below to present a .pptx file.")
+        empty_hint.setObjectName("muted")
+        empty_layout.addWidget(empty_hint, alignment=Qt.AlignmentFlag.AlignCenter)
         layout = QVBoxLayout(self)
         layout.addWidget(self.empty)
 
@@ -107,10 +112,8 @@ class PresentWidget(Page):
     """Open local manifests explicitly; no fabricated library or processing integration."""
 
     def __init__(self) -> None:
-        super().__init__(
-            "Present", "Present PDFs in Buddy, or launch desktop PowerPoint on Windows."
-        )
-        self.body.setSpacing(10)
+        super().__init__("Present", "")
+        self.body.setSpacing(12)
         self._closing = False
         self.fullscreen: FullscreenPresentation | None = None
         self._instance = 0
@@ -140,37 +143,36 @@ class PresentWidget(Page):
         self.next_button.clicked.connect(lambda: self.send("next_slide"))
         self.target = QComboBox()
         self.target.setAccessibleName("Slide to go to")
+        self.target.setToolTip("Choose a slide to jump to")
+        self.target.setMinimumWidth(116)
+        self.target.setPlaceholderText("Go to slide")
         self.go_button = QPushButton("Go to slide")
         command(self.go_button, "arrow-right", compact=True)
         self.go_button.clicked.connect(self._go)
         self.counter = QLabel("No slides loaded")
+        self.counter.setObjectName("muted")
+        self.counter.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.counter.setMinimumWidth(96)
         opening = QHBoxLayout()
+        opening.setSpacing(8)
         opening.addWidget(self.open_button)
         opening.addStretch()
-        opening.addWidget(self.counter)
+        opening.addWidget(self.target)
+        opening.addWidget(self.go_button)
+        opening.addSpacing(8)
         self.fullscreen_button = QPushButton("Full screen")
         command(self.fullscreen_button, "scan")
         self.fullscreen_button.setToolTip("F11: full screen. Esc: exit. Arrows or Space: navigate.")
         self.fullscreen_button.clicked.connect(self.enter_fullscreen)
         opening.addWidget(self.fullscreen_button)
         self.body.addLayout(opening)
-        navigation = QHBoxLayout()
-        for widget in (
-            self.previous_button,
-            self.next_button,
-            self.target,
-            self.go_button,
-        ):
-            navigation.addWidget(widget)
-        self.body.addLayout(navigation)
         self.body.addWidget(self.surface, 1)
-        self.surface.setToolTip(
-            "Drag to select a region, or open Coordinates for numeric selection"
-        )
+        self.surface.setToolTip("Drag to select a region, or use Coordinates for exact values")
         self.coordinates_button = QPushButton("Coordinates")
-        command(self.coordinates_button, "scan")
+        command(self.coordinates_button, "settings-2", compact=True)
         self.coordinates_button.setCheckable(True)
         self.coordinates_button.setAccessibleName("Show region coordinates")
+        self.coordinates_button.setToolTip("Enter selection coordinates")
         self.coordinate_panel = QWidget()
         form = QGridLayout(self.coordinate_panel)
         form.setContentsMargins(0, 0, 0, 0)
@@ -194,41 +196,63 @@ class PresentWidget(Page):
             form.addWidget(caption, row, pair * 2)
             form.addWidget(field, row, pair * 2 + 1)
             self.fields[name] = field
-        self.body.addWidget(self.coordinate_panel)
         self.coordinate_panel.hide()
         self.coordinates_button.toggled.connect(self.coordinate_panel.setVisible)
         commands = QHBoxLayout()
-        self.zoom_button = QPushButton("Zoom to selection")
-        command(self.zoom_button, "scan")
+        commands.setSpacing(8)
+        commands.addWidget(self.previous_button)
+        commands.addWidget(self.counter)
+        commands.addWidget(self.next_button)
+        commands.addStretch()
+        self.zoom_button = QPushButton("Zoom")
+        self.zoom_button.setAccessibleName("Zoom to selection")
+        command(self.zoom_button, "search")
+        self.zoom_button.setToolTip("Zoom to the selected area (Z in full screen)")
         self.zoom_button.clicked.connect(lambda: self._region_action("zoom_region"))
-        self.highlight_button = QPushButton("Highlight selection")
-        command(self.highlight_button, "highlighter", primary=True)
+        self.highlight_button = QPushButton("Highlight")
+        self.highlight_button.setAccessibleName("Highlight selection")
+        command(self.highlight_button, "highlighter")
+        self.highlight_button.setToolTip("Highlight the selected area (H in full screen)")
         self.highlight_button.clicked.connect(lambda: self._region_action("highlight_region"))
-        self.reset_button = QPushButton("Reset")
+        self.reset_button = QPushButton("Reset view")
         command(self.reset_button, "rotate-ccw", compact=True)
         self.reset_button.clicked.connect(lambda: self.send("reset_view"))
         for button in (self.zoom_button, self.highlight_button, self.reset_button):
             commands.addWidget(button)
         commands.addWidget(self.coordinates_button)
         self.body.addLayout(commands)
+        self.body.addWidget(self.coordinate_panel)
         self.powerpoint_open_button = QPushButton("Open PowerPoint…")
-        command(self.powerpoint_open_button, "presentation", primary=True)
+        command(self.powerpoint_open_button, "presentation")
         self.powerpoint_open_button.setAccessibleName("Open a PowerPoint presentation")
         self.powerpoint_open_button.clicked.connect(self._choose_powerpoint)
         self.powerpoint_connect_button = QPushButton("Connect to slideshow…")
         command(self.powerpoint_connect_button, "link-2")
         self.powerpoint_connect_button.clicked.connect(self._list_powerpoint_slideshows)
         self.powerpoint_disconnect_button = QPushButton("Disconnect")
+        self.powerpoint_disconnect_button.setAccessibleName("Disconnect from PowerPoint")
         command(self.powerpoint_disconnect_button, "x", compact=True)
         self.powerpoint_disconnect_button.clicked.connect(self._disconnect_powerpoint)
+        self.powerpoint_panel = QWidget()
+        self.powerpoint_panel.setObjectName("group")
+        self.powerpoint_panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.powerpoint_panel.setAccessibleName("Desktop PowerPoint")
+        powerpoint_layout = QVBoxLayout(self.powerpoint_panel)
+        powerpoint_layout.setContentsMargins(18, 16, 18, 16)
+        powerpoint_layout.setSpacing(10)
+        powerpoint_title = QLabel("Desktop PowerPoint")
+        powerpoint_title.setObjectName("sectionTitle")
+        powerpoint_layout.addWidget(powerpoint_title)
         powerpoint_row = QHBoxLayout()
+        powerpoint_row.setSpacing(8)
         powerpoint_row.addWidget(self.powerpoint_open_button)
         powerpoint_row.addWidget(self.powerpoint_connect_button)
         powerpoint_row.addWidget(self.powerpoint_disconnect_button)
         powerpoint_row.addStretch()
-        self.body.addLayout(powerpoint_row)
-        self.powerpoint_status = QLabel()
-        self.powerpoint_status.setObjectName("muted")
+        powerpoint_layout.addLayout(powerpoint_row)
+        self.powerpoint_status = StatusLabel()
+        self.powerpoint_status.setObjectName("caption")
+        self.powerpoint_status.setTextFormat(Qt.TextFormat.PlainText)
         self.powerpoint_status.setWordWrap(True)
         self.powerpoint_status.setAccessibleName("PowerPoint connection status")
         if sys.platform == "win32":
@@ -241,11 +265,14 @@ class PresentWidget(Page):
             )
             self.powerpoint_open_button.setEnabled(False)
             self.powerpoint_connect_button.setEnabled(False)
-        self.body.addWidget(self.powerpoint_status)
-        self.feedback = QLabel("Open a PDF to begin, or start a PowerPoint slideshow on Windows.")
+        powerpoint_layout.addWidget(self.powerpoint_status)
+        self.body.addWidget(self.powerpoint_panel)
+        self.feedback = StatusLabel()
+        self.feedback.setObjectName("caption")
         self.feedback.setWordWrap(True)
         self.feedback.setTextFormat(Qt.TextFormat.PlainText)
         self.feedback.setAccessibleName("Presentation status")
+        self.feedback.setText("")
         self.body.addWidget(self.feedback)
         self.surface.selection_changed.connect(self._selection_changed)
         self._refresh()
@@ -526,7 +553,7 @@ class PresentWidget(Page):
             if result.status in {"failed", "rejected"}
             else "Full slide restored."
             if result.status == "cancelled"
-            else "Ready."
+            else ""
         )
         self._refresh()
 
@@ -551,6 +578,7 @@ class PresentWidget(Page):
             self._powerpoint_info is not None and not powerpoint_action_busy
         )
         self.fullscreen_button.setEnabled(loaded)
+        self.counter.setVisible(loaded)
         for widget in (self.previous_button, self.next_button, self.target, self.go_button):
             widget.setEnabled(ready)
         self.reset_button.setEnabled(loaded)

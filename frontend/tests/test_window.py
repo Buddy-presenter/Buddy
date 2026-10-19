@@ -61,7 +61,11 @@ def test_invalid_saved_config_falls_back_without_exposing_it(tmp_path, monkeypat
 
 
 def test_real_http_check_keeps_ui_responsive_and_returns_through_signals(qtbot, tmp_path, backend):
-    window = make_window(qtbot, tmp_path, f"http://127.0.0.1:{backend.server_port}")
+    # This checks responsiveness while a request is pending, not the transport timeout.
+    # Allow slow native Windows event delivery before explicitly releasing the server.
+    window = make_window(
+        qtbot, tmp_path, f"http://127.0.0.1:{backend.server_port}", request_timeout=5
+    )
     backend.release.clear()
     ticks = []
     timer = QTimer(window)
@@ -71,33 +75,34 @@ def test_real_http_check_keeps_ui_responsive_and_returns_through_signals(qtbot, 
     window.check_connection()
     qtbot.waitUntil(backend.entered.is_set)
     qtbot.waitUntil(lambda: len(ticks) >= 3)
-    assert not window.home.check.isEnabled()
+    assert not window.preferences.check.isEnabled()
     window.navigation.setCurrentRow(3)
     assert window.pages.currentIndex() == 3
     assert window.runner.busy
     backend.release.set()
     qtbot.waitUntil(lambda: not window.runner.busy)
-    assert window.home.connection.title.text() == "Backend connected"
-    assert window.home.check.isEnabled()
+    assert window.preferences.connection.title.text() == "Backend connected"
+    assert window.preferences.check.isEnabled()
 
 
 def test_backend_failure_can_be_retried(qtbot, tmp_path, backend):
     window = make_window(qtbot, tmp_path, f"http://127.0.0.1:{backend.server_port}")
     backend.response_code = 404
+    window.navigation.setCurrentRow(3)
     window.check_connection()
     qtbot.waitUntil(lambda: not window.runner.busy)
-    assert window.home.connection.retry.isVisible()
+    assert window.preferences.connection.retry.isVisible()
     backend.response_code = 200
-    qtbot.mouseClick(window.home.connection.retry, Qt.MouseButton.LeftButton)
+    qtbot.mouseClick(window.preferences.connection.retry, Qt.MouseButton.LeftButton)
     qtbot.waitUntil(lambda: not window.runner.busy)
-    assert window.home.connection.title.text() == "Backend connected"
+    assert window.preferences.connection.title.text() == "Backend connected"
 
 
 def test_stale_worker_result_does_not_overwrite_state(qtbot, tmp_path):
     window = make_window(qtbot, tmp_path)
-    before = window.home.connection.title.text()
+    before = window.preferences.connection.title.text()
     window._health_succeeded(100, Health("ok"))
-    assert window.home.connection.title.text() == before
+    assert window.preferences.connection.title.text() == before
 
 
 def test_close_during_request_defers_without_blocking(qtbot, tmp_path, backend):

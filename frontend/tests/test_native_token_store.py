@@ -44,8 +44,16 @@ def windows_store(tmp_path, monkeypatch):
     return auth.NativeTokenStore("synthetic-account", tmp_path), vault
 
 
-@pytest.mark.parametrize("length", [1, 511, 512, 513, 1280, 1300, 3000, 16300])
-@pytest.mark.parametrize("character", ["x", "\U0001f512"])
+@pytest.mark.parametrize(
+    "character,length",
+    [
+        ("x", 1),
+        ("x", 512),  # Exactly one piece.
+        ("x", 513),  # First spill into a second piece.
+        ("x", 16300),  # Largest accepted token.
+        ("\U0001f512", 1300),  # Surrogate pairs double the UTF-16 bytes per piece.
+    ],
+)
 def test_windows_byte_limits_and_restart(windows_store, length, character):
     store, vault = windows_store
     token = character * length

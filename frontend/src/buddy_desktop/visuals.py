@@ -1,12 +1,16 @@
 """Buddy's local visual assets, palette and accessible command styling."""
 
+import sys
 from importlib.resources import files
 
-from PySide6.QtCore import QByteArray, QRectF, QSize, Qt, QTimer
+from PySide6.QtCore import QByteArray, QRect, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import (
     QColor,
+    QFont,
+    QFontDatabase,
     QHideEvent,
     QIcon,
+    QImage,
     QPainter,
     QPaintEvent,
     QPalette,
@@ -46,6 +50,29 @@ def command(
         button.setProperty("iconOnly", True)
 
 
+def interface_fonts() -> dict[str, str]:
+    """Crisp platform UI type; Qt renders variable-font weights poorly on Windows."""
+    families = set(QFontDatabase.families())
+    if sys.platform == "darwin":
+        family = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont).family()
+        return {
+            "text": f'"{family}"',
+            "strong": f'font-family: "{family}"; font-weight: 600',
+            "display": f'font-family: "{family}"; font-weight: 700',
+        }
+    if "Segoe UI Variable Text" in families:
+        return {
+            "text": '"Segoe UI Variable Text", "Segoe UI"',
+            "strong": 'font-family: "Segoe UI Variable Text Semibold", "Segoe UI Semibold"',
+            "display": 'font-family: "Segoe UI Variable Display"; font-weight: 600',
+        }
+    return {
+        "text": '"Segoe UI", "Helvetica Neue", sans-serif',
+        "strong": 'font-family: "Segoe UI Semibold", "Segoe UI"; font-weight: 600',
+        "display": 'font-family: "Segoe UI Semibold", "Segoe UI"; font-weight: 600',
+    }
+
+
 def apply_theme(app: QApplication) -> None:
     palette = QPalette()
     for role, color in (
@@ -66,10 +93,74 @@ def apply_theme(app: QApplication) -> None:
     palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor("#777781"))
     palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor("#777781"))
     app.setPalette(palette)
+    fonts = interface_fonts()
+    font = QFont(app.font())
+    font.setFamilies([name.strip().strip('"') for name in fonts["text"].split(",")])
+    # Unhinted, antialiased outlines avoid the jagged GDI-style look at 100% scale.
+    font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
+    font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+    app.setFont(font)
     resources = files("buddy_desktop")
     check_path = str(resources.joinpath("assets", "icons", "check.svg")).replace("\\", "/")
     stylesheet = resources.joinpath("theme.qss").read_text(encoding="utf-8")
-    app.setStyleSheet(stylesheet.replace("__BUDDY_CHECK_ICON__", check_path))
+    for name, value in (
+        ("__BUDDY_CHECK_ICON__", check_path),
+        ("__FONT_TEXT__", fonts["text"]),
+        ("__FONT_STRONG__", fonts["strong"]),
+        ("__FONT_DISPLAY__", fonts["display"]),
+    ):
+        stylesheet = stylesheet.replace(name, value)
+    app.setStyleSheet(stylesheet)
+
+
+# Measured silhouette of assets/buddy.png (1254 px): a disc centred at (625, 627) whose
+# 50% alpha edge lies 573-580 px out. Cropping just inside it drops the hard raster rim.
+_MASCOT_DISC = QRect(625 - 571, 627 - 571, 1142, 1142)
+_MASCOT_CACHE: dict[tuple[int, int], QImage] = {}
+
+
+def mascot_image(size: int, inset: int) -> QImage:
+    """Buddy at exactly size x size device pixels with an analytic, antialiased edge."""
+    key = (size, inset)
+    if key not in _MASCOT_CACHE:
+        source = QImage()
+        source.loadFromData(files("buddy_desktop").joinpath("assets", "buddy.png").read_bytes())
+        disc = QRect(inset, inset, size - 2 * inset, size - 2 * inset)
+        # One high-quality downscale to the final size; nothing is resampled at paint time.
+        # The source interior is ~99% opaque, so flatten it; the mask alone sets coverage.
+        face = (
+            source.copy(_MASCOT_DISC)
+            .scaled(
+                disc.size(),
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            .convertToFormat(QImage.Format.Format_RGB32)
+        )
+        image = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("white"))
+        painter.drawEllipse(QRectF(disc))
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.drawImage(disc.topLeft(), face)
+        painter.end()
+        _MASCOT_CACHE[key] = image
+    return _MASCOT_CACHE[key]
+
+
+def icon_inset(size: int) -> int:
+    return round(size / 32)
+
+
+def app_icon() -> QIcon:
+    """The Buddy mascot at every size the window, taskbar, Dock and switcher ask for."""
+    result = QIcon()
+    for size in (16, 20, 24, 32, 40, 48, 64, 96, 128, 256, 512):
+        result.addPixmap(QPixmap.fromImage(mascot_image(size, icon_inset(size))))
+    return result
 
 
 class BuddyMark(QWidget):
@@ -79,8 +170,6 @@ class BuddyMark(QWidget):
         super().__init__(parent)
         self.setFixedSize(size, size)
         self.setAccessibleName("Buddy")
-        self.image = QPixmap()
-        self.image.loadFromData(files("buddy_desktop").joinpath("assets", "buddy.png").read_bytes())
         self.frame = 0
         self.active = False
         self.reduced_motion = False
@@ -111,9 +200,12 @@ class BuddyMark(QWidget):
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        target = QRectF(self.rect()).adjusted(2, 2, -2, -2)
-        painter.drawPixmap(target, self.image, QRectF(self.image.rect()))
+        # Render at device pixels (HiDPI included) so the edge is never resampled.
+        ratio = self.devicePixelRatioF()
+        size = round(self.width() * ratio)
+        pixmap = QPixmap.fromImage(mascot_image(size, round(size * 0.06) + round(ratio)))
+        pixmap.setDevicePixelRatio(ratio)
+        painter.drawPixmap(0, 0, pixmap)
         if self.active:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             painter.setPen(QColor("#FFB45B"))
