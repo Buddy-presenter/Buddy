@@ -430,6 +430,27 @@ def test_powerpoint_takes_available_page_space_when_no_pdf_is_loaded(desktop_win
 
 
 @pytest.mark.skipif(__import__("sys").platform != "win32", reason="Windows PowerPoint UI only")
+def test_area_erase_command_completion_queues_a_fresh_preview(desktop_window, tmp_path):
+    from buddy_desktop.powerpoint_contract import (
+        PowerPointAction,
+        PowerPointActionResult,
+        PresentationInfo,
+    )
+    from buddy_desktop.slide_contract import Region
+
+    page = desktop_window().present
+    info = PresentationInfo(str(tmp_path / "lesson.pptx"), "lesson.pptx", 1, 2, 42, 256, 960, 540)
+    action = PowerPointAction("erase_region", info, region=Region(0, 0, 20, 20))
+    page._powerpoint_info = info
+    page._powerpoint_path = info.path
+    page._powerpoint_pending[1] = ("command", info.path)
+
+    page._powerpoint_succeeded(1, PowerPointActionResult(action, info))
+
+    assert page._queued_powerpoint_preview == info
+
+
+@pytest.mark.skipif(__import__("sys").platform != "win32", reason="Windows PowerPoint UI only")
 def test_failed_powerpoint_launch_reenables_controls(desktop_window, qtbot, tmp_path):
     from buddy_desktop.powerpoint import PowerPointError
 
@@ -745,6 +766,72 @@ def test_area_eraser_removes_only_buddy_shapes_under_the_selection(control_autom
     assert shapes.Item(1).args == (1, 200, 200, 40, 40)
     service.execute(PowerPointAction("undo_annotation", info))
     assert shapes.Count == 0
+
+
+def test_undo_retains_history_when_office_refuses_to_delete_shape(control_automation):
+    service, file, _, app, _, _ = control_automation
+    info = service.status(file)
+    service.execute(PowerPointAction("draw_line", info, points=((10, 10), (40, 40))))
+    shapes = app.presentation.Slides.Item(1).Shapes
+    shape = shapes.Item(1)
+    delete = shape.Delete
+
+    def fail_delete():
+        raise RuntimeError("Office refused deletion")
+
+    shape.Delete = fail_delete
+    with pytest.raises(PowerPointError, match="still tracked"):
+        service.execute(PowerPointAction("undo_annotation", info))
+    assert shapes.Count == 1
+
+    shape.Delete = delete
+    service.execute(PowerPointAction("undo_annotation", info))
+    assert shapes.Count == 0
+
+
+def test_area_erase_reports_delete_failure_and_keeps_remaining_shape_tracked(
+    control_automation,
+):
+    service, file, _, app, _, _ = control_automation
+    info = service.status(file)
+    service.execute(PowerPointAction("draw_rectangle", info, region=Region(10, 10, 40, 40)))
+    shape = app.presentation.Slides.Item(1).Shapes.Item(1)
+    delete = shape.Delete
+    shape.Delete = lambda: (_ for _ in ()).throw(RuntimeError("Office refused deletion"))
+
+    with pytest.raises(PowerPointError, match="still tracked"):
+        service.execute(PowerPointAction("erase_region", info, region=Region(0, 0, 100, 100)))
+    shape.Delete = delete
+    service.execute(PowerPointAction("undo_annotation", info))
+    assert app.presentation.Slides.Item(1).Shapes.Count == 0
+
+
+def test_annotation_configuration_failure_rolls_back_already_added_shape(
+    control_automation, monkeypatch
+):
+    service, file, _, app, _, _ = control_automation
+    info = service.status(file)
+
+    def fail_after_naming(_shape, _color, *, arrow=False):
+        raise RuntimeError("Office rejected line formatting")
+
+    monkeypatch.setattr(PowerPointAutomation, "_configure_line", fail_after_naming)
+    with pytest.raises(PowerPointError, match="could not create the annotation"):
+        service.execute(PowerPointAction("draw_line", info, points=((10, 10), (40, 40))))
+    assert app.presentation.Slides.Item(1).Shapes.Count == 0
+
+
+def test_annotation_name_failure_rolls_back_newly_added_shape(control_automation, monkeypatch):
+    service, file, _, app, _, _ = control_automation
+    info = service.status(file)
+
+    def fail_name(_shape):
+        raise RuntimeError("Office refused shape naming")
+
+    monkeypatch.setattr(PowerPointAutomation, "_name_shape", fail_name)
+    with pytest.raises(PowerPointError, match="could not create the annotation"):
+        service.execute(PowerPointAction("draw_rectangle", info, region=Region(10, 10, 40, 40)))
+    assert app.presentation.Slides.Item(1).Shapes.Count == 0
 
 
 def test_erase_returns_native_pen_to_arrow_before_clearing_strokes(control_automation):

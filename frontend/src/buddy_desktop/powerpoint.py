@@ -14,6 +14,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, cast
 
@@ -58,17 +59,29 @@ class PowerPointAutomation:
         return name
 
     @classmethod
-    def _delete_named_shapes(cls, slide: Any, names: list[str]) -> None:
+    def _delete_named_shapes(cls, slide: Any, names: list[str]) -> list[str]:
+        """Delete named shapes and return names still present after attempted deletion."""
         shapes = slide.Shapes
+        requested = set(names)
+        found: dict[str, Any] = {}
+        for index in range(shapes.Count, 0, -1):
+            shape = shapes.Item(index)
+            name = str(shape.Name)
+            if name in requested:
+                found[name] = shape
+
         for name in reversed(names):
-            try:
-                shapes.Item(name).Delete()
-            except Exception:
-                # A user may have deleted a Buddy annotation directly in PowerPoint.
+            shape = found.get(name)
+            if shape is None:
+                # A presenter may have removed this annotation directly in PowerPoint.
                 continue
+            with suppress(Exception):
+                shape.Delete()
+        remaining = {str(shapes.Item(index).Name) for index in range(1, shapes.Count + 1)}
+        return [name for name in names if name in remaining]
 
     @classmethod
-    def _delete_all_managed_shapes(cls, slide: Any) -> None:
+    def _delete_all_managed_shapes(cls, slide: Any) -> list[str]:
         shapes = slide.Shapes
         names = []
         for index in range(shapes.Count, 0, -1):
@@ -76,7 +89,17 @@ class PowerPointAutomation:
             name = str(shape.Name)
             if name.startswith(cls._MANAGED_ANNOTATION_PREFIX):
                 names.append(name)
-        cls._delete_named_shapes(slide, names)
+        return cls._delete_named_shapes(slide, names)
+
+    def _retain_annotation_groups(
+        self, key: tuple[str, int, int, float, float], names: list[str]
+    ) -> None:
+        groups = self._annotation_groups.get(key)
+        if groups is None:
+            return
+        remaining = set(names)
+        groups[:] = [[name for name in group if name in remaining] for group in groups]
+        groups[:] = [group for group in groups if group]
 
     def _delete_managed_shapes_in_region(
         self, slide: Any, key: tuple[str, int, int, float, float], region: Any
@@ -100,7 +123,20 @@ class PowerPointAutomation:
                 and shape_bottom >= top
             ):
                 names.append(name)
-        self._delete_named_shapes(slide, names)
+        remaining = self._delete_named_shapes(slide, names)
+        attempted = set(names)
+        still_present = set(remaining) | {
+            name
+            for group in self._annotation_groups.get(key, [])
+            for name in group
+            if name not in attempted
+        }
+        self._retain_annotation_groups(key, list(still_present))
+        if remaining:
+            raise PowerPointError(
+                "PowerPoint could not erase every Buddy annotation in the selected area. "
+                "Remaining annotations are still tracked; retry the erase."
+            )
         groups = self._annotation_groups.get(key)
         if groups is not None:
             removed = set(names)
@@ -145,7 +181,8 @@ class PowerPointAutomation:
         """Create editable slide objects so Buddy can remove each annotation precisely."""
         shapes = slide.Shapes
         r = action.region
-        created: list[str] = []
+        created: list[Any] = []
+        names: list[str] = []
         try:
             if action.kind in {"draw_line", "draw_arrow", "draw_freehand", "draw_underline"}:
                 if action.kind == "draw_underline" and r is not None:
@@ -158,22 +195,23 @@ class PowerPointAutomation:
                 for index, (start, end) in enumerate(zip(points, points[1:], strict=False)):
                     validate_target()
                     line = shapes.AddLine(*start, *end)
+                    created.append(line)
                     name = cls._configure_line(
                         line,
                         action.color,
                         arrow=action.kind == "draw_arrow" and index == len(points) - 2,
                     )
-                    created.append(name)
+                    names.append(name)
             elif action.kind == "draw_rectangle" and r is not None:
                 validate_target()
                 shape = shapes.AddShape(1, r.x, r.y, r.width, r.height)  # msoShapeRectangle
-                created.append(
-                    cls._configure_box(shape, action.color, filled=False, transparency=1)
-                )
+                created.append(shape)
+                names.append(cls._configure_box(shape, action.color, filled=False, transparency=1))
             elif action.kind in {"draw_oval", "filled_oval"} and r is not None:
                 validate_target()
                 shape = shapes.AddShape(9, r.x, r.y, r.width, r.height)  # msoShapeOval
-                created.append(
+                created.append(shape)
+                names.append(
                     cls._configure_box(
                         shape,
                         action.color,
@@ -184,7 +222,8 @@ class PowerPointAutomation:
             elif action.kind in {"highlight_region", "filled_rectangle"} and r is not None:
                 validate_target()
                 shape = shapes.AddShape(1, r.x, r.y, r.width, r.height)
-                created.append(
+                created.append(shape)
+                names.append(
                     cls._configure_box(
                         shape, action.color, filled=True, transparency=action.fill_transparency
                     )
@@ -192,7 +231,8 @@ class PowerPointAutomation:
             elif action.kind == "text_box" and r is not None:
                 validate_target()
                 shape = shapes.AddTextbox(1, r.x, r.y, r.width, r.height)  # horizontal
-                created.append(cls._name_shape(shape))
+                created.append(shape)
+                names.append(cls._name_shape(shape))
                 shape.Fill.Transparency = 1
                 shape.Line.Visible = 0
                 shape.TextFrame.WordWrap = -1
@@ -202,7 +242,8 @@ class PowerPointAutomation:
             elif action.kind == "callout" and r is not None:
                 validate_target()
                 shape = shapes.AddCallout(2, r.x, r.y, r.width, r.height)  # msoCalloutTwo
-                created.append(cls._name_shape(shape))
+                created.append(shape)
+                names.append(cls._name_shape(shape))
                 shape.Fill.Transparency = 1
                 shape.Callout.Border = True
                 shape.TextFrame.TextRange.Text = action.text
@@ -211,14 +252,30 @@ class PowerPointAutomation:
                 shape.Line.ForeColor.RGB = action.color
             else:
                 raise PowerPointError("Unsupported PowerPoint annotation.")
-            return created
+            return names
         except Exception as exc:
-            cls._delete_named_shapes(slide, created)
+            cleanup_failed = False
+            for shape in reversed(created):
+                try:
+                    shape.Delete()
+                except Exception:
+                    cleanup_failed = True
             if isinstance(exc, PowerPointError):
+                if cleanup_failed:
+                    raise PowerPointError(
+                        f"{exc} A partially configured shape may remain on the slide; "
+                        "inspect it before retrying."
+                    ) from None
                 raise
             raise PowerPointError(
-                "PowerPoint could not create the annotation. Check the slide before retrying; "
-                "the action was not retried."
+                "PowerPoint could not create the annotation. "
+                + (
+                    "A partially configured shape may remain on the slide; inspect it before "
+                    "retrying. "
+                    if cleanup_failed
+                    else "Any partially created shapes were removed. "
+                )
+                + "The action was not retried."
             ) from None
 
     @staticmethod
@@ -611,15 +668,28 @@ class PowerPointAutomation:
                 # first so clearing removes the stroke layer before Buddy redraws.
                 view.PointerType = 1
                 view.EraseDrawing()
-                self._delete_all_managed_shapes(slide)
+                remaining = self._delete_all_managed_shapes(slide)
+                self._retain_annotation_groups(info.slide_key, remaining)
+                if remaining:
+                    raise PowerPointError(
+                        "PowerPoint could not erase every Buddy annotation. Remaining "
+                        "annotations are still tracked; retry the erase."
+                    )
                 self._annotation_groups.pop(info.slide_key, None)
             elif action.kind == "undo_annotation":
                 groups = self._annotation_groups.get(info.slide_key, [])
                 if not groups:
                     raise PowerPointError("There is no Buddy annotation to undo on this slide.")
-                self._delete_named_shapes(
-                    window.Presentation.Slides.Item(info.slide_index), groups.pop()
+                remaining = self._delete_named_shapes(
+                    window.Presentation.Slides.Item(info.slide_index), groups[-1]
                 )
+                if remaining:
+                    groups[-1] = remaining
+                    raise PowerPointError(
+                        "PowerPoint could not undo this annotation. It is still tracked; "
+                        "retry the undo."
+                    )
+                groups.pop()
             elif action.kind == "erase_region" and action.region is not None:
                 self._delete_managed_shapes_in_region(
                     window.Presentation.Slides.Item(info.slide_index), info.slide_key, action.region

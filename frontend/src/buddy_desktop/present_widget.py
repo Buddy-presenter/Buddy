@@ -448,6 +448,7 @@ class PresentWidget(Page):
                 "text_box",
                 "callout",
                 "undo_annotation",
+                "erase_region",
                 "erase_drawing",
                 "reset_view",
             }:
