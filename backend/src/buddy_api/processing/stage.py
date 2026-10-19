@@ -106,7 +106,10 @@ def _execute(
                 if os.environ.get("BUDDY_ENVIRONMENT") == "test" and isinstance(
                     response.get("diagnostic"), str
                 ):
-                    raise ExtractionError(f"pdf_inspection_failed:{response['diagnostic']}")
+                    print(
+                        "Test-only PDF stage diagnostic: " + response["diagnostic"],
+                        flush=True,
+                    )
                 raise ExtractionError("pdf_inspection_failed")
             return MetadataOutput.model_validate(response)
     finally:

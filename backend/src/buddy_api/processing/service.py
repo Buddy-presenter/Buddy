@@ -3,7 +3,6 @@
 import asyncio
 import hashlib
 import logging
-import os
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import timedelta
@@ -373,9 +372,6 @@ class Processor:
             # Never persist parser/provider exception text or arbitrary codes.
             code = (
                 exc.code
-                if os.environ.get("BUDDY_ENVIRONMENT") == "test"
-                and isinstance(exc, ExtractionError)
-                else exc.code
                 if isinstance(exc, ProviderFailure)
                 else "pdf_inspection_failed"
                 if isinstance(exc, ExtractionError)
