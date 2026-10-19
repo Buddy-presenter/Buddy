@@ -11,7 +11,6 @@ from buddy_api.analysis.provider import (
     ModelOutput,
     ModelSlide,
     ModelSummary,
-    ProviderFailure,
 )
 from buddy_api.analysis.rendering import render_manifest
 from buddy_api.extraction.runner import extract_pdf
@@ -65,7 +64,13 @@ def test_model_output_is_bound_to_verified_manifest_and_stable_action_ids():
     assert action.instance_id == second.slides[0].actions[0].instance_id
 
 
-def test_model_action_outside_verified_page_is_rejected():
+@pytest.mark.parametrize(
+    ("action_type", "x", "y", "width", "height"),
+    [("zoom_region", 0, 0, "page_width", 20), ("zoom_region", 0, 0, 1, 1)],
+)
+def test_unsafe_model_action_is_dropped_without_losing_analysis(
+    action_type, x, y, width, height
+):
     content = PDF.read_bytes()
     deck_id, job_id, extraction_id = uuid4(), uuid4(), uuid4()
     extraction = extract_pdf(BytesIO(content), source_revision="fixture-revision")
@@ -79,12 +84,16 @@ def test_model_action_outside_verified_page_is_rejected():
                 reason=None,
                 actions=(
                     ModelAction(
-                        type="zoom_region",
+                        type=action_type,
                         purpose="Focus on a region.",
-                        x=0,
-                        y=0,
-                        width=manifest.slides[index].source.width + 1,
-                        height=20,
+                        x=x,
+                        y=y,
+                        width=(
+                            manifest.slides[index].source.width + 1
+                            if width == "page_width"
+                            else width
+                        ),
+                        height=height,
                     ),
                 )
                 if index == 0
@@ -94,7 +103,10 @@ def test_model_action_outside_verified_page_is_rejected():
         ),
     )
 
-    with pytest.raises(ProviderFailure, match="provider_invalid_analysis"):
-        Processor._analysis_document(
-            generated, extraction, manifest, deck_id, job_id, extraction_id
-        )
+    document = Processor._analysis_document(
+        generated, extraction, manifest, deck_id, job_id, extraction_id
+    )
+
+    assert document.presentation_summary.text == "A short geometry presentation."
+    assert all(slide.summary.text for slide in document.slides)
+    assert all(not slide.actions for slide in document.slides)
