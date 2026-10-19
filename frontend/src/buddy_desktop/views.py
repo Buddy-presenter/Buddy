@@ -28,7 +28,7 @@ class StatePanel(QWidget):
         self.setObjectName("statePanel")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 4, 12, 4)
+        layout.setContentsMargins(22, 22, 22, 22)
         layout.setSpacing(10)
         self.title = QLabel()
         self.title.setObjectName("stateTitle")
@@ -58,7 +58,7 @@ class Page(QWidget):
         super().__init__()
         self.setAccessibleName(title)
         self.body = QVBoxLayout(self)
-        self.body.setContentsMargins(28, 24, 28, 24)
+        self.body.setContentsMargins(32, 28, 32, 28)
         self.body.setSpacing(18)
         heading = QLabel(title)
         heading.setObjectName("pageTitle")
@@ -67,104 +67,90 @@ class Page(QWidget):
         introduction.setObjectName("pageDescription")
         introduction.setWordWrap(True)
         introduction.setVisible(bool(description))
+        heading.setVisible(bool(title))
         self.body.addWidget(heading)
         self.body.addWidget(introduction)
 
 
 class HomePage(Page):
-    check_requested = Signal()
     route_requested = Signal(int)
 
     def __init__(self, api_url: str) -> None:
-        super().__init__("Your workspace", "")
-        welcome = QHBoxLayout()
-        self.mascot = BuddyMark(106)
-        welcome.addWidget(self.mascot)
-        greeting = QVBoxLayout()
-        badge = QLabel("BUDDY / DESKTOP")
+        super().__init__("", "")
+        self.setObjectName("homePage")
+        # Home is a starting point for work; account and service controls live in
+        # the profile popover and Settings, respectively.
+        self.body.addStretch(1)
+        hero = QWidget()
+        hero.setObjectName("homeHero")
+        hero_layout = QHBoxLayout(hero)
+        hero_layout.setContentsMargins(28, 30, 28, 30)
+        hero_layout.setSpacing(16)
+        copy = QVBoxLayout()
+        copy.setSpacing(14)
+        badge = QLabel("YOUR PRESENTATION COMPANION")
         badge.setObjectName("eyebrow")
-        greeting.addWidget(badge)
-        title = QLabel("Make yourself at home.")
-        title.setObjectName("sectionTitle")
+        copy.addWidget(badge)
+        title = QLabel("Less prep.\nMore presence.")
+        title.setObjectName("heroTitle")
         title.setWordWrap(True)
-        greeting.addWidget(title)
-        self.workspace_state = QLabel("No presentation selected")
-        self.workspace_state.setObjectName("muted")
+        copy.addWidget(title)
+        self.workspace_state = QLabel("A space for your slides. A companion for your moment.")
+        self.workspace_state.setObjectName("pageDescription")
         self.workspace_state.setWordWrap(True)
-        greeting.addWidget(self.workspace_state)
-        welcome.addLayout(greeting, 1)
-        self.body.addLayout(welcome)
-        actions = QGridLayout()
-        actions.setSpacing(12)
-        self.library_action = QPushButton("Presentation library")
-        self.present_action = QPushButton("Presentation studio")
-        for column, (button, image, route) in enumerate(
-            ((self.library_action, "library-big", 1), (self.present_action, "presentation", 2))
-        ):
-            button.setObjectName("workspaceAction")
-            command(button, image)
-            button.clicked.connect(lambda checked=False, row=route: self.route_requested.emit(row))
-            actions.addWidget(button, 0, column)
-        self.body.addLayout(actions)
-        self.account_slot = QWidget()
-        self.account_layout = QVBoxLayout(self.account_slot)
-        self.account_layout.setContentsMargins(0, 16, 0, 0)
-        self.connection_section = QWidget()
-        connection_layout = QVBoxLayout(self.connection_section)
-        connection_layout.setContentsMargins(0, 16, 0, 0)
-        section = QLabel("Connection")
+        copy.addWidget(self.workspace_state)
+        hero_layout.addLayout(copy, 1)
+        self.mascot = BuddyMark(144)
+        hero_layout.addWidget(self.mascot, alignment=Qt.AlignmentFlag.AlignVCenter)
+        self.body.addWidget(hero)
+        self.body.addSpacing(14)
+        section = QLabel("Where would you like to start?")
         section.setObjectName("sectionTitle")
-        connection_layout.addWidget(section)
-        self.connection = StatePanel()
-        self.connection.show_state(
-            "Connection not checked", "Check that your configured Buddy backend is available."
-        )
-        self.endpoint = QLabel(api_url)
-        self.endpoint.setWordWrap(True)
-        self.endpoint.setTextFormat(Qt.TextFormat.PlainText)
-        self.endpoint.setAccessibleName("Configured backend address")
-        self.endpoint.setObjectName("muted")
-        self.endpoint.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        self._endpoint_url = api_url
-        self.set_endpoint(api_url)
-        self.check = QPushButton("Check connection")
-        self.check.setAccessibleName("Check backend connection")
-        command(self.check, "wifi")
-        self.check.clicked.connect(self.check_requested.emit)
-        self.connection.retry_requested.connect(self.check_requested.emit)
-        connection_layout.addWidget(self.connection)
-        connection_layout.addWidget(self.endpoint)
-        connection_layout.addWidget(self.check, alignment=Qt.AlignmentFlag.AlignLeft)
-        connection_layout.addStretch()
-        self.sections = QGridLayout()
-        self.sections.setHorizontalSpacing(32)
-        self.sections.addWidget(self.account_slot, 0, 0)
-        self.sections.addWidget(self.connection_section, 0, 1)
-        self.sections.setColumnStretch(0, 3)
-        self.sections.setColumnStretch(1, 2)
-        self.body.addLayout(self.sections)
-        self.body.addStretch()
-
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        super().resizeEvent(event)
-        narrow = self.width() < 760
-        position = self.sections.getItemPosition(self.sections.indexOf(self.connection_section))
-        assert isinstance(position, tuple)
-        if position[:2] != ((1, 0) if narrow else (0, 1)):
-            self.sections.removeWidget(self.connection_section)
-            self.sections.addWidget(self.connection_section, 1 if narrow else 0, 0 if narrow else 1)
-            self.sections.setColumnStretch(1, 0 if narrow else 2)
-        self.set_endpoint(self._endpoint_url)
-
-    def set_endpoint(self, url: str) -> None:
-        self._endpoint_url = url
-        self.endpoint.setToolTip(url)
-        self.endpoint.setAccessibleDescription(url)
-        self.endpoint.setText(
-            self.endpoint.fontMetrics().elidedText(
-                url, Qt.TextElideMode.ElideMiddle, max(1, self.endpoint.width())
+        self.body.addWidget(section)
+        actions = QGridLayout()
+        actions.setSpacing(16)
+        self.library_action = QPushButton("Go to library")
+        self.present_action = QPushButton("Open workspace")
+        for column, (button, image, route, card_title, description) in enumerate(
+            (
+                (
+                    self.library_action,
+                    "library-big",
+                    1,
+                    "Your presentations",
+                    "Import and keep your PDF and PowerPoint decks in one place.",
+                ),
+                (
+                    self.present_action,
+                    "presentation",
+                    2,
+                    "Take the stage",
+                    "Open a local PDF and present. No account needed.",
+                ),
             )
-        )
+        ):
+            card = QWidget()
+            card.setObjectName("startCard")
+            card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            content = QVBoxLayout(card)
+            content.setContentsMargins(22, 22, 22, 22)
+            content.setSpacing(12)
+            label = QLabel(card_title)
+            label.setObjectName("sectionTitle")
+            content.addWidget(label)
+            detail = QLabel(description)
+            detail.setObjectName("muted")
+            detail.setWordWrap(True)
+            content.addWidget(detail)
+            content.addStretch()
+            command(button, image)
+            button.setObjectName("quietButton")
+            button.clicked.connect(lambda checked=False, row=route: self.route_requested.emit(row))
+            content.addWidget(button, alignment=Qt.AlignmentFlag.AlignLeft)
+            actions.addWidget(card, 0, column)
+            actions.setColumnStretch(column, 1)
+        self.body.addLayout(actions)
+        self.body.addStretch(2)
 
 
 class UnavailablePage(Page):
@@ -178,10 +164,18 @@ class UnavailablePage(Page):
 
 class SettingsPage(Page):
     save_requested = Signal(str)
+    check_requested = Signal()
 
     def __init__(self, api_url: str, *, environment_override: bool) -> None:
         super().__init__("Settings", "")
-        heading = QLabel("Backend connection")
+        appearance = QLabel("Appearance")
+        appearance.setObjectName("sectionTitle")
+        self.body.addWidget(appearance)
+        self.reduce_motion = QCheckBox("Reduce motion")
+        self.reduce_motion.setAccessibleName("Reduce mascot motion")
+        self.body.addWidget(self.reduce_motion)
+        self.body.addSpacing(16)
+        heading = QLabel("Service connection")
         heading.setObjectName("sectionTitle")
         self.body.addWidget(heading)
         self.url = QLineEdit(api_url)
@@ -211,10 +205,36 @@ class SettingsPage(Page):
         self.feedback.setAccessibleName("Settings status")
         self.feedback.setTextFormat(Qt.TextFormat.PlainText)
         self.body.addWidget(self.feedback)
-        appearance = QLabel("Appearance")
-        appearance.setObjectName("sectionTitle")
-        self.body.addWidget(appearance)
-        self.reduce_motion = QCheckBox("Reduce motion")
-        self.reduce_motion.setAccessibleName("Reduce mascot motion")
-        self.body.addWidget(self.reduce_motion)
+        self.connection = StatePanel()
+        self.connection.show_state(
+            "Connection not checked", "Check the service if you are having trouble syncing."
+        )
+        self.connection.retry_requested.connect(self.check_requested.emit)
+        self.body.addWidget(self.connection)
+        self.endpoint = QLabel()
+        self.endpoint.setObjectName("muted")
+        self.endpoint.setTextFormat(Qt.TextFormat.PlainText)
+        self.endpoint.setAccessibleName("Configured backend address")
+        self.endpoint.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.body.addWidget(self.endpoint)
+        self._endpoint_url = api_url
+        self.set_endpoint(api_url)
+        self.check = QPushButton("Check connection")
+        command(self.check, "wifi")
+        self.check.clicked.connect(self.check_requested.emit)
+        self.body.addWidget(self.check, alignment=Qt.AlignmentFlag.AlignLeft)
         self.body.addStretch()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self.set_endpoint(self._endpoint_url)
+
+    def set_endpoint(self, url: str) -> None:
+        self._endpoint_url = url
+        self.endpoint.setToolTip(url)
+        self.endpoint.setAccessibleDescription(url)
+        self.endpoint.setText(
+            self.endpoint.fontMetrics().elidedText(
+                url, Qt.TextElideMode.ElideMiddle, max(1, self.endpoint.width())
+            )
+        )

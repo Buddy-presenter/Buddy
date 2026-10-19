@@ -58,6 +58,7 @@ class LibraryWidget(QWidget):
     present_requested = Signal(object)
     private_invalidated = Signal()
     upload_progress = Signal(object, str, int, int)
+    signin_requested = Signal()
 
     def __init__(self, config: AppConfig, account: AccountWidget) -> None:
         super().__init__()
@@ -85,12 +86,17 @@ class LibraryWidget(QWidget):
         self.retry_path: Path | None = None
         self.upload_progress.connect(self.update_upload_progress)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setContentsMargins(32, 28, 32, 28)
         layout.setSpacing(18)
         heading = QLabel("Library")
         heading.setObjectName("pageTitle")
         layout.addWidget(heading)
-        controls = QHBoxLayout()
+        description = QLabel("Your decks, ready for their next moment.")
+        description.setObjectName("pageDescription")
+        layout.addWidget(description)
+        self.toolbar = QWidget()
+        controls = QHBoxLayout(self.toolbar)
+        controls.setContentsMargins(0, 0, 0, 0)
         search_label = QLabel("&Search")
         self.search = QLineEdit()
         self.search.setMaxLength(256)
@@ -98,7 +104,7 @@ class LibraryWidget(QWidget):
         self.search.setAccessibleName("Search decks")
         self.search.addAction(icon("search"), QLineEdit.ActionPosition.LeadingPosition)
         search_label.setBuddy(self.search)
-        controls.addWidget(search_label)
+        search_label.hide()
         controls.addWidget(self.search, 1)
         self.sort = QComboBox()
         self.sort.setAccessibleName("Sort decks")
@@ -119,19 +125,21 @@ class LibraryWidget(QWidget):
         self.refresh.setToolTip("Refresh library")
         self.refresh.clicked.connect(self.reload)
         controls.addWidget(self.refresh)
-        layout.addLayout(controls)
-        actions = QHBoxLayout()
+        layout.addWidget(self.toolbar)
+        self.selection_actions = QWidget()
+        actions = QHBoxLayout(self.selection_actions)
+        actions.setContentsMargins(0, 0, 0, 0)
         self.upload_button = QPushButton("Upload PDF or PPTX…")
         command(self.upload_button, "folder-open", primary=True)
         self.upload_button.clicked.connect(self.choose_upload)
-        actions.addWidget(self.upload_button)
+        controls.addWidget(self.upload_button)
         self.open_button = QPushButton("Present PDF")
         command(self.open_button, "presentation")
         self.open_button.setEnabled(False)
         self.open_button.clicked.connect(self.open_selected)
         actions.addWidget(self.open_button)
         actions.addStretch()
-        layout.addLayout(actions)
+        # Presentation action follows the selected deck details.
         self.upload_panel = QWidget()
         upload_layout = QVBoxLayout(self.upload_panel)
         upload_layout.setContentsMargins(0, 0, 0, 0)
@@ -163,6 +171,13 @@ class LibraryWidget(QWidget):
         self.state.retry.setAccessibleName("Retry library request")
         self.state.retry_requested.connect(self.reload)
         layout.addWidget(self.state)
+        self.signin_button = QPushButton("Sign in to Buddy")
+        command(self.signin_button, "log-in", primary=True)
+        self.signin_button.clicked.connect(self.signin_requested.emit)
+        state_layout = self.state.layout()
+        assert isinstance(state_layout, QVBoxLayout)
+        state_layout.addWidget(self.signin_button)
+
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["Deck", "Status", "Created", "Format"])
         self.table.setAccessibleName("Saved presentations")
@@ -195,9 +210,12 @@ class LibraryWidget(QWidget):
         self.detail.setFrameShape(QPlainTextEdit.Shape.NoFrame)
         self.detail.setAccessibleName("Selected deck processing status")
         layout.addWidget(self.detail)
+        layout.addWidget(self.selection_actions)
         self.empty_space = QWidget()
         layout.addWidget(self.empty_space, 1)
-        pager = QHBoxLayout()
+        self.pager = QWidget()
+        pager = QHBoxLayout(self.pager)
+        pager.setContentsMargins(0, 0, 0, 0)
         self.previous = QPushButton("&Previous")
         self.next = QPushButton("&Next")
         for button, standard_icon, tooltip in [
@@ -221,7 +239,7 @@ class LibraryWidget(QWidget):
         pager.addWidget(self.previous)
         pager.addWidget(self.count, 1)
         pager.addWidget(self.next)
-        layout.addLayout(pager)
+        layout.addWidget(self.pager)
         self.table.currentCellChanged.connect(self.selection_changed)
         self.debounce = QTimer(self)
         self.debounce.setSingleShot(True)
@@ -247,6 +265,7 @@ class LibraryWidget(QWidget):
         self.table.hide()
         self.detail.clear()
         self.detail.hide()
+        self.selection_actions.hide()
         self.empty_space.show()
         self.count.clear()
         self.last_page = None
@@ -295,14 +314,23 @@ class LibraryWidget(QWidget):
             self.page = 1
             self.upload_keys.clear()
         self.account_key = key
+        self._access_layout()
         self.refresh.setEnabled(self.token() is not None)
         self.upload_button.setEnabled(self.token() is not None and not self.runner.busy)
         if not self.token():
             self.state.show_state(
-                "Sign in to view your decks", "Account access is available on Home."
+                "Sign in to view your decks",
+                "Keep your presentations together and access your private library.",
             )
         elif self.active:
             self.reload()
+
+    def _access_layout(self) -> None:
+        signed_in = bool(self.account.session and self.account.session.tokens)
+        self.toolbar.setVisible(signed_in)
+        self.pager.setVisible(signed_in)
+        self.signin_button.setVisible(not signed_in)
+        self.signin_button.setEnabled(not self.account_busy)
 
     def activate(self, active: bool) -> None:
         self.active = active
@@ -327,10 +355,12 @@ class LibraryWidget(QWidget):
             return
         self.invalidate()
         access = self.token()
+        self._access_layout()
         if access is None:
             self.refresh.setEnabled(False)
             self.state.show_state(
-                "Sign in to view your decks", "Sign in or resume your session on Home."
+                "Sign in to view your decks",
+                "Keep your presentations together and access your private library.",
             )
             self.account.check_session()
             return
@@ -444,6 +474,7 @@ class LibraryWidget(QWidget):
                     self.table.setItem(row, column, item)
             self.table.show()
             self.detail.show()
+            self.selection_actions.show()
             self.empty_space.hide()
             self.table.selectRow(0)
             self.selection_changed()

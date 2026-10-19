@@ -91,13 +91,12 @@ def test_routes_fit_and_commands_have_accessible_names(desktop_window, qtbot, th
     assert window.present.coordinates_button.isChecked()
     themed.processEvents()
     assert window.pages.currentWidget().horizontalScrollBar().maximum() == 0
+    previous_route = window.pages.currentIndex()
     qtbot.mouseClick(window.account_button, Qt.MouseButton.LeftButton)
-    assert window.pages.currentIndex() == 4
-    qtbot.mouseClick(window.profile.controls, Qt.MouseButton.LeftButton)
-    assert window.pages.currentIndex() == 0
-    scroll = window.pages.currentWidget()
-    account_position = window.account.mapTo(scroll.viewport(), window.account.rect().topLeft())
-    assert account_position.y() < scroll.viewport().height()
+    assert window.account_popover.isVisible()
+    assert window.pages.currentIndex() == previous_route
+    qtbot.keyClick(window.account_popover, Qt.Key.Key_Escape)
+    assert not window.account_popover.isVisible()
 
 
 def test_activity_reduced_motion_visibility_and_persistence(desktop_window, qtbot, themed):
@@ -140,17 +139,18 @@ def test_connection_header_tracks_real_request(desktop_window, qtbot, backend, t
     assert window.connection_status.text() == "Connection not checked"
 
 
-def test_long_endpoint_does_not_widen_home(desktop_window, themed):
+def test_long_endpoint_does_not_widen_settings(desktop_window, themed):
     url = "https://buddy.example/" + "x" * 400
     window = desktop_window(url)
+    window.navigation.setCurrentRow(3)
     window.resize(800, 600)
     themed.processEvents()
     themed.processEvents()
     assert window.width() == 800
     assert window.pages.currentWidget().horizontalScrollBar().maximum() == 0
-    assert window.home.endpoint.toolTip() == url
-    assert window.home.endpoint.accessibleDescription() == url
-    assert len(window.home.endpoint.text()) < len(url)
+    assert window.preferences.endpoint.toolTip() == url
+    assert window.preferences.endpoint.accessibleDescription() == url
+    assert len(window.preferences.endpoint.text()) < len(url)
 
 
 @pytest.mark.parametrize("size", [(800, 600), (1200, 800)])

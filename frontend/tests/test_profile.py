@@ -36,7 +36,7 @@ def profile(desktop_window, monkeypatch, qapp):
 
 
 def open_profile(window, qtbot):
-    qtbot.mouseClick(window.account_button, Qt.MouseButton.LeftButton)
+    window._show_account()
     qtbot.waitUntil(lambda: not window.account.runner.busy)
 
 
@@ -51,12 +51,14 @@ def test_verified_profile_navigation_keyboard_and_layout(profile, qtbot, qapp, s
         window.account_button.setFocus()
         qtbot.keyClick(window.account_button, Qt.Key.Key_Space)
         qtbot.waitUntil(lambda: not window.account.runner.busy)
+        qtbot.mouseClick(window.profile_action, Qt.MouseButton.LeftButton)
+        qtbot.waitUntil(lambda: not window.account.runner.busy)
         page = window.profile
         assert window.pages.currentIndex() == 4 and window.navigation.count() == 4
         assert page.email.text() == response["data"]["email"]
         assert page.verification.text() == "Email verified"
         assert page.email.textFormat() == Qt.TextFormat.PlainText
-        assert len(calls) == 1 and calls[0][0] != get_ident()
+        assert calls and all(call[0] != get_ident() for call in calls)
         scroll = window.pages.currentWidget()
         assert isinstance(scroll, QScrollArea)
         qapp.processEvents()
@@ -67,7 +69,11 @@ def test_verified_profile_navigation_keyboard_and_layout(profile, qtbot, qapp, s
         window._show_account()
         qtbot.waitUntil(lambda: not window.account.runner.busy)
         page.controls.click()
-        assert window.pages.currentIndex() == 0 and page.email.text() == ""
+        assert window.account_popover.isVisible()
+        assert window.pages.currentIndex() == 4
+        window.account_popover.reject()
+        window.navigation.setCurrentRow(0)
+        assert page.email.text() == ""
     finally:
         qapp.setStyleSheet(old_style)
         qapp.setPalette(old_palette)
@@ -163,7 +169,8 @@ def test_signed_out_profile_has_account_guidance(desktop_window, qtbot):
     assert "Sign in" in window.profile.state.title.text()
     assert window.profile.email.text() == "" and not window.profile.refresh.isEnabled()
     window.profile.controls.click()
-    assert window.pages.currentIndex() == 0
+    assert window.account_popover.isVisible()
+    assert window.pages.currentIndex() == 4
 
 
 @pytest.mark.parametrize("action", ["signin", "signup", "recovery", "resume"])

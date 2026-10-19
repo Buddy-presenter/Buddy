@@ -2,9 +2,10 @@
 
 from dataclasses import replace
 
-from PySide6.QtCore import QByteArray, QSettings, QSize, Slot
+from PySide6.QtCore import QByteArray, QSettings, QSize, Qt, Slot
 from PySide6.QtGui import QAction, QCloseEvent, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
+    QDialog,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from buddy_desktop.account_widget import AccountWidget
+from buddy_desktop.auth import AccountProfile
 from buddy_desktop.config import AppConfig, ConfigurationError, validate_api_url
 from buddy_desktop.library_widget import LibraryWidget
 from buddy_desktop.present_widget import PresentWidget
@@ -46,6 +48,7 @@ class MainWindow(QMainWindow):
         self._active_task: int | None = None
         self._account_busy = False
         self._library_busy = False
+        self._verified_profile: AccountProfile | None = None
         self.runner = TaskRunner(self)
         self.runner.succeeded.connect(self._health_succeeded)
         self.runner.failed.connect(self._health_failed)
@@ -106,11 +109,10 @@ class MainWindow(QMainWindow):
         self.present.executor.completed.connect(self._presentation_completed)
         self.present.executor.idle.connect(self._present_idle)
         self.library.activity_changed.connect(self._library_activity)
-        self.home.account_layout.addWidget(self.account)
         self.home.route_requested.connect(self._select_route)
-        self.home.check_requested.connect(self.check_connection)
         self.preferences = SettingsPage(config.api_url, environment_override=environment_override)
         self.preferences.save_requested.connect(self.save_settings)
+        self.preferences.check_requested.connect(self.check_connection)
         self.preferences.reduce_motion.setChecked(
             bool(settings.value("appearance/reduce_motion", False, type=bool))
         )
@@ -144,13 +146,43 @@ class MainWindow(QMainWindow):
         header_layout.addStretch()
         self.connection_status = QLabel("Connection not checked")
         self.connection_status.setObjectName("connectionStatus")
-        header_layout.addWidget(self.connection_status)
+        self.connection_status.hide()
+        self.preferences.body.insertWidget(3, self.connection_status)
         self.activity_mark = BuddyMark(24)
         header_layout.addWidget(self.activity_mark)
         self.account_button = QPushButton("Account")
-        command(self.account_button, "circle-user-round", compact=True)
-        self.account_button.clicked.connect(self._show_account)
+        command(self.account_button, "circle-user-round")
+        self.account_button.setObjectName("accountButton")
+        self.account_button.clicked.connect(self._show_account_controls)
         header_layout.addWidget(self.account_button)
+        self.account_popover = QDialog(self, Qt.WindowType.Popup)
+        self.account_popover.setObjectName("accountPopover")
+        self.account_popover.setAccessibleName("Buddy account")
+        self.account_popover.setFixedWidth(340)
+        popover_layout = QVBoxLayout(self.account_popover)
+        popover_layout.setContentsMargins(24, 20, 24, 20)
+        popover_layout.setSpacing(16)
+        popover_header = QHBoxLayout()
+        self.account_title = QLabel("Welcome to Buddy")
+        self.account_title.setObjectName("sectionTitle")
+        self.account_title.setWordWrap(True)
+        self.account_title.setTextFormat(Qt.TextFormat.PlainText)
+        popover_header.addWidget(self.account_title, 1)
+        close_account = QPushButton("Close account menu")
+        command(close_account, "x", compact=True)
+        close_account.setObjectName("quietButton")
+        close_account.clicked.connect(self.account_popover.reject)
+        popover_header.addWidget(close_account)
+        popover_layout.addLayout(popover_header)
+        popover_layout.addWidget(self.account)
+        self.profile_action = QPushButton("View your profile")
+        command(self.profile_action, "circle-user-round")
+        self.profile_action.clicked.connect(self._show_account)
+        popover_layout.addWidget(self.profile_action)
+        self.account.session_changed.connect(self._account_identity)
+        self.account.profile_loaded.connect(self._profile_identity)
+        self._account_identity()
+        self.library.signin_requested.connect(self._show_account_controls)
         workspace_layout.addWidget(header)
         workspace_layout.addWidget(self.pages, 1)
         layout.addWidget(workspace, 1)
@@ -160,7 +192,8 @@ class MainWindow(QMainWindow):
         self.navigation.setCurrentRow(0)
         self._create_menu()
         self.statusBar().setAccessibleName("Application status")
-        self.statusBar().showMessage("Ready")
+        self.statusBar().setSizeGripEnabled(False)
+        self.statusBar().hide()
         geometry = settings.value("window/geometry")
         if isinstance(geometry, QByteArray):
             self.restoreGeometry(geometry)
@@ -214,16 +247,60 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _show_account(self) -> None:
+        self.account_popover.hide()
         self.navigation.setCurrentRow(-1)
         self.navigate(4)
         self.profile.controls.setFocus()
 
     @Slot()
     def _show_account_controls(self) -> None:
-        self._select_route(0)
-        scroll = self.pages.widget(0)
-        if isinstance(scroll, QScrollArea):
-            scroll.ensureWidgetVisible(self.account)
+        if self.account_popover.isVisible():
+            self.account_popover.hide()
+            return
+        self._account_identity()
+        self.account_popover.adjustSize()
+        anchor = self.account_button.mapToGlobal(self.account_button.rect().bottomRight())
+        screen = self.account_button.screen().availableGeometry()
+        self.account_popover.move(
+            max(
+                screen.left(),
+                min(
+                    anchor.x() - self.account_popover.width(),
+                    screen.right() - self.account_popover.width(),
+                ),
+            ),
+            max(screen.top(), min(anchor.y() + 8, screen.bottom() - self.account_popover.height())),
+        )
+        if self.account.account_id and not self.account.runner.busy and not self._verified_profile:
+            self.account.start("profile")
+        self.account_popover.show()
+        self.account_popover.activateWindow()
+        target = self.profile_action if self.account.account_id else self.account.buttons["signin"]
+        target.setFocus()
+
+    def _account_identity(self) -> None:
+        signed_in = bool(self.account.account_id)
+        self.account_button.setText("My account" if signed_in else "Sign in")
+        self.account_button.setAccessibleName("Open your profile menu" if signed_in else "Sign in")
+        self.account_button.setToolTip(self.account_button.accessibleName())
+        self.profile_action.setVisible(signed_in)
+        # Never retain an email across sign-out, expiry, or backend changes.
+        if not signed_in or (
+            self._verified_profile and self._verified_profile.id != self.account.account_id
+        ):
+            self._verified_profile = None
+        email = self._verified_profile.email if self._verified_profile else ""
+        self.account_title.setText(email or ("Your account" if signed_in else "Welcome to Buddy"))
+        self.account_title.setToolTip(email)
+        self.account_button.setText(
+            email[0].upper() if email else "My account" if signed_in else "Sign in"
+        )
+        self.account_button.setToolTip(email or self.account_button.accessibleName())
+
+    def _profile_identity(self, _identifier: int, profile: object) -> None:
+        if isinstance(profile, AccountProfile) and profile.id == self.account.account_id:
+            self._verified_profile = profile
+            self._account_identity()
 
     @Slot(int)
     def navigate(self, index: int) -> None:
@@ -251,11 +328,11 @@ class MainWindow(QMainWindow):
     def check_connection(self) -> None:
         if self.runner.busy or self._closing:
             return
-        self.home.connection.show_state("Connecting…", "Checking your Buddy backend.")
+        self.preferences.connection.show_state("Connecting…", "Checking your Buddy backend.")
         self.connection_status.setText("Checking connection")
         self.activity_mark.set_activity(True)
         self.home.mascot.set_activity(True)
-        self.home.check.setEnabled(False)
+        self.preferences.check.setEnabled(False)
         self.preferences.save.setEnabled(False)
         self.statusBar().showMessage("Checking backend connection…")
         self._active_task = self.runner.submit(HealthService(self.config).check)
@@ -267,7 +344,9 @@ class MainWindow(QMainWindow):
         if not isinstance(result, Health):
             self._health_failed(identifier, "The service returned an unsupported result.")
             return
-        self.home.connection.show_state("Backend connected", "Your Buddy service reports healthy.")
+        self.preferences.connection.show_state(
+            "Backend connected", "Your Buddy service reports healthy."
+        )
         self.connection_status.setText("Backend connected")
         self.statusBar().showMessage("Backend connected.")
 
@@ -275,7 +354,7 @@ class MainWindow(QMainWindow):
     def _health_failed(self, identifier: int, message: str) -> None:
         if identifier != self._active_task or self._closing:
             return
-        self.home.connection.show_state("Connection unavailable", message, retry=True)
+        self.preferences.connection.show_state("Connection unavailable", message, retry=True)
         self.connection_status.setText("Connection unavailable")
         self.statusBar().showMessage(message)
 
@@ -287,7 +366,7 @@ class MainWindow(QMainWindow):
         if self._closing:
             self.close()
         else:
-            self.home.check.setEnabled(True)
+            self.preferences.check.setEnabled(True)
             self.preferences.save.setEnabled(
                 not self.environment_override
                 and not self.account.runner.busy
@@ -297,6 +376,12 @@ class MainWindow(QMainWindow):
     @Slot(bool)
     def _account_activity(self, busy: bool) -> None:
         self._account_busy = busy
+        if busy and self.account.operation != "profile":
+            self._verified_profile = None
+            self.account_button.setText("Account")
+            self.account_button.setToolTip("Account operation in progress")
+            self.account_title.setText("Checking account…")
+            self.account_title.setToolTip("")
         self._update_activity()
         self.preferences.save.setEnabled(
             not busy
@@ -359,9 +444,9 @@ class MainWindow(QMainWindow):
         self.account.configure(url)
         self.library.configure(self.config)
         self.preferences.url.setText(url)
-        self.home.set_endpoint(url)
+        self.preferences.set_endpoint(url)
         self.connection_status.setText("Connection not checked")
-        self.home.connection.show_state(
+        self.preferences.connection.show_state(
             "Connection not checked", "Check the updated backend address."
         )
         self.preferences.feedback.setText("Backend settings saved.")
@@ -375,6 +460,7 @@ class MainWindow(QMainWindow):
             self.move(screens[0].availableGeometry().topLeft())
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self.account_popover.hide()
         self.profile.activate(False)
         self.account.shutdown()
         self.library.shutdown()

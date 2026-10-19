@@ -39,6 +39,6 @@ def test_service_error_is_delivered_without_blocking_event_loop(
     backend.release.set()
     assert "denied access" in failure()[0][1]
     qtbot.waitUntil(lambda: not window.runner.busy)
-    assert window.home.check.isEnabled()
+    assert window.preferences.check.isEnabled()
     window.close()
     qtbot.waitUntil(lambda: not window.isVisible())

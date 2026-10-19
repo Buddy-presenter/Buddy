@@ -43,13 +43,10 @@ class ProfilePage(Page):
         self.verification.setAccessibleName("Email verification status")
         self.verification.setWordWrap(True)
         self.body.addWidget(self.verification)
-        guidance = QLabel(
-            "To sign out, sign in again, or recover your password, "
-            "open the existing account controls."
-        )
+        guidance = QLabel("Manage sign-in and sign-out from your account menu.")
         guidance.setWordWrap(True)
         self.body.addWidget(guidance)
-        self.controls = QPushButton("Account controls")
+        self.controls = QPushButton("Manage account")
         command(self.controls, "circle-user-round")
         self.controls.clicked.connect(self.controls_requested.emit)
         self.body.addWidget(self.controls, alignment=Qt.AlignmentFlag.AlignLeft)
@@ -91,7 +88,8 @@ class ProfilePage(Page):
         self.waiting = False
         if not self.account.account_id:
             self.state.show_state(
-                "Sign in to view your profile", "Open Account controls to sign in."
+                "Sign in to view your profile",
+                "Use the account menu in the top-right corner to sign in.",
             )
             self.refresh.setEnabled(False)
             return
