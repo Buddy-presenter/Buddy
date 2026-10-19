@@ -1,7 +1,9 @@
 """Import interaction, real isolated PDF previews and private-state lifecycle."""
 
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
+from uuid import UUID
 
 import pytest
 from frontend.tests.test_library import signed_in
@@ -10,7 +12,7 @@ from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt, QUrl
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QImage
 
 from buddy_desktop.import_surface import ImportPreview, dropped_path
-from buddy_desktop.library_service import LibraryPage, LibraryService
+from buddy_desktop.library_service import DeckSummary, LibraryPage, LibraryService
 from buddy_desktop.visuals import BuddyMark, apply_theme
 
 
@@ -183,7 +185,25 @@ def test_signed_out_drop_does_not_start_upload(desktop_window):
 def test_pdf_import_card_with_real_previews_and_upload(
     upload_http, desktop_window, qtbot, monkeypatch, qapp, size
 ):
-    monkeypatch.setattr(LibraryService, "list", lambda *a, **kw: LibraryPage((), 0, 1, 20))
+    def listing(*args, **kwargs):
+        rows = (
+            ()
+            if upload_http.record["status"] != "complete"
+            else (
+                DeckSummary(
+                    UUID(upload_http.record["deck"]["id"]),
+                    FIXTURE.stem,
+                    datetime.now(UTC),
+                    "uploaded",
+                    0,
+                    "pdf",
+                    True,
+                ),
+            )
+        )
+        return LibraryPage(rows, len(rows), 1, 20)
+
+    monkeypatch.setattr(LibraryService, "list", listing)
     palette, stylesheet = qapp.palette(), qapp.styleSheet()
     apply_theme(qapp)
     try:
@@ -214,6 +234,10 @@ def test_pdf_import_card_with_real_previews_and_upload(
         assert "Presentation saved" in library.upload_status.text()
         qapp.processEvents()
         assert window.grab().save(str(destination / f"pdf-saved-{size[0]}.png"))
+        assert library.dismiss_upload_button.isVisible()
+        library.dismiss_upload_button.click()
+        assert not library.upload_panel.isVisible() and not library.preview.images
+        assert library.table.rowCount() == 1
     finally:
         upload_http.release.set()
         qapp.setStyleSheet(stylesheet)

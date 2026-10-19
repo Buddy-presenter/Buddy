@@ -8,7 +8,7 @@ deck/revision; Buddy never overwrites or silently converts the PPTX.
 
 ## Desktop flow
 
-Sign in, open Library, and choose **Upload PDF or PPTX…**. Files use the existing upload
+Sign in, open Library, and choose **Choose presentation**. Files use the existing upload
 reservation, checksums, quotas and private API transport. Select a saved PDF and choose
 **Present PDF**. Availability to present is separate from processing/analysis status:
 a PDF can be presented while its status is Awaiting processing. A saved PPTX explains

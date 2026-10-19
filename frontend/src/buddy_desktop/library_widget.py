@@ -167,6 +167,11 @@ class LibraryWidget(QWidget):
         for button in (self.cancel_upload_button, self.retry_upload_button):
             button.setAccessibleName(button.text())
             upload_actions.addWidget(button)
+        self.dismiss_upload_button = QPushButton("Dismiss")
+        command(self.dismiss_upload_button, "x")
+        self.dismiss_upload_button.clicked.connect(self.dismiss_import)
+        self.dismiss_upload_button.hide()
+        upload_actions.addWidget(self.dismiss_upload_button)
         upload_actions.addStretch()
         upload_layout.addLayout(upload_actions)
         self.preview = ImportPreview()
@@ -410,6 +415,8 @@ class LibraryWidget(QWidget):
                 self.mascot_changed.emit("success")
                 self.upload_bar.setRange(0, 100)
                 self.upload_bar.setValue(100)
+                self.upload_bar.hide()
+                self.dismiss_upload_button.show()
                 self.retry_path = None
                 self.retry_upload_button.hide()
         if not self.current():
@@ -579,6 +586,7 @@ class LibraryWidget(QWidget):
         self.cancel_upload_button.show()
         self.cancel_upload_button.setEnabled(True)
         self.retry_upload_button.hide()
+        self.dismiss_upload_button.hide()
 
         def upload(service: PresentationService) -> object:
             self.upload_service = service
@@ -597,6 +605,10 @@ class LibraryWidget(QWidget):
     def retry_upload(self) -> None:
         if self.retry_path is not None:
             self.start_upload(self.retry_path)
+
+    def dismiss_import(self) -> None:
+        if not self.runner.busy:
+            self.clear_upload(clear_keys=False)
 
     def cancel_upload(self) -> None:
         if self.upload_cancelled is not None:

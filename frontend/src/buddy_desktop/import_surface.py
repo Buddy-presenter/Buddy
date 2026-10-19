@@ -236,9 +236,7 @@ class ImportPreview(QWidget):
         label.setToolTip(f"Slide {index + 1} of {count}")
         self.images.append(label)
         self.row.addWidget(label, 1)
-        self.title.setText(
-            f"{count} slides · local preview · showing {len(self.images)} of {min(3, count)}"
-        )
+        self.title.setText(f"Slide preview · {len(self.images)} of {count} slides")
 
     def failed(self, _identifier: int, message: str) -> None:
         if not self.cancelled.is_set():
