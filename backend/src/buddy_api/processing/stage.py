@@ -136,9 +136,8 @@ def main() -> int:
         result = '{"error":"storage_unavailable"}'
     except Exception as exc:
         if os.environ.get("BUDDY_ENVIRONMENT") == "test":
-            result = json.dumps(
-                {"error": "pdf_inspection_failed", "diagnostic": type(exc).__name__}
-            )
+            diagnostic = exc.code if isinstance(exc, ExtractionError) else type(exc).__name__
+            result = json.dumps({"error": "pdf_inspection_failed", "diagnostic": diagnostic})
         else:
             result = '{"error":"pdf_inspection_failed"}'
     finally:
