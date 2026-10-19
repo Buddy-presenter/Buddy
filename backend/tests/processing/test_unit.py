@@ -1,6 +1,7 @@
 import subprocess
 import sys
 import time
+from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
@@ -30,7 +31,14 @@ def test_envelope_has_no_untrusted_source_or_stage():
             job_id="10000000-0000-0000-0000-000000000001", generation=0, source_key="other-owner"
         )
     with pytest.raises(ValidationError):
-        PDFSource(key="source", version="version", size=2**30, sha256="a" * 64, revision="v1")
+        PDFSource(
+            key="source",
+            version="version",
+            size=2**30,
+            sha256="a" * 64,
+            revision="v1",
+            deck_id=UUID("10000000-0000-0000-0000-000000000001"),
+        )
 
 
 def test_health_requires_fresh_real_runtime_tick(monkeypatch, tmp_path):
@@ -98,7 +106,14 @@ def test_whole_stage_timeout_kills_process_and_removes_its_scratch(monkeypatch, 
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     monkeypatch.setattr(stage.subprocess, "Popen", stalled)
     monkeypatch.setenv("BUDDY_DATABASE_URL", "must-not-reach-parser")
-    source = PDFSource(key="source", version="version", size=1, sha256="a" * 64, revision="v1")
+    source = PDFSource(
+        key="source",
+        version="version",
+        size=1,
+        sha256="a" * 64,
+        revision="v1",
+        deck_id=UUID("10000000-0000-0000-0000-000000000001"),
+    )
     storage = UploadSettings(
         bucket="buddy-test",
         region="eu-central-1",

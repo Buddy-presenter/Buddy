@@ -33,7 +33,9 @@ class Queue:
                 QueueUrl=self.settings.queue_url,
                 MaxNumberOfMessages=1,
                 WaitTimeSeconds=10,
-                VisibilityTimeout=60,
+                # Worker attempts are bounded at fifteen minutes and renew the DB lease.
+                # Matching SQS visibility prevents redelivery during provider/validator work.
+                VisibilityTimeout=self.settings.runtime_seconds,
             ).get("Messages", [])
         )
 

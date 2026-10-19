@@ -6,10 +6,18 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from buddy_api.analysis.contracts import Manifest
 from buddy_api.extraction.contracts import Extraction
 
 ACTIVE = ("queued", "retry_wait", "running")
-TERMINAL = ("metadata_ready", "cancelled", "dead_letter", "failed")
+TERMINAL = (
+    "metadata_ready",
+    "analysis_ready",
+    "analysis_partial",
+    "cancelled",
+    "dead_letter",
+    "failed",
+)
 
 
 class Message(BaseModel):
@@ -23,6 +31,7 @@ class MetadataOutput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     stage: Literal["pdf_metadata.v1"] = "pdf_metadata.v1"
     metadata: Extraction
+    manifest: Manifest
 
 
 class PDFSource(BaseModel):
@@ -32,6 +41,7 @@ class PDFSource(BaseModel):
     size: int = Field(ge=1, le=64 * 1024 * 1024)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     revision: str = Field(min_length=1, max_length=128)
+    deck_id: UUID
 
 
 class JobData(BaseModel):

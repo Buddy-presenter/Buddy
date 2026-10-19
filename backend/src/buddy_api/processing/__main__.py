@@ -16,6 +16,7 @@ from buddy_api.processing.service import Processor
 from buddy_api.uploads.config import UploadSettings
 from buddy_api.uploads.service import blocking
 from buddy_api.uploads.storage import SourceStorage
+from buddy_api.validation.config import ValidatorSettings
 
 HEALTH = root() / "health"
 
@@ -35,7 +36,16 @@ async def run() -> None:
         SourceStorage(uploads),
         Queue(settings),
     )
-    processor = Processor(database, storage, settings, queue)
+    validator_python = os.environ.get("BUDDY_VALIDATOR_PYTHON")
+    if not validator_python:
+        raise ValueError("Worker requires the isolated PDF action validator runtime.")
+    processor = Processor(
+        database,
+        storage,
+        settings,
+        queue,
+        validator_settings=ValidatorSettings(python=validator_python, seconds=15),
+    )
     await database.check_ready()
     logging.info("Worker database ready")
     await blocking(storage.check)

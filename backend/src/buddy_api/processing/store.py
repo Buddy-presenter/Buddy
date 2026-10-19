@@ -6,7 +6,13 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from buddy_api.persistence.models import Deck, DeckExtraction, JobOutbox, ProcessingJob
+from buddy_api.persistence.models import (
+    AnalysisVersion,
+    Deck,
+    DeckExtraction,
+    JobOutbox,
+    ProcessingJob,
+)
 from buddy_api.persistence.repositories import Extractions
 from buddy_api.processing.config import WorkerSettings
 from buddy_api.processing.contracts import ACTIVE, JobData, Message, MetadataOutput
@@ -111,6 +117,7 @@ async def retry(session: AsyncSession, job: ProcessingJob, settings: WorkerSetti
     await quota(session, job.owner_id, settings.owner_quota)
     job.generation += 1
     job.status, job.stage_state, job.progress = "queued", "pending", 0
+    job.stage = "pdf_analysis.v1" if job.extraction_id else "pdf_metadata.v1"
     job.error_code = None
     job.not_before = now()
     outbox = await session.get(JobOutbox, job.id)
@@ -130,7 +137,7 @@ async def claim(
         or job.generation != message.generation
         or job.status not in {"queued", "retry_wait"}
         or job.source_revision is None
-        or job.stage != "pdf_metadata.v1"
+        or job.stage not in {"pdf_metadata.v1", "pdf_analysis.v1"}
         or job.not_before > now()
     ):
         return None
@@ -184,14 +191,14 @@ async def heartbeat(
     return True
 
 
-async def complete(
+async def save_metadata(
     session: AsyncSession, identifier: UUID, token: UUID, output: MetadataOutput
-) -> bool:
+) -> UUID | None:
     job = await session.scalar(
         select(ProcessingJob).where(ProcessingJob.id == identifier).with_for_update()
     )
     if job is None or not valid_lease(job, token):
-        return False
+        return None
     deck = await session.get(Deck, job.deck_id)
     metadata = output.metadata
     if (
@@ -208,12 +215,42 @@ async def complete(
         owner_id=job.owner_id, deck_id=job.deck_id, extraction=metadata
     )
     job.extraction_id = extraction.id
-    job.status, job.stage_state, job.progress, job.error_code = (
-        "metadata_ready",
-        "succeeded",
-        100,
+    job.stage, job.stage_state, job.progress, job.error_code = (
+        "pdf_analysis.v1",
+        "running",
+        35,
         None,
     )
+    return extraction.id
+
+
+async def complete(session: AsyncSession, identifier: UUID, token: UUID, analysis_id: UUID) -> bool:
+    job = await session.scalar(
+        select(ProcessingJob).where(ProcessingJob.id == identifier).with_for_update()
+    )
+    if job is None or not valid_lease(job, token):
+        return False
+    deck = await session.get(Deck, job.deck_id)
+    analysis = await session.scalar(
+        select(AnalysisVersion).where(
+            AnalysisVersion.id == analysis_id,
+            AnalysisVersion.job_id == job.id,
+            AnalysisVersion.deck_id == job.deck_id,
+            AnalysisVersion.owner_id == job.owner_id,
+        )
+    )
+    if (
+        deck is None
+        or deck.owner_id != job.owner_id
+        or deck.source_format != "pdf"
+        or deck.source_revision != job.source_revision
+        or analysis is None
+        or analysis.extraction_id != job.extraction_id
+        or analysis.publication not in {"published", "partial"}
+    ):
+        raise UploadError(409, "analysis_incomplete", "The analysis is not ready for completion.")
+    job.status = "analysis_partial" if analysis.publication == "partial" else "analysis_ready"
+    job.stage_state, job.progress, job.error_code = "succeeded", 100, None
     job.lease_id = job.lease_until = job.deadline_at = None
     return True
 

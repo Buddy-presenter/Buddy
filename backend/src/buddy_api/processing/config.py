@@ -15,7 +15,7 @@ class WorkerSettings(BaseModel):
     concurrency: int = Field(default=2, ge=1, le=16)
     max_attempts: int = Field(default=3, ge=1, le=5)
     lease_seconds: int = Field(default=45, ge=30, le=120)
-    runtime_seconds: int = Field(default=120, ge=90, le=180)
+    runtime_seconds: int = Field(default=900, ge=300, le=900)
 
     @classmethod
     def from_environment(cls, values: Mapping[str, str]) -> "WorkerSettings | None":

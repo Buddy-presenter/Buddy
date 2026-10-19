@@ -9,6 +9,7 @@ import sys
 import tempfile
 from contextlib import suppress
 
+from buddy_api.analysis.rendering import render_manifest
 from buddy_api.extraction.contracts import ExtractionError
 from buddy_api.extraction.runner import extract_pdf, windows_memory_limit
 from buddy_api.processing.contracts import MetadataOutput, PDFSource
@@ -25,7 +26,8 @@ def inspect_source(source: PDFSource, storage: SourceStorage) -> MetadataOutput:
         source_format="pdf",
     )
     return MetadataOutput(
-        metadata=extract_pdf(io.BytesIO(content), source_revision=source.revision)
+        metadata=(metadata := extract_pdf(io.BytesIO(content), source_revision=source.revision)),
+        manifest=render_manifest(content, metadata, str(source.deck_id)),
     )
 
 
@@ -84,7 +86,9 @@ def _execute(
         },
         start_new_session=os.name != "nt",
     )
-    request = json.dumps({"source": source.model_dump(), "storage": settings.model_dump()}).encode()
+    request = json.dumps(
+        {"source": source.model_dump(mode="json"), "storage": settings.model_dump(mode="json")}
+    ).encode()
     try:
         # Windows job kills the complete parser tree; Linux uses a private process group.
         with windows_memory_limit(process.pid, 1024 * 1024 * 1024):
@@ -118,7 +122,7 @@ def main() -> int:
             import resource
 
             resource.setrlimit(resource.RLIMIT_AS, (1024**3, 1024**3))
-            resource.setrlimit(resource.RLIMIT_CPU, (90, 90))
+            resource.setrlimit(resource.RLIMIT_CPU, (120, 120))
         request = json.loads(sys.stdin.buffer.read(16385))
         source = PDFSource.model_validate(request["source"])
         storage = SourceStorage(UploadSettings.model_validate(request["storage"]))

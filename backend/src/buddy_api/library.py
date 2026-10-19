@@ -143,6 +143,12 @@ def library_router() -> APIRouter:
                         "queued": DeckStatus.QUEUED,
                         "retry_wait": DeckStatus.QUEUED,
                         "metadata_ready": DeckStatus.INCOMPLETE,
+                        "analysis_partial": DeckStatus.INCOMPLETE,
+                        "analysis_ready": (
+                            DeckStatus.READY
+                            if has_analysis and has_render_proof
+                            else DeckStatus.INCOMPLETE
+                        ),
                         "cancelled": DeckStatus.INCOMPLETE,
                         "dead_letter": DeckStatus.FAILED,
                         "failed": DeckStatus.FAILED,

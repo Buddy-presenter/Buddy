@@ -1,10 +1,11 @@
 # Stored presentation analysis v1 (#11)
 
-Exactly three outputs live in PostgreSQL: a presentation summary, ordered content
-summaries for every slide, and zero or more parameterized content actions per slide.
-Original PPTX files, rendered images and validation artifacts remain in object storage;
-these records contain references, not file bytes or public URLs. Generation (#12),
-conversion (#10), visual validation (#49) and the review page (#23) consume this contract.
+The durable PDF worker submits the checksum-verified original PDF to Amazon Bedrock
+GPT-6 Luna through its PDF-capable Responses API. It persists exactly three outputs:
+one presentation summary, one ordered content summary per page, and zero or more
+parameterized content actions. Actions are limited to `zoom_region` and
+`highlight_region`; navigation and reset controls come from code. Existing PPTX upload
+and storage remain compatible, while PPTX analysis and playback are deferred.
 
 ## Records and version isolation
 
@@ -20,6 +21,9 @@ Composite foreign keys preserve owner/deck/analysis consistency. Repository call
 derive owner scope from verified identity or an authorized backend job. The source
 revision/hash, extractor/schema version, slide IDs/order and aspect ratios must match an
 existing owned extraction. The manifest pins the render, dimensions and image digests.
+PDFium computes these page-raster hashes in memory to bind coordinate provenance; Buddy
+does not save those pages as previews or send rasterized pages to the provider. The
+provider receives the original PDF through `input_file`.
 Renderer, validator and display-profile identifiers describe the intended validation
 environment and must change when its behavior changes.
 
@@ -50,11 +54,13 @@ Never invent content for unreadable slides.
 Published means ready for review, not that every action succeeded. Rejected and
 needs-review actions remain inspectable with reasons, but are never usable. The library
 selects the highest analysis version for the deck, then requires that revision to be
-published and belong to the latest successful job. It also requires complete render
-evidence matching every ordered manifest slide, render revision and raster checksum.
+published and belong to the latest completed analysis job. It also requires complete
+render evidence matching every ordered manifest slide, render revision and raster checksum.
 Current RenderedAsset rows cannot express that evidence, so successful decks remain
 `incomplete` until a renderer persists the proof. Asset presence/count or old published
-versions cannot imply completion. Historical analyses remain readable by ID.
+versions cannot imply completion. A successful analysis job can therefore appear as
+`incomplete` in the library until the separate renderer-persistence work exists.
+Historical analyses remain readable by ID.
 
 ## Catalog and generation contract
 
@@ -73,8 +79,8 @@ standalone copies deliberately and pass the parity test.
 
 `general_controls(ordered_slide_ids, current_slide_id)` enables next except on the last
 slide, previous except on the first, supplies ordered valid jump targets, and always
-enables reset. It does not generate commands or mutate the player. Existing executor
-boundary no-ops remain unchanged. Model-prompt and UI/runtime wiring remain later work.
+enables reset. The analysis worker does not generate or persist these controls. Existing
+executor boundary no-ops remain unchanged.
 
 Stored instances retain catalog `version`, `instance_id`, `purpose`, deck/render/slide
 references, `type` and filled `params`. Unknown/extra fields, general controls, duplicate
@@ -86,14 +92,16 @@ aspect ratios must agree; values are not silently interpreted in the other plane
 
 `ValidationInput` (`buddy.validation.v1`) binds a unique validation ID to analysis ID/hash,
 action instance ID/hash and validator/renderer/display-profile versions. Evidence carries
-opaque artifact UUIDs, kind and SHA-256, never storage keys. The future validator/artifact
-owner must resolve evidence under the same owner and retain actual artifacts; a reference
-alone is not proof of visual correctness. This issue does not run the visual validator.
+opaque artifact UUIDs, kind and SHA-256, never storage keys. The worker calls the existing
+isolated #49 validation service, which stores owner-scoped report/screenshots and returns
+the references bound to the exact source, action and profile. A reference alone is not
+proof of semantic correctness; the validator explicitly records that semantic grounding
+is not verified.
 
 The PDF [action validator](action-validation.md) produces owner-scoped standalone
-execution reports and private evidence. It does not automatically append analysis-action
-validation history or publish an analysis. The later pipeline must explicitly bind a
-matching report's source/action/renderer/profile to this contract.
+execution reports and private evidence. A standalone API request does not automatically
+append analysis-action validation history or publish an analysis. The trusted worker
+explicitly binds each matching report's source/action/renderer/profile to this contract.
 
 Only trusted `record_validation(owner_id=..., result=...)` appends results. Validated needs
 evidence and no failure reasons; rejected/needs-review needs reasons. Validation IDs retry
@@ -117,7 +125,8 @@ Published machine-readable schemas are `analysis-v1.schema.json`,
 
 ## Migration and checks
 
-Apply revision `95b10c10806a` explicitly with the migration identity. It archives each old
+Apply the analysis migration and the following worker-state migration explicitly with the
+migration identity. They archive each old
 `graph` payload, marks its parent legacy/unavailable, retains all IDs/version/session
 references and drops the active column. Stop old backend binaries before migration and
 deploy compatible binaries before serving again. The transactional migration is

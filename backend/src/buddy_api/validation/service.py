@@ -96,7 +96,13 @@ class ValidationService:
         return content, mime
 
     async def validate(
-        self, owner: UUID, deck_id: UUID, key: UUID, inputs: ValidationRequest
+        self,
+        owner: UUID,
+        deck_id: UUID,
+        key: UUID,
+        inputs: ValidationRequest,
+        *,
+        source_content: bytes | None = None,
     ) -> StoredResult:
         if self.uploads.parser_slot.locked():
             raise UploadError(
@@ -172,11 +178,27 @@ class ValidationService:
                 )
                 if not source_key or not version or not size:
                     raise UploadError(409, "source_unavailable", "Saved source is unavailable.")
-                content = await blocking(
-                    lambda: self.uploads.storage.read(
-                        source_key, version=version, size=size, sha256=digest, source_format="pdf"
+                content = (
+                    source_content
+                    if source_content is not None
+                    else await blocking(
+                        lambda: self.uploads.storage.read(
+                            source_key,
+                            version=version,
+                            size=size,
+                            sha256=digest,
+                            source_format="pdf",
+                        )
                     )
                 )
+                if (
+                    len(content) != size
+                    or hashlib.sha256(content).hexdigest() != digest
+                    or not content.startswith(b"%PDF-")
+                ):
+                    raise UploadError(
+                        409, "source_mismatch", "Saved source does not match its accepted revision."
+                    )
                 cancelled = Event()
                 task = asyncio.create_task(
                     asyncio.to_thread(run_validation, content, request, self.settings, cancelled)

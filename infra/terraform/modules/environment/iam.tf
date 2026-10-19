@@ -61,6 +61,17 @@ resource "aws_iam_role_policy" "worker_versions" {
     { Effect = "Allow", Action = ["s3:GetObjectVersion"], Resource = "${aws_s3_bucket.private["data"].arn}/sources/*" }
   ] })
 }
+resource "aws_iam_role_policy" "worker_bedrock_analysis" {
+  role = aws_iam_role.task["worker"].id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [
+    {
+      Effect = "Allow", Action = ["bedrock:InvokeModel"], Resource = [
+        "arn:aws:bedrock:${var.region}:${var.account_id}:inference-profile/global.openai.gpt-6-luna",
+        "arn:aws:bedrock:${var.region}:${var.account_id}:project/default"
+      ]
+    }
+  ] })
+}
 resource "aws_iam_role" "github" {
   for_each = toset(["deploy", "release"])
   name     = "${local.name}-${each.key}"

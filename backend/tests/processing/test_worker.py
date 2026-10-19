@@ -14,15 +14,16 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from buddy_api.analysis.provider import ModelOutput, ModelSlide, ModelSummary
+from buddy_api.analysis.store import Analyses
 from buddy_api.app import create_app
 from buddy_api.auth import Principal, authenticated
 from buddy_api.config import Environment, Settings
-from buddy_api.extraction.runner import extract_pdf
 from buddy_api.persistence.database import Database
 from buddy_api.persistence.models import DeckExtraction, JobOutbox, ProcessingJob
 from buddy_api.processing import store
 from buddy_api.processing.config import WorkerSettings
-from buddy_api.processing.contracts import Message, MetadataOutput
+from buddy_api.processing.contracts import Message, PDFSource
 from buddy_api.processing.service import Processor
 from buddy_api.processing.stage import inspect_source
 from buddy_api.uploads.config import UploadSettings
@@ -71,9 +72,32 @@ class SQS:
         self.acked.append(receipt)
 
 
+class SyntheticProvider:
+    def analyze(self, content, extraction, deck_id, manifest):
+        assert hashlib.sha256(content).hexdigest() == extraction.source_sha256
+        assert manifest.deck_id == deck_id
+        return ModelOutput(
+            presentation=ModelSummary(text="Synthetic presentation summary.", reason=None),
+            slides=tuple(
+                ModelSlide(
+                    number=index + 1,
+                    text=f"Synthetic summary for page {index + 1}.",
+                    reason=None,
+                    actions=(),
+                )
+                for index, _page in enumerate(extraction.slides)
+            ),
+        )
+
+
 def make_processor(db, storage, settings, queue):
     return Processor(
-        db, storage, settings, queue, inspector=lambda source: inspect_source(source, storage)
+        db,
+        storage,
+        settings,
+        queue,
+        inspector=lambda source: inspect_source(source, storage),
+        provider=SyntheticProvider(),
     )
 
 
@@ -109,8 +133,9 @@ def test_real_pdf_worker_pinned_source_duplicate_and_restart(migrated_database):
             await processor.run_message(sqs.messages[0])
             await processor.run_message(sqs.messages[0])
             result = await row(db, job.id)
-            assert (result.status, result.attempts, result.progress) == ("metadata_ready", 1, 100)
-            assert s3.requests[0]["VersionId"] == "pinned-version" and len(s3.requests) == 1
+            assert (result.status, result.attempts, result.progress) == ("analysis_ready", 1, 100)
+            assert all(request["VersionId"] == "pinned-version" for request in s3.requests)
+            assert len(s3.requests) == 2
             async with db.transaction() as repos:
                 extraction = await repos.extractions.get(result.extraction_id, owner_id=owner.id)
                 assert len(extraction.document["slides"]) == 3
@@ -121,7 +146,9 @@ def test_real_pdf_worker_pinned_source_duplicate_and_restart(migrated_database):
                 )
                 assert len({page["id"] for page in extraction.document["slides"]}) == 3
                 assert extraction.document["warnings"]
-                assert await repos.analyses.list(owner_id=owner.id) == []
+                analyses = await repos.analyses.list(owner_id=owner.id)
+                assert len(analyses) == 1 and analyses[0].publication == "published"
+                assert analyses[0].job_id == job.id
             await db.close()
             db = Database(migrated_database)
             assert (await row(db, job.id)).extraction_id == extraction.id
@@ -194,7 +221,7 @@ def test_expired_lease_rejects_old_output_and_recovers_after_restart(migrated_da
                 (await session.get(ProcessingJob, job.id)).not_before = store.now()
             await processor.maintain()
             await processor.run_message(queue.messages[-1])
-            assert (await row(db, job.id)).status == "metadata_ready"
+            assert (await row(db, job.id)).status == "analysis_ready"
             assert (await row(db, job.id)).attempts == 2
         finally:
             await db.close()
@@ -207,34 +234,54 @@ def test_cancel_retry_race_fences_outputs_and_partial_persistence_rolls_back(mig
         db = Database(migrated_database)
         try:
             owner, deck, job = await seed(db)
-            output = MetadataOutput(
-                metadata=await asyncio.to_thread(
-                    extract_pdf, PDF, source_revision=deck.source_revision
-                )
+            source_storage = SourceStorage(UPLOADS, S3(PDF.read_bytes()))
+            output = await asyncio.to_thread(
+                inspect_source,
+                PDFSource(
+                    key=deck.source_key,
+                    version=deck.source_version_id,
+                    size=deck.source_size_bytes,
+                    sha256=deck.source_sha256,
+                    revision=deck.source_revision,
+                    deck_id=deck.id,
+                ),
+                source_storage,
             )
+            source_storage.close()
             async with db.sessions() as session, session.begin():
                 claimed = await store.claim(session, Message(job_id=job.id, generation=0), WORKER)
                 token = claimed.lease_id
             async with db.sessions() as session, session.begin():
                 await store.cancel(session, await store.owned(session, owner.id, job.id))
             async with db.sessions() as session, session.begin():
-                assert not await store.complete(session, job.id, token, output)
+                assert await store.save_metadata(session, job.id, token, output) is None
                 await store.retry(session, await store.owned(session, owner.id, job.id), WORKER)
             async with db.sessions() as session, session.begin():
-                assert not await store.complete(session, job.id, token, output)
+                assert await store.save_metadata(session, job.id, token, output) is None
                 claimed = await store.claim(session, Message(job_id=job.id, generation=2), WORKER)
                 token = claimed.lease_id
             with pytest.raises(RuntimeError):
                 async with db.sessions() as session, session.begin():
-                    assert await store.complete(session, job.id, token, output)
+                    assert await store.save_metadata(session, job.id, token, output)
                     await session.flush()
                     raise RuntimeError("simulate failure before commit")
             async with db.sessions() as session:
                 assert (await session.scalars(select(DeckExtraction))).all() == []
             assert (await row(db, job.id)).status == "running"
             async with db.sessions() as session, session.begin():
-                assert await store.complete(session, job.id, token, output)
-            assert (await row(db, job.id)).status == "metadata_ready"
+                extraction_id = await store.save_metadata(session, job.id, token, output)
+            async with db.sessions() as session, session.begin():
+                generated = SyntheticProvider().analyze(
+                    PDF.read_bytes(), output.metadata, str(deck.id), output.manifest
+                )
+                document = Processor._analysis_document(
+                    generated, output.metadata, output.manifest, deck.id, job.id, extraction_id
+                )
+                analysis = await Analyses(session).create(
+                    owner_id=owner.id, deck_id=deck.id, version=1, document=document
+                )
+                assert await store.complete(session, job.id, token, analysis.id)
+            assert (await row(db, job.id)).status == "analysis_ready"
         finally:
             await db.close()
 
@@ -324,6 +371,8 @@ def test_owner_api_and_legacy_library_mapping(migrated_database):
                     "queued",
                     "retry_wait",
                     "metadata_ready",
+                    "analysis_ready",
+                    "analysis_partial",
                     "cancelled",
                     "dead_letter",
                 ):
@@ -349,6 +398,7 @@ def test_owner_api_and_legacy_library_mapping(migrated_database):
         decks = client.get("/api/v1/decks").json()["data"]["items"]
         mapping = {item["title"]: item["status"] for item in decks}
         assert mapping["metadata_ready"] == mapping["succeeded"] == "incomplete"
+        assert mapping["analysis_ready"] == mapping["analysis_partial"] == "incomplete"
         assert mapping["dead_letter"] == mapping["failed"] == "failed"
         app.dependency_overrides[authenticated] = lambda: Principal(uuid4(), "other@example.test")
         for path in ("", "/retry", "/cancel"):
