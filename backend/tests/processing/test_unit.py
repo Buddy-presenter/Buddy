@@ -75,3 +75,36 @@ def test_stage_rejects_bad_internal_request_without_echoing_input():
     assert result.returncode == 0
     assert result.stdout == b'{"error":"pdf_inspection_failed"}'
     assert b"private" not in result.stderr
+
+
+def test_whole_stage_timeout_kills_process_and_removes_its_scratch(monkeypatch, tmp_path):
+    import tempfile
+
+    from buddy_api.processing import stage
+    from buddy_api.uploads.config import UploadSettings
+
+    original = subprocess.Popen
+    children = []
+
+    def stalled(_command, **kwargs):
+        assert "BUDDY_DATABASE_URL" not in kwargs["env"]
+        child = original(
+            [sys.executable, "-c", "import sys,time; sys.stdin.buffer.read(); time.sleep(30)"],
+            **kwargs,
+        )
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(stage.subprocess, "Popen", stalled)
+    monkeypatch.setenv("BUDDY_DATABASE_URL", "must-not-reach-parser")
+    source = PDFSource(key="source", version="version", size=1, sha256="a" * 64, revision="v1")
+    storage = UploadSettings(
+        bucket="buddy-test",
+        region="eu-central-1",
+        kms_key="arn:aws:kms:eu-central-1:123456789012:key/00000000-0000-0000-0000-000000000000",
+    )
+    with pytest.raises(TimeoutError):
+        stage.execute(source, storage, seconds=0.2)
+    assert children and children[0].poll() is not None
+    assert list(tmp_path.glob("stage-*")) == []

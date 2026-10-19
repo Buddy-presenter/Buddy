@@ -31,6 +31,7 @@ from buddy_api.uploads.validation import validate_source
 logger = logging.getLogger(__name__)
 ACTIVE = ("pending", "receiving", "cleanup")
 RETRYABLE = {
+    "job_capacity",
     "upload_interrupted",
     "upload_timeout",
     "upload_expired",

@@ -30,6 +30,14 @@ def inspect_source(source: PDFSource, storage: SourceStorage) -> MetadataOutput:
 
 
 def execute(source: PDFSource, settings: UploadSettings, seconds: float = 90) -> MetadataOutput:
+    # Parent-owned workspace survives a killed child long enough to remove its artifacts.
+    with tempfile.TemporaryDirectory(prefix="stage-") as directory:
+        return _execute(source, settings, seconds, directory)
+
+
+def _execute(
+    source: PDFSource, settings: UploadSettings, seconds: float, directory: str
+) -> MetadataOutput:
     # No database URL or identity tokens are inherited by the download/parser stage.
     env = {
         key: value
@@ -70,9 +78,9 @@ def execute(source: PDFSource, settings: UploadSettings, seconds: float = 90) ->
         env={
             **env,
             "PYTHONDONTWRITEBYTECODE": "1",
-            "TMPDIR": tempfile.gettempdir(),
-            "TMP": tempfile.gettempdir(),
-            "TEMP": tempfile.gettempdir(),
+            "TMPDIR": directory,
+            "TMP": directory,
+            "TEMP": directory,
         },
         start_new_session=os.name != "nt",
     )

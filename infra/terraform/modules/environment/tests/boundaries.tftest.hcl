@@ -88,20 +88,6 @@ run "production_redundancy" {
     error_message = "Desktop publishing must have a separate release identity."
   }
 }
-run "worker_runtime_boundaries" {
-  command = apply
-  variables {
-    worker_image = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-  }
-  assert {
-    condition     = jsondecode(aws_ecs_task_definition.service["worker"].container_definitions)[0].healthCheck.command == ["CMD", "python", "-m", "buddy_api.processing", "--health"] && jsondecode(aws_ecs_task_definition.service["worker"].container_definitions)[0].stopTimeout == 120 && length(jsondecode(aws_ecs_task_definition.service["worker"].container_definitions)[0].mountPoints) == 1
-    error_message = "A supplied worker requires real health, bounded drain time and dedicated writable scratch."
-  }
-  assert {
-    condition     = jsondecode(aws_iam_role_policy.worker_versions.policy).Statement[0].Action == ["s3:GetObjectVersion"] && !contains(jsondecode(aws_iam_role_policy.data["worker"].policy).Statement[1].Action, "s3:PutObject")
-    error_message = "The PDF worker needs pinned source reads, not object writes."
-  }
-}
 run "reject_mutable_image" {
   command = plan
   variables { api_image = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api:latest" }
@@ -211,7 +197,8 @@ run "reject_public_task_addresses_in_production" {
 run "private_upload_runtime_and_version_cleanup" {
   command = plan
   variables {
-    api_image = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    api_image    = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    worker_image = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   }
   # Supply only external computed identities needed to evaluate the API template.
   # Keep its mount, environment and IAM policy expressions under test unchanged.
@@ -257,6 +244,7 @@ run "private_upload_runtime_and_version_cleanup" {
     target = aws_sqs_queue.processing
     values = {
       url = "https://sqs.eu-central-1.amazonaws.com/123456789012/buddy-staging"
+      arn = "arn:aws:sqs:eu-central-1:123456789012:buddy-staging"
     }
     override_during = plan
   }
@@ -266,6 +254,19 @@ run "private_upload_runtime_and_version_cleanup" {
       arn = "arn:aws:secretsmanager:eu-central-1:123456789012:secret:buddy-staging-api-test12"
     }
     override_during = plan
+  }
+  override_resource {
+    target          = aws_secretsmanager_secret.database["worker"]
+    values          = { arn = "arn:aws:secretsmanager:eu-central-1:123456789012:secret:buddy-staging-worker-test12" }
+    override_during = plan
+  }
+  assert {
+    condition     = jsondecode(aws_ecs_task_definition.service["worker"].container_definitions)[0].healthCheck.command == ["CMD", "python", "-m", "buddy_api.processing", "--health"] && jsondecode(aws_ecs_task_definition.service["worker"].container_definitions)[0].stopTimeout == 120 && length(jsondecode(aws_ecs_task_definition.service["worker"].container_definitions)[0].mountPoints) == 1
+    error_message = "A supplied worker requires real health, bounded drain time and dedicated writable scratch."
+  }
+  assert {
+    condition     = jsondecode(aws_iam_role_policy.worker_versions.policy).Statement[0].Action == ["s3:GetObjectVersion"] && !contains(jsondecode(aws_iam_role_policy.data["worker"].policy).Statement[1].Action, "s3:PutObject")
+    error_message = "The PDF worker needs pinned source reads, not object writes."
   }
   assert {
     condition = (
