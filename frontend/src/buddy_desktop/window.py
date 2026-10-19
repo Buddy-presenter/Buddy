@@ -1,9 +1,10 @@
 """Navigation and lifecycle for one desktop window and one application event loop."""
 
+import sys
 from dataclasses import replace
 
 from PySide6.QtCore import QByteArray, QSettings, QSize, Qt, Slot
-from PySide6.QtGui import QAction, QCloseEvent, QGuiApplication, QKeySequence
+from PySide6.QtGui import QAction, QCloseEvent, QGuiApplication, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -28,8 +29,8 @@ from buddy_desktop.profile_page import ProfilePage
 from buddy_desktop.services import Health, HealthService
 from buddy_desktop.slide_executor import Completion
 from buddy_desktop.tasks import TaskRunner
-from buddy_desktop.views import HomePage, SettingsPage
-from buddy_desktop.visuals import BuddyMark, command, icon
+from buddy_desktop.views import HomePage, SettingsPage, divider
+from buddy_desktop.visuals import BuddyMark, app_icon, command, icon
 
 
 class MainWindow(QMainWindow):
@@ -56,46 +57,43 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Buddy")
         self.setMinimumSize(800, 600)
         self.resize(1200, 800)
-        self.setWindowIcon(icon("presentation", "#FF9F61"))
+        self.setWindowIcon(app_icon())
         root = QWidget()
         layout = QHBoxLayout(root)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         sidebar = QWidget()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(184)
+        sidebar.setFixedWidth(208)
         sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(14, 24, 14, 18)
+        sidebar_layout.setContentsMargins(12, 16, 12, 16)
         wordmark = QHBoxLayout()
-        wordmark.setSpacing(6)
-        wordmark.addWidget(BuddyMark(36))
+        wordmark.setContentsMargins(6, 0, 0, 0)
+        wordmark.setSpacing(8)
+        wordmark.addWidget(BuddyMark(28))
         brand = QLabel("Buddy")
         brand.setObjectName("brand")
         wordmark.addWidget(brand)
         wordmark.addStretch()
         sidebar_layout.addLayout(wordmark)
-        sidebar_layout.addSpacing(32)
-        workspace_label = QLabel("WORKSPACE")
-        workspace_label.setObjectName("muted")
-        sidebar_layout.addWidget(workspace_label)
+        sidebar_layout.addSpacing(20)
         self.navigation = QListWidget()
         self.navigation.setObjectName("navigation")
         self.navigation.setIconSize(QSize(18, 18))
         self.navigation.setAccessibleName("Workspace navigation")
-        self.navigation.setFixedHeight(208)
+        self.navigation.setFixedHeight(4 * 38)
+        self.navigation.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         for name, image in (
             ("Home", "house"),
             ("Library", "library-big"),
             ("Present", "presentation"),
             ("Settings", "settings-2"),
         ):
-            self.navigation.addItem(QListWidgetItem(icon(image), name))
+            glyph = icon(image)
+            glyph.addPixmap(icon(image, "#FFB27F").pixmap(40, 40), QIcon.Mode.Selected)
+            self.navigation.addItem(QListWidgetItem(glyph, name))
         sidebar_layout.addWidget(self.navigation)
         sidebar_layout.addStretch()
-        self.sidebar_status = QLabel("Local workspace")
-        self.sidebar_status.setObjectName("muted")
-        self.sidebar_status.setWordWrap(True)
-        sidebar_layout.addWidget(self.sidebar_status)
         self.pages = QStackedWidget()
         self.home = HomePage(config.api_url)
         self.account = AccountWidget(config.api_url)
@@ -138,47 +136,59 @@ class MainWindow(QMainWindow):
         workspace_layout.setSpacing(0)
         header = QWidget()
         header.setObjectName("workspaceHeader")
-        header.setFixedHeight(60)
+        header.setFixedHeight(64)
         header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(28, 0, 24, 0)
+        header_layout.setContentsMargins(32, 0, 20, 0)
+        header_layout.setSpacing(12)
         self.route_title = QLabel("Home")
+        self.route_title.setObjectName("routeTitle")
         header_layout.addWidget(self.route_title)
         header_layout.addStretch()
         self.connection_status = QLabel("Connection not checked")
         self.connection_status.setObjectName("connectionStatus")
         self.connection_status.hide()
         self.preferences.body.insertWidget(3, self.connection_status)
-        self.activity_mark = BuddyMark(24)
+        # Visible only while background work runs, so it never reads as decoration.
+        self.activity_mark = BuddyMark(22)
+        self.activity_mark.setToolTip("Working…")
+        self.activity_mark.hide()
         header_layout.addWidget(self.activity_mark)
-        self.account_button = QPushButton("Account")
-        command(self.account_button, "circle-user-round")
+        self.account_button = QPushButton("Sign in")
         self.account_button.setObjectName("accountButton")
+        self.account_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.account_button.clicked.connect(self._show_account_controls)
         header_layout.addWidget(self.account_button)
         self.account_popover = QDialog(self, Qt.WindowType.Popup)
         self.account_popover.setObjectName("accountPopover")
         self.account_popover.setAccessibleName("Buddy account")
-        self.account_popover.setFixedWidth(340)
+        self.account_popover.setFixedWidth(300)
         popover_layout = QVBoxLayout(self.account_popover)
-        popover_layout.setContentsMargins(24, 20, 24, 20)
-        popover_layout.setSpacing(16)
-        popover_header = QHBoxLayout()
-        self.account_title = QLabel("Welcome to Buddy")
+        popover_layout.setContentsMargins(16, 16, 16, 12)
+        popover_layout.setSpacing(12)
+        identity = QHBoxLayout()
+        identity.setSpacing(12)
+        self.account_avatar = QLabel()
+        self.account_avatar.setObjectName("avatar")
+        self.account_avatar.setFixedSize(40, 40)
+        self.account_avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        identity.addWidget(self.account_avatar)
+        self.account_title = QLabel("Sign in to Buddy")
         self.account_title.setObjectName("sectionTitle")
-        self.account_title.setWordWrap(True)
         self.account_title.setTextFormat(Qt.TextFormat.PlainText)
-        popover_header.addWidget(self.account_title, 1)
-        close_account = QPushButton("Close account menu")
-        command(close_account, "x", compact=True)
-        close_account.setObjectName("quietButton")
-        close_account.clicked.connect(self.account_popover.reject)
-        popover_header.addWidget(close_account)
-        popover_layout.addLayout(popover_header)
-        popover_layout.addWidget(self.account)
-        self.profile_action = QPushButton("View your profile")
+        identity.addWidget(self.account_title, 1)
+        popover_layout.addLayout(identity)
+        self.account_divider = divider()
+        popover_layout.addWidget(self.account_divider)
+        menu = QVBoxLayout()
+        menu.setSpacing(2)
+        self.profile_action = QPushButton("Profile")
         command(self.profile_action, "circle-user-round")
+        self.profile_action.setObjectName("menuItem")
+        self.profile_action.setAccessibleName("View your profile")
         self.profile_action.clicked.connect(self._show_account)
-        popover_layout.addWidget(self.profile_action)
+        menu.addWidget(self.profile_action)
+        menu.addWidget(self.account)
+        popover_layout.addLayout(menu)
         self.account.session_changed.connect(self._account_identity)
         self.account.profile_loaded.connect(self._profile_identity)
         self._account_identity()
@@ -219,6 +229,11 @@ class MainWindow(QMainWindow):
         quit_action.setShortcut(QKeySequence.StandardKey.Quit)
         quit_action.triggered.connect(self.close)
         workspace_menu.addAction(quit_action)
+        # macOS keeps its native global menu. Elsewhere a one-item menu strip is noise;
+        # the window keeps every shortcut.
+        if sys.platform != "darwin":
+            self.addActions(workspace_menu.actions())
+            self.menuBar().hide()
 
     def _open_saved_pdf(self, result: DownloadedPDF) -> None:
         if self.present.executor.busy:
@@ -234,6 +249,7 @@ class MainWindow(QMainWindow):
                 self.present.fullscreen.close()
             self.present.executor.clear()
             self.present.counter.setText("No slides loaded")
+            self.home.workspace_state.hide()
             self.present._refresh()
 
     def _presentation_completed(self, result: Completion) -> None:
@@ -258,7 +274,7 @@ class MainWindow(QMainWindow):
             self.account_popover.hide()
             return
         self._account_identity()
-        self.account_popover.adjustSize()
+        self._fit_account_popover()
         anchor = self.account_button.mapToGlobal(self.account_button.rect().bottomRight())
         screen = self.account_button.screen().availableGeometry()
         self.account_popover.move(
@@ -274,28 +290,64 @@ class MainWindow(QMainWindow):
         if self.account.account_id and not self.account.runner.busy and not self._verified_profile:
             self.account.start("profile")
         self.account_popover.show()
+        self._fit_account_popover()
         self.account_popover.activateWindow()
         target = self.profile_action if self.account.account_id else self.account.buttons["signin"]
         target.setFocus()
 
+    def _fit_account_popover(self) -> None:
+        # The menu changes content between account states; a re-shown popup otherwise
+        # restores its previous, taller geometry instead of shrinking to fit.
+        layout = self.account_popover.layout()
+        if layout is not None:
+            layout.activate()
+        self.account_popover.resize(
+            self.account_popover.width(), self.account_popover.sizeHint().height()
+        )
+
     def _account_identity(self) -> None:
         signed_in = bool(self.account.account_id)
-        self.account_button.setText("My account" if signed_in else "Sign in")
-        self.account_button.setAccessibleName("Open your profile menu" if signed_in else "Sign in")
-        self.account_button.setToolTip(self.account_button.accessibleName())
         self.profile_action.setVisible(signed_in)
+        self.account_divider.setVisible(signed_in)
         # Never retain an email across sign-out, expiry, or backend changes.
         if not signed_in or (
             self._verified_profile and self._verified_profile.id != self.account.account_id
         ):
             self._verified_profile = None
         email = self._verified_profile.email if self._verified_profile else ""
-        self.account_title.setText(email or ("Your account" if signed_in else "Welcome to Buddy"))
-        self.account_title.setToolTip(email)
-        self.account_button.setText(
-            email[0].upper() if email else "My account" if signed_in else "Sign in"
+        initial = email[:1].upper()
+        # Long addresses are elided in the menu; the tooltip and Profile show them in full.
+        self.account_title.setText(
+            self.account_title.fontMetrics().elidedText(
+                email or ("Your account" if signed_in else "Sign in to Buddy"),
+                Qt.TextElideMode.ElideMiddle,
+                300 - 32 - (52 if signed_in else 0),
+            )
         )
-        self.account_button.setToolTip(email or self.account_button.accessibleName())
+        self.account_title.setToolTip(email)
+        self.account_avatar.setVisible(signed_in)
+        if initial:
+            self.account_avatar.setText(initial)
+        else:
+            self.account_avatar.setPixmap(icon("circle-user-round", "#FFF4EC").pixmap(20, 20))
+        button = self.account_button
+        button.setProperty("avatar", signed_in)
+        if signed_in:
+            button.setFixedSize(32, 32)
+            button.setText(initial)
+            button.setIcon(QIcon() if initial else icon("circle-user-round", "#FFF4EC"))
+            button.setAccessibleName("Open your account menu")
+        else:
+            button.setMinimumSize(0, 0)
+            button.setMaximumSize(16777215, 16777215)
+            button.setText("Sign in")
+            button.setIcon(QIcon())
+            button.setAccessibleName("Sign in")
+        button.setToolTip(email or button.accessibleName())
+        button.style().unpolish(button)
+        button.style().polish(button)
+        if self.account_popover.isVisible():
+            self._fit_account_popover()
 
     def _profile_identity(self, _identifier: int, profile: object) -> None:
         if isinstance(profile, AccountProfile) and profile.id == self.account.account_id:
@@ -330,6 +382,7 @@ class MainWindow(QMainWindow):
             return
         self.preferences.connection.show_state("Connecting…", "Checking your Buddy backend.")
         self.connection_status.setText("Checking connection")
+        self.activity_mark.show()
         self.activity_mark.set_activity(True)
         self.home.mascot.set_activity(True)
         self.preferences.check.setEnabled(False)
@@ -378,7 +431,6 @@ class MainWindow(QMainWindow):
         self._account_busy = busy
         if busy and self.account.operation != "profile":
             self._verified_profile = None
-            self.account_button.setText("Account")
             self.account_button.setToolTip("Account operation in progress")
             self.account_title.setText("Checking account…")
             self.account_title.setToolTip("")
@@ -406,14 +458,15 @@ class MainWindow(QMainWindow):
             self.close()
 
     def _update_activity(self) -> None:
-        self.activity_mark.set_activity(
-            self._active_task is not None or self._account_busy or self._library_busy
-        )
+        busy = self._active_task is not None or self._account_busy or self._library_busy
+        self.activity_mark.setVisible(busy)
+        self.activity_mark.set_activity(busy)
 
     @Slot()
     def _present_idle(self) -> None:
         if self.present.surface.slide is not None:
-            self.home.workspace_state.setText(self.present.counter.text())
+            self.home.workspace_state.setText(f"Presenting · {self.present.counter.text()}")
+            self.home.workspace_state.show()
         if self._closing:
             self.close()
 

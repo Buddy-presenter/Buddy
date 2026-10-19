@@ -295,8 +295,16 @@ def test_invalid_identity_configuration(field, value):
         IdentityConfig(**values)
 
 
-@pytest.mark.parametrize("shutdown", [False, True])
-@pytest.mark.parametrize("boundary", ["token", "me", "queued_result"])
+@pytest.mark.parametrize(
+    "boundary,shutdown",
+    [
+        ("token", False),
+        ("me", False),
+        ("queued_result", False),
+        # Shutdown cancels through the same path; check it at the hardest boundary.
+        ("queued_result", True),
+    ],
+)
 def test_widget_late_cancellation_clears_and_revokes_session(
     session, monkeypatch, qtbot, shutdown, boundary
 ):

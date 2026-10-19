@@ -8,7 +8,7 @@ from threading import Event
 from uuid import UUID, uuid4
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -85,18 +85,14 @@ class LibraryWidget(QWidget):
         self.upload_service: PresentationService | None = None
         self.retry_path: Path | None = None
         self.upload_progress.connect(self.update_upload_progress)
+        # The window header names this route; the page starts with its tools.
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 28, 32, 28)
-        layout.setSpacing(18)
-        heading = QLabel("Library")
-        heading.setObjectName("pageTitle")
-        layout.addWidget(heading)
-        description = QLabel("Your decks, ready for their next moment.")
-        description.setObjectName("pageDescription")
-        layout.addWidget(description)
+        layout.setContentsMargins(32, 8, 32, 24)
+        layout.setSpacing(14)
         self.toolbar = QWidget()
         controls = QHBoxLayout(self.toolbar)
         controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(8)
         search_label = QLabel("&Search")
         self.search = QLineEdit()
         self.search.setMaxLength(256)
@@ -122,6 +118,7 @@ class LibraryWidget(QWidget):
         self.refresh.setToolTip("Refresh library")
         self.refresh.setAccessibleName("Refresh library")
         command(self.refresh, "refresh-cw", compact=True)
+        self.refresh.setObjectName("quietButton")
         self.refresh.setToolTip("Refresh library")
         self.refresh.clicked.connect(self.reload)
         controls.addWidget(self.refresh)
@@ -129,16 +126,19 @@ class LibraryWidget(QWidget):
         self.selection_actions = QWidget()
         actions = QHBoxLayout(self.selection_actions)
         actions.setContentsMargins(0, 0, 0, 0)
-        self.upload_button = QPushButton("Upload PDF or PPTX…")
+        actions.setSpacing(16)
+        self.upload_button = QPushButton("Upload")
+        self.upload_button.setAccessibleName("Upload PDF or PPTX")
         command(self.upload_button, "folder-open", primary=True)
+        self.upload_button.setToolTip("Upload a PDF or PowerPoint (PPTX) file")
         self.upload_button.clicked.connect(self.choose_upload)
         controls.addWidget(self.upload_button)
-        self.open_button = QPushButton("Present PDF")
-        command(self.open_button, "presentation")
+        self.open_button = QPushButton("Present")
+        self.open_button.setAccessibleName("Present PDF")
+        command(self.open_button, "presentation", primary=True)
+        self.open_button.setToolTip("Present the selected deck")
         self.open_button.setEnabled(False)
         self.open_button.clicked.connect(self.open_selected)
-        actions.addWidget(self.open_button)
-        actions.addStretch()
         # Presentation action follows the selected deck details.
         self.upload_panel = QWidget()
         upload_layout = QVBoxLayout(self.upload_panel)
@@ -147,6 +147,7 @@ class LibraryWidget(QWidget):
         self.upload_status.setWordWrap(True)
         self.upload_status.setTextFormat(Qt.TextFormat.PlainText)
         self.upload_status.setAccessibleName("Upload status")
+        upload_layout.setSpacing(8)
         upload_layout.addWidget(self.upload_status)
         self.upload_bar = QProgressBar()
         self.upload_bar.setObjectName("uploadProgress")
@@ -166,20 +167,22 @@ class LibraryWidget(QWidget):
         upload_layout.addLayout(upload_actions)
         layout.addWidget(self.upload_panel)
         self.upload_panel.hide()
-        self.state = StatePanel()
+        self.state = StatePanel(centered=True)
         self.state.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self.state.retry.setAccessibleName("Retry library request")
         self.state.retry_requested.connect(self.reload)
         layout.addWidget(self.state)
-        self.signin_button = QPushButton("Sign in to Buddy")
+        self.signin_button = QPushButton("Sign in")
+        self.signin_button.setAccessibleName("Sign in to Buddy")
         command(self.signin_button, "log-in", primary=True)
+        self.signin_button.setIcon(QIcon())
         self.signin_button.clicked.connect(self.signin_requested.emit)
         state_layout = self.state.layout()
         assert isinstance(state_layout, QVBoxLayout)
-        state_layout.addWidget(self.signin_button)
+        state_layout.addWidget(self.signin_button, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["Deck", "Status", "Created", "Format"])
+        self.table.setHorizontalHeaderLabels(["Name", "Status", "Added", "Type"])
         self.table.setAccessibleName("Saved presentations")
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -195,7 +198,10 @@ class LibraryWidget(QWidget):
             2, QHeaderView.ResizeMode.ResizeToContents
         )
         self.table.setMinimumHeight(220)
-        self.table.verticalHeader().setDefaultSectionSize(58)
+        self.table.verticalHeader().setDefaultSectionSize(48)
+        self.table.horizontalHeader().setDefaultAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
         self.table.setShowGrid(False)
         self.table.setAlternatingRowColors(True)
         self.table.horizontalHeader().setHighlightSections(False)
@@ -206,10 +212,14 @@ class LibraryWidget(QWidget):
         self.detail = QPlainTextEdit()
         self.detail.setReadOnly(True)
         self.detail.setTabChangesFocus(True)
-        self.detail.setFixedHeight(96)
+        self.detail.setFixedHeight(68)
         self.detail.setFrameShape(QPlainTextEdit.Shape.NoFrame)
+        # Long titles still scroll by wheel or keyboard, without a bar beside two lines of text.
+        self.detail.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.detail.setAccessibleName("Selected deck processing status")
-        layout.addWidget(self.detail)
+        # Selected-deck details sit beside the action that uses them.
+        actions.addWidget(self.detail, 1)
+        actions.addWidget(self.open_button, alignment=Qt.AlignmentFlag.AlignTop)
         layout.addWidget(self.selection_actions)
         self.empty_space = QWidget()
         layout.addWidget(self.empty_space, 1)
@@ -320,7 +330,7 @@ class LibraryWidget(QWidget):
         if not self.token():
             self.state.show_state(
                 "Sign in to view your decks",
-                "Keep your presentations together and access your private library.",
+                "Decks you upload are saved to your Buddy account.",
             )
         elif self.active:
             self.reload()
@@ -342,7 +352,7 @@ class LibraryWidget(QWidget):
     def filter_changed(self, _value: object = None) -> None:
         self.page = 1
         self.invalidate()
-        self.state.show_state("Loading library", "Searching saved decks…")
+        self.state.show_state("Loading library", "")
         self.debounce.start()
 
     def move_page(self, delta: int) -> None:
@@ -360,7 +370,7 @@ class LibraryWidget(QWidget):
             self.refresh.setEnabled(False)
             self.state.show_state(
                 "Sign in to view your decks",
-                "Keep your presentations together and access your private library.",
+                "Decks you upload are saved to your Buddy account.",
             )
             self.account.check_session()
             return
@@ -371,7 +381,7 @@ class LibraryWidget(QWidget):
         service = LibraryService(self.config)
         search, sort, page = self.search.text().strip(), str(self.sort.currentData()), self.page
         self.request_generation = self.generation
-        self.state.show_state("Loading library", "Retrieving your saved decks…")
+        self.state.show_state("Loading library", "")
         self.refresh.setEnabled(False)
         self.activity_changed.emit(True)
 
@@ -504,7 +514,7 @@ class LibraryWidget(QWidget):
                 guidance = "PDF is available to present. " + guidance
             self.open_button.setEnabled(deck.can_present and not self.runner.busy)
             attempts = f" Processing attempts: {deck.attempts}." if deck.attempts else ""
-            self.detail.setPlainText(guidance + attempts + "\n\n" + deck.title)
+            self.detail.setPlainText(deck.title + "\n" + guidance + attempts)
 
     def failed(self, _identifier: int, message: str) -> None:
         if self.upload_request and self.retry_path is not None and not self.closing:

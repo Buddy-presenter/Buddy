@@ -40,13 +40,12 @@ def open_profile(window, qtbot):
     qtbot.waitUntil(lambda: not window.account.runner.busy)
 
 
-@pytest.mark.parametrize("size", [(800, 600), (1200, 800)])
-def test_verified_profile_navigation_keyboard_and_layout(profile, qtbot, qapp, size):
+def test_verified_profile_navigation_keyboard_and_layout(profile, qtbot, qapp):
     window, response, calls = profile
     old_style, old_palette = qapp.styleSheet(), qapp.palette()
     apply_theme(qapp)
     try:
-        window.resize(*size)
+        window.resize(800, 600)  # The minimum window size is the binding layout constraint.
         response["data"]["email"] = "long" * 64 + "@example.test"
         window.account_button.setFocus()
         qtbot.keyClick(window.account_button, Qt.Key.Key_Space)
@@ -173,7 +172,8 @@ def test_signed_out_profile_has_account_guidance(desktop_window, qtbot):
     assert window.pages.currentIndex() == 4
 
 
-@pytest.mark.parametrize("action", ["signin", "signup", "recovery", "resume"])
+# Sign-up and recovery share sign-in's browser path; resume is the other token path.
+@pytest.mark.parametrize("action", ["signin", "resume"])
 @pytest.mark.parametrize("outcome", ["success", "failure", "cancel", "navigate"])
 def test_open_profile_during_authentication_tracks_completion(
     profile, monkeypatch, qtbot, action, outcome

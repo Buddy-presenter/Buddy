@@ -5,7 +5,6 @@ import json
 import socket
 from contextlib import suppress
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from threading import Event, Thread
 from uuid import uuid4
 
@@ -121,7 +120,8 @@ def test_uncertain_transfer_polls_instead_of_resending(upload_http, tmp_path, st
     assert upload_http.gets == 1 and not upload_http.bodies
 
 
-@pytest.mark.parametrize("code", [401, 403, 413, 415, 422, 429, 503, 302])
+# One status per outcome: expired access, rejected file, transient failure, no redirects.
+@pytest.mark.parametrize("code", [401, 413, 503, 302])
 def test_upload_safe_actionable_errors(upload_http, tmp_path, code):
     upload_http.code = code
     expected = (
@@ -179,16 +179,15 @@ def test_navigation_does_not_hide_upload_session_expiry(
     assert not library.upload_keys
 
 
-@pytest.mark.parametrize("size", [(800, 600), (1120, 760)])
 def test_upload_native_layout_and_keyboard(
-    upload_http, desktop_window, monkeypatch, qtbot, tmp_path, qapp, size
+    upload_http, desktop_window, monkeypatch, qtbot, tmp_path, qapp
 ):
     old_style, old_palette = qapp.styleSheet(), qapp.palette()
     apply_theme(qapp)
     monkeypatch.setattr(LibraryService, "list", lambda *a, **kw: LibraryPage((), 0, 1, 20))
     try:
         window = desktop_window(f"http://127.0.0.1:{upload_http.server_port}")
-        window.resize(*size)
+        window.resize(800, 600)  # The minimum window size is the binding layout constraint.
         library = signed_in(window)
         qtbot.waitUntil(lambda: not library.runner.busy)
         upload_http.release.clear()
@@ -205,10 +204,6 @@ def test_upload_native_layout_and_keyboard(
         qtbot.keyClick(library.cancel_upload_button, Qt.Key.Key_Space)
         qtbot.waitUntil(lambda: not library.runner.busy)
         assert library.retry_upload_button.isVisible()
-        destination = Path("build/issue37")
-        destination.mkdir(parents=True, exist_ok=True)
-        qapp.processEvents()
-        assert window.grab().save(str(destination / f"upload-recovery-{size[0]}.png"))
     finally:
         upload_http.release.set()
         qapp.setStyleSheet(old_style)

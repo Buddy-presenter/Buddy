@@ -13,6 +13,7 @@ OutputBaseFilename={#OutputName}
 Compression=lzma2
 SolidCompression=yes
 UninstallDisplayIcon={app}\Buddy.exe
+SetupIconFile={#AppIcon}
 [Files]
 Source: "{#AppSource}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 [Icons]

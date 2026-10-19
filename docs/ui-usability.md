@@ -16,6 +16,17 @@ services. It reorganizes their existing controls rather than adding a second wor
 - Signed-out Library has a direct sign-in action instead of disabled search/import/paging
   controls. Signed-in Library keeps the existing file picker, search, sorting and pagination; presentation
   actions sit with selected-deck details. No synthetic deck data or job progress is added.
+- The header names the current route, so pages do not repeat a title or tagline. Copy that
+  restates the obvious (sidebar "Workspace"/"Local workspace" labels, success chatter such as
+  "Ready.") is removed; status lines appear only when they carry progress or an error.
+- Signed out, the header shows a **Sign in** button; signed in, it becomes an avatar with the
+  verified email's initial. Its menu shows the email, **Profile** and **Sign out**. Password
+  recovery and **Use saved sign-in** (the existing resume of a session stored on this device)
+  are secondary links under Sign in and Create account. On Windows the one-item menu bar is
+  hidden; its keyboard shortcuts stay on the window, and macOS keeps the native menu.
+- Type uses Segoe UI Variable on Windows 11 (Segoe UI elsewhere on Windows; the system font on
+  macOS), unhinted and antialiased. Weights use named families because Qt renders variable
+  weights as faux bold. `apply_theme` resolves the font placeholders in `theme.qss`.
 - Inspect all routes and the account popover at 800x600 and 1200x800, including keyboard
   dismissal, sign-in cancellation, expiry and account/backend changes. Verify existing PDF
   and private-upload regressions as well as rendered evidence before review.

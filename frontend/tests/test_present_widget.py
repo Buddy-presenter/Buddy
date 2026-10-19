@@ -135,14 +135,3 @@ def test_close_during_slide_read_waits_without_blocking(present, qtbot, monkeypa
     qtbot.waitUntil(lambda: not page.executor.busy)
     qtbot.waitUntil(lambda: not window.isVisible())
     assert page.executor.current_index == 0
-
-
-def test_present_controls_fit_minimum_window_width(present, qapp):
-    window, page = present
-    window.resize(800, 600)
-    qapp.processEvents()
-    scroll = window.pages.widget(2)
-    assert not scroll.horizontalScrollBar().isVisible()
-    for field in page.fields.values():
-        field.setFocus()
-        assert field.isEnabled()

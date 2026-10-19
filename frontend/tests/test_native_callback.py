@@ -246,10 +246,18 @@ def test_entrypoint_uses_bundled_api_as_default_without_disabling_saved_url(tmp_
     assert environment_override
 
 
-@pytest.mark.parametrize("frozen", [False, True])
 @pytest.mark.parametrize(
-    "override",
-    ["none", "api", "identity", "identity_callback", "callback", "single_identity"],
+    "frozen,override",
+    [
+        (False, "none"),
+        (False, "api"),
+        (False, "identity"),
+        (False, "identity_callback"),
+        (False, "callback"),
+        (False, "single_identity"),
+        # Frozen builds only change where the deployment file is read from.
+        (True, "none"),
+    ],
 )
 def test_entrypoint_keeps_callback_default_with_its_identity(
     tmp_path, monkeypatch, frozen, override

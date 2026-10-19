@@ -62,6 +62,57 @@ def deployment_config(source: Path | None, *, production: bool = False) -> dict[
     return value
 
 
+def _png(size: int) -> bytes:
+    from PySide6.QtCore import QBuffer, QByteArray, QIODevice
+
+    from buddy_desktop.visuals import icon_inset, mascot_image
+
+    data = QByteArray()
+    buffer = QBuffer(data)
+    buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+    if not mascot_image(size, icon_inset(size)).save(buffer, "PNG"):
+        raise RuntimeError("Could not render the Buddy icon.")
+    return bytes(data.data())
+
+
+def write_app_icon(folder: Path) -> Path:
+    """Package the antialiased Buddy mascot as a multi-resolution .ico or .icns."""
+    if sys.platform == "win32":
+        sizes = (16, 20, 24, 32, 40, 48, 64, 128, 256)
+        images = [_png(size) for size in sizes]
+        # ICONDIR, then one ICONDIRENTRY per PNG-compressed image (0 encodes 256).
+        header = (0).to_bytes(2, "little") + (1).to_bytes(2, "little")
+        header += len(sizes).to_bytes(2, "little")
+        offset, entries = 6 + 16 * len(sizes), b""
+        for size, image in zip(sizes, images, strict=True):
+            entries += bytes([size % 256, size % 256, 0, 0]) + (1).to_bytes(2, "little")
+            entries += (32).to_bytes(2, "little") + len(image).to_bytes(4, "little")
+            entries += offset.to_bytes(4, "little")
+            offset += len(image)
+        path = folder / "Buddy.ico"
+        path.write_bytes(header + entries + b"".join(images))
+        return path
+    chunks = b""
+    for kind, size in (
+        (b"icp4", 16),
+        (b"icp5", 32),
+        (b"ic11", 32),
+        (b"icp6", 64),
+        (b"ic12", 64),
+        (b"ic07", 128),
+        (b"ic08", 256),
+        (b"ic13", 256),
+        (b"ic09", 512),
+        (b"ic14", 512),
+        (b"ic10", 1024),
+    ):
+        image = _png(size)
+        chunks += kind + (len(image) + 8).to_bytes(4, "big") + image
+    path = folder / "Buddy.icns"
+    path.write_bytes(b"icns" + (len(chunks) + 8).to_bytes(4, "big") + chunks)
+    return path
+
+
 def register_macos_callback(bundle: Path, signing_identity: str | None = None) -> None:
     """Register URL activation before the final bundle signature and notarization."""
     info = bundle / "Contents/Info.plist"
@@ -122,6 +173,7 @@ def build(
     public_settings = output / "buddy-deployment.json"
     public_settings.write_text(json.dumps(deployment_config(public_config, production=production)))
     bundle = output / "bundle"
+    app_icon = write_app_icon(output)
     command = [
         sys.executable,
         "-m",
@@ -132,6 +184,8 @@ def build(
         "--windowed",
         "--name",
         "Buddy",
+        "--icon",
+        str(app_icon),
         "--paths",
         str(ROOT),
         "--collect-data",
@@ -207,6 +261,7 @@ def build(
                 f"/DAppSource={bundle / 'Buddy'}",
                 f"/DOutputDirectory={output}",
                 f"/DOutputName=Buddy-{version}-{revision[:12]}-windows-x64",
+                f"/DAppIcon={app_icon}",
                 str(ROOT / "frontend/scripts/release/windows.iss"),
             ],
             check=True,

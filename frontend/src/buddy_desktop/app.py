@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import sys
+from contextlib import suppress
 from dataclasses import replace
 from importlib.resources import files
 from pathlib import Path
@@ -14,7 +15,7 @@ from PySide6.QtWidgets import QApplication
 from buddy_desktop import __version__
 from buddy_desktop.config import AppConfig, ConfigurationError, validate_api_url
 from buddy_desktop.native_callback import NativeCallbackServer
-from buddy_desktop.visuals import apply_theme
+from buddy_desktop.visuals import app_icon, apply_theme
 from buddy_desktop.window import MainWindow
 from buddy_identity.config import IdentityError
 
@@ -93,10 +94,18 @@ def run_application(
     if QApplication.instance() is not None:
         print("Buddy already has a Qt application instance.", file=sys.stderr)
         return 1
+    if sys.platform == "win32":
+        # Group the taskbar button under Buddy's own icon, not the Python interpreter's,
+        # when running from source. Packaged builds carry the same icon in Buddy.exe.
+        import ctypes
+
+        with suppress(AttributeError, OSError):
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("org.buddy.desktop")
     app = QApplication(sys.argv)
     app.setOrganizationName("Buddy")
     app.setApplicationName("BuddyDesktop")
     app.setApplicationVersion(__version__)
+    app.setWindowIcon(app_icon())
     activation = NativeCallbackServer(app)
     app.installEventFilter(activation)
     arguments = sys.argv[1:]

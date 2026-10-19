@@ -1,11 +1,11 @@
 """A read-only verified profile, using the existing serialized account lifecycle."""
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QLabel, QPushButton, QSizePolicy
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from buddy_desktop.account_widget import AccountWidget
 from buddy_desktop.auth import AccountProfile
-from buddy_desktop.views import Page, StatePanel
+from buddy_desktop.views import Page, StatePanel, centered_column
 from buddy_desktop.visuals import command
 
 
@@ -13,21 +13,34 @@ class ProfilePage(Page):
     controls_requested = Signal()
 
     def __init__(self, account: AccountWidget) -> None:
-        super().__init__("Your profile", "Your verified Buddy account information.")
+        super().__init__("Profile", "")
         self.account = account
         self.active = False
         self.request_id: int | None = None
         self.profile_id: str | None = None
         self.waiting = False
-        self.refresh = QPushButton("Refresh profile")
-        command(self.refresh, "refresh-cw")
-        self.refresh.clicked.connect(self.load)
-        self.body.addWidget(self.refresh, alignment=Qt.AlignmentFlag.AlignLeft)
-        self.state = StatePanel()
+        self.body.addSpacing(24)
+        layout = centered_column(self.body, 520)
+        layout.setSpacing(16)
+        self.state = StatePanel(centered=True)
         self.state.retry.setAccessibleName("Retry profile request")
         self.state.retry_requested.connect(self.load)
-        self.body.addWidget(self.state)
+        layout.addWidget(self.state)
+        self.card = QWidget()
+        self.card.setObjectName("group")
+        self.card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        card = QHBoxLayout(self.card)
+        card.setContentsMargins(20, 20, 16, 20)
+        card.setSpacing(16)
+        self.avatar = QLabel()
+        self.avatar.setObjectName("avatarLarge")
+        self.avatar.setFixedSize(56, 56)
+        self.avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card.addWidget(self.avatar)
+        identity = QVBoxLayout()
+        identity.setSpacing(4)
         self.email = QLabel()
+        self.email.setObjectName("cardTitle")
         self.email.setTextFormat(Qt.TextFormat.PlainText)
         self.email.setWordWrap(True)
         self.email.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
@@ -38,18 +51,23 @@ class ProfilePage(Page):
             | Qt.TextInteractionFlag.TextSelectableByKeyboard
         )
         self.email.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.body.addWidget(self.email)
+        identity.addWidget(self.email)
         self.verification = QLabel()
+        self.verification.setObjectName("badge")
         self.verification.setAccessibleName("Email verification status")
         self.verification.setWordWrap(True)
-        self.body.addWidget(self.verification)
-        guidance = QLabel("Manage sign-in and sign-out from your account menu.")
-        guidance.setWordWrap(True)
-        self.body.addWidget(guidance)
+        identity.addWidget(self.verification)
+        card.addLayout(identity, 1)
+        self.refresh = QPushButton("Refresh profile")
+        command(self.refresh, "refresh-cw", compact=True)
+        self.refresh.setObjectName("quietButton")
+        self.refresh.clicked.connect(self.load)
+        card.addWidget(self.refresh, alignment=Qt.AlignmentFlag.AlignTop)
+        layout.addWidget(self.card)
         self.controls = QPushButton("Manage account")
-        command(self.controls, "circle-user-round")
+        self.controls.setCursor(Qt.CursorShape.PointingHandCursor)
         self.controls.clicked.connect(self.controls_requested.emit)
-        self.body.addWidget(self.controls, alignment=Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(self.controls, alignment=Qt.AlignmentFlag.AlignHCenter)
         self.body.addStretch()
         account.profile_loaded.connect(self.loaded)
         account.profile_failed.connect(self.failed)
@@ -62,8 +80,22 @@ class ProfilePage(Page):
         self.profile_id = None
         self.email.clear()
         self.verification.clear()
+        self.avatar.clear()
         self.email.hide()
         self.verification.hide()
+        self.card.hide()
+        self._controls()
+
+    def _controls(self) -> None:
+        signed_in = bool(self.account.account_id)
+        self.controls.setText("Manage account" if signed_in else "Sign in")
+        self.controls.setAccessibleName(
+            "Open your account menu" if signed_in else "Sign in to view your profile"
+        )
+        self.controls.setToolTip(self.controls.accessibleName())
+        self.controls.setProperty("primary", not signed_in)
+        self.controls.style().unpolish(self.controls)
+        self.controls.style().polish(self.controls)
 
     def activate(self, active: bool) -> None:
         self.active = active
@@ -87,14 +119,11 @@ class ProfilePage(Page):
             return
         self.waiting = False
         if not self.account.account_id:
-            self.state.show_state(
-                "Sign in to view your profile",
-                "Use the account menu in the top-right corner to sign in.",
-            )
+            self.state.show_state("Sign in to view your profile", "")
             self.refresh.setEnabled(False)
             return
         self.refresh.setEnabled(False)
-        self.state.show_state("Loading profile", "Checking your account information securely…")
+        self.state.show_state("Loading profile", "")
         self.request_id = self.account.start("profile")
 
     def loaded(self, identifier: int, result: object) -> None:
@@ -108,11 +137,12 @@ class ProfilePage(Page):
         self.profile_id = result.id
         self.email.setText(result.email)
         self.verification.setText("Email verified")
+        self.avatar.setText(result.email[:1].upper())
         self.email.show()
         self.verification.show()
-        self.state.show_state(
-            "Account verified", "This information comes from your account provider."
-        )
+        self.card.show()
+        self.state.hide()
+        self._controls()
 
     def failed(self, identifier: int, message: str) -> None:
         if not self.active or identifier != self.request_id:
@@ -125,13 +155,12 @@ class ProfilePage(Page):
             self.clear()
             if self.active:
                 self.waiting = True
-                self.state.show_state(
-                    "Checking account", "Waiting for your account operation to finish."
-                )
+                self.state.show_state("Checking account", "")
         self.refresh.setEnabled(not busy and bool(self.account.account_id))
         self.state.retry.setEnabled(not busy)
 
     def session_changed(self) -> None:
+        self._controls()
         if not self.account.account_id:
             self.waiting = False
             self.clear()
