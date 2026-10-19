@@ -20,8 +20,8 @@ commands to the same callable/API.
   evidence references. `GET /api/v1/action-validations/{id}/evidence/{artifact_id}` returns
   one checksum-verified artifact. Missing/foreign IDs return 404; responses are no-store.
 - The internal callable is `ValidationService.validate(owner, deck_id, key, request)`.
-  It derives source revision/hash from the owned record. It remains independent of
-  analysis generation, queues, sessions and `analysis_versions`.
+  It derives source revision/hash from the owned record. The backend API and PDF analysis
+  worker use this same isolated validator.
 
 `validated` means the action executed with the expected deterministic state and pixels
 in the reported runtime/profile. `rejected` covers bad catalog parameters, stale IDs,
@@ -67,16 +67,17 @@ Python executable with `-m buddy_desktop.validation_worker` and fixed private jo
 
 Migration `0007_action_checks` adds owner/deck-scoped `action_checks` with a unique
 owner/retry key, request digest, bounded storage reservation, durable phase, result and
-private artifact metadata. Existing analysis-validation history is not overwritten.
-Future issue #12 can explicitly bind these reports/evidence to matching stored analysis
-actions using issue #11's contract; this endpoint does not automatically publish analyses
-or mark an action usable.
+private artifact metadata. The issue #12 analysis worker invokes this same validator for
+each candidate action, then records the versioned evidence and validation state against the
+matching stored action using issue #11's contract. Only a validated action is marked usable;
+rejected and needs-review outcomes remain visible with their reasons.
 
 Before/after PNGs and a JSON report use KMS-encrypted, versioned private S3 objects under
 `sources/<owner>/<deck>/validation/<run>/<kind>.<extension>`. No storage paths or S3 versions
-are exposed. Exact-version reads verify MIME, length and SHA-256. Existing scoped
-`sources/*` version-read/cleanup permissions suffice; no public bucket or new broad IAM
-grant is introduced.
+are exposed. Exact-version reads verify MIME, length and SHA-256. The API can read and clean
+up versioned source and validation objects. The worker can write and clean up versioned
+objects only under the exact `sources/*/*/validation/*` path; original PDF objects remain
+read-only to the worker.
 
 Each pending check reserves 32 MiB against the same private storage quota as original
 uploads. Completion replaces that reservation with the actual artifact byte count.

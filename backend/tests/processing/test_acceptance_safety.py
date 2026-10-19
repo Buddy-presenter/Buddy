@@ -119,3 +119,26 @@ def test_disposable_worker_role_is_scoped_to_claude_inference(operator, journal,
         "arn:aws:bedrock:eu-west-1::foundation-model/anthropic.claude-sonnet-4-6",
         "arn:aws:bedrock:eu-central-1:549327541867:project/default",
     }
+    evidence_write = next(
+        statement for statement in policies["worker"] if "s3:PutObject" in statement["Action"]
+    )
+    assert (
+        evidence_write["Resource"]
+        == "arn:aws:s3:::buddy-staging-549327541867-data/sources/*/*/validation/*"
+    )
+    assert set(evidence_write["Action"]) == {"s3:PutObject", "s3:DeleteObjectVersion"}
+    evidence_versions = next(
+        statement
+        for statement in policies["worker"]
+        if "s3:ListBucketVersions" in statement["Action"]
+    )
+    assert evidence_versions["Condition"]["StringLike"]["s3:prefix"] == "sources/*/*/validation/*"
+    evidence_key = next(
+        statement
+        for statement in policies["worker"]
+        if "kms:GenerateDataKey" in statement["Action"]
+    )
+    assert (
+        evidence_key["Condition"]["StringEquals"]["kms:ViaService"]
+        == "s3.eu-central-1.amazonaws.com"
+    )

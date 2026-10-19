@@ -351,6 +351,16 @@ class Acceptance:
                     ],
                 ),
                 kms(["kms:Decrypt"], [f"s3.{REGION}.amazonaws.com", f"sqs.{REGION}.amazonaws.com"]),
+                statement(
+                    ["s3:ListBucketVersions"],
+                    f"arn:aws:s3:::{BUCKET}",
+                    Condition={"StringLike": {"s3:prefix": "sources/*/*/validation/*"}},
+                ),
+                statement(
+                    ["s3:PutObject", "s3:DeleteObjectVersion"],
+                    f"arn:aws:s3:::{BUCKET}/sources/*/*/validation/*",
+                ),
+                kms(["kms:GenerateDataKey"], f"s3.{REGION}.amazonaws.com"),
             ],
         )
         self.controller_policy = [

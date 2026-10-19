@@ -61,6 +61,22 @@ resource "aws_iam_role_policy" "worker_versions" {
     { Effect = "Allow", Action = ["s3:GetObjectVersion"], Resource = "${aws_s3_bucket.private["data"].arn}/sources/*" }
   ] })
 }
+resource "aws_iam_role_policy" "worker_validation_evidence" {
+  role = aws_iam_role.task["worker"].id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [
+    { Effect = "Allow", Action = ["s3:ListBucketVersions"], Resource = aws_s3_bucket.private["data"].arn,
+    Condition = { StringLike = { "s3:prefix" = "sources/*/*/validation/*" } } },
+    { Effect = "Allow", Action = ["s3:PutObject", "s3:DeleteObjectVersion"],
+    Resource = "${aws_s3_bucket.private["data"].arn}/sources/*/*/validation/*" }
+  ] })
+}
+resource "aws_iam_role_policy" "worker_validation_evidence_kms" {
+  role = aws_iam_role.task["worker"].id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [
+    { Effect = "Allow", Action = ["kms:GenerateDataKey"], Resource = aws_kms_key.data.arn,
+    Condition = { StringEquals = { "kms:ViaService" = "s3.${var.region}.amazonaws.com" } } }
+  ] })
+}
 resource "aws_iam_role_policy" "worker_bedrock_analysis" {
   role = aws_iam_role.task["worker"].id
   policy = jsonencode({ Version = "2012-10-17", Statement = [

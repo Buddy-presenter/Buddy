@@ -302,6 +302,15 @@ run "private_upload_runtime_and_version_cleanup" {
   }
   assert {
     condition = (
+      jsondecode(aws_iam_role_policy.worker_validation_evidence.policy).Statement[0].Condition.StringLike["s3:prefix"] == "sources/*/*/validation/*" &&
+      jsondecode(aws_iam_role_policy.worker_validation_evidence.policy).Statement[1].Resource == "${aws_s3_bucket.private["data"].arn}/sources/*/*/validation/*" &&
+      toset(jsondecode(aws_iam_role_policy.worker_validation_evidence.policy).Statement[1].Action) == toset(["s3:PutObject", "s3:DeleteObjectVersion"]) &&
+      jsondecode(aws_iam_role_policy.worker_validation_evidence_kms.policy).Statement[0].Action == ["kms:GenerateDataKey"]
+    )
+    error_message = "The worker may write and clean only isolated validation evidence, encrypted with the data key."
+  }
+  assert {
+    condition = (
       jsondecode(aws_ecs_task_definition.service["api"].container_definitions)[0].readonlyRootFilesystem &&
       jsondecode(aws_ecs_task_definition.service["api"].container_definitions)[0].user == "10001:10001" &&
       jsondecode(aws_ecs_task_definition.service["api"].container_definitions)[0].mountPoints[0].containerPath == "/var/lib/buddy-upload" &&
