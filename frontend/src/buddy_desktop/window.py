@@ -3,7 +3,15 @@
 from dataclasses import replace
 
 from PySide6.QtCore import QByteArray, QSettings, QSize, Slot
-from PySide6.QtGui import QAction, QCloseEvent, QGuiApplication, QKeySequence
+from PySide6.QtGui import (
+    QAction,
+    QCloseEvent,
+    QDragEnterEvent,
+    QDragLeaveEvent,
+    QDropEvent,
+    QGuiApplication,
+    QKeySequence,
+)
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -19,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from buddy_desktop.account_widget import AccountWidget
 from buddy_desktop.config import AppConfig, ConfigurationError, validate_api_url
+from buddy_desktop.import_surface import dropped_path
 from buddy_desktop.library_widget import LibraryWidget
 from buddy_desktop.present_widget import PresentWidget
 from buddy_desktop.presentation_service import DownloadedPDF
@@ -46,6 +55,9 @@ class MainWindow(QMainWindow):
         self._active_task: int | None = None
         self._account_busy = False
         self._library_busy = False
+        self._mascot_feedback = "idle"
+        self._drag_attention = False
+        self.setAcceptDrops(True)
         self.runner = TaskRunner(self)
         self.runner.succeeded.connect(self._health_succeeded)
         self.runner.failed.connect(self._health_failed)
@@ -65,14 +77,15 @@ class MainWindow(QMainWindow):
         sidebar_layout.setContentsMargins(14, 24, 14, 18)
         wordmark = QHBoxLayout()
         wordmark.setSpacing(6)
-        wordmark.addWidget(BuddyMark(36))
+        self.brand_mark = BuddyMark(40)
+        wordmark.addWidget(self.brand_mark)
         brand = QLabel("Buddy")
         brand.setObjectName("brand")
         wordmark.addWidget(brand)
         wordmark.addStretch()
         sidebar_layout.addLayout(wordmark)
         sidebar_layout.addSpacing(32)
-        workspace_label = QLabel("WORKSPACE")
+        workspace_label = QLabel("Workspace")
         workspace_label.setObjectName("muted")
         sidebar_layout.addWidget(workspace_label)
         self.navigation = QListWidget()
@@ -106,6 +119,9 @@ class MainWindow(QMainWindow):
         self.present.executor.completed.connect(self._presentation_completed)
         self.present.executor.idle.connect(self._present_idle)
         self.library.activity_changed.connect(self._library_activity)
+        self.library.mascot_changed.connect(self._mascot_event)
+        self.library.import_surface.attention_changed.connect(self._drag_changed)
+        self.library.preview.runner.idle.connect(self._preview_idle)
         self.home.account_layout.addWidget(self.account)
         self.home.route_requested.connect(self._select_route)
         self.home.check_requested.connect(self.check_connection)
@@ -233,6 +249,7 @@ class MainWindow(QMainWindow):
             self.route_title.setText(("Home", "Library", "Present", "Settings", "Profile")[index])
             self.profile.activate(index == 4)
             self.library.activate(index == 1)
+            self._update_activity()
             if index == 2:
                 self.statusBar().showMessage(
                     "PDF presentation controls run locally after opening or downloading the file."
@@ -245,7 +262,55 @@ class MainWindow(QMainWindow):
         self.settings.setValue("appearance/reduce_motion", reduced)
         for mark in self.findChildren(BuddyMark):
             mark.reduced_motion = reduced
-            mark.set_activity(mark.active)
+            mark.set_state(mark.state)
+
+    def _drag_changed(self, active: bool) -> None:
+        self._drag_attention = active
+        self._update_activity()
+
+    def _mascot_event(self, state: str) -> None:
+        self._mascot_feedback = state
+        self._update_activity()
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if (
+            self.library.token()
+            and not self.library.runner.busy
+            and not self._closing
+            and dropped_path(event.mimeData()) is not None
+        ):
+            self._drag_changed(True)
+            self.statusBar().showMessage("Release to import your presentation into Library.")
+            event.acceptProposedAction()
+            return
+        self.statusBar().showMessage(
+            "Import one local PDF or PPTX. Sign in and finish the current operation first."
+        )
+        event.ignore()
+
+    def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
+        self._drag_changed(False)
+        self.statusBar().clearMessage()
+        event.accept()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        path = dropped_path(event.mimeData())
+        self._drag_changed(False)
+        if (
+            path is not None
+            and self.library.token()
+            and not self.library.runner.busy
+            and not self._closing
+        ):
+            # Navigate without scheduling a competing list request ahead of the upload.
+            self.pages.setCurrentIndex(1)
+            self.library.active = True
+            self.library.start_upload(path)
+            self.navigation.setCurrentRow(1)
+            self.statusBar().showMessage("Importing presentation…")
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
     @Slot()
     def check_connection(self) -> None:
@@ -259,6 +324,7 @@ class MainWindow(QMainWindow):
         self.preferences.save.setEnabled(False)
         self.statusBar().showMessage("Checking backend connection…")
         self._active_task = self.runner.submit(HealthService(self.config).check)
+        self._update_activity()
 
     @Slot(int, object)
     def _health_succeeded(self, identifier: int, result: object) -> None:
@@ -270,6 +336,7 @@ class MainWindow(QMainWindow):
         self.home.connection.show_state("Backend connected", "Your Buddy service reports healthy.")
         self.connection_status.setText("Backend connected")
         self.statusBar().showMessage("Backend connected.")
+        self._mascot_feedback = "idle"
 
     @Slot(int, str)
     def _health_failed(self, identifier: int, message: str) -> None:
@@ -278,12 +345,12 @@ class MainWindow(QMainWindow):
         self.home.connection.show_state("Connection unavailable", message, retry=True)
         self.connection_status.setText("Connection unavailable")
         self.statusBar().showMessage(message)
+        self._mascot_feedback = "error"
 
     @Slot()
     def _task_idle(self) -> None:
         self._active_task = None
         self._update_activity()
-        self.home.mascot.set_activity(False)
         if self._closing:
             self.close()
         else:
@@ -321,14 +388,25 @@ class MainWindow(QMainWindow):
             self.close()
 
     def _update_activity(self) -> None:
-        self.activity_mark.set_activity(
-            self._active_task is not None or self._account_busy or self._library_busy
-        )
+        state = self._mascot_feedback
+        if self._active_task is not None or self._account_busy or self._library_busy:
+            state = "working"
+        elif self._drag_attention:
+            state = "attention"
+        elif self.pages.currentIndex() == 2 and self.present.surface.slide is not None:
+            state = "presenting"
+        for mark in self.findChildren(BuddyMark):
+            mark.set_state(state)
+
+    def _preview_idle(self) -> None:
+        if self._closing:
+            self.close()
 
     @Slot()
     def _present_idle(self) -> None:
         if self.present.surface.slide is not None:
             self.home.workspace_state.setText(self.present.counter.text())
+        self._update_activity()
         if self._closing:
             self.close()
 
@@ -384,6 +462,7 @@ class MainWindow(QMainWindow):
             or self.account.runner.busy
             or self.library.runner.busy
             or self.present.executor.busy
+            or self.library.preview.runner.busy
         ):
             self._closing = True
             self.runner.stop()

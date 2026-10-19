@@ -76,6 +76,9 @@ For feature-specific contracts, read the linked guide before editing. Keep tests
 their owning component unless a test intentionally crosses a component boundary; those
 belong in `tests/integration/`.
 
+Desktop visual direction, tools, import/mascot behavior and UI acceptance are described
+in the [desktop experience plan](ui-revamp.md).
+
 Authenticated original-PPTX ingestion, storage limits, retry contracts and recovery are
 documented in [private uploads](uploads.md). Library includes PDF/PPTX upload controls.
 See [PDF presentations](pdf-presentations.md) for the built-in PDF viewer and page validation.

@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from buddy_desktop.account_widget import AccountWidget
 from buddy_desktop.config import AppConfig
+from buddy_desktop.import_surface import ImportPreview, ImportSurface
 from buddy_desktop.library_service import LibraryAccessExpired, LibraryPage, LibraryService
 from buddy_desktop.presentation_service import (
     DownloadedPDF,
@@ -58,6 +59,7 @@ class LibraryWidget(QWidget):
     present_requested = Signal(object)
     private_invalidated = Signal()
     upload_progress = Signal(object, str, int, int)
+    mascot_changed = Signal(str)
 
     def __init__(self, config: AppConfig, account: AccountWidget) -> None:
         super().__init__()
@@ -90,6 +92,10 @@ class LibraryWidget(QWidget):
         heading = QLabel("Library")
         heading.setObjectName("pageTitle")
         layout.addWidget(heading)
+        self.import_surface = ImportSurface()
+        self.import_surface.browse_requested.connect(self.choose_upload)
+        self.import_surface.file_dropped.connect(self.start_upload)
+        layout.addWidget(self.import_surface)
         controls = QHBoxLayout()
         search_label = QLabel("&Search")
         self.search = QLineEdit()
@@ -121,10 +127,7 @@ class LibraryWidget(QWidget):
         controls.addWidget(self.refresh)
         layout.addLayout(controls)
         actions = QHBoxLayout()
-        self.upload_button = QPushButton("Upload PDF or PPTX…")
-        command(self.upload_button, "folder-open", primary=True)
-        self.upload_button.clicked.connect(self.choose_upload)
-        actions.addWidget(self.upload_button)
+        self.upload_button = self.import_surface.browse
         self.open_button = QPushButton("Present PDF")
         command(self.open_button, "presentation")
         self.open_button.setEnabled(False)
@@ -133,8 +136,16 @@ class LibraryWidget(QWidget):
         actions.addStretch()
         layout.addLayout(actions)
         self.upload_panel = QWidget()
+        self.upload_panel.setObjectName("transferCard")
+        self.upload_panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         upload_layout = QVBoxLayout(self.upload_panel)
-        upload_layout.setContentsMargins(0, 0, 0, 0)
+        upload_layout.setContentsMargins(18, 14, 18, 14)
+        self.upload_name = QLabel()
+        self.upload_name.setObjectName("sectionTitle")
+        self.upload_name.setWordWrap(True)
+        self.upload_name.setTextFormat(Qt.TextFormat.PlainText)
+        self.upload_name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        upload_layout.addWidget(self.upload_name)
         self.upload_status = QLabel()
         self.upload_status.setWordWrap(True)
         self.upload_status.setTextFormat(Qt.TextFormat.PlainText)
@@ -156,7 +167,9 @@ class LibraryWidget(QWidget):
             upload_actions.addWidget(button)
         upload_actions.addStretch()
         upload_layout.addLayout(upload_actions)
-        layout.addWidget(self.upload_panel)
+        self.preview = ImportPreview()
+        upload_layout.addWidget(self.preview)
+        self.import_surface.content.addWidget(self.upload_panel)
         self.upload_panel.hide()
         self.state = StatePanel()
         self.state.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
@@ -277,6 +290,7 @@ class LibraryWidget(QWidget):
             self.pending = False
             self.refresh.setEnabled(False)
             self.upload_button.setEnabled(False)
+            self.import_surface.set_available(False)
             self.state.show_state(
                 "Checking account", "Library access is paused during account changes."
             )
@@ -297,6 +311,7 @@ class LibraryWidget(QWidget):
         self.account_key = key
         self.refresh.setEnabled(self.token() is not None)
         self.upload_button.setEnabled(self.token() is not None and not self.runner.busy)
+        self.import_surface.set_available(self.upload_button.isEnabled())
         if not self.token():
             self.state.show_state(
                 "Sign in to view your decks", "Account access is available on Home."
@@ -343,6 +358,8 @@ class LibraryWidget(QWidget):
         self.request_generation = self.generation
         self.state.show_state("Loading library", "Retrieving your saved decks…")
         self.refresh.setEnabled(False)
+        self.upload_button.setEnabled(False)
+        self.import_surface.set_available(False)
         self.activity_changed.emit(True)
 
         def work() -> LibraryPage | LibraryAccessExpired:
@@ -376,7 +393,19 @@ class LibraryWidget(QWidget):
             if self.upload_keys.get(fingerprint) == key:
                 del self.upload_keys[fingerprint]
             if self.retry_path is not None:
-                self.upload_status.setText("Presentation saved. Refresh Library to see it.")
+                is_pptx = self.retry_path.suffix.lower() == ".pptx"
+                self.upload_status.setText(
+                    "PowerPoint saved. Export to PDF to present; "
+                    "PowerPoint previews are not available yet."
+                    if is_pptx
+                    else "Presentation saved. Your PDF is available in Library."
+                )
+                self.import_surface.mascot.set_state("success")
+                self.import_surface.title.setText("Your original is saved.")
+                self.import_surface.message.setText(
+                    "Choose another presentation whenever you're ready."
+                )
+                self.mascot_changed.emit("success")
                 self.upload_bar.setRange(0, 100)
                 self.upload_bar.setValue(100)
                 self.retry_path = None
@@ -480,10 +509,15 @@ class LibraryWidget(QWidget):
             self.upload_status.setText(message)
             self.upload_bar.hide()
             self.retry_upload_button.show()
+            self.import_surface.mascot.set_state("error")
+            self.import_surface.title.setText("Import needs attention.")
+            self.import_surface.message.setText("Retry below, or choose another presentation.")
+            self.mascot_changed.emit("error")
             self.state.hide()
             return
         if self.current():
             self.state.show_state("Library unavailable", message, retry=True)
+            self.mascot_changed.emit("error")
 
     def idle(self) -> None:
         self.cancel_upload_button.hide()
@@ -493,6 +527,7 @@ class LibraryWidget(QWidget):
         self.activity_changed.emit(False)
         self.refresh.setEnabled(not self.closing and self.token() is not None)
         self.upload_button.setEnabled(not self.closing and self.token() is not None)
+        self.import_surface.set_available(self.upload_button.isEnabled())
         self.retry_upload_button.setEnabled(not self.closing and self.token() is not None)
         self.selection_changed()
         if self.pending and self.active and not self.closing:
@@ -512,6 +547,8 @@ class LibraryWidget(QWidget):
             return
         try:
             info = path.stat()
+            if not path.is_file() or path.suffix.lower() not in {".pdf", ".pptx"}:
+                raise OSError
         except OSError:
             self.state.show_state("File unavailable", "Choose a readable presentation file.")
             return
@@ -522,6 +559,13 @@ class LibraryWidget(QWidget):
         cancelled = Event()
         self.upload_cancelled = cancelled
         self.upload_panel.show()
+        self.upload_name.setText(path.name)
+        self.import_surface.title.setText("Your presentation is on its way.")
+        self.import_surface.message.setText(
+            "Your original stays unchanged. Follow the transfer below."
+        )
+        self.import_surface.mascot.set_state("working")
+        self.preview.start(path)
         self.upload_bar.show()
         self.upload_bar.setRange(0, 0)
         self.upload_status.setText("Preparing presentation…")
@@ -561,6 +605,12 @@ class LibraryWidget(QWidget):
         if clear_keys:
             self.upload_keys.clear()
         self.upload_panel.hide()
+        self.upload_name.clear()
+        self.preview.clear()
+        self.import_surface.title.setText("Bring your next presentation.")
+        self.import_surface.message.setText("Drop one PDF or PowerPoint here, or choose a file.")
+        self.import_surface.mascot.set_state("idle")
+        self.mascot_changed.emit("idle")
 
     def update_upload_progress(self, operation: object, phase: str, sent: int, total: int) -> None:
         if operation is not self.upload_cancelled or self.closing or self.retry_path is None:
@@ -590,6 +640,7 @@ class LibraryWidget(QWidget):
         self.debounce.stop()
         self.request_generation = self.generation
         self.upload_button.setEnabled(False)
+        self.import_surface.set_available(False)
         self.open_button.setEnabled(False)
         self.refresh.setEnabled(False)
         self.state.show()
@@ -614,3 +665,4 @@ class LibraryWidget(QWidget):
         self.debounce.stop()
         self.invalidate()
         self.runner.stop()
+        self.preview.shutdown()
