@@ -62,7 +62,7 @@ class PresentationService:
                 connection.shutdown(socket.SHUT_RDWR)
             connection.close()
 
-    def opener(self) -> Any:
+    def opener(self, response_timeout: float) -> Any:
         service = self
 
         class Reader(io.RawIOBase):
@@ -70,7 +70,7 @@ class PresentationService:
 
             def __init__(self, connection: socket.socket):
                 self.connection = connection
-                self.deadline = time.monotonic() + float(connection.gettimeout() or 120)
+                self.deadline = time.monotonic() + response_timeout
                 # Retain the descriptor when urllib closes its connection after headers.
                 self.lease = connection.makefile("rb", buffering=0)
                 connection.settimeout(0.2)
@@ -164,7 +164,9 @@ class PresentationService:
             else self.config.request_timeout
         )
         try:
-            with self.opener().open(request, timeout=timeout) as response:
+            with self.opener(timeout).open(
+                request, timeout=self.config.request_timeout
+            ) as response:
                 limit = MAX_BYTES if pdf else 65536
                 payload = response.read(limit + 1)
                 expected = "application/pdf" if pdf else "application/json"
