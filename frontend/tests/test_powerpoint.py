@@ -1,4 +1,5 @@
 from pathlib import Path
+from threading import Event
 
 import pytest
 
@@ -428,3 +429,82 @@ def test_powerpoint_status_poll_does_not_toggle_controls(desktop_window, tmp_pat
 
     assert not page.powerpoint_open_button.isEnabled()
     assert not page.powerpoint_connect_button.isEnabled()
+
+
+@pytest.mark.skipif(__import__("sys").platform != "win32", reason="Windows PowerPoint UI only")
+@pytest.mark.parametrize("fails", [False, True])
+def test_disconnect_ignores_late_poll_completion(desktop_window, qtbot, tmp_path, fails):
+    from buddy_desktop.powerpoint import PresentationInfo
+
+    page = desktop_window().present
+    info = PresentationInfo(str(tmp_path / "lesson.pptx"), "lesson.pptx", 2, 6)
+    started, release = Event(), Event()
+
+    class BlockedPowerPoint:
+        def list_slideshows(self):
+            return ()
+
+        def status(self, _path):
+            started.set()
+            if not release.wait(5):
+                raise RuntimeError("Test did not release the poll")
+            if fails:
+                raise PowerPointError("PowerPoint is temporarily busy.")
+            return info
+
+    page.powerpoint = BlockedPowerPoint()
+    page._attach_powerpoint_info(info)
+    page._submit_powerpoint("status", info.path)
+    try:
+        qtbot.waitUntil(started.is_set)
+        page.powerpoint_disconnect_button.click()
+        disconnected_text = page.powerpoint_status.text()
+        assert page._powerpoint_info is None
+        assert not page._powerpoint_poll.isActive()
+    finally:
+        release.set()
+    qtbot.waitUntil(lambda: not page.powerpoint_runner.busy)
+
+    assert page._powerpoint_info is None
+    assert page._powerpoint_path is None
+    assert not page._powerpoint_poll.isActive()
+    assert page.powerpoint_status.text() == disconnected_text
+
+
+@pytest.mark.skipif(__import__("sys").platform != "win32", reason="Windows PowerPoint UI only")
+@pytest.mark.parametrize("action", ["launch", "status"])
+def test_window_finishes_closing_after_powerpoint_task(desktop_window, qtbot, tmp_path, action):
+    from buddy_desktop.powerpoint import PresentationInfo
+
+    window = desktop_window()
+    page = window.present
+    info = PresentationInfo(str(tmp_path / "lesson.pptx"), "lesson.pptx", 2, 6)
+    started, release = Event(), Event()
+
+    class BlockedPowerPoint:
+        def list_slideshows(self):
+            return ()
+
+        def launch(self, _path):
+            started.set()
+            if not release.wait(5):
+                raise RuntimeError("Test did not release the task")
+            return info
+
+        status = launch
+
+    page.powerpoint = BlockedPowerPoint()
+    if action == "status":
+        page._attach_powerpoint_info(info)
+    page._submit_powerpoint(action, info.path)
+    try:
+        qtbot.waitUntil(started.is_set)
+        window.close()
+        assert window.isVisible()
+        assert window._closing
+        assert not window.centralWidget().isEnabled()
+    finally:
+        release.set()
+    qtbot.waitUntil(lambda: not page.powerpoint_runner.busy)
+    qtbot.waitUntil(lambda: not window.isVisible(), timeout=1000)
+    assert not page._powerpoint_poll.isActive()

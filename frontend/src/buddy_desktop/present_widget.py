@@ -368,6 +368,9 @@ class PresentWidget(Page):
     @Slot()
     def _disconnect_powerpoint(self) -> None:
         self._powerpoint_poll.stop()
+        # Invalidate in-flight work: neither late success nor failure may restore
+        # a connection or restart polling after the user explicitly disconnects.
+        self._powerpoint_pending.clear()
         self._powerpoint_info = None
         self._powerpoint_path = None
         self.powerpoint_status.setText(
