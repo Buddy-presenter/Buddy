@@ -105,6 +105,7 @@ class MainWindow(QMainWindow):
         self.library.private_invalidated.connect(self._clear_private_pdf)
         self.present.executor.completed.connect(self._presentation_completed)
         self.present.executor.idle.connect(self._present_idle)
+        self.present.powerpoint_runner.idle.connect(self._powerpoint_idle)
         self.library.activity_changed.connect(self._library_activity)
         self.home.account_layout.addWidget(self.account)
         self.home.route_requested.connect(self._select_route)
@@ -327,8 +328,15 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _present_idle(self) -> None:
+        self.present._refresh()
         if self.present.surface.slide is not None:
             self.home.workspace_state.setText(self.present.counter.text())
+        if self._closing:
+            self.close()
+
+    @Slot()
+    def _powerpoint_idle(self) -> None:
+        self.present._refresh()
         if self._closing:
             self.close()
 
@@ -384,6 +392,7 @@ class MainWindow(QMainWindow):
             or self.account.runner.busy
             or self.library.runner.busy
             or self.present.executor.busy
+            or self.present.powerpoint_runner.busy
         ):
             self._closing = True
             self.runner.stop()

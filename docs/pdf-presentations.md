@@ -1,10 +1,11 @@
 # PDF presentations (#10)
 
-Buddy accepts **PDF and PPTX** originals. PDF is the supported in-app presentation format.
-PPTX ingestion, unchanged private originals, extraction and existing analysis contracts
-remain available; PPTX playback/conversion and an automatic analysis pipeline are not
-implemented. Export a PPTX to PDF and upload that file to present it. The PDF is a separate
-deck/revision; Buddy never overwrites or silently converts the PPTX.
+Buddy accepts **PDF and PPTX** originals. PDF remains Buddy's in-app rendered format.
+On Windows, Present can also launch a local `.pptx` in installed desktop PowerPoint and
+track its slideshow. This is a separate presentation path: Buddy does not convert the
+PPTX or render it in its own slide surface. The original remains unchanged. Slide
+navigation from Buddy is added by #109; drawing/erase by #110; region zoom remains under
+investigation in #111. Export to PDF when using Buddy's cross-platform rendered viewer.
 
 ## Desktop flow
 
@@ -30,8 +31,9 @@ advance; Left/Page Up go back; G chooses a slide; drag a region then Z zooms or 
 R resets. Zoom/highlight state survives entering/exiting. Closing Buddy or signing out of
 a private presentation closes full screen and restores the surface safely.
 
-The built-in engine is `pypdfium2==5.14.0`, backed by PDFium. No Office, LibreOffice,
-browser account, external application or system PDF viewer is required. Windows and
+The built-in PDF engine is `pypdfium2==5.14.0`, backed by PDFium. PDF presentation does
+not require Office, LibreOffice, a browser account, an external application or a system
+PDF viewer. Windows and
 macOS native libraries and their notices are collected by the desktop packager.
 pypdfium2 is available under Apache-2.0/BSD-3-Clause; PDFium and bundled third-party
 components have their own redistribution notices. Retain the wheel's bundled notices:
