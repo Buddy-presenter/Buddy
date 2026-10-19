@@ -470,3 +470,96 @@ def test_windows_shell_launches_source_callback_and_relays_to_pending_login(qapp
             assert attempt.code == "synthetic-shell-code"
     finally:
         server.close()
+
+
+@pytest.mark.parametrize("finish", ["payload", "peer-close", "server-close", "timeout"])
+def test_native_connection_resources_are_released(qapp, qtbot, tmp_path, finish):
+    from PySide6.QtCore import QCoreApplication, QEvent, QTimer
+    from PySide6.QtNetwork import QLocalSocket
+    from shiboken6 import isValid
+
+    server = NativeCallbackServer(directory=tmp_path)
+    assert server.start()
+    client = QLocalSocket()
+    activations = []
+    server.activated.connect(lambda: activations.append(True))
+    try:
+        client.connectToServer(server.name)
+        assert client.waitForConnected(1500)
+        qtbot.waitUntil(lambda: len(server.buffers) == 1)
+        accepted = next(iter(server.buffers))
+        deadline = server.findChild(QTimer)
+        assert deadline is not None and deadline.isActive()
+        if finish == "payload":
+            client.write(b"activate\n")
+            assert client.waitForBytesWritten(1500)
+        elif finish == "peer-close":
+            client.abort()
+        elif finish == "server-close":
+            server.close()
+        # An idle peer must be cut off by the real two-second timer.
+        qtbot.waitUntil(lambda: not server.buffers, timeout=4000)
+        assert not isValid(deadline) or not deadline.isActive()
+        qtbot.waitUntil(lambda: client.state() == QLocalSocket.LocalSocketState.UnconnectedState)
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        assert not isValid(accepted) and not isValid(deadline)
+        assert server.findChildren(QTimer) == []
+        assert activations == ([True] if finish == "payload" else [])
+        server.close()  # Cleanup remains idempotent after a timeout/disconnect.
+    finally:
+        client.abort()
+        server.close()
+
+
+def test_repeated_native_socket_teardown_survives_deferred_deletion(tmp_path):
+    # Reproduce the failing lifecycle in a fresh process: a native crash fails this
+    # test without killing pytest or being mistaken for a timeout/assertion retry.
+    script = r"""
+import gc
+import sys
+import time
+from pathlib import Path
+from PySide6.QtCore import QCoreApplication, QEvent
+from PySide6.QtNetwork import QLocalSocket
+from buddy_desktop.native_callback import NativeCallbackServer
+
+app = QCoreApplication([])
+for cycle in range(40):
+    server = NativeCallbackServer(directory=Path(sys.argv[1]))
+    assert server.start()
+    clients = []
+    for _ in range(4):
+        client = QLocalSocket()
+        client.connectToServer(server.name)
+        assert client.waitForConnected(1500)
+        clients.append(client)
+        app.processEvents()
+    deadline = time.monotonic() + 5
+    while len(server.buffers) < 4 and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.001)
+    assert len(server.buffers) == 4
+    for client in clients:
+        client.write(b'activate\n' if cycle % 2 else b'partial')
+        assert client.waitForBytesWritten(1500)
+    app.processEvents()
+    server.close()
+    assert not server.buffers and not server.timers
+    server.deleteLater()
+    for client in clients:
+        client.abort()
+        client.deleteLater()
+    clients.clear()
+    del client, server
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    gc.collect()
+    app.processEvents()
+"""
+    result = subprocess.run(
+        [sys.executable, "-X", "faulthandler", "-c", script, str(tmp_path)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
