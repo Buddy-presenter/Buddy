@@ -50,7 +50,9 @@ def desktop_window(qtbot, tmp_path, monkeypatch):
             str(tmp_path / f"buddy-{len(windows)}.ini"), QSettings.Format.IniFormat
         )
         window = MainWindow(AppConfig(api_url, request_timeout), settings, **kwargs)
-        qtbot.addWidget(window)
+        # This fixture owns asynchronous shutdown. pytest-qt's addWidget cleanup
+        # unconditionally deleteLater()s even a window whose closeEvent is waiting
+        # for an isolated renderer, so do not register a second cleanup owner.
         windows.append(window)
         window.show()
         return window
@@ -63,12 +65,14 @@ def desktop_window(qtbot, tmp_path, monkeypatch):
                 not window.runner.busy
                 and not window.account.runner.busy
                 and not window.library.runner.busy
+                and not window.library.preview.runner.busy
                 and not window.present.executor.busy
             ),
-            timeout=5000,
+            timeout=25000,
         )
         qtbot.waitUntil(lambda window=window: not window.isVisible(), timeout=5000)
         window.settings.sync()
+        window.deleteLater()
 
 
 @pytest.fixture

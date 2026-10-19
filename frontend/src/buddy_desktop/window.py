@@ -389,12 +389,12 @@ class MainWindow(QMainWindow):
 
     def _update_activity(self) -> None:
         state = self._mascot_feedback
-        if self._active_task is not None or self._account_busy or self._library_busy:
+        if self.pages.currentIndex() == 2 and self.present.surface.slide is not None:
+            state = "presenting"
+        elif self._active_task is not None or self._account_busy or self._library_busy:
             state = "working"
         elif self._drag_attention:
             state = "attention"
-        elif self.pages.currentIndex() == 2 and self.present.surface.slide is not None:
-            state = "presenting"
         for mark in self.findChildren(BuddyMark):
             mark.set_state(state)
 

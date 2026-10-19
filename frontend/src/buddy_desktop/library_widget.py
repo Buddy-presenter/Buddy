@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLayout,
     QLineEdit,
     QPlainTextEdit,
     QProgressBar,
@@ -87,6 +88,7 @@ class LibraryWidget(QWidget):
         self.retry_path: Path | None = None
         self.upload_progress.connect(self.update_upload_progress)
         layout = QVBoxLayout(self)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         layout.setContentsMargins(28, 24, 28, 24)
         layout.setSpacing(18)
         heading = QLabel("Library")
@@ -483,6 +485,11 @@ class LibraryWidget(QWidget):
         )
         self.previous.setEnabled(self.page > 1)
         self.next.setEnabled(self.page * 20 < result.total)
+        # Propagate the newly visible table/details minimum before another input
+        # event, including a short window's scroll area.
+        current_layout = self.layout()
+        if current_layout is not None:
+            current_layout.activate()
 
     def selection_changed(self, *_args: object) -> None:
         row = self.table.currentRow()

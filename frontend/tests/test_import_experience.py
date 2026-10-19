@@ -83,11 +83,40 @@ def test_late_private_preview_is_discarded(qtbot, monkeypatch):
     preview.start(FIXTURE)
     qtbot.waitUntil(entered.is_set)
     old_operation = preview.cancelled
+    preview.start(FIXTURE)
+    assert preview.pending_path == FIXTURE
     preview.clear()
     release.set()
     qtbot.waitUntil(lambda: not preview.runner.busy)
     preview.page_ready.emit(old_operation, 0, QImage(), 1)
     assert not preview.images and not preview.title.text()
+    assert preview.pending_path is None
+
+
+def test_close_waits_for_preview_without_blocking_gui(desktop_window, qtbot, monkeypatch):
+    import buddy_desktop.import_surface as module
+
+    entered, release = Event(), Event()
+
+    def render(*args):
+        entered.set()
+        release.wait(4)
+        image = QImage(20, 20, QImage.Format.Format_ARGB32)
+        image.fill(Qt.GlobalColor.white)
+        return {"sizes": [[20, 20]]}, image
+
+    monkeypatch.setattr(module, "render", render)
+    window = desktop_window()
+    preview = window.library.preview
+    preview.start(FIXTURE)
+    qtbot.waitUntil(entered.is_set)
+    assert not window.close()
+    assert window.isVisible() and window._closing
+    qtbot.wait(40)
+    assert preview.runner.busy
+    release.set()
+    qtbot.waitUntil(lambda: not preview.runner.busy and not window.isVisible())
+    assert not preview.images
 
 
 def test_window_drop_uses_real_upload_and_pptx_truth(
@@ -148,6 +177,47 @@ def test_signed_out_drop_does_not_start_upload(desktop_window):
     window.dragEnterEvent(event)
     assert not event.isAccepted() and not window.library.runner.busy
     assert not window.library.import_surface.browse.isEnabled()
+
+
+@pytest.mark.parametrize("size", [(800, 600), (1200, 800)])
+def test_pdf_import_card_with_real_previews_and_upload(
+    upload_http, desktop_window, qtbot, monkeypatch, qapp, size
+):
+    monkeypatch.setattr(LibraryService, "list", lambda *a, **kw: LibraryPage((), 0, 1, 20))
+    palette, stylesheet = qapp.palette(), qapp.styleSheet()
+    apply_theme(qapp)
+    try:
+        window = desktop_window(f"http://127.0.0.1:{upload_http.server_port}", request_timeout=5)
+        window.resize(*size)
+        library = signed_in(window)
+        qtbot.waitUntil(lambda: not library.runner.busy)
+        upload_http.release.clear()
+        library.start_upload(FIXTURE)
+        qtbot.waitUntil(upload_http.entered.is_set)
+        qtbot.waitUntil(lambda: not library.preview.runner.busy, timeout=20000)
+        assert len(library.preview.images) == 3
+        scroll = window.pages.currentWidget()
+        scroll.ensureWidgetVisible(library.import_surface)
+        qapp.processEvents()
+        assert scroll.horizontalScrollBar().maximum() == 0
+        assert library.preview.parent() is library.upload_panel
+        assert library.upload_panel.parent() is library.import_surface
+        for thumbnail in library.preview.images:
+            assert not thumbnail.pixmap().isNull()
+            assert thumbnail.pixmap().width() <= thumbnail.width()
+        destination = Path("build/issue112")
+        destination.mkdir(parents=True, exist_ok=True)
+        assert window.grab().save(str(destination / f"pdf-import-{size[0]}.png"))
+        upload_http.release.set()
+        qtbot.waitUntil(lambda: not library.runner.busy)
+        assert upload_http.bodies == [FIXTURE.read_bytes()]
+        assert "Presentation saved" in library.upload_status.text()
+        qapp.processEvents()
+        assert window.grab().save(str(destination / f"pdf-saved-{size[0]}.png"))
+    finally:
+        upload_http.release.set()
+        qapp.setStyleSheet(stylesheet)
+        qapp.setPalette(palette)
 
 
 def test_mascot_interrupts_and_preserves_semantics_with_reduced_motion(qtbot):
