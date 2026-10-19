@@ -159,6 +159,16 @@ def build(
         command += ["--osx-bundle-identifier", "org.buddy.desktop"]
         if signing_identity:
             command += ["--codesign-identity", signing_identity]
+    elif sys.platform == "win32":
+        # COM automation modules are imported at runtime to keep the macOS build clean.
+        command += [
+            "--hidden-import",
+            "pythoncom",
+            "--hidden-import",
+            "pywintypes",
+            "--hidden-import",
+            "win32com.client",
+        ]
     command += [str(ROOT / "frontend/scripts/release/desktop_entry.py")]
     build_environment = dict(os.environ)
     if sys.platform == "win32":
