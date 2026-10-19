@@ -1,0 +1,26 @@
+FROM python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258 AS builder
+WORKDIR /build
+COPY shared/pyproject.toml ./shared/pyproject.toml
+COPY shared/src ./shared/src
+COPY backend/pyproject.toml backend/README.md ./backend/
+COPY backend/src ./backend/src
+COPY backend/migrations ./backend/migrations
+RUN python -m pip wheel --no-cache-dir --wheel-dir /wheels --no-deps ./shared ./backend \
+    && python -m pip wheel --no-cache-dir --wheel-dir /wheels --find-links=/wheels 'buddy-backend[api]'
+
+FROM python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && curl --fail --silent --show-error --proto '=https' https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem -o /tmp/rds-bundle.pem \
+    && cat /tmp/rds-bundle.pem >> /etc/ssl/certs/ca-certificates.crt \
+    && rm /tmp/rds-bundle.pem \
+    && apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 buddy && useradd --uid 10001 --gid 10001 --no-create-home buddy \
+    && mkdir -p /var/lib/buddy-upload && chown 10001:10001 /var/lib/buddy-upload && chmod 0700 /var/lib/buddy-upload
+COPY --from=builder /wheels /wheels
+RUN python -m pip install --no-cache-dir --no-index --find-links=/wheels 'buddy-backend[api]' && rm -rf /wheels
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt PGSSLROOTCERT=/etc/ssl/certs/ca-certificates.crt TMPDIR=/var/lib/buddy-upload
+VOLUME ["/var/lib/buddy-upload"]
+USER 10001:10001
+HEALTHCHECK --interval=15s --timeout=5s --start-period=40s --retries=3 CMD ["python", "-m", "buddy_api.processing", "--health"]
+ENTRYPOINT ["python", "-m", "buddy_api.processing"]

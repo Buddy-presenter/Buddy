@@ -154,12 +154,47 @@ class ProcessingJob(OwnedRecord):
             ["deck_id", "owner_id"], ["decks.id", "decks.owner_id"], ondelete="RESTRICT"
         ),
         UniqueConstraint("id", "deck_id", "owner_id"),
-        CheckConstraint("status IN ('pending','running','succeeded','failed')", name="status"),
+        CheckConstraint(
+            "status IN ('pending','running','succeeded','failed','queued','retry_wait',"
+            "'metadata_ready','cancelled','dead_letter')",
+            name="status",
+        ),
         CheckConstraint("attempts >= 0", name="attempts_nonnegative"),
+        UniqueConstraint("deck_id", "source_revision"),
+        ForeignKeyConstraint(
+            ["extraction_id", "deck_id", "owner_id"],
+            ["deck_extractions.id", "deck_extractions.deck_id", "deck_extractions.owner_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("generation >= 0 AND progress >= 0 AND progress <= 100", name="progress"),
+        CheckConstraint(
+            "stage_state IN ('pending','running','succeeded','failed','cancelled')",
+            name="stage_state",
+        ),
     )
     deck_id: Mapped[UUID] = mapped_column(index=True)
     status: Mapped[str] = mapped_column(String(16), server_default="pending")
     attempts: Mapped[int] = mapped_column(server_default="0")
+    source_revision: Mapped[str | None] = mapped_column(String(128))
+    generation: Mapped[int] = mapped_column(server_default="0")
+    stage: Mapped[str] = mapped_column(String(32), server_default="pdf_metadata.v1")
+    stage_state: Mapped[str] = mapped_column(String(16), server_default="pending")
+    progress: Mapped[int] = mapped_column(server_default="0")
+    lease_id: Mapped[UUID | None] = mapped_column()
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    not_before: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    extraction_id: Mapped[UUID | None] = mapped_column()
+
+
+class JobOutbox(Base):
+    __tablename__ = "job_outbox"
+    job_id: Mapped[UUID] = mapped_column(
+        ForeignKey("processing_jobs.id", ondelete="RESTRICT"), primary_key=True
+    )
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    publish_attempts: Mapped[int] = mapped_column(server_default="0")
 
 
 class AnalysisVersion(OwnedRecord):

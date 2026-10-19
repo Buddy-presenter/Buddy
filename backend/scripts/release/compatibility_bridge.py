@@ -11,10 +11,11 @@ from buddy_api.persistence.models import Base
 
 OLD_HEAD = "0003_extractions"
 FEATURE_HEAD = "0008_rollback_compatibility"
+WORKER_HEAD = "0009_pdf_workers"
 
 
 async def check_ready(self):
-    """Accept exactly the two tested schemas, checking every legacy mapped column."""
+    """Accept only the explicitly tested schemas, checking every legacy mapped column."""
     try:
         async with self.engine.connect() as connection:
             heads = set(
@@ -22,7 +23,7 @@ async def check_ready(self):
                     await connection.execute(text("SELECT version_num FROM alembic_version"))
                 ).scalars()
             )
-            if heads not in ({OLD_HEAD}, {FEATURE_HEAD}):
+            if heads not in ({OLD_HEAD}, {FEATURE_HEAD}, {WORKER_HEAD}):
                 raise PersistenceUnavailable("Database is outside the tested compatibility window.")
             for table in Base.metadata.sorted_tables:
                 await connection.execute(select(table).limit(0))

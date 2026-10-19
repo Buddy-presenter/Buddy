@@ -1,7 +1,7 @@
 # Architecture and code ownership
 
-Buddy is a native PySide6 desktop application backed by an API; later processing workers
-will also belong to the backend. The
+Buddy is a native PySide6 desktop application backed by an API and separately privileged
+PDF metadata processing workers. The
 desktop and backend are separate installable Python projects. They communicate over the
 versioned HTTP/event contracts; neither imports the other's implementation. `buddy_identity`
 is a small shared package because the client and API both validate the same Cognito issuer,
@@ -32,7 +32,7 @@ flowchart LR
 | `frontend/src/buddy_desktop/` | Desktop UI, presenter surface, API client, and local Windows/macOS adapters. |
 | `frontend/tests/` | Desktop and Qt tests. |
 | `frontend/scripts/` | Desktop startup smoke and packaging/signing helpers. |
-| `backend/src/buddy_api/` | API endpoints, application services, authorization, persistence adapters, and future worker entry points. |
+| `backend/src/buddy_api/` | API endpoints, application services, authorization, persistence adapters, and processing worker entry points. |
 | `backend/migrations/` | Alembic environment and immutable database revisions. |
 | `backend/tests/` | API, database, and backend tests. |
 | `backend/scripts/` | Backend health smoke and deployment helpers. |

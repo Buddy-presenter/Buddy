@@ -69,6 +69,10 @@ jobs:
           BUDDY_BOOTSTRAP_TEST: 'true'
         run: python -m pytest -p no:pytest-qt infra/tests
       - run: docker build -f infra/container/Dockerfile -t buddy-api:ci .
+      - name: Build and test the read-only worker image with real local service boundaries
+        run: |
+          docker build -f infra/container/Dockerfile.worker -t buddy-worker:ci .
+          python infra/container/smoke_worker.py --image buddy-worker:ci
       - name: Build the previous source contract and compatibility bridge without AWS credentials
         shell: bash
         run: |

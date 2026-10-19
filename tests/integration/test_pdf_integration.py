@@ -184,7 +184,7 @@ def test_persisted_upload_recovery_and_late_completion(
                     timeout=10000,
                 )
                 assert keys == [keys[0], keys[0]]
-                assert library.table.item(0, 1).text() == "Awaiting processing"
+                assert library.table.item(0, 1).text() == "Queued"
                 assert library.open_button.isEnabled()
                 assert not library.upload_keys
             else:

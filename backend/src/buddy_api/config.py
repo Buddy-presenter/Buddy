@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from buddy_api.persistence.settings import DatabaseConfigurationError, DatabaseSettings
+from buddy_api.processing.config import WorkerSettings
 from buddy_api.uploads.config import UploadSettings
 from buddy_api.validation.config import ValidatorSettings
 from buddy_identity.config import IdentityConfig, IdentityError
@@ -46,6 +47,7 @@ class Settings:
     identity: IdentityConfig | None = None
     uploads: UploadSettings | None = None
     validator: ValidatorSettings | None = None
+    worker: WorkerSettings | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.environment, Environment):
@@ -125,4 +127,5 @@ class Settings:
             identity,
             uploads,
             validator,
+            WorkerSettings.from_environment(values),
         )
