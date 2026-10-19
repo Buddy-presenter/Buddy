@@ -65,10 +65,10 @@ resource "aws_ecs_task_definition" "service" {
       awslogs-group  = aws_cloudwatch_log_group.service[each.key].name,
       awslogs-region = var.region, awslogs-stream-prefix = each.key
     } },
-    portMappings = each.key == "api" ? [{ containerPort = 8000, hostPort = 8000, protocol = "tcp" }] : [],
-    stopTimeout  = each.key == "worker" ? 120 : 30,
-  }, each.key == "migration" ? { command = ["python", "/opt/buddy/migrate_database.py"] } : {}, each.key == "worker" ? {
-    healthCheck = { command = ["CMD", "python", "-m", "buddy_api.processing", "--health"], interval = 15, timeout = 5, retries = 3, startPeriod = 40 }
+    portMappings                           = each.key == "api" ? [{ containerPort = 8000, hostPort = 8000, protocol = "tcp" }] : [],
+    stopTimeout                            = each.key == "worker" ? 120 : 30,
+    }, each.key == "migration" ? { command = ["python", "/opt/buddy/migrate_database.py"] } : {}, each.key == "worker" ? {
+    healthCheck                            = { command = ["CMD", "python", "-m", "buddy_api.processing", "--health"], interval = 15, timeout = 5, retries = 3, startPeriod = 40 }
   } : {})])
 }
 resource "aws_ecs_service" "api" {

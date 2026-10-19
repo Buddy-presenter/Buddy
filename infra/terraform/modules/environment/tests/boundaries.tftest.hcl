@@ -89,7 +89,7 @@ run "production_redundancy" {
   }
 }
 run "worker_runtime_boundaries" {
-  command = plan
+  command = apply
   variables {
     worker_image = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   }
