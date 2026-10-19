@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from buddy_api.analysis.provider import ModelOutput, ModelSlide, ModelSummary
+from buddy_api.analysis.provider import ModelAction, ModelOutput, ModelSlide, ModelSummary
 from buddy_api.analysis.store import Analyses
 from buddy_api.app import create_app
 from buddy_api.auth import Principal, authenticated
@@ -29,6 +29,7 @@ from buddy_api.processing.stage import inspect_source
 from buddy_api.uploads.config import UploadSettings
 from buddy_api.uploads.contracts import UploadError
 from buddy_api.uploads.storage import SourceStorage
+from buddy_api.validation.contracts import ProcessResult, StoredResult, action_digest
 
 PDF = Path(__file__).resolve().parents[3] / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf"
 WORKER = WorkerSettings(
@@ -90,14 +91,15 @@ class SyntheticProvider:
         )
 
 
-def make_processor(db, storage, settings, queue):
+def make_processor(db, storage, settings, queue, *, provider=None, validation=None):
     return Processor(
         db,
         storage,
         settings,
         queue,
         inspector=lambda source: inspect_source(source, storage),
-        provider=SyntheticProvider(),
+        provider=provider or SyntheticProvider(),
+        validation=validation,
     )
 
 
@@ -156,6 +158,130 @@ def test_real_pdf_worker_pinned_source_duplicate_and_restart(migrated_database):
                 assert (await store.schedule(session, deck)).id == job.id
             await processor.run_message({"Body": "not-json", "ReceiptHandle": "poison"})
             assert "poison" not in sqs.acked
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_pending_validation_defers_without_spending_attempt_and_resumes_analysis(
+    migrated_database, monkeypatch
+):
+    class CandidateProvider:
+        calls = 0
+
+        def analyze(self, content, extraction, deck_id, manifest):
+            self.calls += 1
+            return ModelOutput(
+                presentation=ModelSummary(text="A focused presentation.", reason=None),
+                slides=tuple(
+                    ModelSlide(
+                        number=index + 1,
+                        text=f"Page {index + 1} summary.",
+                        reason=None,
+                        actions=(
+                            ModelAction(
+                                type="zoom_region",
+                                purpose="Focus on the key detail.",
+                                x=1,
+                                y=1,
+                                width=1,
+                                height=1,
+                            ),
+                        )
+                        if index == 0
+                        else (),
+                    )
+                    for index, _slide in enumerate(extraction.slides)
+                ),
+            )
+
+    class PendingThenRejected:
+        calls = 0
+
+        def __init__(self, revision, source_sha):
+            self.revision, self.source_sha = revision, source_sha
+
+        async def reconcile(self):
+            return None
+
+        async def validate(self, owner, deck_id, key, request, *, source_content=None):
+            self.calls += 1
+            if self.calls == 1:
+                raise UploadError(
+                    409, "validation_pending", "Validation reservation is still pending.", 300
+                )
+            action = request.action
+            result = ProcessResult(
+                state="rejected",
+                reasons=["invalid_action_parameters"],
+                profile=request.profile,
+                runtime_platform=sys.platform,
+                source_revision=self.revision,
+                source_sha256=self.source_sha,
+                action_sha256=action_digest(action),
+            )
+            return StoredResult(id=uuid4(), deck_id=deck_id, result=result, evidence=[])
+
+    async def scenario():
+        db = Database(migrated_database)
+        try:
+            failures = []
+            original_fail = store.fail
+
+            async def capture_fail(session, identifier, token, settings, code, *, permanent=False):
+                failures.append(code)
+                await original_fail(session, identifier, token, settings, code, permanent=permanent)
+
+            monkeypatch.setattr(store, "fail", capture_fail)
+            owner, deck, job = await seed(db)
+            queue = SQS()
+            provider = CandidateProvider()
+            validator = PendingThenRejected(deck.source_revision, deck.source_sha256)
+            processor = make_processor(
+                db,
+                SourceStorage(UPLOADS, S3(PDF.read_bytes())),
+                WORKER,
+                queue,
+                provider=provider,
+                validation=validator,
+            )
+            await processor.maintain()
+            assert len(queue.messages) == 1
+            await processor.run_message(queue.messages[-1])
+
+            waiting = await row(db, job.id)
+            assert waiting.status == "retry_wait"
+            assert waiting.attempts == 0
+            assert waiting.extraction_id is not None
+            assert provider.calls == 1 and validator.calls == 1
+
+            async with db.sessions() as session, session.begin():
+                current = await session.get(ProcessingJob, job.id)
+                current.not_before = store.now()
+                outbox = await session.get(JobOutbox, job.id)
+                outbox.available_at = store.now()
+            await processor.maintain()
+            assert len(queue.messages) == 2
+            await processor.run_message(queue.messages[-1])
+            assert validator.calls == 2
+            assert not failures, failures
+
+            finished = await row(db, job.id)
+            assert (finished.status, finished.error_code, finished.attempts) == (
+                "analysis_ready",
+                None,
+                1,
+            )
+            assert provider.calls == 1 and validator.calls == 2
+            async with db.sessions() as session:
+                analyses = await Analyses(session).list(owner_id=owner.id)
+                assert len(analyses) == 1
+                result = await Analyses(session).read(analyses[0].id, owner_id=owner.id)
+                action = result.slides[0].actions[0]
+                assert action.state == "rejected"
+                assert action.validation is not None
+                assert action.validation.reasons == ("invalid_action_parameters",)
         finally:
             await db.close()
 

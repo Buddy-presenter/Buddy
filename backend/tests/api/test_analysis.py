@@ -62,8 +62,6 @@ def test_generation_and_storage_exclude_general_controls(kind):
         "boolean",
         "nan",
         "extra_params",
-        "bounds",
-        "zoom_limit",
     ],
 )
 def test_invalid_analysis_is_rejected_before_persistence(change):
@@ -97,8 +95,6 @@ def test_invalid_analysis_is_rejected_before_persistence(change):
         action["params"]["region"]["width"] = {
             "boolean": True,
             "nan": float("nan"),
-            "bounds": 1921,
-            "zoom_limit": 1,
         }[change]
     with pytest.raises(ValidationError):
         AnalysisInput.model_validate(value)

@@ -281,6 +281,33 @@ async def fail(
     job.not_before = outbox.available_at
 
 
+async def defer(
+    session: AsyncSession,
+    identifier: UUID,
+    token: UUID,
+    delay_seconds: int,
+) -> None:
+    """Release a job while a durable validator reservation is still in flight.
+
+    This is a wait, not a failed processing attempt. Keep the existing extraction and
+    analysis so the next delivery resumes at the same idempotent validation request.
+    """
+    job = await session.scalar(
+        select(ProcessingJob).where(ProcessingJob.id == identifier).with_for_update()
+    )
+    if job is None or job.status != "running" or job.lease_id != token:
+        return
+    job.attempts = max(0, job.attempts - 1)
+    job.generation += 1
+    job.status, job.stage_state = "retry_wait", "pending"
+    job.error_code = None
+    job.lease_id = job.lease_until = job.deadline_at = None
+    outbox = await session.get(JobOutbox, job.id)
+    assert outbox is not None
+    outbox.available_at = now() + timedelta(seconds=max(1, min(delay_seconds, 300)))
+    job.not_before = outbox.available_at
+
+
 async def reconcile(session: AsyncSession, settings: WorkerSettings) -> None:
     # Bounded work; expired workers lose their token before another attempt starts.
     jobs = (

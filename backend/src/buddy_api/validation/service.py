@@ -6,6 +6,7 @@ import json
 import tempfile
 from datetime import UTC, datetime, timedelta
 from functools import partial
+from math import ceil
 from pathlib import Path
 from threading import Event
 from typing import Any
@@ -142,8 +143,25 @@ class ValidationService:
                         raise UploadError(
                             409, "idempotency_conflict", "Retry key belongs to another validation."
                         )
-                    if row.status != "failed":
+                    if row.status == "complete":
                         return self.public(row)
+                    if row.status == "pending":
+                        remaining = max(
+                            1, ceil((row.expires_at - datetime.now(UTC)).total_seconds())
+                        )
+                        raise UploadError(
+                            409,
+                            "validation_pending",
+                            "Validation is still reserved; retry after its lease expires.",
+                            remaining,
+                        )
+                    if row.status == "cleanup":
+                        raise UploadError(
+                            503,
+                            "cleanup_pending",
+                            "Validation cleanup is still in progress; retry later.",
+                            30,
+                        )
                 if (
                     await self.uploads.storage_usage(session, owner) + 32 * 1024 * 1024
                     > self.uploads.settings.quota_bytes

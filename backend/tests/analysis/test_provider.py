@@ -153,6 +153,9 @@ def test_bedrock_request_submits_exact_pdf_with_native_claude_api(monkeypatch):
     assert "exactly one of these forms" in next(
         part["text"] for part in content if part["type"] == "text"
     )
+    assert "call content a table only when it is visibly arranged in rows and columns" in next(
+        part["text"] for part in content if part["type"] == "text"
+    )
     schema = body["output_config"]["format"]["schema"]
     assert schema["properties"]["slides"]["items"]["properties"]["number"]["enum"] == [1]
     action_schema = schema["properties"]["slides"]["items"]["properties"]["actions"]

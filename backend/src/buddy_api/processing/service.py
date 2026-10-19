@@ -85,6 +85,8 @@ class Processor:
     async def maintain(self, *, publish: bool = True) -> None:
         async with self.database.sessions() as session, session.begin():
             await store.reconcile(session, self.settings)
+        if self.validation is not None:
+            await self.validation.reconcile()
         # Recover accepted pre-upgrade PDFs and any missing scheduler transaction.
         async with self.database.sessions() as session, session.begin():
             decks = (
@@ -369,6 +371,14 @@ class Processor:
                 await store.fail(session, job.id, token, self.settings, "worker_interrupted")
             raise
         except Exception as exc:
+            if isinstance(exc, UploadError) and exc.code in {
+                "validation_pending",
+                "cleanup_pending",
+            }:
+                async with self.database.sessions() as session, session.begin():
+                    await store.defer(session, job.id, token, exc.retry_after or 30)
+                await blocking(lambda: self.queue.acknowledge(raw["ReceiptHandle"]))
+                return
             # Never persist parser/provider exception text or arbitrary codes.
             code = (
                 exc.code
@@ -430,21 +440,6 @@ class Processor:
                 raise ProviderFailure("provider_slide_order")
             actions = []
             for action_index, candidate in enumerate(model_slide.actions):
-                source = manifest.slides[index].source
-                if (
-                    candidate.x + candidate.width > source.width
-                    or candidate.y + candidate.height > source.height
-                    or (
-                        candidate.type == "zoom_region"
-                        and (
-                            candidate.width < source.width / 32
-                            or candidate.height < source.height / 32
-                        )
-                    )
-                ):
-                    # Reject only this model-suggested action. Never clamp its geometry or
-                    # fail otherwise valid summaries and sibling actions for the page.
-                    continue
                 try:
                     actions.append(
                         ContentAction.model_validate(
