@@ -14,7 +14,9 @@ on reviewed `main`, target `staging`:
 
 1. Select `rollout_phase=compatibility`. This builds the temporary bridge directly on
    the pinned original image. It changes only readiness to accept exactly `0003_extractions`
-   and `0008_rollback_compatibility`, checking every legacy mapped column. Its packaged
+   and `0008_rollback_compatibility`, plus the explicitly tested `0009_pdf_workers`
+   expansion, checking every legacy mapped column. Rebuild and verify the bridge digest
+   when adopting 0009; previously deployed bridge images remain unchanged. Its packaged
    migrations remain at 0003, so this deployment does not expand the live schema.
    GitHub's staging environment approval is still required.
 2. Verify the bridge is healthy, retain the successful deployment audit and inspect the

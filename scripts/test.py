@@ -16,11 +16,9 @@ def main(argv=None):
         choices=("all", "desktop", "api", "database", "integration", "repository", "worker"),
     )
     args = parser.parse_args(argv)
-    if args.target == "worker":
-        parser.exit(
-            2, "Worker application smoke is blocked: implement the worker in issue #8 first.\n"
-        )
-    if args.target in {"database", "integration"} and not os.environ.get("BUDDY_TEST_DATABASE_URL"):
+    if args.target in {"database", "integration", "worker"} and not os.environ.get(
+        "BUDDY_TEST_DATABASE_URL"
+    ):
         parser.exit(
             2, "Database tests require BUDDY_TEST_DATABASE_URL (disposable *_test database).\n"
         )
@@ -32,8 +30,9 @@ def main(argv=None):
         "database": ["backend/tests/api"],
         "integration": ["tests/integration"],
         "repository": ["tests/repository"],
+        "worker": ["backend/tests/processing"],
     }
-    if args.target in {"api", "database"}:
+    if args.target in {"api", "database", "worker"}:
         command += ["-p", "no:pytest-qt"]
     command += paths[args.target]
     if args.target == "database":

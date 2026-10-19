@@ -186,7 +186,7 @@ def test_pdf_upload_storage_database_private_download_and_pptx_preservation(uplo
         assert cloud.content_types[storage_key] == PDF_TYPE
         assert initialize(client, key, body).json()["data"]["deck"] == deck
         listing = client.get("/api/v1/decks").json()["data"]["items"][0]
-        assert listing["can_present"] and listing["status"] == "uploaded"
+        assert listing["can_present"] and listing["status"] == "queued"
         downloaded = client.get(f"/api/v1/decks/{identifier}/source")
         assert downloaded.content == content
         assert downloaded.headers["cache-control"] == "no-store"
@@ -205,9 +205,42 @@ def test_pdf_upload_storage_database_private_download_and_pptx_preservation(uplo
                 stored = await session.get(Deck, UUID(identifier))
                 assert stored.source_format == "pdf"
                 assert stored.source_sha256 == hashlib.sha256(content).hexdigest()
-                assert await session.scalar(select(func.count()).select_from(ProcessingJob)) == 0
+                assert await session.scalar(select(func.count()).select_from(ProcessingJob)) == 1
+                job = await session.scalar(select(ProcessingJob))
+                assert job.deck_id == stored.id and job.source_revision == stored.source_revision
 
         client.portal.call(persisted)
+
+
+def test_pdf_job_quota_failure_cleans_bytes_and_same_upload_key_can_recover(upload_app):
+    fixture = Path(__file__).resolve().parents[3] / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf"
+    content = fixture.read_bytes()
+    body = {**metadata(content), "filename": "slides.pdf", "content_type": PDF_TYPE}
+    with upload_app() as (client, cloud, service):
+        service.owner_job_quota = 1
+        first = initialize(client, uuid4(), body).json()["data"]["id"]
+        assert (
+            client.put(
+                f"/api/v1/uploads/{first}/content",
+                content=content,
+                headers={"Content-Type": PDF_TYPE},
+            ).status_code
+            == 200
+        )
+        retry_key = uuid4()
+        second = initialize(client, retry_key, body).json()["data"]["id"]
+        full = client.put(
+            f"/api/v1/uploads/{second}/content", content=content, headers={"Content-Type": PDF_TYPE}
+        )
+        assert full.status_code == 429 and full.json()["error"]["code"] == "job_capacity"
+        assert len(cloud.objects) == 1
+        job = client.get(f"/api/v1/decks/{first}/job").json()["data"]
+        assert client.post(f"/api/v1/jobs/{job['id']}/cancel").status_code == 200
+        assert initialize(client, retry_key, body).json()["data"]["id"] == second
+        recovered = client.put(
+            f"/api/v1/uploads/{second}/content", content=content, headers={"Content-Type": PDF_TYPE}
+        )
+        assert recovered.status_code == 200 and len(cloud.objects) == 2
 
 
 def test_original_bytes_private_identity_and_complete_retry_survive_restart(upload_app):

@@ -108,6 +108,7 @@ jobs:
         run: |
           python scripts/test.py api
           python scripts/test.py database
+          python scripts/test.py worker
       - name: Install Qt runtime libraries for desktop integration tests
         run: |
           sudo apt-get update
