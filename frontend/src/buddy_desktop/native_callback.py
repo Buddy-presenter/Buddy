@@ -10,7 +10,7 @@ from tempfile import gettempdir
 from threading import Event, Lock
 from urllib.parse import parse_qs, urlsplit
 
-from PySide6.QtCore import QEvent, QLockFile, QObject, QStandardPaths, QTimer, Signal
+from PySide6.QtCore import QEvent, QLockFile, QObject, QStandardPaths, QTimer, Signal, Slot
 from PySide6.QtGui import QFileOpenEvent
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
@@ -136,6 +136,7 @@ class NativeCallbackServer(QObject):
         self.server.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
         self.server.newConnection.connect(self.connected)
         self.buffers: dict[QLocalSocket, bytearray] = {}
+        self.timers: dict[QLocalSocket, QTimer] = {}
 
     def start(self, uri: str | None = None) -> bool:
         if uri is not None and not callback_shape(uri):
@@ -159,14 +160,42 @@ class NativeCallbackServer(QObject):
         # No pending attempt exists on cold start: never resume an unsolicited URL.
         return True
 
+    @Slot()
     def connected(self) -> None:
         while self.server.hasPendingConnections():
             socket = self.server.nextPendingConnection()
             self.buffers[socket] = bytearray()
-            socket.readyRead.connect(lambda socket=socket: self.read(socket))
-            socket.disconnected.connect(lambda socket=socket: self.disconnected(socket))
-            QTimer.singleShot(2000, socket, socket.abort)
+            # Qt receiver-bound slots do not capture the socket in a Python
+            # callable owned by that same socket during its C++ destruction.
+            socket.readyRead.connect(self.ready_read)
+            socket.disconnected.connect(self.socket_disconnected)
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self.connection_timeout)
+            self.timers[socket] = timer
+            timer.start(2000)
             self.read(socket)
+
+    @Slot()
+    def ready_read(self) -> None:
+        socket = self.sender()
+        if isinstance(socket, QLocalSocket):
+            self.read(socket)
+
+    @Slot()
+    def socket_disconnected(self) -> None:
+        socket = self.sender()
+        if isinstance(socket, QLocalSocket):
+            self.disconnected(socket)
+
+    @Slot()
+    def connection_timeout(self) -> None:
+        timer = self.sender()
+        for socket, deadline in list(self.timers.items()):
+            if deadline is timer:
+                socket.abort()
+                self.disconnected(socket)
+                return
 
     def read(self, socket: QLocalSocket) -> None:
         data = self.buffers.get(socket)
@@ -188,6 +217,11 @@ class NativeCallbackServer(QObject):
         socket.disconnectFromServer()
 
     def disconnected(self, socket: QLocalSocket) -> None:
+        if socket not in self.buffers:
+            return
+        timer = self.timers.pop(socket)
+        timer.stop()
+        timer.deleteLater()
         self.buffers.pop(socket, None)
         socket.deleteLater()
 
@@ -201,5 +235,6 @@ class NativeCallbackServer(QObject):
     def close(self) -> None:
         for socket in list(self.buffers):
             socket.abort()
+            self.disconnected(socket)
         self.server.close()
         self.guard.unlock()

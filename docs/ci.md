@@ -32,6 +32,16 @@ in the same context, so a slow Windows cold start is not mistaken for a hung fin
 script. Regression tests deliberately hang each phase and require Node's VM-timeout error.
 Assertions and process failures still fail the suite.
 
+Accepted native IPC connections use receiver-bound Qt slots rather than Python closures
+capturing their own sockets. Each connection has an owned, single-shot deadline timer,
+stopped and deleted on disconnect or server close before the socket's deferred deletion.
+This removes callback/socket lifetime cycles in the cleanup path that aborted Windows
+Python 3.12 main CI and segfaulted macOS Python 3.14 PR CI. Native regressions exercise
+payload completion, peer close, server close and the real idle timeout, checking that
+sockets and timers are destroyed. A separate process repeats multi-connection teardown,
+deferred deletion and garbage collection; crashes, nonzero exits and timeouts fail.
+Existing state/PKCE, IPC and OS event tests remain present with no retry or skip rules.
+
 ## Security and required checks
 
 Keep the existing required check **CI** in the main branch ruleset/protection. Because
