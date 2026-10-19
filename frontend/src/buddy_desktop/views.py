@@ -76,19 +76,23 @@ class HomePage(Page):
     route_requested = Signal(int)
 
     def __init__(self, api_url: str) -> None:
-        super().__init__("Your workspace", "")
+        super().__init__(
+            "A little preparation.\nA lot more presence.",
+            "Your presentations, with Buddy beside you.",
+        )
+        self.setObjectName("homePage")
         welcome = QHBoxLayout()
-        self.mascot = BuddyMark(106)
+        self.mascot = BuddyMark(124)
         welcome.addWidget(self.mascot)
         greeting = QVBoxLayout()
-        badge = QLabel("BUDDY / DESKTOP")
+        badge = QLabel("Ready when you are")
         badge.setObjectName("eyebrow")
         greeting.addWidget(badge)
-        title = QLabel("Make yourself at home.")
+        title = QLabel("Make room for your next idea.")
         title.setObjectName("sectionTitle")
         title.setWordWrap(True)
         greeting.addWidget(title)
-        self.workspace_state = QLabel("No presentation selected")
+        self.workspace_state = QLabel("Start with a PDF, or bring your PowerPoint into Library.")
         self.workspace_state.setObjectName("muted")
         self.workspace_state.setWordWrap(True)
         greeting.addWidget(self.workspace_state)
@@ -96,8 +100,8 @@ class HomePage(Page):
         self.body.addLayout(welcome)
         actions = QGridLayout()
         actions.setSpacing(12)
-        self.library_action = QPushButton("Presentation library")
-        self.present_action = QPushButton("Presentation studio")
+        self.library_action = QPushButton("Your library")
+        self.present_action = QPushButton("Open the stage")
         for column, (button, image, route) in enumerate(
             ((self.library_action, "library-big", 1), (self.present_action, "presentation", 2))
         ):
@@ -106,6 +110,12 @@ class HomePage(Page):
             button.clicked.connect(lambda checked=False, row=route: self.route_requested.emit(row))
             actions.addWidget(button, 0, column)
         self.body.addLayout(actions)
+        guidance = QLabel(
+            "Import privately in Library. Open a local PDF in Present, even without an account."
+        )
+        guidance.setObjectName("muted")
+        guidance.setWordWrap(True)
+        self.body.addWidget(guidance)
         self.account_slot = QWidget()
         self.account_layout = QVBoxLayout(self.account_slot)
         self.account_layout.setContentsMargins(0, 16, 0, 0)

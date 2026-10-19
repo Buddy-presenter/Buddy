@@ -8,11 +8,24 @@ deck/revision; Buddy never overwrites or silently converts the PPTX.
 
 ## Desktop flow
 
-Sign in, open Library, and choose **Upload PDF or PPTX…**. Files use the existing upload
+Sign in, open Library, and choose **Choose presentation**. Files use the existing upload
 reservation, checksums, quotas and private API transport. Select a saved PDF and choose
 **Present PDF**. Availability to present is separate from processing/analysis status:
 a PDF can be presented while its status is Awaiting processing. A saved PPTX explains
 that its playback and processing pipeline are not supported yet.
+
+The desktop import surface also accepts a single local PDF/PPTX dropped on the window
+while signed in and idle. **Choose presentation** uses the same upload path. It becomes
+a named transfer card with actual byte/stage progress, cancellation and retry. PDF imports
+progressively reveal up to three real local slide previews using the existing isolated
+renderer. These previews are memory-only and are not analysis results. Changing account,
+signing out or changing backend clears them and rejects late results. A cancelled preview
+drains its current bounded render before another starts. PPTX originals are saved without
+conversion or invented thumbnails; actual PPTX previews remain issue #113.
+
+Buddy reacts to drag hover, ongoing work, confirmed saving and errors. During presentation
+the character stays quiet. **Settings → Reduce motion** persists across restarts; hidden
+characters stop their activity timers. See [the desktop experience plan](ui-revamp.md).
 
 Interrupted upload retries keep their reservation key until completion is confirmed.
 Selecting the same file again after a successful upload creates a separate deck.

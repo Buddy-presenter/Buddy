@@ -4,13 +4,14 @@ QMainWindow, QScrollArea, QStackedWidget { background: #0B0C10; }
 QWidget#sidebar { background: #101116; border-right: 1px solid #24252C; }
 QWidget#workspaceHeader { background: #0E0F13; border-bottom: 1px solid #24252C; }
 QLabel#brand { font-size: 25px; font-weight: 700; }
-QLabel#pageTitle { font-size: 28px; font-weight: 700; }
-QLabel#sectionTitle { font-size: 16px; font-weight: 600; }
+QLabel#pageTitle { font-size: 30px; font-weight: 600; padding-bottom: 4px; }
+QWidget#homePage QLabel#pageTitle { font-size: 34px; font-weight: 600; }
+QLabel#sectionTitle { font-size: 17px; font-weight: 600; }
 QLabel#stateTitle { font-size: 17px; font-weight: 600; }
-QLabel#eyebrow { color: #FFAA6A; font-size: 11px; font-weight: 600; }
+QLabel#eyebrow { color: #FFAA6A; font-size: 12px; font-weight: 500; }
 QLabel#muted, QLabel#pageDescription { color: #A4A4AF; }
 QLabel#connectionStatus { color: #B5B5C0; font-size: 12px; }
-QWidget#statePanel { background: transparent; border-left: 2px solid #494A56; }
+QWidget#statePanel { background: #121318; border: 1px solid #292A33; border-radius: 8px; }
 QWidget#accountPanel { background: transparent; }
 QWidget#workspaceHeader QLabel { background: transparent; }
 QListWidget#navigation { background: transparent; border: 0; outline: 0; padding: 0; }
@@ -28,7 +29,8 @@ QPushButton[primary="true"]:hover { background: #FFB580; border-color: #FFB580; 
 QPushButton[primary="true"]:pressed { background: #F18B4C; }
 QPushButton[primary="true"]:disabled { background: #3A2D25; color: #A59A91; border-color: #3A2D25; }
 QPushButton[iconOnly="true"] { padding: 0; }
-QPushButton#workspaceAction { text-align: left; padding: 18px; font-size: 15px; min-height: 38px; }
+QPushButton#workspaceAction { text-align: left; padding: 18px; font-size: 16px; min-height: 38px; background: #191A20; border-color: #323039; border-radius: 10px; }
+QPushButton#workspaceAction:hover { background: #25201E; border-color: #B45032; }
 QPushButton#quietButton { background: transparent; border-color: transparent; color: #B8B8C2; }
 QPushButton#quietButton:hover { background: #23242C; border-color: #363740; }
 QPushButton:focus, QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus, QCheckBox:focus { border: 2px solid #FFAF73; }
@@ -38,7 +40,7 @@ QComboBox { padding-right: 24px; }
 QComboBox::drop-down { width: 22px; border: 0; }
 QComboBox QAbstractItemView { background: #202128; color: #F3F0E9; selection-background-color: #493126; }
 QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width: 18px; border-left: 1px solid #393A45; }
-QTableWidget { background: #0F1015; alternate-background-color: #15161C; border: 1px solid #292A33; border-radius: 6px; gridline-color: #24252D; selection-background-color: #30251F; selection-color: #FFFFFF; }
+QTableWidget { background: #101116; alternate-background-color: #14151B; border: 1px solid #292A33; border-radius: 10px; gridline-color: #24252D; selection-background-color: #30251F; selection-color: #FFFFFF; }
 QTableWidget::item { padding: 12px 14px; border-bottom: 1px solid #24252D; }
 QHeaderView::section { background: #17181E; color: #B5B5BF; border: 0; border-bottom: 1px solid #30313A; padding: 12px 14px; font-weight: 600; }
 QPlainTextEdit { background: #111218; border: 1px solid #2C2D36; border-radius: 6px; padding: 10px; color: #B5B5BF; }
@@ -70,3 +72,16 @@ QProgressBar#uploadProgress::chunk {
     background: #B45032;
     border-radius: 3px;
 }
+QWidget#importSurface {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #211B19, stop:0.6 #16161C, stop:1 #121318);
+    border: 1px solid #4B352B;
+    border-radius: 14px;
+}
+QWidget#importSurface[dragOver="true"] { background: #2E211B; border: 2px solid #F6A142; }
+QWidget#importSurface QLabel, QWidget#importSurface QPushButton { background: transparent; }
+QWidget#importSurface QPushButton { border-color: #6E4D39; }
+QWidget#importSurface QPushButton:hover { background: #39271D; border-color: #F6A142; }
+QLabel#importTitle { font-size: 22px; font-weight: 600; }
+QWidget#transferCard { background: transparent; border: 0; }
+QWidget#transferCard QLabel { background: transparent; border: 0; }
+QLabel#slideThumbnail { background: #0B0C10; border: 1px solid #393A45; border-radius: 6px; }
