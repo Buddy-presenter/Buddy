@@ -8,46 +8,25 @@ its canonical source path and is revalidated before Buddy reports it as connecte
 from __future__ import annotations
 
 import importlib
-import os
+import re
 import sys
+import tempfile
 import time
+import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
 import psutil  # type: ignore[import-untyped]
 
-from buddy_desktop.services import ServiceError
-
-
-class PowerPointError(ServiceError):
-    """A user-actionable PowerPoint operation failure without private path details."""
-
-
-@dataclass(frozen=True)
-class PresentationInfo:
-    """A snapshot of an active PowerPoint slideshow."""
-
-    path: str
-    name: str
-    slide_index: int
-    slide_count: int
-
-    @property
-    def identity(self) -> str:
-        """Canonical local identity used to avoid attaching to a different deck."""
-        return canonical_path(self.path)
-
-    @property
-    def choice_label(self) -> str:
-        return f"{self.name} — slide {self.slide_index} of {self.slide_count} ({self.path})"
-
-
-def canonical_path(value: str | Path) -> str:
-    """Return a normalized absolute path, with Windows case folding when applicable."""
-    path = os.path.realpath(os.fspath(value))
-    return os.path.normcase(path)
+from buddy_desktop.powerpoint_contract import (
+    PowerPointAction,
+    PowerPointActionResult,
+    PowerPointFrame,
+)
+from buddy_desktop.powerpoint_contract import PowerPointError as PowerPointError
+from buddy_desktop.powerpoint_contract import PresentationInfo as PresentationInfo
+from buddy_desktop.powerpoint_contract import canonical_path as canonical_path
 
 
 class PowerPointAutomation:
@@ -65,6 +44,182 @@ class PowerPointAutomation:
         self._com_loader = com_loader
         self._progid_probe = progid_probe
         self._process_probe = process_probe or self._powerpoint_process_running
+        # One PowerPointAutomation instance serves a single TaskRunner, so operations are
+        # serialized. The slide names themselves survive a Buddy restart while the
+        # read-only PowerPoint session remains open; Reset scans by this private prefix.
+        self._annotation_groups: dict[tuple[str, int, int, float, float], list[list[str]]] = {}
+
+    _MANAGED_ANNOTATION_PREFIX = "BuddyAnnotation_"
+
+    @classmethod
+    def _name_shape(cls, shape: Any) -> str:
+        name = cls._MANAGED_ANNOTATION_PREFIX + uuid.uuid4().hex
+        shape.Name = name
+        return name
+
+    @classmethod
+    def _delete_named_shapes(cls, slide: Any, names: list[str]) -> None:
+        shapes = slide.Shapes
+        for name in reversed(names):
+            try:
+                shapes.Item(name).Delete()
+            except Exception:
+                # A user may have deleted a Buddy annotation directly in PowerPoint.
+                continue
+
+    @classmethod
+    def _delete_all_managed_shapes(cls, slide: Any) -> None:
+        shapes = slide.Shapes
+        names = []
+        for index in range(shapes.Count, 0, -1):
+            shape = shapes.Item(index)
+            name = str(shape.Name)
+            if name.startswith(cls._MANAGED_ANNOTATION_PREFIX):
+                names.append(name)
+        cls._delete_named_shapes(slide, names)
+
+    def _delete_managed_shapes_in_region(
+        self, slide: Any, key: tuple[str, int, int, float, float], region: Any
+    ) -> None:
+        shapes = slide.Shapes
+        names = []
+        left, top = region.x, region.y
+        right, bottom = left + region.width, top + region.height
+        for index in range(shapes.Count, 0, -1):
+            shape = shapes.Item(index)
+            name = str(shape.Name)
+            if not name.startswith(self._MANAGED_ANNOTATION_PREFIX):
+                continue
+            shape_left, shape_top = float(shape.Left), float(shape.Top)
+            shape_right = shape_left + float(shape.Width)
+            shape_bottom = shape_top + float(shape.Height)
+            if (
+                shape_left <= right
+                and shape_right >= left
+                and shape_top <= bottom
+                and shape_bottom >= top
+            ):
+                names.append(name)
+        self._delete_named_shapes(slide, names)
+        groups = self._annotation_groups.get(key)
+        if groups is not None:
+            removed = set(names)
+            groups[:] = [[name for name in group if name not in removed] for group in groups]
+            groups[:] = [group for group in groups if group]
+
+    @classmethod
+    def _configure_line(cls, shape: Any, color: int, *, arrow: bool = False) -> str:
+        name = cls._name_shape(shape)
+        shape.Line.ForeColor.RGB = color
+        shape.Line.Weight = 2.25
+        if arrow:
+            shape.Line.EndArrowheadStyle = 2  # msoArrowheadTriangle
+        return name
+
+    @classmethod
+    def _configure_box(
+        cls,
+        shape: Any,
+        color: int,
+        *,
+        filled: bool,
+        transparency: float,
+    ) -> str:
+        name = cls._name_shape(shape)
+        shape.Fill.ForeColor.RGB = color
+        shape.Fill.Transparency = transparency if filled else 1
+        if filled:
+            shape.Line.Visible = 0
+        else:
+            shape.Line.ForeColor.RGB = color
+            shape.Line.Weight = 2.25
+        return name
+
+    @classmethod
+    def _create_annotation_shapes(
+        cls,
+        slide: Any,
+        action: PowerPointAction,
+        validate_target: Callable[[], Any],
+    ) -> list[str]:
+        """Create editable slide objects so Buddy can remove each annotation precisely."""
+        shapes = slide.Shapes
+        r = action.region
+        created: list[str] = []
+        try:
+            if action.kind in {"draw_line", "draw_arrow", "draw_freehand", "draw_underline"}:
+                if action.kind == "draw_underline" and r is not None:
+                    points: tuple[tuple[float, float], ...] = (
+                        (r.x, r.y + r.height),
+                        (r.x + r.width, r.y + r.height),
+                    )
+                else:
+                    points = action.points
+                for index, (start, end) in enumerate(zip(points, points[1:], strict=False)):
+                    validate_target()
+                    line = shapes.AddLine(*start, *end)
+                    name = cls._configure_line(
+                        line,
+                        action.color,
+                        arrow=action.kind == "draw_arrow" and index == len(points) - 2,
+                    )
+                    created.append(name)
+            elif action.kind == "draw_rectangle" and r is not None:
+                validate_target()
+                shape = shapes.AddShape(1, r.x, r.y, r.width, r.height)  # msoShapeRectangle
+                created.append(
+                    cls._configure_box(shape, action.color, filled=False, transparency=1)
+                )
+            elif action.kind in {"draw_oval", "filled_oval"} and r is not None:
+                validate_target()
+                shape = shapes.AddShape(9, r.x, r.y, r.width, r.height)  # msoShapeOval
+                created.append(
+                    cls._configure_box(
+                        shape,
+                        action.color,
+                        filled=action.kind == "filled_oval",
+                        transparency=action.fill_transparency,
+                    )
+                )
+            elif action.kind in {"highlight_region", "filled_rectangle"} and r is not None:
+                validate_target()
+                shape = shapes.AddShape(1, r.x, r.y, r.width, r.height)
+                created.append(
+                    cls._configure_box(
+                        shape, action.color, filled=True, transparency=action.fill_transparency
+                    )
+                )
+            elif action.kind == "text_box" and r is not None:
+                validate_target()
+                shape = shapes.AddTextbox(1, r.x, r.y, r.width, r.height)  # horizontal
+                created.append(cls._name_shape(shape))
+                shape.Fill.Transparency = 1
+                shape.Line.Visible = 0
+                shape.TextFrame.WordWrap = -1
+                shape.TextFrame.TextRange.Text = action.text
+                shape.TextFrame.TextRange.Font.Color.RGB = action.color
+                shape.TextFrame.TextRange.Font.Size = 20
+            elif action.kind == "callout" and r is not None:
+                validate_target()
+                shape = shapes.AddCallout(2, r.x, r.y, r.width, r.height)  # msoCalloutTwo
+                created.append(cls._name_shape(shape))
+                shape.Fill.Transparency = 1
+                shape.Callout.Border = True
+                shape.TextFrame.TextRange.Text = action.text
+                shape.TextFrame.TextRange.Font.Color.RGB = action.color
+                shape.TextFrame.TextRange.Font.Size = 18
+                shape.Line.ForeColor.RGB = action.color
+            else:
+                raise PowerPointError("Unsupported PowerPoint annotation.")
+            return created
+        except Exception as exc:
+            cls._delete_named_shapes(slide, created)
+            if isinstance(exc, PowerPointError):
+                raise
+            raise PowerPointError(
+                "PowerPoint could not create the annotation. Check the slide before retrying; "
+                "the action was not retried."
+            ) from None
 
     @staticmethod
     def _powerpoint_process_running() -> bool:
@@ -117,6 +272,50 @@ class PowerPointAutomation:
         pythoncom.CoUninitialize()
 
     @staticmethod
+    def _window_handle(slideshow: Any, name: str) -> int:
+        try:
+            handle = slideshow.HWND
+            result = int(handle() if callable(handle) else handle)
+            if result <= 0:
+                raise ValueError("Invalid window handle")
+            return result
+        except Exception:
+            # Some 64-bit Office builds advertise HWND in their type library but
+            # reject it through IDispatch. Inspect native window metadata instead;
+            # this never sends mouse/keyboard input or uses screen coordinates.
+            gui = importlib.import_module("win32gui")
+            processes = importlib.import_module("win32process")
+            stem = re.escape(Path(name).stem)
+            title_pattern = re.compile(
+                r"(?:^|\s-\s)\s*" + stem + r"(?:\.pptx)?\s*(?:\s-\s|$)", re.I
+            )
+            matches: list[int] = []
+
+            def inspect(hwnd: int, _context: object) -> None:
+                title = gui.GetWindowText(hwnd)
+                kind = gui.GetClassName(hwnd)
+                if kind != "screenClass" and not (
+                    kind == "PPTFrameClass" and title.startswith("PowerPoint Slide Show")
+                ):
+                    return
+                if not title_pattern.search(title):
+                    return
+                try:
+                    pid = processes.GetWindowThreadProcessId(hwnd)[1]
+                    if psutil.Process(pid).name().casefold() == "powerpnt.exe":
+                        matches.append(hwnd)
+                except psutil.Error:
+                    return
+
+            gui.EnumWindows(inspect, None)
+            if len(matches) != 1:
+                raise PowerPointError(
+                    "Cannot uniquely identify the PowerPoint slideshow window. "
+                    "Use fullscreen mode or close shows with duplicate filenames, then reconnect."
+                ) from None
+            return matches[0]
+
+    @staticmethod
     def _snapshot(slideshow: Any) -> PresentationInfo:
         presentation = slideshow.Presentation
         path = str(presentation.FullName)
@@ -134,7 +333,18 @@ class PowerPointAutomation:
         slide_count = int(presentation.Slides.Count)
         if not path or not name or slide_count < 1 or not 1 <= slide_index <= slide_count:
             raise PowerPointError("PowerPoint has not displayed a slide yet.")
-        return PresentationInfo(path, name, slide_index, slide_count)
+        slide = presentation.Slides.Item(slide_index)
+        window_id = PowerPointAutomation._window_handle(slideshow, name)
+        return PresentationInfo(
+            path,
+            name,
+            slide_index,
+            slide_count,
+            window_id,
+            int(slide.SlideID),
+            float(presentation.PageSetup.SlideWidth),
+            float(presentation.PageSetup.SlideHeight),
+        )
 
     @staticmethod
     def _validate_file(path: str | Path) -> Path:
@@ -307,3 +517,133 @@ class PowerPointAutomation:
                 "More than one slideshow is using that file. Disconnect and select one explicitly."
             )
         return matches[0] if matches else None
+
+    def _target_window(self, application: Any, expected: PresentationInfo) -> Any:
+        windows = application.SlideShowWindows
+        matches = [
+            windows.Item(i)
+            for i in range(1, windows.Count + 1)
+            if canonical_path(str(windows.Item(i).Presentation.FullName)) == expected.identity
+        ]
+        if len(matches) != 1:
+            raise PowerPointError("The selected slideshow is unavailable or ambiguous. Reconnect.")
+        window = matches[0]
+        current = self._snapshot(window)
+        if current.slide_key != expected.slide_key or current.slide_index != expected.slide_index:
+            raise PowerPointError("The slideshow changed. Wait for Buddy to refresh and try again.")
+        if int(window.View.State) not in {1, 2}:
+            raise PowerPointError(
+                "Return PowerPoint to a visible slide before using these controls."
+            )
+        return window
+
+    def preview(self, expected: PresentationInfo) -> PowerPointFrame:
+        """Export a bounded static reference image; never retain private preview files."""
+        if not self._process_probe():
+            raise PowerPointError("PowerPoint is no longer running. Reconnect to a slideshow.")
+        pythoncom, client = self._start_com()
+        try:
+            application = client.Dispatch("PowerPoint.Application")
+            window = self._target_window(application, expected)
+            width = 1280
+            height = max(1, round(width * expected.slide_height / expected.slide_width))
+            if height > 2560:
+                height = 2560
+                width = max(1, round(height * expected.slide_width / expected.slide_height))
+            with tempfile.TemporaryDirectory(prefix="buddy-powerpoint-") as folder:
+                image_path = Path(folder) / "slide.png"
+                window.Presentation.Slides.Item(expected.slide_index).Export(
+                    str(image_path), "PNG", width, height
+                )
+                with image_path.open("rb") as stream:
+                    png = stream.read(16 * 1024 * 1024 + 1)
+                if len(png) > 16 * 1024 * 1024:
+                    raise PowerPointError("The PowerPoint preview exceeds its size limit.")
+            self._target_window(application, expected)
+            return PowerPointFrame(expected, png)
+        except PowerPointError:
+            raise
+        except Exception as exc:
+            raise PowerPointError(
+                "PowerPoint could not export the slide preview. Fully download the file and retry."
+            ) from exc
+        finally:
+            self._end_com(pythoncom)
+
+    def execute(self, action: PowerPointAction) -> PowerPointActionResult:
+        """The only action entry point; caller strings never become COM method names."""
+        if not isinstance(action, PowerPointAction):
+            raise PowerPointError("Unsupported PowerPoint action.")
+        action.validate()
+        if not self._process_probe():
+            raise PowerPointError("PowerPoint is no longer running. Reconnect to a slideshow.")
+        pythoncom, client = self._start_com()
+        try:
+            application = client.Dispatch("PowerPoint.Application")
+            window = self._target_window(application, action.target)
+            info = self._snapshot(window)
+            view = window.View
+            if action.kind in {"next_slide", "previous_slide", "go_to_slide"}:
+                target = (
+                    info.slide_index + 1
+                    if action.kind == "next_slide"
+                    else info.slide_index - 1
+                    if action.kind == "previous_slide"
+                    else action.slide_number
+                )
+                if target is None or not 1 <= target <= info.slide_count:
+                    raise PowerPointError("Already at the first or last slide.")
+                view.GotoSlide(target, 0)  # Direct slide navigation; preserve animation state.
+                deadline = time.monotonic() + 2
+                while self._snapshot(window).slide_index != target:
+                    if time.monotonic() >= deadline:
+                        raise PowerPointError("PowerPoint has not confirmed the requested slide.")
+                    time.sleep(0.03)
+            elif action.kind == "set_pointer_tool":
+                pointer_types = {"arrow": 1, "pen": 2}
+                if action.pointer_tool == "pen":
+                    view.PointerColor.RGB = action.color
+                view.PointerType = pointer_types[action.pointer_tool or "arrow"]
+            elif action.kind in {"erase_drawing", "reset_view"}:
+                slide = window.Presentation.Slides.Item(info.slide_index)
+                # Office 16 can leave native pen marks visible when EraseDrawing is
+                # called while the pen pointer remains active. Return to the arrow
+                # first so clearing removes the stroke layer before Buddy redraws.
+                view.PointerType = 1
+                view.EraseDrawing()
+                self._delete_all_managed_shapes(slide)
+                self._annotation_groups.pop(info.slide_key, None)
+            elif action.kind == "undo_annotation":
+                groups = self._annotation_groups.get(info.slide_key, [])
+                if not groups:
+                    raise PowerPointError("There is no Buddy annotation to undo on this slide.")
+                self._delete_named_shapes(
+                    window.Presentation.Slides.Item(info.slide_index), groups.pop()
+                )
+            elif action.kind == "erase_region" and action.region is not None:
+                self._delete_managed_shapes_in_region(
+                    window.Presentation.Slides.Item(info.slide_index), info.slide_key, action.region
+                )
+            else:
+                # Each annotation is a named slide object. This avoids the slideshow
+                # DrawLine layer's stale-ink behavior after EraseDrawing, and lets Buddy
+                # remove only its own ink while preserving the underlying slide content.
+                self._target_window(application, action.target)
+                slide = window.Presentation.Slides.Item(info.slide_index)
+                names = self._create_annotation_shapes(
+                    slide, action, lambda: self._target_window(application, action.target)
+                )
+                if names:
+                    self._annotation_groups.setdefault(info.slide_key, []).append(names)
+            if action.kind not in {"next_slide", "previous_slide", "go_to_slide"}:
+                self._target_window(application, action.target)
+            return PowerPointActionResult(action, self._snapshot(window))
+        except PowerPointError:
+            raise
+        except Exception as exc:
+            raise PowerPointError(
+                "PowerPoint could not finish the action. Check the slide; erase ink if needed. "
+                "The action was not retried."
+            ) from exc
+        finally:
+            self._end_com(pythoncom)

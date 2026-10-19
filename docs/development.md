@@ -34,6 +34,11 @@ still use the installed Windows/macOS handler. Windows source-only account testi
 see [local account development](accounts.md#local-account-development-windows).
 No account or demo data is fabricated.
 
+Windows desktop PowerPoint control uses the local Office installation and needs no Buddy
+account or backend. See [PowerPoint presentations](powerpoint-presentations.md) for manual
+navigation/annotation steps, coordinate and Office limitations, and the opt-in real-Office
+smoke command (`python frontend/scripts/smoke_powerpoint.py`).
+
 ## API and database
 
 Install the API separately in the same environment:
