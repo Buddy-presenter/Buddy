@@ -101,7 +101,7 @@ class PowerPointAutomation:
             if self._progid_probe is not None:
                 self._progid_probe()
             else:
-                import winreg
+                winreg = importlib.import_module("winreg")
 
                 with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, "PowerPoint.Application\\CLSID"):
                     pass
