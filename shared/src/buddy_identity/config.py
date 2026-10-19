@@ -10,6 +10,7 @@ CALLBACK = "org.buddy.desktop://oauth/callback"
 SIGNOUT_CALLBACK = "org.buddy.desktop://oauth/signed-out"
 BROWSER_CALLBACK_PATH = "/auth/desktop/callback"
 BROWSER_SIGNOUT_PATH = "/auth/desktop/signed-out"
+HANDOFF_PATH = "/auth/desktop/handoff/v1"
 SCOPES = "openid email aws.cognito.signin.user.admin"
 
 

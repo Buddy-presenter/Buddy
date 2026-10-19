@@ -18,6 +18,14 @@ variables {
 run "private_staging_before_images_exist" {
   command = plan
   assert {
+    condition     = alltrue([for rule in aws_s3_bucket_lifecycle_configuration.private["data"].rule : rule.filter[0].prefix == "auth-handoffs/" && rule.expiration[0].days == 1 && rule.noncurrent_version_expiration[0].noncurrent_days == 1 if rule.id == "expire-encrypted-desktop-handoffs"]) && length([for rule in aws_s3_bucket_lifecycle_configuration.private["data"].rule : rule if rule.id == "expire-encrypted-desktop-handoffs"]) == 1
+    error_message = "Encrypted handoff current and historical versions need scoped one-day cleanup."
+  }
+  assert {
+    condition     = alltrue([for rule in aws_s3_bucket_lifecycle_configuration.private["releases"].rule : length(rule.expiration) == 0])
+    error_message = "Handoff cleanup must not expire release artifacts."
+  }
+  assert {
     condition     = aws_cognito_user_pool_client.desktop.callback_urls == toset(["org.buddy.desktop://oauth/callback", "https://staging.example.com/auth/desktop/callback", "http://localhost:8000/auth/desktop/callback"]) && aws_cognito_user_pool_client.desktop.logout_urls == toset(["org.buddy.desktop://oauth/signed-out", "https://staging.example.com/auth/desktop/signed-out", "http://localhost:8000/auth/desktop/signed-out"])
     error_message = "Staging must support the HTTPS browser return, existing native clients and the explicit localhost development callback."
   }

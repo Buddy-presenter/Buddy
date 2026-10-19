@@ -55,7 +55,8 @@ Cognito hosts login over its AWS HTTPS hostname; the API uses CloudFront HTTPS.
 Environment overrides remain available for operators/development. Passwords and codes
 stay in the managed browser UI, never in Buddy's widgets, API, logs or database.
 
-Windows installation registers the `org.buddy.desktop` URL protocol under HKCU, without
+For legacy native callbacks, Windows installation registers the `org.buddy.desktop`
+URL protocol under HKCU, without
 administrator rights and notifies Windows that protocol associations changed. macOS
 packages declare it in CFBundleURLTypes and are re-signed after metadata generation,
 before notarization. Windows launches a second process that
@@ -63,10 +64,86 @@ forwards the callback to the existing instance over a user-only named pipe. macO
 QFileOpenEvent to the application. Unix-domain IPC uses a private user-owned directory;
 there is no HTTP listener. Regular source-only runs do not register themselves with the OS:
 install the preview package or use the explicit Windows local launcher below.
+HTTPS callbacks use the handoff below and do not need protocol registration.
 Cold-start/unsolicited
 callbacks never create a session; start a fresh login in Buddy after a restart.
 
 ## Browser completion and app return
+
+### Encrypted HTTPS handoff (#104)
+
+Desktop clients configured with an HTTPS browser callback now register a five-minute attempt
+on that callback's HTTPS origin before opening managed login. The desktop generates an
+ephemeral RSA-2048 private key and an independent 256-bit collection secret in memory.
+Only its public key and the SHA-256 digest of the collection secret reach the API.
+The OAuth state uses the versioned `buddy-v1-` prefix and fresh 256-bit randomness;
+the existing independent S256 PKCE verifier still protects the code exchange.
+
+The finish page scrubs its query immediately, fetches the attempt's public key, encrypts
+the result with AES-256-GCM (state as authenticated additional data), and wraps that key
+with RSA-OAEP/SHA-256. It sends only this envelope to the same-origin API. The desktop
+polls every two seconds with its separate capability in an Authorization header,
+decrypts the result locally, checks the exact state and exchanges the one-use code
+directly with Cognito. Passwords, verification codes and session tokens never enter this
+handoff. Only Buddy's existing verified `/auth/me` check establishes signed-in status.
+
+No Windows protocol registration, app-opening browser permission, loopback listener,
+local port, new hosting service or database migration is needed for this path. The
+button-free page asks the user to return to Buddy manually. Browser submission failures
+show a retry message; cancellation/expiry leaves the desktop signed out. Sign-out
+revokes/removes credentials first, then opens Cognito logout to clear its browser session;
+the desktop does not wait for an app-link acknowledgment. Complete that browser step
+to clear the managed-login session too.
+
+The API uses the existing private, KMS-encrypted data bucket through workload identity.
+Handoff objects occupy only `auth-handoffs/v1/`, keyed by a hash of state; they contain
+no plaintext OAuth code, private key, collection secret, password or session token.
+Conditional S3 writes serialize completion and consumption across processes/restarts.
+Only the authenticated collector can consume or cancel; a consumed attempt becomes
+a tombstone and cannot be reused. Expiry is enforced by the API after five minutes,
+independently of S3 cleanup. The scoped Terraform lifecycle expires current and historical
+handoff object versions after one day and removes expired markers; AWS deletion is
+asynchronous, not a promise of immediate erasure. Existing presentation retention is
+unchanged. API request bodies are capped at 12 KiB, with eight concurrent storage
+operations and 60 new attempts/minute per API process; deployment WAF throttling remains
+required for these public pre-authentication operations. No CORS access is granted.
+
+Deploy the reviewed API before distributing the updated desktop. Apply the reviewed
+handoff lifecycle rule through the existing infrastructure process before production
+acceptance. Existing S3 GetObject/PutObject and KMS permissions suffice. The API needs
+the existing private storage configuration (`BUDDY_UPLOADS_ENABLED=true` plus its data
+bucket/region/KMS settings); an unconfigured server returns 503 rather than fabricating
+a handoff. This storage dependency is separate from the database-backed profile check.
+The explicit HTTP-localhost development callback retains its legacy native return and
+local launcher registration; it does not opt into remote handoff storage.
+The Cognito allowlist and fixed HTTPS redirect URI stay unchanged. An older API rejects
+registration before the browser opens; an older desktop continues its native protocol
+path. Do not change an operator's explicit native callback configuration automatically.
+
+Delivery is deliberately one-use: if the collection response is lost after consumption,
+or the app restarts and loses its private key, start a fresh sign-in. There is no unsafe
+resume of an unfinished authorization attempt. A saved completed session still uses the
+OS vault and **Resume session** as before. Neither a browser finish page nor passing
+automated tests proves that a real account completed signup/recovery on an installed app.
+
+After approved API/desktop rollout, test manually:
+
+1. Open Buddy against staging and click **Sign in**. Complete managed login. The page
+   should show **Return to Buddy** with no button; returning to Buddy should show signed-in
+   status, then Account should show your verified email. No app-opening prompt is needed.
+2. Repeat with **Create account** and **Forgot password** using real verification/recovery
+   messages. Finish browser sign-in after recovery; the same handoff must complete.
+3. Cancel in Buddy before finishing the browser. A late browser return must not sign in;
+   start a fresh attempt. Closing/reopening Buddy during login has the same requirement.
+4. Leave an attempt unfinished for five minutes, then return: expect expiry/retry, no
+   authenticated profile. Retry normally. Reloading the scrubbed page cannot repeat login.
+5. Disconnect networking during the return. Expect a visible, recoverable failure; after
+   reconnecting, cancel/retry if the result was consumed. No indefinite-looking wait.
+6. Sign out, complete Cognito's browser sign-out, and check Account hides the old email.
+   Sign in again, restart Buddy, and test **Resume session**. Repeat on installed Windows
+   and macOS clients and on Chrome/Edge/Safari supported by those platforms.
+
+### Legacy native clients
 
 Direct native returns can open Buddy while leaving the Cognito tab looking as though it
 is still loading. The new redirect first loads a real finish page on Buddy's existing API.

@@ -28,6 +28,7 @@ from buddy_api.contracts import (
     VersionData,
     VersionResponse,
 )
+from buddy_api.handoff import HandoffLimitMiddleware, handoff_router
 from buddy_api.library import library_router
 from buddy_api.middleware import RequestContextMiddleware
 from buddy_api.persistence.database import Database, DatabaseProbe
@@ -122,6 +123,7 @@ def create_app(
         openapi_url="/openapi.json" if config.environment is not Environment.PRODUCTION else None,
     )
     app.add_middleware(UploadMetadataLimitMiddleware)
+    app.add_middleware(HandoffLimitMiddleware)
     app.add_middleware(RequestContextMiddleware, allowed_hosts=config.allowed_hosts)
     app.state.database = database
     app.state.authentication = Authentication(config.identity)
@@ -129,6 +131,7 @@ def create_app(
     app.state.validator = validator
     app.include_router(auth_router(config.identity))
     app.include_router(browser_return_router())
+    app.include_router(handoff_router(storage))
     app.include_router(private_router())
     app.include_router(library_router())
     app.include_router(analysis_router())
