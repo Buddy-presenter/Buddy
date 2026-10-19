@@ -85,3 +85,14 @@ QLabel#importTitle { font-size: 22px; font-weight: 600; }
 QWidget#transferCard { background: transparent; border: 0; }
 QWidget#transferCard QLabel { background: transparent; border: 0; }
 QLabel#slideThumbnail { background: #0B0C10; border: 1px solid #393A45; border-radius: 6px; }
+QWidget#companionHabitat {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #0E0F14, stop:1 #141113);
+    border-top: 1px solid #2A2525;
+}
+QLabel#companionCaption { color: #B5B5C0; font-size: 12px; background: transparent; }
+QWidget#companionHabitat QToolButton {
+    background: transparent; color: #C5B4A8; border: 1px solid transparent;
+    border-radius: 5px; padding: 3px 8px; font-size: 12px;
+}
+QWidget#companionHabitat QToolButton:hover { background: #2A211D; color: #FFB477; }
+QWidget#companionHabitat QToolButton:focus { border-color: #FFB477; }

@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from buddy_desktop.account_widget import AccountWidget
+from buddy_desktop.companion import CompanionHabitat
 from buddy_desktop.config import AppConfig, ConfigurationError, validate_api_url
 from buddy_desktop.import_surface import dropped_path
 from buddy_desktop.library_widget import LibraryWidget
@@ -169,6 +170,21 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self.account_button)
         workspace_layout.addWidget(header)
         workspace_layout.addWidget(self.pages, 1)
+        self.companion = CompanionHabitat()
+        workspace_layout.addWidget(self.companion)
+        self.preferences.show_companion.setChecked(
+            bool(settings.value("appearance/show_companion", True, type=bool))
+        )
+        self.preferences.wander.setChecked(
+            bool(settings.value("appearance/companion_wander", True, type=bool))
+        )
+        self.companion.set_resting(
+            bool(settings.value("appearance/companion_resting", False, type=bool))
+        )
+        self.companion.resting_changed.connect(self._companion_rest_changed)
+        self.preferences.show_companion.toggled.connect(self._companion_preferences_changed)
+        self.preferences.wander.toggled.connect(self._companion_preferences_changed)
+        self._companion_preferences_changed()
         layout.addWidget(workspace, 1)
         self.setCentralWidget(root)
         self._motion_changed(self.preferences.reduce_motion.isChecked())
@@ -263,6 +279,19 @@ class MainWindow(QMainWindow):
         for mark in self.findChildren(BuddyMark):
             mark.reduced_motion = reduced
             mark.set_state(mark.state)
+        self.companion.set_reduced_motion(reduced)
+
+    def _companion_preferences_changed(self) -> None:
+        visible = self.preferences.show_companion.isChecked()
+        wandering = self.preferences.wander.isChecked()
+        self.settings.setValue("appearance/show_companion", visible)
+        self.settings.setValue("appearance/companion_wander", wandering)
+        self.companion.setVisible(visible)
+        self.companion.set_wandering(wandering)
+        self.preferences.wander.setEnabled(visible)
+
+    def _companion_rest_changed(self, resting: bool) -> None:
+        self.settings.setValue("appearance/companion_resting", resting)
 
     def _drag_changed(self, active: bool) -> None:
         self._drag_attention = active
@@ -397,6 +426,7 @@ class MainWindow(QMainWindow):
             state = "attention"
         for mark in self.findChildren(BuddyMark):
             mark.set_state(state)
+        self.companion.set_state(state)
 
     def _preview_idle(self) -> None:
         if self._closing:
@@ -453,6 +483,7 @@ class MainWindow(QMainWindow):
             self.move(screens[0].availableGeometry().topLeft())
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self.companion.shutdown()
         self.profile.activate(False)
         self.account.shutdown()
         self.library.shutdown()
