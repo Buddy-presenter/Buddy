@@ -20,7 +20,8 @@ api = [
   "psutil==7.2.2",
   "jsonschema==4.26.0",
   "boto3==1.40.50",
-  "pypdfium2[helpers]==5.14.0",
+  "pypdfium2==5.14.0",
+  "Pillow==12.3.0",
 ]
 dev = ["build==1.6.1", "mypy==2.4.0", "pytest==9.1.1", "ruff==0.17.0", "httpx==0.28.1",
        "python-pptx==1.0.2"]

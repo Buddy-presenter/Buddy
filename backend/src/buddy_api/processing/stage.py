@@ -68,7 +68,6 @@ def _execute(
             "AWS_CONTAINER_AUTHORIZATION_TOKEN",
             "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
             "AWS_EC2_METADATA_DISABLED",
-            "BUDDY_ENVIRONMENT",
         }
     }
     if os.environ.get("BUDDY_ENVIRONMENT") == "test":
@@ -103,13 +102,6 @@ def _execute(
             if response.get("error") == "storage_unavailable":
                 raise OSError("Private source unavailable")
             if "error" in response:
-                if os.environ.get("BUDDY_ENVIRONMENT") == "test" and isinstance(
-                    response.get("diagnostic"), str
-                ):
-                    print(
-                        "Test-only PDF stage diagnostic: " + response["diagnostic"],
-                        flush=True,
-                    )
                 raise ExtractionError("pdf_inspection_failed")
             return MetadataOutput.model_validate(response)
     finally:
@@ -137,12 +129,8 @@ def main() -> int:
         result = inspect_source(source, storage).model_dump_json()
     except UploadError:
         result = '{"error":"storage_unavailable"}'
-    except Exception as exc:
-        if os.environ.get("BUDDY_ENVIRONMENT") == "test":
-            diagnostic = exc.code if isinstance(exc, ExtractionError) else type(exc).__name__
-            result = json.dumps({"error": "pdf_inspection_failed", "diagnostic": diagnostic})
-        else:
-            result = '{"error":"pdf_inspection_failed"}'
+    except Exception:
+        result = '{"error":"pdf_inspection_failed"}'
     finally:
         if storage:
             storage.close()
