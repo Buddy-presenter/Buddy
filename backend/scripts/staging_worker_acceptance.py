@@ -520,6 +520,7 @@ class Acceptance:
                 "started",
                 "acceptance_result",
                 "acceptance_failed",
+                "unexpected_job_state",
                 "initial_processing_passed",
                 "fault_injected_waiting_for_replacement",
                 "replacement_recovery_passed",

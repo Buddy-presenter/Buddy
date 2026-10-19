@@ -301,6 +301,13 @@ async def exercise(config):
             if job.status == status:
                 return job
             if job.status in {"dead_letter", "metadata_ready"}:
+                event(
+                    "unexpected_job_state",
+                    job=label,
+                    status=job.status,
+                    error_code=job.error_code,
+                    attempts=job.attempts,
+                )
                 raise RuntimeError("Unexpected terminal state for " + label)
             await asyncio.sleep(0.05 if status == "running" else 1)
         raise TimeoutError("Acceptance attempt budget exhausted")
