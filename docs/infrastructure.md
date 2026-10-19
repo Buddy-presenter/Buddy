@@ -41,9 +41,10 @@ region and short-lived credentials; never invent a second account ID or create a
 The edge provider uses `us-east-1` for CloudFront WAF and optional edge ACM only; the API,
 RDS, objects, queues and identity stay in the selected workload region.
 
-The repository has no processing-worker implementation. Queue/IAM infrastructure is
-real, but `worker_image = null` deliberately leaves the worker service absent. Supply the
-worker issue's reviewed image digest when implemented; do not deploy a pretend worker.
+The [PDF worker](pdf-workers.md) has a real entry point and separate container image.
+Queue/IAM infrastructure is real, but `worker_image = null` deliberately leaves the
+worker service absent. Supply its reviewed image digest and complete live acceptance;
+source code or a successful local smoke alone does not establish a deployed worker.
 `api_image = null` similarly permits the initial ECR/network/data provisioning before
 the first image can be built and pushed. `start_services = false` keeps defined services
 stopped until database initialization and migration succeed. Missing images never imply
@@ -218,7 +219,8 @@ and requires an explicit staging-only `egress_mode = "public_ip"` to accept ENAB
 
 Optional Container Insights is disabled in staging. Standard Fargate service CPU/memory
 metrics, task logs, load-balancer health checks and deployment rollback are retained.
-Workers remain absent, and production is not provisioned by staging. No Spot capacity,
+Workers remain absent until a reviewed worker digest is supplied, and production is not
+provisioned by staging. No Spot capacity,
 CPU/memory downsizing or database consolidation is used for savings. Separately, the
 requester's decision to retain the AWS Free account plan requires one-day staging RDS
 automated-backup retention instead of seven days; production remains 35 days. The actual

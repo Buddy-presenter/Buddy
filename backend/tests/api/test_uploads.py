@@ -212,6 +212,37 @@ def test_pdf_upload_storage_database_private_download_and_pptx_preservation(uplo
         client.portal.call(persisted)
 
 
+def test_pdf_job_quota_failure_cleans_bytes_and_same_upload_key_can_recover(upload_app):
+    fixture = Path(__file__).resolve().parents[3] / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf"
+    content = fixture.read_bytes()
+    body = {**metadata(content), "filename": "slides.pdf", "content_type": PDF_TYPE}
+    with upload_app() as (client, cloud, service):
+        service.owner_job_quota = 1
+        first = initialize(client, uuid4(), body).json()["data"]["id"]
+        assert (
+            client.put(
+                f"/api/v1/uploads/{first}/content",
+                content=content,
+                headers={"Content-Type": PDF_TYPE},
+            ).status_code
+            == 200
+        )
+        retry_key = uuid4()
+        second = initialize(client, retry_key, body).json()["data"]["id"]
+        full = client.put(
+            f"/api/v1/uploads/{second}/content", content=content, headers={"Content-Type": PDF_TYPE}
+        )
+        assert full.status_code == 429 and full.json()["error"]["code"] == "job_capacity"
+        assert len(cloud.objects) == 1
+        job = client.get(f"/api/v1/decks/{first}/job").json()["data"]
+        assert client.post(f"/api/v1/jobs/{job['id']}/cancel").status_code == 200
+        assert initialize(client, retry_key, body).json()["data"]["id"] == second
+        recovered = client.put(
+            f"/api/v1/uploads/{second}/content", content=content, headers={"Content-Type": PDF_TYPE}
+        )
+        assert recovered.status_code == 200 and len(cloud.objects) == 2
+
+
 def test_original_bytes_private_identity_and_complete_retry_survive_restart(upload_app):
     key = uuid4()
     with upload_app() as (client, cloud, service):

@@ -213,9 +213,40 @@ def verify(image):
         assert sql(f"SELECT status FROM processing_jobs WHERE id='{job}'") == "metadata_ready"
         assert sql("SELECT count(*) FROM deck_extractions") == "1"
         docker("stop", "--time", "120", worker)
+        source = b"Malformed PDF fixture"
+        bad_deck, bad_job = str(uuid4()), str(uuid4())
+        sql(f"""INSERT INTO decks(id,owner_id,title,source_format,source_key,source_revision,
+          source_version_id,source_size_bytes,source_sha256)
+        VALUES ('{bad_deck}','{owner}','bad','pdf','sources/smoke/bad.pdf','bad-v1',
+          'pinned',{len(source)},'{hashlib.sha256(source).hexdigest()}');
+        INSERT INTO processing_jobs(id,owner_id,deck_id,status,source_revision)
+        VALUES ('{bad_job}','{owner}','{bad_deck}','queued','bad-v1');
+        INSERT INTO job_outbox(job_id,available_at) VALUES ('{bad_job}',now());""")
+        messages[:] = [
+            {
+                "MessageId": str(uuid4()),
+                "ReceiptHandle": "bad-receipt",
+                "Body": json.dumps(
+                    {"schema_version": "buddy.job.v1", "job_id": bad_job, "generation": 0}
+                ),
+            }
+        ]
+        docker("start", worker)
+        for _ in range(60):
+            if sql(f"SELECT status FROM processing_jobs WHERE id='{bad_job}'") == "dead_letter":
+                break
+            time.sleep(1)
+        else:
+            raise RuntimeError("Worker container did not persist malformed-PDF failure")
+        assert (
+            sql(f"SELECT error_code FROM processing_jobs WHERE id='{bad_job}'")
+            == "pdf_inspection_failed"
+        )
+        assert sql("SELECT count(*) FROM deck_extractions") == "1"
+        docker("stop", "--time", "120", worker)
         print(
             "Worker image: startup, restricted DB role, real PDF, lease recovery, "
-            "pinned S3 HTTP, restart and shutdown passed."
+            "pinned S3 HTTP, malformed-PDF failure, restart and shutdown passed."
         )
     finally:
         for name in reversed(containers):

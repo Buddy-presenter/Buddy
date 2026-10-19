@@ -11,7 +11,8 @@ PostgreSQL transaction as the deck. The unique `(deck_id, source_revision)` cons
 transaction-scoped admission lock make scheduling idempotent across replicas. The API
 dispatcher also reconciles accepted pre-upgrade PDFs in bounded batches. Scheduling and
 retry enforce the owner quota (four active jobs by default); a full quota returns a safe
-429. A failed upload transaction cannot leave an orphan job or accepted source.
+429. A failed upload transaction cannot leave an orphan job or accepted source; quota
+failures retain the upload's same-key retry path after capacity becomes available.
 
 The API publishes identifier-only `buddy.job.v1` messages through SQS. Publish failure
 leaves the outbox durable; a send followed by a lost commit can duplicate delivery safely.
@@ -48,7 +49,8 @@ verify size, media type and SHA before inspection. Originals are never deleted b
 Container scratch must not be shared between worker replicas. An exclusive OS lock
 protects its worker-owned `buddy-processing` directory; startup removes only abandoned
 `work-*` directories after obtaining that lock. Normal stage directories are removed on
-exit. Hard-killed stages leave files only inside that owned workspace for restart cleanup;
+exit, including a parent-owned per-attempt directory removed after a timed-out child dies.
+Hard-killed worker processes leave files only inside that owned workspace for restart cleanup;
 Fargate also discards scratch with the task. Never sweep global/system temporary files.
 
 ## API and typed output
