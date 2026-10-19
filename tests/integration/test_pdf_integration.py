@@ -111,3 +111,91 @@ def test_pdf_upload_and_open_from_library_with_real_transport(
             server.server_close()
             thread.join(timeout=5)
             qapp.setStyleSheet(old_style)
+
+
+@pytest.mark.postgres
+@pytest.mark.parametrize("action", ["lost-response", "cancel", "signout", "shutdown"])
+def test_persisted_upload_recovery_and_late_completion(
+    upload_app, desktop_window, qtbot, monkeypatch, action
+):
+    """The API commits the real deck before its HTTP response is lost/cancelled."""
+    with upload_app() as (client, cloud, _service):
+        committed, release = Event(), Event()
+        keys = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def forward(self):
+                body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                if self.command == "POST":
+                    keys.append(self.headers["Idempotency-Key"])
+                response = client.request(
+                    self.command,
+                    self.path,
+                    content=body,
+                    headers={k: v for k, v in self.headers.items() if k.lower() != "host"},
+                )
+                if self.command == "PUT":
+                    assert response.status_code == 200
+                    committed.set()
+                    release.wait(10)
+                    return  # Close without delivering the committed response.
+                self.send_response(response.status_code)
+                for key, value in response.headers.items():
+                    self.send_header(key, value)
+                self.end_headers()
+                with suppress(OSError):
+                    self.wfile.write(response.content)
+
+            do_GET = do_POST = do_PUT = forward
+
+            def log_message(self, *_args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            window = desktop_window(f"http://127.0.0.1:{server.server_port}", request_timeout=5)
+            window.account.session = SimpleNamespace(
+                tokens=Tokens("account-a", "refresh", time.monotonic() + 3600), cancelled=Event()
+            )
+            window.account.session_changed.emit()
+            window.navigation.setCurrentRow(1)
+            library = window.library
+            qtbot.waitUntil(lambda: not library.runner.busy, timeout=10000)
+            monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a: (str(FIXTURE), ""))
+            library.choose_upload()
+            qtbot.waitUntil(committed.is_set, timeout=15000)
+            assert cloud.puts == 1
+            if action == "cancel":
+                library.cancel_upload_button.click()
+            elif action == "signout":
+                window.account.session = None
+                window.account.session_changed.emit()
+            elif action == "shutdown":
+                window.close()
+            else:
+                release.set()
+            qtbot.waitUntil(lambda: not library.runner.busy, timeout=3000)
+            if action in {"lost-response", "cancel"}:
+                library.retry_upload_button.click()
+                qtbot.waitUntil(
+                    lambda: not library.runner.busy and library.table.rowCount() == 1,
+                    timeout=10000,
+                )
+                assert keys == [keys[0], keys[0]]
+                assert library.table.item(0, 1).text() == "Awaiting processing"
+                assert library.open_button.isEnabled()
+                assert not library.upload_keys
+            else:
+                assert library.last_page is None and library.retry_path is None
+                assert not library.upload_keys
+            # Query production API state even when the GUI was closed/signed out.
+            page = client.get("/api/v1/decks", headers={"Authorization": "Bearer account-a"})
+            assert page.status_code == 200 and page.json()["data"]["total"] == 1
+            assert cloud.puts == 1
+        finally:
+            release.set()
+            server.shutdown()
+            server.server_close()
+            thread.join(5)
