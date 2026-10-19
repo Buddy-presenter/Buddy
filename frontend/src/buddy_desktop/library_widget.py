@@ -137,15 +137,19 @@ class LibraryWidget(QWidget):
         upload_layout.setContentsMargins(0, 0, 0, 0)
         self.upload_status = QLabel()
         self.upload_status.setWordWrap(True)
+        self.upload_status.setTextFormat(Qt.TextFormat.PlainText)
         self.upload_status.setAccessibleName("Upload status")
         upload_layout.addWidget(self.upload_status)
         self.upload_bar = QProgressBar()
+        self.upload_bar.setObjectName("uploadProgress")
         self.upload_bar.setAccessibleName("Presentation transfer progress")
         upload_layout.addWidget(self.upload_bar)
         upload_actions = QHBoxLayout()
         self.cancel_upload_button = QPushButton("Cancel upload")
+        command(self.cancel_upload_button, "x")
         self.cancel_upload_button.clicked.connect(self.cancel_upload)
         self.retry_upload_button = QPushButton("Retry upload")
+        command(self.retry_upload_button, "refresh-cw")
         self.retry_upload_button.clicked.connect(self.retry_upload)
         for button in (self.cancel_upload_button, self.retry_upload_button):
             button.setAccessibleName(button.text())
@@ -353,6 +357,11 @@ class LibraryWidget(QWidget):
         return not self.closing and self.active and self.request_generation == self.generation
 
     def completed(self, _identifier: int, result: object) -> None:
+        if isinstance(result, LibraryAccessExpired) and self.upload_request and self.retry_path:
+            # Navigation must not hide an expired upload session. Identity changes
+            # clear retry_path, so a late old-account response cannot expire a new one.
+            self.account.expire_session(str(result))
+            return
         if isinstance(result, UploadRejected):
             if self.upload_request:
                 fingerprint, key = self.upload_request
@@ -471,6 +480,8 @@ class LibraryWidget(QWidget):
             self.upload_status.setText(message)
             self.upload_bar.hide()
             self.retry_upload_button.show()
+            self.state.hide()
+            return
         if self.current():
             self.state.show_state("Library unavailable", message, retry=True)
 
@@ -583,6 +594,8 @@ class LibraryWidget(QWidget):
         self.refresh.setEnabled(False)
         self.state.show()
         self.state.show_state("Working…", "Transferring your private presentation…")
+        if self.upload_request is not None:
+            self.state.hide()
         self.activity_changed.emit(True)
         service = PresentationService(self.config, access)
 

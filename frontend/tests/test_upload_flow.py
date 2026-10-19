@@ -22,6 +22,7 @@ from buddy_desktop.presentation_service import (
     UploadRejected,
 )
 from buddy_desktop.services import ServiceError
+from buddy_desktop.visuals import apply_theme
 
 
 @pytest.fixture
@@ -38,6 +39,8 @@ def upload_http():
         def do_POST(self):
             server.keys.append(self.headers["Idempotency-Key"])
             server.metadata = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            server.reserve_entered.set()
+            server.reserve_release.wait(5)
             self.reply(server.record)
 
         def do_GET(self):
@@ -64,13 +67,16 @@ def upload_http():
     server.keys, server.bodies = [], []
     server.record = {"id": str(uuid4()), "status": "pending", "deck": {"id": str(uuid4())}}
     server.entered, server.release = Event(), Event()
+    server.reserve_entered, server.reserve_release = Event(), Event()
     server.release.set()
+    server.reserve_release.set()
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
         yield server
     finally:
         server.release.set()
+        server.reserve_release.set()
         server.shutdown()
         server.server_close()
         thread.join(5)
@@ -151,6 +157,58 @@ def test_cancel_between_chunks_stops_sending(upload_http, tmp_path):
     service.progress = progress
     with pytest.raises(UploadCancelled):
         service.upload(source(tmp_path), uuid4())
+
+
+def test_navigation_does_not_hide_upload_session_expiry(
+    upload_http, desktop_window, monkeypatch, qtbot, tmp_path
+):
+    monkeypatch.setattr(LibraryService, "list", lambda *a, **kw: LibraryPage((), 0, 1, 20))
+    window = desktop_window(f"http://127.0.0.1:{upload_http.server_port}", request_timeout=5)
+    library = signed_in(window)
+    qtbot.waitUntil(lambda: not library.runner.busy)
+    upload_http.code = 401
+    upload_http.reserve_release.clear()
+    library.start_upload(source(tmp_path))
+    qtbot.waitUntil(upload_http.reserve_entered.is_set)
+    window.navigation.setCurrentRow(0)
+    upload_http.reserve_release.set()
+    qtbot.waitUntil(lambda: not library.runner.busy)
+    assert window.account.session.tokens is None
+    assert not library.upload_panel.isVisible()
+    assert not library.upload_keys
+
+
+@pytest.mark.parametrize("size", [(800, 600), (1120, 760)])
+def test_upload_native_layout_and_keyboard(
+    upload_http, desktop_window, monkeypatch, qtbot, tmp_path, qapp, size
+):
+    old_style, old_palette = qapp.styleSheet(), qapp.palette()
+    apply_theme(qapp)
+    monkeypatch.setattr(LibraryService, "list", lambda *a, **kw: LibraryPage((), 0, 1, 20))
+    try:
+        window = desktop_window(f"http://127.0.0.1:{upload_http.server_port}")
+        window.resize(*size)
+        library = signed_in(window)
+        qtbot.waitUntil(lambda: not library.runner.busy)
+        upload_http.release.clear()
+        library.start_upload(source(tmp_path))
+        qtbot.waitUntil(upload_http.entered.is_set)
+        qtbot.waitUntil(lambda: "Validating" in library.upload_status.text())
+        scroll = window.pages.currentWidget()
+        scroll.ensureWidgetVisible(library.cancel_upload_button)
+        assert scroll.horizontalScrollBar().maximum() == 0
+        assert library.upload_panel.width() <= scroll.viewport().width()
+        library.cancel_upload_button.setFocus()
+        from PySide6.QtCore import Qt
+
+        qtbot.keyClick(library.cancel_upload_button, Qt.Key.Key_Space)
+        qtbot.waitUntil(lambda: not library.runner.busy)
+        assert library.retry_upload_button.isVisible()
+        assert window.grab().save(f"build/issue37/upload-recovery-{size[0]}.png")
+    finally:
+        upload_http.release.set()
+        qapp.setStyleSheet(old_style)
+        qapp.setPalette(old_palette)
 
 
 @pytest.mark.parametrize("action", ["cancel", "signout", "shutdown", "backend"])
