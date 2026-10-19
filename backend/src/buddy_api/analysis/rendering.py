@@ -5,6 +5,7 @@ only the accepted original PDF through its supported PDF input API.
 """
 
 import hashlib
+import os
 from contextlib import closing
 from io import BytesIO
 
@@ -69,7 +70,9 @@ def render_manifest(content: bytes, extraction: Extraction, deck_id: str) -> Man
                 )
     except ExtractionError:
         raise
-    except Exception:
+    except Exception as exc:
+        if os.environ.get("BUDDY_ENVIRONMENT") == "test":
+            raise ExtractionError(f"pdf_render_manifest_failed:{type(exc).__name__}") from None
         raise ExtractionError("pdf_render_manifest_failed") from None
     return Manifest.model_validate(
         {"version": "1.0", "deck_id": deck_id, "render_id": render_id, "slides": slides}
