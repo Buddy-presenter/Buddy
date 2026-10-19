@@ -154,6 +154,13 @@ class MainWindow(QMainWindow):
         self.activity_mark.setToolTip("Working…")
         self.activity_mark.hide()
         header_layout.addWidget(self.activity_mark)
+        self.cancel_auth_button = QPushButton("Cancel sign-in")
+        command(self.cancel_auth_button, "x")
+        self.cancel_auth_button.setAccessibleName("Cancel browser sign-in")
+        self.cancel_auth_button.setToolTip("Cancel the sign-in waiting in your browser")
+        self.cancel_auth_button.clicked.connect(self.account.cancel_operation)
+        self.cancel_auth_button.hide()
+        header_layout.addWidget(self.cancel_auth_button)
         self.account_button = QPushButton("Sign in")
         self.account_button.setObjectName("accountButton")
         self.account_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -430,6 +437,9 @@ class MainWindow(QMainWindow):
     @Slot(bool)
     def _account_activity(self, busy: bool) -> None:
         self._account_busy = busy
+        self.cancel_auth_button.setVisible(
+            busy and self.account.operation in {"signin", "signup", "recovery"}
+        )
         if busy and self.account.operation != "profile":
             self._verified_profile = None
             self.account_button.setToolTip("Account operation in progress")

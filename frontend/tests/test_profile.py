@@ -172,6 +172,48 @@ def test_signed_out_profile_has_account_guidance(desktop_window, qtbot):
     assert window.pages.currentIndex() == 4
 
 
+def test_browser_sign_in_remains_cancellable_after_popup_dismisses(
+    profile, monkeypatch, qtbot
+):
+    window, _, _ = profile
+    account = window.account
+    assert account.session is not None
+    account.session.tokens = None
+    account.account_id = None
+    account.idle()
+    window._account_identity()
+    entered_browser, cancelled_browser = Event(), Event()
+
+    def wait_for_browser_cancel(_url, _state, cancelled, **_kwargs):
+        entered_browser.set()
+        assert cancelled.wait(5), "Browser authentication did not receive cancellation"
+        cancelled_browser.set()
+        raise IdentityError("Sign-in was cancelled.")
+
+    monkeypatch.setattr(auth, "browser_code", wait_for_browser_cancel)
+    window._show_account_controls()
+    qtbot.mouseClick(account.buttons["signin"], Qt.MouseButton.LeftButton)
+    try:
+        qtbot.waitUntil(entered_browser.is_set)
+        qtbot.waitUntil(lambda: window.cancel_auth_button.isVisible())
+
+        # The system browser takes focus and Qt dismisses the account popup. The
+        # main-window cancel action must remain available while OAuth is pending.
+        window.account_popover.hide()
+        assert not window.account_popover.isVisible()
+        assert window.cancel_auth_button.isVisible()
+        assert window.cancel_auth_button.isEnabled()
+        assert window.cancel_auth_button.accessibleName() == "Cancel browser sign-in"
+
+        qtbot.mouseClick(window.cancel_auth_button, Qt.MouseButton.LeftButton)
+        qtbot.waitUntil(cancelled_browser.is_set)
+        qtbot.waitUntil(lambda: not account.runner.busy)
+        assert not window.cancel_auth_button.isVisible()
+    finally:
+        account.cancel_operation()
+        account.runner.wait_for_shutdown()
+
+
 # Sign-up and recovery share sign-in's browser path; resume is the other token path.
 @pytest.mark.parametrize("action", ["signin", "resume"])
 @pytest.mark.parametrize("outcome", ["success", "failure", "cancel", "navigate"])
