@@ -29,13 +29,22 @@ resource "aws_iam_role" "task" {
 resource "aws_iam_role_policy" "data" {
   for_each = toset(["api", "worker"])
   role     = aws_iam_role.task[each.key].id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [
-    { Effect = "Allow", Action = ["s3:ListBucket"], Resource = aws_s3_bucket.private["data"].arn },
-    { Effect = "Allow", Action = each.key == "api" ? ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"] : ["s3:GetObject"], Resource = each.key == "api" ? "${aws_s3_bucket.private["data"].arn}/*" : "${aws_s3_bucket.private["data"].arn}/sources/*" },
-    { Effect = "Allow", Action = each.key == "api" ? ["sqs:SendMessage"] : ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:GetQueueAttributes"], Resource = aws_sqs_queue.processing.arn },
-    { Effect = "Allow", Action = each.key == "api" ? ["kms:Decrypt", "kms:GenerateDataKey"] : ["kms:Decrypt"], Resource = aws_kms_key.data.arn,
-    Condition = { StringEquals = { "kms:ViaService" = ["s3.${var.region}.amazonaws.com", "sqs.${var.region}.amazonaws.com"] } } }
-  ] })
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = concat(
+      [
+        { Effect = "Allow", Action = ["s3:ListBucket"], Resource = aws_s3_bucket.private["data"].arn },
+      ],
+      each.key == "api" ? [
+        { Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"], Resource = "${aws_s3_bucket.private["data"].arn}/*" },
+      ] : [],
+      [
+        { Effect = "Allow", Action = each.key == "api" ? ["sqs:SendMessage"] : ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:GetQueueAttributes"], Resource = aws_sqs_queue.processing.arn },
+        { Effect = "Allow", Action = each.key == "api" ? ["kms:Decrypt", "kms:GenerateDataKey"] : ["kms:Decrypt"], Resource = aws_kms_key.data.arn,
+        Condition = { StringEquals = { "kms:ViaService" = ["s3.${var.region}.amazonaws.com", "sqs.${var.region}.amazonaws.com"] } } }
+      ]
+    )
+  })
 }
 resource "aws_iam_role_policy" "upload_versions" {
   role = aws_iam_role.task["api"].id

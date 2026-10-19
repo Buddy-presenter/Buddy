@@ -265,8 +265,16 @@ run "private_upload_runtime_and_version_cleanup" {
     error_message = "A supplied worker requires real health, bounded drain time and dedicated writable scratch."
   }
   assert {
-    condition     = jsondecode(aws_iam_role_policy.worker_versions.policy).Statement[0].Action == ["s3:GetObjectVersion"] && !contains(jsondecode(aws_iam_role_policy.data["worker"].policy).Statement[1].Action, "s3:PutObject")
-    error_message = "The PDF worker needs pinned source reads, not object writes."
+    condition = (
+      jsondecode(aws_iam_role_policy.worker_versions.policy).Statement[0].Action == ["s3:GetObjectVersion"] &&
+      alltrue([
+        for statement in jsondecode(aws_iam_role_policy.data["worker"].policy).Statement :
+        !contains(statement.Action, "s3:GetObject") &&
+        !contains(statement.Action, "s3:PutObject") &&
+        !contains(statement.Action, "s3:DeleteObject")
+      ])
+    )
+    error_message = "The PDF worker needs pinned source reads, not unversioned reads or object writes."
   }
   assert {
     condition = (
