@@ -88,6 +88,20 @@ run "production_redundancy" {
     error_message = "Desktop publishing must have a separate release identity."
   }
 }
+run "worker_runtime_boundaries" {
+  command = plan
+  variables {
+    worker_image = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+  assert {
+    condition     = jsondecode(aws_ecs_task_definition.service["worker"].container_definitions)[0].healthCheck.command == ["CMD", "python", "-m", "buddy_api.processing", "--health"] && jsondecode(aws_ecs_task_definition.service["worker"].container_definitions)[0].stopTimeout == 120 && length(jsondecode(aws_ecs_task_definition.service["worker"].container_definitions)[0].mountPoints) == 1
+    error_message = "A supplied worker requires real health, bounded drain time and dedicated writable scratch."
+  }
+  assert {
+    condition     = jsondecode(aws_iam_role_policy.worker_versions.policy).Statement[0].Action == ["s3:GetObjectVersion"] && !contains(jsondecode(aws_iam_role_policy.data["worker"].policy).Statement[1].Action, "s3:PutObject")
+    error_message = "The PDF worker needs pinned source reads, not object writes."
+  }
+}
 run "reject_mutable_image" {
   command = plan
   variables { api_image = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api:latest" }

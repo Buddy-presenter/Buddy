@@ -140,6 +140,11 @@ def library_router() -> APIRouter:
                         None: DeckStatus.UPLOADED,
                         "pending": DeckStatus.QUEUED,
                         "running": DeckStatus.PROCESSING,
+                        "queued": DeckStatus.QUEUED,
+                        "retry_wait": DeckStatus.QUEUED,
+                        "metadata_ready": DeckStatus.INCOMPLETE,
+                        "cancelled": DeckStatus.INCOMPLETE,
+                        "dead_letter": DeckStatus.FAILED,
                         "failed": DeckStatus.FAILED,
                         "succeeded": (
                             DeckStatus.READY

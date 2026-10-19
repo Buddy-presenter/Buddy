@@ -31,6 +31,9 @@ from buddy_api.contracts import (
 from buddy_api.library import library_router
 from buddy_api.middleware import RequestContextMiddleware
 from buddy_api.persistence.database import Database, DatabaseProbe
+from buddy_api.processing.api import processing_router
+from buddy_api.processing.queue import Queue
+from buddy_api.processing.service import Processor
 from buddy_api.readiness import DependencyProbe, check_dependencies, validate_probes
 from buddy_api.uploads.contracts import UploadError
 from buddy_api.uploads.router import UploadMetadataLimitMiddleware, upload_router
@@ -64,7 +67,12 @@ def create_app(
     database = Database(config.database) if config.database is not None else None
     storage = upload_storage or (SourceStorage(config.uploads) if config.uploads else None)
     uploads = (
-        UploadService(database, config.uploads, storage)
+        UploadService(
+            database,
+            config.uploads,
+            storage,
+            owner_job_quota=config.worker.owner_quota if config.worker else 4,
+        )
         if database and config.uploads and storage
         else None
     )
@@ -78,6 +86,12 @@ def create_app(
         ValidationService(uploads, config.validator) if uploads and config.validator else None
     )
     started = False
+    queue = Queue(config.worker) if config.worker and uploads else None
+    processor = (
+        Processor(database, storage, config.worker, queue)
+        if database and storage and config.worker and queue
+        else None
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -95,10 +109,17 @@ def create_app(
                 await asyncio.sleep(30)
 
         validation_cleanup = asyncio.create_task(reconcile_validation()) if validator else None
+        dispatch = asyncio.create_task(processor.dispatch()) if processor else None
         try:
             yield
         finally:
             started = False
+            if dispatch:
+                dispatch.cancel()
+                with suppress(asyncio.CancelledError):
+                    await dispatch
+            if queue:
+                queue.close()
             if reconciler:
                 reconciler.cancel()
                 with suppress(asyncio.CancelledError):
@@ -127,6 +148,7 @@ def create_app(
     app.state.authentication = Authentication(config.identity)
     app.state.uploads = uploads
     app.state.validator = validator
+    app.state.worker_settings = config.worker
     app.include_router(auth_router(config.identity))
     app.include_router(browser_return_router())
     app.include_router(private_router())
@@ -134,6 +156,7 @@ def create_app(
     app.include_router(analysis_router())
     app.include_router(upload_router())
     app.include_router(validation_router())
+    app.include_router(processing_router())
 
     @app.exception_handler(UploadError)
     async def upload_error(request: Request, exc: UploadError) -> JSONResponse:

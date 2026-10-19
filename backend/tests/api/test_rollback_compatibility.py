@@ -102,6 +102,8 @@ def test_bridge_preserves_old_reads_writes_sessions_and_new_readiness(
     assert original.returncode == 0, original.stderr
     baseline = old_app(previous_source, database_settings, "baseline", bridge=True)
     assert baseline.returncode == 0, baseline.stderr
+    asyncio.run(upgrade(database_settings, "0008_rollback_compatibility"))
+    assert old_app(previous_source, database_settings, "read", bridge=True).returncode == 0
     asyncio.run(upgrade(database_settings, "head"))
     # The original immutable image remains an invalid rollback target; the
     # compatibility release must become the recorded previous app first.

@@ -29,6 +29,7 @@ buddy-api = "buddy_api.cli:main"
 buddy-api-schema = "buddy_api.schema:main"
 buddy-db = "buddy_api.persistence.migrate:main"
 buddy-extract = "buddy_api.extraction.cli:main"
+buddy-worker = "buddy_api.processing.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/buddy_api"]

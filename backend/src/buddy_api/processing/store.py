@@ -1,0 +1,264 @@
+"""Transactional state transitions. Lease tokens fence every output and heartbeat."""
+
+from datetime import UTC, datetime, timedelta
+from uuid import UUID, uuid4
+
+from sqlalchemy import func, select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from buddy_api.persistence.models import Deck, DeckExtraction, JobOutbox, ProcessingJob
+from buddy_api.persistence.repositories import Extractions
+from buddy_api.processing.config import WorkerSettings
+from buddy_api.processing.contracts import ACTIVE, JobData, Message, MetadataOutput
+from buddy_api.uploads.contracts import UploadError
+
+
+def now() -> datetime:
+    return datetime.now(UTC)
+
+
+async def admission_lock(session: AsyncSession) -> None:
+    await session.execute(text("SELECT pg_advisory_xact_lock(704008)"))
+
+
+async def quota(session: AsyncSession, owner: UUID, limit: int) -> None:
+    count = await session.scalar(
+        select(func.count())
+        .select_from(ProcessingJob)
+        .where(
+            ProcessingJob.owner_id == owner,
+            ProcessingJob.source_revision.is_not(None),
+            ProcessingJob.status.in_(ACTIVE),
+        )
+    )
+    if int(count or 0) >= limit:
+        raise UploadError(429, "job_capacity", "Processing capacity is full; retry later.", 30)
+
+
+async def schedule(session: AsyncSession, deck: Deck, owner_quota: int = 4) -> ProcessingJob | None:
+    if deck.source_format != "pdf":
+        return None
+    if not all(
+        (
+            deck.source_key,
+            deck.source_revision,
+            deck.source_sha256,
+            deck.source_version_id,
+            deck.source_size_bytes,
+        )
+    ):
+        raise UploadError(409, "source_not_accepted", "An accepted PDF source is required.")
+    await admission_lock(session)
+    existing = await session.scalar(
+        select(ProcessingJob).where(
+            ProcessingJob.deck_id == deck.id,
+            ProcessingJob.source_revision == deck.source_revision,
+        )
+    )
+    if existing is not None:
+        return existing
+    await quota(session, deck.owner_id, owner_quota)
+    job = ProcessingJob(
+        id=uuid4(),
+        owner_id=deck.owner_id,
+        deck_id=deck.id,
+        source_revision=deck.source_revision,
+        status="queued",
+    )
+    session.add(job)
+    await session.flush()
+    session.add(JobOutbox(job_id=job.id, available_at=now()))
+    await session.flush()
+    return job
+
+
+async def owned(session: AsyncSession, owner: UUID, identifier: UUID) -> ProcessingJob:
+    job = await session.scalar(
+        select(ProcessingJob)
+        .where(
+            ProcessingJob.id == identifier,
+            ProcessingJob.owner_id == owner,
+        )
+        .with_for_update()
+    )
+    if job is None:
+        raise UploadError(404, "not_found", "Job not found.")
+    return job
+
+
+def describe(job: ProcessingJob) -> JobData:
+    return JobData.model_validate(
+        {key: getattr(job, key) for key in JobData.model_fields if key != "analysis_ready"}
+    )
+
+
+async def cancel(session: AsyncSession, job: ProcessingJob) -> None:
+    if job.source_revision is None:
+        raise UploadError(409, "legacy_job", "Legacy jobs cannot be controlled by this worker.")
+    if job.status not in ACTIVE:
+        return
+    job.status, job.stage_state = "cancelled", "cancelled"
+    job.generation += 1
+    job.lease_id = job.lease_until = job.deadline_at = None
+
+
+async def retry(session: AsyncSession, job: ProcessingJob, settings: WorkerSettings) -> None:
+    if job.source_revision is None or job.status not in {"dead_letter", "failed", "cancelled"}:
+        raise UploadError(409, "job_not_retryable", "This job cannot be retried.")
+    # Lifetime attempts remain bounded, even across explicit retries.
+    if job.attempts >= settings.max_attempts:
+        raise UploadError(409, "attempts_exhausted", "The job attempt budget is exhausted.")
+    await quota(session, job.owner_id, settings.owner_quota)
+    job.generation += 1
+    job.status, job.stage_state, job.progress = "queued", "pending", 0
+    job.error_code = None
+    job.not_before = now()
+    outbox = await session.get(JobOutbox, job.id)
+    assert outbox is not None
+    outbox.available_at = now()
+
+
+async def claim(
+    session: AsyncSession, message: Message, settings: WorkerSettings
+) -> ProcessingJob | None:
+    await admission_lock(session)
+    job = await session.scalar(
+        select(ProcessingJob).where(ProcessingJob.id == message.job_id).with_for_update()
+    )
+    if (
+        job is None
+        or job.generation != message.generation
+        or job.status not in {"queued", "retry_wait"}
+        or job.source_revision is None
+        or job.stage != "pdf_metadata.v1"
+        or job.not_before > now()
+    ):
+        return None
+    outbox = await session.get(JobOutbox, job.id)
+    if outbox is None:
+        return None
+    running = await session.scalar(
+        select(func.count())
+        .select_from(ProcessingJob)
+        .where(
+            ProcessingJob.status == "running",
+            ProcessingJob.source_revision.is_not(None),
+            ProcessingJob.lease_until > now(),
+        )
+    )
+    if int(running or 0) >= settings.concurrency:
+        return None
+    job.attempts += 1
+    if job.attempts > settings.max_attempts:
+        job.status, job.stage_state, job.error_code = "dead_letter", "failed", "attempts_exhausted"
+        return None
+    job.status, job.stage_state, job.progress = "running", "running", 10
+    job.lease_id = uuid4()
+    job.lease_until = now() + timedelta(seconds=settings.lease_seconds)
+    job.deadline_at = now() + timedelta(seconds=settings.runtime_seconds)
+    await session.flush()
+    return job
+
+
+def valid_lease(job: ProcessingJob, token: UUID) -> bool:
+    return bool(
+        job.status == "running"
+        and job.lease_id == token
+        and job.lease_until
+        and job.lease_until > now()
+        and job.deadline_at
+        and job.deadline_at > now()
+    )
+
+
+async def heartbeat(
+    session: AsyncSession, identifier: UUID, token: UUID, settings: WorkerSettings
+) -> bool:
+    job = await session.scalar(
+        select(ProcessingJob).where(ProcessingJob.id == identifier).with_for_update()
+    )
+    if job is None or not valid_lease(job, token):
+        return False
+    job.lease_until = min(now() + timedelta(seconds=settings.lease_seconds), job.deadline_at)  # type: ignore[type-var]
+    job.progress = 50
+    return True
+
+
+async def complete(
+    session: AsyncSession, identifier: UUID, token: UUID, output: MetadataOutput
+) -> bool:
+    job = await session.scalar(
+        select(ProcessingJob).where(ProcessingJob.id == identifier).with_for_update()
+    )
+    if job is None or not valid_lease(job, token):
+        return False
+    deck = await session.get(Deck, job.deck_id)
+    metadata = output.metadata
+    if (
+        deck is None
+        or deck.owner_id != job.owner_id
+        or deck.source_format != "pdf"
+        or deck.source_revision != job.source_revision
+        or metadata.source_revision != job.source_revision
+        or metadata.source_sha256 != deck.source_sha256
+        or metadata.source_format != "pdf"
+    ):
+        raise UploadError(409, "source_changed", "The job source is no longer current.")
+    extraction = await Extractions(session, DeckExtraction).save(
+        owner_id=job.owner_id, deck_id=job.deck_id, extraction=metadata
+    )
+    job.extraction_id = extraction.id
+    job.status, job.stage_state, job.progress, job.error_code = (
+        "metadata_ready",
+        "succeeded",
+        100,
+        None,
+    )
+    job.lease_id = job.lease_until = job.deadline_at = None
+    return True
+
+
+async def fail(
+    session: AsyncSession,
+    identifier: UUID,
+    token: UUID,
+    settings: WorkerSettings,
+    code: str,
+    *,
+    permanent: bool = False,
+) -> None:
+    job = await session.scalar(
+        select(ProcessingJob).where(ProcessingJob.id == identifier).with_for_update()
+    )
+    if job is None or job.status != "running" or job.lease_id != token:
+        return
+    job.error_code, job.stage_state = code, "failed"
+    job.lease_id = job.lease_until = job.deadline_at = None
+    job.generation += 1
+    job.status = (
+        "dead_letter" if permanent or job.attempts >= settings.max_attempts else "retry_wait"
+    )
+    outbox = await session.get(JobOutbox, job.id)
+    assert outbox is not None
+    outbox.available_at = now() + timedelta(seconds=min(60, 2**job.attempts))
+    job.not_before = outbox.available_at
+
+
+async def reconcile(session: AsyncSession, settings: WorkerSettings) -> None:
+    # Bounded work; expired workers lose their token before another attempt starts.
+    jobs = (
+        await session.scalars(
+            select(ProcessingJob)
+            .where(
+                ProcessingJob.source_revision.is_not(None),
+                ProcessingJob.status == "running",
+                (ProcessingJob.lease_until <= now()) | (ProcessingJob.deadline_at <= now()),
+            )
+            .order_by(ProcessingJob.lease_until)
+            .limit(16)
+            .with_for_update(skip_locked=True)
+        )
+    ).all()
+    for job in jobs:
+        assert job.lease_id is not None
+        await fail(session, job.id, job.lease_id, settings, "worker_lease_expired")

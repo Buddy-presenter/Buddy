@@ -52,10 +52,18 @@ async def blocking[T](call: Callable[[], T]) -> T:
 
 
 class UploadService:
-    def __init__(self, database: Database, settings: UploadSettings, storage: SourceStorage):
+    def __init__(
+        self,
+        database: Database,
+        settings: UploadSettings,
+        storage: SourceStorage,
+        *,
+        owner_job_quota: int = 4,
+    ):
         self.database = database
         self.settings = settings
         self.storage = storage
+        self.owner_job_quota = owner_job_quota
         # Share one bounded resource slot with PDF reads and the isolated Qt validator.
         self.parser_slot = asyncio.Semaphore(1)
 
@@ -260,6 +268,9 @@ class UploadService:
             current.deck_id = deck.id
             current.status = "complete"
             current.error_code = None
+            from buddy_api.processing.store import schedule
+
+            await schedule(session, deck, self.owner_job_quota)
             await session.flush()
             return await self.describe(session, current)
 

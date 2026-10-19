@@ -79,9 +79,21 @@ the normal platform unless you set `QT_QPA_PLATFORM=offscreen`. API CI runs on L
 PostgreSQL. Existing `frontend/scripts/smoke_desktop.py` and `backend/scripts/smoke_api.py --database` verify
 the installed applications, beyond pytest's editable-install checks.
 
-There is no processing-worker application or capture/device contract on main. Issue #8
-must supply the real worker before its startup/success/error smoke can exist.
-`python scripts/test.py worker` exits with a specific blocked result rather than passing
-a fabricated worker test. The persisted-job smoke verifies the shared database contract;
-it does not claim to execute jobs. Issue #43 must remain open until the real worker smoke
-and device adapters are added against their implemented contracts.
+Issue #43 is complete for its accepted desktop/API test foundations. Issue #8 supplies
+the real processing worker. With the disposable PostgreSQL URL configured, run
+`python scripts/test.py worker`: real migrations, PDF inspection, persisted output,
+restart/expired leases, duplicates, outbox publish recovery, quota/concurrency,
+retry/cancel fencing, rollback on partial persistence and owner-only APIs are exercised.
+Only external S3/SQS boundaries are substituted in these deterministic tests.
+
+`docker build -f infra/container/Dockerfile.worker -t buddy-worker:local .` and
+`python infra/container/smoke_worker.py --image buddy-worker:local` exercise the installed
+Linux worker, real PostgreSQL with a restricted runtime role, read-only root, dropped
+capabilities, bounded scratch, the actual PDF parser, health and process restart. The
+smoke uses synthetic AWS HTTP responses, not cloud credentials. CI runs this as well as
+the worker test target on Python 3.12/3.14.
+
+For opt-in real staging S3/SQS checks, see [PDF workers](pdf-workers.md). These are not CI
+tests and can consume AWS credits. A local-database cloud smoke is not proof of private
+staging RDS networking, task-role authorization or a deployed worker service.
+Microphone/device coverage remains with future issue #15; it does not exist yet.

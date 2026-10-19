@@ -186,7 +186,7 @@ def test_pdf_upload_storage_database_private_download_and_pptx_preservation(uplo
         assert cloud.content_types[storage_key] == PDF_TYPE
         assert initialize(client, key, body).json()["data"]["deck"] == deck
         listing = client.get("/api/v1/decks").json()["data"]["items"][0]
-        assert listing["can_present"] and listing["status"] == "uploaded"
+        assert listing["can_present"] and listing["status"] == "queued"
         downloaded = client.get(f"/api/v1/decks/{identifier}/source")
         assert downloaded.content == content
         assert downloaded.headers["cache-control"] == "no-store"
@@ -205,7 +205,9 @@ def test_pdf_upload_storage_database_private_download_and_pptx_preservation(uplo
                 stored = await session.get(Deck, UUID(identifier))
                 assert stored.source_format == "pdf"
                 assert stored.source_sha256 == hashlib.sha256(content).hexdigest()
-                assert await session.scalar(select(func.count()).select_from(ProcessingJob)) == 0
+                assert await session.scalar(select(func.count()).select_from(ProcessingJob)) == 1
+                job = await session.scalar(select(ProcessingJob))
+                assert job.deck_id == stored.id and job.source_revision == stored.source_revision
 
         client.portal.call(persisted)
 

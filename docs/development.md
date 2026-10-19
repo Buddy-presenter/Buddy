@@ -90,3 +90,6 @@ For launching Buddy and trying every command in Present, follow the
 The isolated PDF action validation API, private evidence, runtime setup and test commands
 are documented in [action validation](action-validation.md). It uses predefined actions;
 no model generation or document text extraction is required.
+
+Durable PDF metadata scheduling, SQS workers, owner job controls and opt-in staging
+verification are documented in [PDF workers](pdf-workers.md).
