@@ -61,7 +61,11 @@ def test_invalid_saved_config_falls_back_without_exposing_it(tmp_path, monkeypat
 
 
 def test_real_http_check_keeps_ui_responsive_and_returns_through_signals(qtbot, tmp_path, backend):
-    window = make_window(qtbot, tmp_path, f"http://127.0.0.1:{backend.server_port}")
+    # This checks responsiveness while a request is pending, not the transport timeout.
+    # Allow slow native Windows event delivery before explicitly releasing the server.
+    window = make_window(
+        qtbot, tmp_path, f"http://127.0.0.1:{backend.server_port}", request_timeout=5
+    )
     backend.release.clear()
     ticks = []
     timer = QTimer(window)
