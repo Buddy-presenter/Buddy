@@ -44,9 +44,15 @@ def https_browser_code(
         headers = {"Content-Type": "application/json"}
         if authenticated:
             headers["Authorization"] = "Buddy-Handoff " + secret
-        return request_json(
-            Request(endpoint + "/" + action, data=json.dumps(body).encode(), headers=headers)
-        )
+        try:
+            return request_json(
+                Request(endpoint + "/" + action, data=json.dumps(body).encode(), headers=headers)
+            )
+        except IdentityError:
+            raise IdentityError(
+                "Secure sign-in handoff is unavailable or expired. Check your connection "
+                "and start a fresh sign-in."
+            ) from None
 
     if cancelled.is_set():
         raise IdentityError("Sign-in was cancelled.")

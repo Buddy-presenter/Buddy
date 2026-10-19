@@ -143,3 +143,22 @@ def test_cancellation_browser_failure_expiry_and_registration_failure(monkeypatc
         assert requests == []
     elif finish != "start-failure":
         assert requests[-1]["action"] == "cancel"
+
+
+def test_lost_collection_response_requires_a_fresh_attempt_and_does_not_reopen_browser(monkeypatch):
+    requests = []
+    opened = []
+
+    def respond(request):
+        requests.append(request)
+        if request.full_url.endswith("/start"):
+            return {"status": "pending"}
+        raise IdentityError("Account service unavailable.")
+
+    monkeypatch.setattr(https_handoff, "request_json", respond)
+    with pytest.raises(IdentityError, match="fresh sign-in"):
+        https_handoff.https_browser_code(
+            URL, STATE, Event(), opener=lambda url: opened.append(url) or True
+        )
+    assert opened == [URL]
+    assert json.loads(requests[-1].data)["action"] == "cancel"
