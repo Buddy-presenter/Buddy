@@ -5,7 +5,7 @@ import json
 import re
 import time
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from threading import Lock
 from typing import Annotated, Any
 from urllib.request import Request as HttpRequest
@@ -29,6 +29,8 @@ from buddy_identity.transport import request_json
 
 class AccountData(BaseModel):
     id: UUID
+    email: str | None = None
+    email_verified: bool = False
 
 
 class AccountResponse(BaseModel):
@@ -56,12 +58,18 @@ class AttemptLimiter:
             return count < 30
 
 
+@dataclass(frozen=True, repr=False)
+class VerifiedIdentity:
+    subject: str
+    email: str
+
+
 class CognitoVerifier:
     def __init__(self, config: IdentityConfig) -> None:
         self.config = config
         self.keys = PyJWKClient(config.issuer + "/.well-known/jwks.json", timeout=5, lifespan=300)
 
-    def verify(self, token: str) -> str:
+    def verify(self, token: str) -> VerifiedIdentity:
         try:
             key = self.keys.get_signing_key_from_jwt(token)
             claims: dict[str, Any] = jwt.decode(
@@ -118,7 +126,7 @@ class CognitoVerifier:
             or not re.fullmatch(r"[^\s@]+@[^\s@]+", values.get("email", ""))
         ):
             raise SessionExpired("Sign-in expired or was rejected. Please sign in again.")
-        return self.config.issuer + "#" + str(claims["sub"])
+        return VerifiedIdentity(self.config.issuer + "#" + str(claims["sub"]), values["email"])
 
 
 @dataclass(frozen=True)
@@ -126,6 +134,7 @@ class Principal:
     """An account resolved from verified provider state, never a client-supplied UUID."""
 
     id: UUID
+    email: str = field(repr=False)
 
 
 class Authentication:
@@ -144,21 +153,21 @@ class Authentication:
         ):
             raise HTTPException(401, headers={"WWW-Authenticate": "Bearer"})
         try:
-            subject = await run_in_threadpool(self.verifier.verify, authorization[7:])
+            identity = await run_in_threadpool(self.verifier.verify, authorization[7:])
             async with request.app.state.database.sessions() as session, session.begin():
                 await session.execute(
                     insert(User)
-                    .values(subject=subject)
+                    .values(subject=identity.subject)
                     .on_conflict_do_nothing(index_elements=[User.subject])
                 )
                 identifier = (
-                    await session.execute(select(User.id).where(User.subject == subject))
+                    await session.execute(select(User.id).where(User.subject == identity.subject))
                 ).scalar_one()
         except SessionExpired:
             raise HTTPException(401, headers={"WWW-Authenticate": "Bearer"}) from None
         except (IdentityError, SQLAlchemyError, OSError, TimeoutError):
             raise HTTPException(503) from None
-        return Principal(identifier)
+        return Principal(identifier, identity.email)
 
 
 async def authenticated(
@@ -194,7 +203,8 @@ def auth_router(config: IdentityConfig | None) -> APIRouter:
             raise HTTPException(429, headers={"Retry-After": "60"})
         principal = await authentication.identify(request, authorization)
         return AccountResponse(
-            data=AccountData(id=principal.id), request_id=request.state.request_id
+            data=AccountData(id=principal.id, email=principal.email, email_verified=True),
+            request_id=request.state.request_id,
         )
 
     return router

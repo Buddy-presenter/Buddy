@@ -5,7 +5,6 @@ import time
 from contextlib import suppress
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from importlib.resources import files
 from pathlib import Path
 from threading import Event, Thread
 from types import SimpleNamespace
@@ -14,15 +13,17 @@ import pytest
 from backend.tests.support.database import database_settings as database_settings
 from backend.tests.support.database import migrate
 from fastapi.testclient import TestClient
+from frontend.tests.test_auth import Store
 from sqlalchemy import select
 
 from buddy_api.app import create_app
-from buddy_api.auth import CognitoVerifier
+from buddy_api.auth import CognitoVerifier, VerifiedIdentity
 from buddy_api.config import Environment, Settings
 from buddy_api.persistence.database import Database
 from buddy_api.persistence.models import ProcessingJob
 from buddy_api.persistence.repositories import Repositories
-from buddy_desktop.auth import Tokens
+from buddy_desktop.auth import AccountSession, Tokens
+from buddy_desktop.visuals import apply_theme
 from buddy_identity.config import IdentityConfig, SessionExpired
 
 
@@ -58,7 +59,7 @@ def test_end_to_end_library_and_native_layout(
     def verify(self, token):
         if token != "test-token":
             raise SessionExpired("invalid")
-        return "owner"
+        return VerifiedIdentity("owner", "owner@example.test")
 
     monkeypatch.setattr(CognitoVerifier, "verify", verify)
     identity = IdentityConfig(
@@ -73,8 +74,8 @@ def test_end_to_end_library_and_native_layout(
         database=database_settings,
         identity=identity,
     )
-    old_style = qapp.styleSheet()
-    qapp.setStyleSheet(files("buddy_desktop").joinpath("theme.qss").read_text(encoding="utf-8"))
+    old_style, old_palette = qapp.styleSheet(), qapp.palette()
+    apply_theme(qapp)
     with TestClient(create_app(settings)) as client:
 
         class Handler(BaseHTTPRequestHandler):
@@ -142,6 +143,24 @@ def test_end_to_end_library_and_native_layout(
             qtbot.waitUntil(lambda: not library.runner.busy, timeout=10000)
             assert library.total == 1 and library.table.item(0, 1).text() == "Failed"
             assert "Contact support" in library.detail.toPlainText()
+
+            # Exercise the real profile HTTP contract through Qt, API and PostgreSQL.
+            window.account.session = AccountSession(identity, window.config.api_url, Store())
+            window.account.session.tokens = Tokens("test-token", "refresh", time.monotonic() + 300)
+            window.account.account_id = client.get(
+                "/api/v1/auth/me", headers={"Authorization": "Bearer test-token"}
+            ).json()["data"]["id"]
+            window._show_account()
+            qtbot.waitUntil(lambda: not window.account.runner.busy, timeout=10000)
+            assert window.profile.email.text() == "owner@example.test"
+            assert window.profile.verification.text() == "Email verified"
+            assert window.pages.currentWidget().horizontalScrollBar().maximum() == 0
+            assert window.grab().save(str(screenshots / f"profile-{size[0]}.png"))
+            window.account.session.tokens.access = "revoked-test-token"
+            window.profile.refresh.click()
+            qtbot.waitUntil(lambda: not window.account.runner.busy, timeout=10000)
+            assert window.account.account_id is None and window.profile.email.text() == ""
+            assert "expired" in window.profile.state.message.text()
         finally:
             if window:
                 window.close()
@@ -150,3 +169,4 @@ def test_end_to_end_library_and_native_layout(
             server.server_close()
             thread.join(timeout=5)
             qapp.setStyleSheet(old_style)
+            qapp.setPalette(old_palette)

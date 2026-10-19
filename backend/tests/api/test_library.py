@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
-from buddy_api.auth import CognitoVerifier
+from buddy_api.auth import CognitoVerifier, VerifiedIdentity
 from buddy_api.config import Environment, Settings
 from buddy_api.persistence.database import Database
 from buddy_api.persistence.models import AnalysisVersion, ProcessingJob, RenderedAsset
@@ -71,7 +71,7 @@ def library_api(migrated_database, monkeypatch, api_client_factory):
     def verify(self, token):
         if token not in {"owner", "other"}:
             raise SessionExpired("invalid")
-        return token
+        return VerifiedIdentity(token, f"{token}@example.test")
 
     monkeypatch.setattr(CognitoVerifier, "verify", verify)
     settings = Settings(

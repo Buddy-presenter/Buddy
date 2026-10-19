@@ -56,7 +56,10 @@ def signed(monkeypatch):
 def test_signed_account_identity_and_revocation(signed, monkeypatch):
     verifier, claims, key = signed
     token = jwt.encode(claims, key, algorithm="RS256")
-    assert verifier.verify(token) == CONFIG.issuer + "#" + claims["sub"]
+    result = verifier.verify(token)
+    assert result.subject == CONFIG.issuer + "#" + claims["sub"]
+    assert result.email == "verified@example.test"
+    assert "verified@example.test" not in repr(result)
     monkeypatch.setattr(
         auth, "request_json", lambda _: (_ for _ in ()).throw(SessionExpired("revoked"))
     )

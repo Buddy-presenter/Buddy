@@ -10,7 +10,7 @@ from starlette.exceptions import HTTPException
 
 from buddy_api import authorization
 from buddy_api.app import create_app
-from buddy_api.auth import CognitoVerifier, Principal
+from buddy_api.auth import CognitoVerifier, Principal, VerifiedIdentity
 from buddy_api.config import Environment, Settings
 from buddy_api.contracts import ErrorResponse
 from buddy_api.persistence.database import Database
@@ -74,7 +74,7 @@ def private_api(database_settings, monkeypatch):
     def verify(self, token):
         if token not in ("owner", "other"):
             raise SessionExpired("revoked")
-        return token
+        return VerifiedIdentity(token, f"{token}@example.test")
 
     monkeypatch.setattr(CognitoVerifier, "verify", verify)
     with TestClient(
@@ -165,7 +165,7 @@ def test_stream_rechecks_authentication_and_stops_on_revocation(monkeypatch):
         calls.append(header)
         if len(calls) > 1:
             raise HTTPException(401)
-        return Principal(uuid4())
+        return Principal(uuid4(), "verified@example.test")
 
     async def snapshot(*args):
         return authorization.ResourceResponse(data={"status": "active"}, request_id="request")

@@ -92,6 +92,8 @@ def test_routes_fit_and_commands_have_accessible_names(desktop_window, qtbot, th
     themed.processEvents()
     assert window.pages.currentWidget().horizontalScrollBar().maximum() == 0
     qtbot.mouseClick(window.account_button, Qt.MouseButton.LeftButton)
+    assert window.pages.currentIndex() == 4
+    qtbot.mouseClick(window.profile.controls, Qt.MouseButton.LeftButton)
     assert window.pages.currentIndex() == 0
     scroll = window.pages.currentWidget()
     account_position = window.account.mapTo(scroll.viewport(), window.account.rect().topLeft())

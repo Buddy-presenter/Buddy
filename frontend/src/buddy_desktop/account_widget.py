@@ -5,16 +5,18 @@ from pathlib import Path
 from PySide6.QtCore import QStandardPaths, Qt, QTimer, Signal
 from PySide6.QtWidgets import QGridLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from buddy_desktop.auth import AccountSession, NativeTokenStore
+from buddy_desktop.auth import AccountProfile, AccountSession, NativeTokenStore, ProfileFailure
 from buddy_desktop.services import ServiceError
 from buddy_desktop.tasks import TaskRunner
 from buddy_desktop.visuals import command
-from buddy_identity.config import IdentityConfig, IdentityError
+from buddy_identity.config import IdentityConfig, IdentityError, SessionExpired
 
 
 class AccountWidget(QWidget):
     activity_changed = Signal(bool)
     session_changed = Signal()
+    profile_loaded = Signal(int, object)
+    profile_failed = Signal(int, str)
 
     def __init__(self, api_url: str) -> None:
         super().__init__()
@@ -102,12 +104,15 @@ class AccountWidget(QWidget):
             self.message.setText(str(exc))
         self.idle()
 
-    def start(self, action: str) -> None:
+    def start(self, action: str) -> int | None:
         session = self.session
         if session is None or self.runner.busy or self.closing:
-            return
+            return None
         self.operation = action
-        if action != "check":
+        if action == "profile" and (not self.account_id or not session.tokens):
+            return None
+        expected_id = self.account_id
+        if action not in {"check", "profile"}:
             self.account_id = None
         session.cancelled.clear()
         self.timer.stop()
@@ -130,8 +135,17 @@ class AccountWidget(QWidget):
         self.cancel.setEnabled(action in {"signin", "signup", "recovery"})
         self.activity_changed.emit(True)
 
-        def work() -> str:
+        def work() -> str | AccountProfile | ProfileFailure:
             try:
+                if action == "profile" and expected_id:
+                    try:
+                        return session.profile(expected_id)
+                    except SessionExpired:
+                        return ProfileFailure("Your session expired. Please sign in again.", True)
+                    except IdentityError:
+                        return ProfileFailure(
+                            "Profile unavailable. Check your connection and retry."
+                        )
                 if action == "resume":
                     return session.resume()
                 if action == "signout":
@@ -142,11 +156,29 @@ class AccountWidget(QWidget):
             except IdentityError as exc:
                 raise ServiceError(str(exc)) from None
 
-        self.runner.submit(work)
+        return self.runner.submit(work)
 
     def completed(self, _identifier: int, result: object) -> None:
         if self.closing or (self.session and self.session.cancelled.is_set()):
             self.message.setText("Sign-in was cancelled.")
+            return
+        if self.operation == "profile":
+            if isinstance(result, AccountProfile) and result.id == self.account_id:
+                self.profile_loaded.emit(_identifier, result)
+                self.message.setText("Signed in to Buddy.")
+                self.timer.start()
+            else:
+                if isinstance(result, ProfileFailure) and result.expired:
+                    self.account_id = None
+                    if self.session:
+                        self.session.tokens = None
+                message = (
+                    result.message if isinstance(result, ProfileFailure) else "Profile unavailable."
+                )
+                self.message.setText(message)
+                self.profile_failed.emit(_identifier, message)
+                if self.session and self.session.tokens:
+                    self.timer.start()
             return
         # Cognito's page keeps its spinner after handing off the callback URL.
         self.message.setText(
@@ -163,6 +195,11 @@ class AccountWidget(QWidget):
             self.account_id = None
 
     def failed(self, _identifier: int, message: str) -> None:
+        if self.operation == "profile":
+            self.profile_failed.emit(_identifier, "Profile unavailable. Please try again.")
+            if self.session and self.session.tokens:
+                self.timer.start()
+            return
         self.account_id = None
         self.message.setText(message)
         if self.session:
