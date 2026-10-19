@@ -504,8 +504,9 @@ class LibraryWidget(QWidget):
             if deck.source_format == "pptx":
                 guidance = (
                     (
-                        "PPTX is saved. PPTX processing and playback are not supported yet. "
-                        "Export it to PDF and upload the PDF to present."
+                        "PPTX is saved. To present it on Windows, open the local file from "
+                        "Present in desktop PowerPoint; saved-library launch is not connected yet. "
+                        "You can also export it to PDF and present the PDF in Buddy."
                     )
                     + " "
                     + guidance

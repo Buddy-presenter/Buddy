@@ -1,8 +1,9 @@
 """Local rendered-slide controls using the production six-command executor."""
 
+import sys
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal, Slot
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent, QPen
 from PySide6.QtWidgets import (
     QComboBox,
@@ -18,9 +19,11 @@ from PySide6.QtWidgets import (
 )
 
 from buddy_desktop.fullscreen import FullscreenPresentation
+from buddy_desktop.powerpoint import PowerPointAutomation, PresentationInfo
 from buddy_desktop.slide_contract import Region
 from buddy_desktop.slide_executor import Completion, SlideExecutor
 from buddy_desktop.slide_surface import SlideSurface
+from buddy_desktop.tasks import TaskRunner
 from buddy_desktop.views import Page, StatusLabel
 from buddy_desktop.visuals import BuddyMark, command
 
@@ -44,7 +47,7 @@ class SelectionSurface(SlideSurface):
         empty_title = QLabel("Open a PDF to start presenting")
         empty_title.setObjectName("sectionTitle")
         empty_layout.addWidget(empty_title, alignment=Qt.AlignmentFlag.AlignCenter)
-        empty_hint = QLabel("PowerPoint files need to be exported to PDF first.")
+        empty_hint = QLabel("Or use desktop PowerPoint below to present a .pptx file.")
         empty_hint.setObjectName("muted")
         empty_layout.addWidget(empty_hint, alignment=Qt.AlignmentFlag.AlignCenter)
         layout = QVBoxLayout(self)
@@ -115,6 +118,16 @@ class PresentWidget(Page):
         self.fullscreen: FullscreenPresentation | None = None
         self._instance = 0
         self._committed_key: tuple[str, str, str] | None = None
+        self.powerpoint = PowerPointAutomation()
+        self.powerpoint_runner = TaskRunner(self)
+        self.powerpoint_runner.succeeded.connect(self._powerpoint_succeeded)
+        self.powerpoint_runner.failed.connect(self._powerpoint_failed)
+        self._powerpoint_pending: dict[int, tuple[str, str | None]] = {}
+        self._powerpoint_path: str | None = None
+        self._powerpoint_info: PresentationInfo | None = None
+        self._powerpoint_poll = QTimer(self)
+        self._powerpoint_poll.setInterval(500)
+        self._powerpoint_poll.timeout.connect(self._poll_powerpoint)
         self.surface = SelectionSurface()
         self.executor = SlideExecutor(self.surface)
         self.executor.completed.connect(self._completed)
@@ -209,6 +222,51 @@ class PresentWidget(Page):
         commands.addWidget(self.coordinates_button)
         self.body.addLayout(commands)
         self.body.addWidget(self.coordinate_panel)
+        self.powerpoint_open_button = QPushButton("Open PowerPoint…")
+        command(self.powerpoint_open_button, "presentation")
+        self.powerpoint_open_button.setAccessibleName("Open a PowerPoint presentation")
+        self.powerpoint_open_button.clicked.connect(self._choose_powerpoint)
+        self.powerpoint_connect_button = QPushButton("Connect to slideshow…")
+        command(self.powerpoint_connect_button, "link-2")
+        self.powerpoint_connect_button.clicked.connect(self._list_powerpoint_slideshows)
+        self.powerpoint_disconnect_button = QPushButton("Disconnect")
+        self.powerpoint_disconnect_button.setAccessibleName("Disconnect from PowerPoint")
+        command(self.powerpoint_disconnect_button, "x", compact=True)
+        self.powerpoint_disconnect_button.clicked.connect(self._disconnect_powerpoint)
+        self.powerpoint_panel = QWidget()
+        self.powerpoint_panel.setObjectName("group")
+        self.powerpoint_panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.powerpoint_panel.setAccessibleName("Desktop PowerPoint")
+        powerpoint_layout = QVBoxLayout(self.powerpoint_panel)
+        powerpoint_layout.setContentsMargins(18, 16, 18, 16)
+        powerpoint_layout.setSpacing(10)
+        powerpoint_title = QLabel("Desktop PowerPoint")
+        powerpoint_title.setObjectName("sectionTitle")
+        powerpoint_layout.addWidget(powerpoint_title)
+        powerpoint_row = QHBoxLayout()
+        powerpoint_row.setSpacing(8)
+        powerpoint_row.addWidget(self.powerpoint_open_button)
+        powerpoint_row.addWidget(self.powerpoint_connect_button)
+        powerpoint_row.addWidget(self.powerpoint_disconnect_button)
+        powerpoint_row.addStretch()
+        powerpoint_layout.addLayout(powerpoint_row)
+        self.powerpoint_status = StatusLabel()
+        self.powerpoint_status.setObjectName("caption")
+        self.powerpoint_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.powerpoint_status.setWordWrap(True)
+        self.powerpoint_status.setAccessibleName("PowerPoint connection status")
+        if sys.platform == "win32":
+            self.powerpoint_status.setText(
+                "PowerPoint is disconnected. Open a .pptx here or connect to a running slideshow."
+            )
+        else:
+            self.powerpoint_status.setText(
+                "Desktop PowerPoint control is available on Windows only."
+            )
+            self.powerpoint_open_button.setEnabled(False)
+            self.powerpoint_connect_button.setEnabled(False)
+        powerpoint_layout.addWidget(self.powerpoint_status)
+        self.body.addWidget(self.powerpoint_panel)
         self.feedback = StatusLabel()
         self.feedback.setObjectName("caption")
         self.feedback.setWordWrap(True)
@@ -217,6 +275,134 @@ class PresentWidget(Page):
         self.feedback.setText("")
         self.body.addWidget(self.feedback)
         self.surface.selection_changed.connect(self._selection_changed)
+        self._refresh()
+
+    @Slot()
+    def _choose_powerpoint(self) -> None:
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "Open PowerPoint presentation", "", "PowerPoint presentations (*.pptx)"
+        )
+        if filename:
+            self._submit_powerpoint("launch", filename)
+
+    @Slot()
+    def _list_powerpoint_slideshows(self) -> None:
+        self._submit_powerpoint("list")
+
+    def _submit_powerpoint(self, action: str, path: str | None = None) -> None:
+        if sys.platform != "win32" or self._closing or self.powerpoint_runner.busy:
+            return
+        if action != "status":
+            self.powerpoint_status.setText(
+                "Starting PowerPoint…" if action == "launch" else "Checking running slideshows…"
+            )
+        try:
+            operation = {
+                "launch": lambda: self.powerpoint.launch(path or ""),
+                "list": self.powerpoint.list_slideshows,
+                "connect": lambda: self.powerpoint.connect(path or ""),
+                "status": lambda: self.powerpoint.status(path or ""),
+            }[action]
+            request = self.powerpoint_runner.submit(operation)
+        except (KeyError, RuntimeError):
+            self.powerpoint_status.setText("PowerPoint is busy. Try again when it is ready.")
+            return
+        self._powerpoint_pending[request] = (action, path)
+        self._refresh()
+
+    @Slot(int, object)
+    def _powerpoint_succeeded(self, request: int, result: object) -> None:
+        pending = self._powerpoint_pending.pop(request, None)
+        if pending is None or self._closing:
+            return
+        action, path = pending
+        if action in {"launch", "connect"} and isinstance(result, PresentationInfo):
+            self._attach_powerpoint_info(result)
+        elif action == "list" and isinstance(result, tuple):
+            presentations = tuple(item for item in result if isinstance(item, PresentationInfo))
+            if not presentations:
+                self.powerpoint_status.setText(
+                    "No running PowerPoint slideshow was found. Start one in PowerPoint first."
+                )
+            else:
+                labels = [item.choice_label for item in presentations]
+                selected, accepted = QInputDialog.getItem(
+                    self,
+                    "Connect to a PowerPoint slideshow",
+                    "Choose the presentation Buddy should track:",
+                    labels,
+                    0,
+                    False,
+                )
+                if accepted:
+                    index = labels.index(selected)
+                    item = presentations[index]
+                    self._submit_powerpoint("connect", item.path)
+                else:
+                    self.powerpoint_status.setText("PowerPoint connection cancelled.")
+        elif action == "status":
+            if isinstance(result, PresentationInfo):
+                self._attach_powerpoint_info(result)
+            else:
+                self._powerpoint_lost()
+        self._refresh()
+
+    @Slot(int, str)
+    def _powerpoint_failed(self, request: int, message: str) -> None:
+        pending = self._powerpoint_pending.pop(request, None)
+        if pending is None or self._closing:
+            return
+        action, _ = pending
+        if action == "status":
+            # A transient COM failure does not mean the show disconnected. Keep the
+            # last known connected line in place so retries cannot make it blink.
+            if self._powerpoint_info is None:
+                self.powerpoint_status.setText(
+                    f"PowerPoint status check failed; retrying. {message}"
+                )
+            self._powerpoint_poll.start()
+        else:
+            self.powerpoint_status.setText(message)
+        self._refresh()
+
+    def _attach_powerpoint_info(self, info: PresentationInfo) -> None:
+        self._powerpoint_info = info
+        self._powerpoint_path = info.path
+        status = (
+            f"Connected to {info.name} — slide {info.slide_index} of {info.slide_count}. "
+            "PowerPoint is displaying the slideshow."
+        )
+        # Status checks run frequently. Re-setting identical text can trigger
+        # QLabel/layout repaints and make the presentation controls appear to flicker.
+        if self.powerpoint_status.text() != status:
+            self.powerpoint_status.setText(status)
+        if not self._powerpoint_poll.isActive():
+            self._powerpoint_poll.start()
+
+    def _poll_powerpoint(self) -> None:
+        if self._powerpoint_path is not None:
+            self._submit_powerpoint("status", self._powerpoint_path)
+
+    def _powerpoint_lost(self, reason: str | None = None) -> None:
+        self._powerpoint_poll.stop()
+        self._powerpoint_info = None
+        self._powerpoint_path = None
+        self.powerpoint_status.setText(
+            reason
+            or "PowerPoint slideshow disconnected. Connect again to explicitly select a slideshow."
+        )
+
+    @Slot()
+    def _disconnect_powerpoint(self) -> None:
+        self._powerpoint_poll.stop()
+        # Invalidate in-flight work: neither late success nor failure may restore
+        # a connection or restart polling after the user explicitly disconnects.
+        self._powerpoint_pending.clear()
+        self._powerpoint_info = None
+        self._powerpoint_path = None
+        self.powerpoint_status.setText(
+            "Disconnected from Buddy. PowerPoint remains open and the slideshow is unchanged."
+        )
         self._refresh()
 
     @Slot()
@@ -377,6 +563,20 @@ class PresentWidget(Page):
         self.surface.empty.setVisible(self.surface.slide is None)
         ready = loaded and not self.executor.busy
         self.open_button.setEnabled(not self.executor.busy and not self._closing)
+        # Fast status checks should not repeatedly disable and re-enable the visible
+        # controls. Only user-initiated launch/connect/list operations lock them.
+        powerpoint_action_busy = self._closing or any(
+            action != "status" for action, _path in self._powerpoint_pending.values()
+        )
+        self.powerpoint_open_button.setEnabled(
+            sys.platform == "win32" and not powerpoint_action_busy
+        )
+        self.powerpoint_connect_button.setEnabled(
+            sys.platform == "win32" and not powerpoint_action_busy
+        )
+        self.powerpoint_disconnect_button.setEnabled(
+            self._powerpoint_info is not None and not powerpoint_action_busy
+        )
         self.fullscreen_button.setEnabled(loaded)
         self.counter.setVisible(loaded)
         for widget in (self.previous_button, self.next_button, self.target, self.go_button):
@@ -394,4 +594,6 @@ class PresentWidget(Page):
         if self.fullscreen is not None:
             self.fullscreen.close()
         self.executor.close()
+        self._powerpoint_poll.stop()
+        self.powerpoint_runner.stop()
         self._refresh()

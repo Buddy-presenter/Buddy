@@ -37,3 +37,7 @@ is a migration rather than a layout fix. Microsoft's
 [Windows App account interaction](https://learn.microsoft.com/en-us/windows-app/user-account-settings-add-remove-manage)
 uses a profile entry point for account management. The local Apple Design guidance informs
 hierarchy, restrained motion, anchored popovers and predictable feedback.
+
+Desktop PowerPoint launch, connect and disconnect controls share the presenter's rounded
+group surface, spacing, icon buttons and caption status style. The PDF preview and its
+fullscreen controls remain separate from the external PowerPoint slideshow.
