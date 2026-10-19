@@ -57,7 +57,9 @@ def test_callback_query_is_removed_from_access_log_scope():
     assert observed == [b""] and scope["query_string"] == b""
 
 
-def run_browser(query, *, signed_out=False, fragment="", script=SCRIPT):
+def run_browser(
+    query, *, signed_out=False, fragment="", script=SCRIPT, public_key=None, fail=False
+):
     node = shutil.which("node")
     if node is None:
         pytest.skip("JavaScript behavior checks need Node.js, available on repository CI runners.")
@@ -71,6 +73,7 @@ const nodes = Object.fromEntries(['title','message'].map(key => [key, {
 const events = {};
 const navigations = [];
 const history = [];
+const posts = [];
 const window = {
   location: { search: data.query, hash: data.fragment,
     pathname: data.signed_out ? '/auth/desktop/signed-out' : '/auth/desktop/callback',
@@ -79,16 +82,30 @@ const window = {
   addEventListener: (event, callback) => { events[event] = callback; }
 };
 const context = vm.createContext({window, URLSearchParams, events,
+  crypto: require('node:crypto').webcrypto, TextEncoder, Uint8Array, btoa, atob, AbortSignal,
+  fetch: async (url, options) => {
+    posts.push({url, options});
+    return {ok: !data.fail, json: async () => ({public_key: data.public_key})};
+  },
   document: { getElementById: key => nodes[key] }});
 vm.runInContext(data.script, context, {timeout: 1000});
 const beforeLoad = [...navigations];
-vm.runInContext('if (events.load) events.load();', context, {timeout: 1000});
-process.stdout.write(JSON.stringify({nodes, history, beforeLoad, navigations}));
+const loaded = vm.runInContext('if (events.load) events.load();', context, {timeout: 1000});
+Promise.resolve(loaded).then(() => {
+  process.stdout.write(JSON.stringify({nodes, history, beforeLoad, navigations, posts}));
+});
 """
     result = subprocess.run(
         [node, "-e", harness],
         input=json.dumps(
-            {"script": script, "query": query, "signed_out": signed_out, "fragment": fragment}
+            {
+                "script": script,
+                "query": query,
+                "signed_out": signed_out,
+                "fragment": fragment,
+                "public_key": public_key,
+                "fail": fail,
+            }
         ),
         text=True,
         capture_output=True,
@@ -164,3 +181,53 @@ def test_error_return_and_signout_keep_fixed_native_targets():
     ]
     assert run_browser("?code=x", signed_out=True)["navigations"] == []
     assert run_browser("?state=x&code=y", fragment="#access_token=private")["navigations"] == []
+
+
+def test_https_browser_encryption_is_interoperable_and_never_launches_native_links():
+    import base64
+
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding, rsa
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public = base64.b64encode(
+        private.public_key().public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    ).decode()
+    state = "buddy-v1-" + "s" * 43
+    result = run_browser("?state=" + state + "&code=synthetic-private-code", public_key=public)
+    assert result["navigations"] == []
+    assert result["history"] == [BROWSER_CALLBACK_PATH]
+    assert [post["url"] for post in result["posts"]] == [
+        "/auth/desktop/handoff/v1/key",
+        "/auth/desktop/handoff/v1/complete",
+    ]
+    for post in result["posts"]:
+        assert post["options"]["credentials"] == "omit"
+        assert post["options"]["redirect"] == "error"
+        assert "synthetic-private-code" not in post["options"]["body"]
+    envelope = json.loads(result["posts"][-1]["options"]["body"])["sealed"]
+    key = private.decrypt(
+        base64.b64decode(envelope["key"]),
+        padding.OAEP(
+            mgf=padding.MGF1(hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None,
+        ),
+    )
+    plaintext = AESGCM(key).decrypt(
+        base64.b64decode(envelope["nonce"]), base64.b64decode(envelope["data"]), state.encode()
+    )
+    assert json.loads(plaintext) == {"state": state, "code": "synthetic-private-code"}
+    assert result["nodes"]["title"]["textContent"] == "Return to Buddy"
+
+
+def test_https_failure_never_silently_falls_back_to_a_native_link():
+    state = "buddy-v1-" + "s" * 43
+    result = run_browser("?state=" + state + "&code=synthetic-code", fail=True)
+    assert result["navigations"] == []
+    assert len(result["posts"]) == 1
+    assert result["nodes"]["title"]["textContent"] == "Could not return to Buddy"

@@ -122,11 +122,16 @@ def test_browser_finish_uri_matches_pkce_exchange_and_logout(session, monkeypatc
     monkeypatch.setattr(
         auth, "browser_code", lambda url, *args, **kwargs: urls.append(url) or "one-use-code"
     )
+    monkeypatch.setattr(
+        auth, "https_browser_code", lambda url, *args, **kwargs: urls.append(url) or "one-use-code"
+    )
+    monkeypatch.setattr(auth.webbrowser, "open", lambda url: urls.append(url) or True)
     assert client.sign_in() == identifier
     start = parse_qs(urlsplit(urls[0]).query)
     exchange = parse_qs(requests[0].data.decode())
     assert start["redirect_uri"] == exchange["redirect_uri"] == [callback]
     assert start["code_challenge_method"] == ["S256"]
+    assert start["state"][0].startswith("buddy-v1-") == callback.startswith("https://")
     assert "code_verifier" not in start and "code_verifier" in exchange
     client.sign_out()
     assert parse_qs(urlsplit(urls[-1]).query)["logout_uri"] == [

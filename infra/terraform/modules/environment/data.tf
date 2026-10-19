@@ -60,6 +60,25 @@ resource "aws_s3_bucket_lifecycle_configuration" "private" {
     abort_incomplete_multipart_upload { days_after_initiation = 1 }
     noncurrent_version_expiration { noncurrent_days = local.production ? 35 : 7 }
   }
+  dynamic "rule" {
+    for_each = each.key == "data" ? [1] : []
+    content {
+      id     = "expire-encrypted-desktop-handoffs"
+      status = "Enabled"
+      filter { prefix = "auth-handoffs/" }
+      expiration { days = 1 }
+      noncurrent_version_expiration { noncurrent_days = 1 }
+    }
+  }
+  dynamic "rule" {
+    for_each = each.key == "data" ? [1] : []
+    content {
+      id     = "remove-expired-handoff-markers"
+      status = "Enabled"
+      filter { prefix = "auth-handoffs/" }
+      expiration { expired_object_delete_marker = true }
+    }
+  }
 }
 resource "aws_db_subnet_group" "main" {
   name       = local.name

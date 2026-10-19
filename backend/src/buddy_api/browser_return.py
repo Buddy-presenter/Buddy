@@ -1,4 +1,4 @@
-"""A completed browser document that hands only a one-use code to the native app."""
+"""A completed browser document with encrypted HTTPS and legacy native returns."""
 
 import base64
 import hashlib
@@ -9,8 +9,8 @@ from starlette.responses import HTMLResponse
 from buddy_identity.config import BROWSER_CALLBACK_PATH, BROWSER_SIGNOUT_PATH
 
 # No request values are interpolated into HTML or JavaScript. OAuth parameters are
-# read in the browser only, removed from history immediately, and never sent onwards
-# to another HTTP endpoint. The native broker still enforces state and single use.
+# read in the browser only and removed from history immediately. New clients send
+# only an encrypted return to the same origin; old clients retain native delivery.
 SCRIPT = r"""(() => {
   const search = window.location.search;
   const fragment = window.location.hash;
@@ -45,6 +45,52 @@ SCRIPT = r"""(() => {
     if (!safe(state, 256) || params.has('code') === params.has('error') ||
         (params.has('code') && !safe(code, 4096)) ||
         (params.has('error') && !safe(error, 128))) { invalid(); return; }
+    if (state.startsWith('buddy-v1-')) {
+      const post = async (action, body) => {
+        const response = await fetch('/auth/desktop/handoff/v1/' + action, {
+          method: 'POST', credentials: 'omit', cache: 'no-store', redirect: 'error',
+          headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+          signal: AbortSignal.timeout(15000)
+        });
+        if (!response.ok) throw new Error('Handoff unavailable');
+        return response.json();
+      };
+      const encode = bytes => btoa(String.fromCharCode(...new Uint8Array(bytes)));
+      const decode = value => Uint8Array.from(atob(value), c => c.charCodeAt(0));
+      title.textContent = 'Finishing sign-in';
+      message.textContent = 'Sending the browser result securely to Buddy…';
+      const deliver = async () => {
+        try {
+          const registration = await post('key', {state});
+          const publicKey = await crypto.subtle.importKey('spki', decode(registration.public_key),
+            {name: 'RSA-OAEP', hash: 'SHA-256'}, false, ['encrypt']);
+          const key = await crypto.subtle.generateKey(
+            {name: 'AES-GCM', length: 256}, true, ['encrypt']);
+          const nonce = crypto.getRandomValues(new Uint8Array(12));
+          const plaintext = new TextEncoder().encode(
+            JSON.stringify({state, ...(code ? {code} : {error})}));
+          const data = await crypto.subtle.encrypt(
+            {name: 'AES-GCM', iv: nonce, additionalData: new TextEncoder().encode(state)},
+            key, plaintext);
+          const wrapped = await crypto.subtle.encrypt({name: 'RSA-OAEP'}, publicKey,
+            await crypto.subtle.exportKey('raw', key));
+          await post('complete', {state, sealed: {
+            key: encode(wrapped), nonce: encode(nonce), data: encode(data)}});
+          title.textContent = error ? 'Sign-in was not completed' : 'Return to Buddy';
+          message.textContent = error
+            ? 'Continue in Buddy to retry or cancel. You can close this tab.'
+            : 'The browser result was sent. Return to Buddy and close this tab. ' +
+              'Buddy will finish checking your account.';
+        } catch {
+          title.textContent = 'Could not return to Buddy';
+          message.textContent = 'Return to Buddy, cancel this sign-in, and try again. ' +
+            'This sign-in may have expired or the connection was interrupted.';
+        }
+      };
+      window.addEventListener('load', deliver, {once: true});
+      window.addEventListener('pageshow', event => { if (event.persisted) invalid(); });
+      return;
+    }
     const native = new URLSearchParams({state});
     native.set(code ? 'code' : 'error', code || error);
     target = 'org.buddy.desktop://oauth/callback?' + native.toString();
@@ -104,7 +150,7 @@ def browser_return_router() -> APIRouter:
                 "X-Frame-Options": "DENY",
                 "Cross-Origin-Opener-Policy": "same-origin",
                 "Content-Security-Policy": (
-                    f"default-src 'none'; script-src {csp_hash(SCRIPT)}; "
+                    f"default-src 'none'; connect-src 'self'; script-src {csp_hash(SCRIPT)}; "
                     f"style-src {csp_hash(STYLE)}; base-uri 'none'; form-action 'none'; "
                     "frame-ancestors 'none'"
                 ),
