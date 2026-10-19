@@ -5,6 +5,7 @@ import json
 import socket
 from contextlib import suppress
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from threading import Event, Thread
 from uuid import uuid4
 
@@ -204,7 +205,10 @@ def test_upload_native_layout_and_keyboard(
         qtbot.keyClick(library.cancel_upload_button, Qt.Key.Key_Space)
         qtbot.waitUntil(lambda: not library.runner.busy)
         assert library.retry_upload_button.isVisible()
-        assert window.grab().save(f"build/issue37/upload-recovery-{size[0]}.png")
+        destination = Path("build/issue37")
+        destination.mkdir(parents=True, exist_ok=True)
+        qapp.processEvents()
+        assert window.grab().save(str(destination / f"upload-recovery-{size[0]}.png"))
     finally:
         upload_http.release.set()
         qapp.setStyleSheet(old_style)
