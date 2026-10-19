@@ -1,0 +1,84 @@
+"""Disposable operator test guards, not evidence that live AWS checks passed."""
+
+import importlib.util
+from pathlib import Path
+
+import pytest
+
+
+@pytest.fixture
+def operator(monkeypatch):
+    scripts = Path(__file__).resolve().parents[2] / "scripts"
+    monkeypatch.syspath_prepend(str(scripts))
+    spec = importlib.util.spec_from_file_location(
+        "acceptance_operator", scripts / "staging_worker_acceptance.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture
+def journal():
+    run = "a" * 12
+    return {
+        "run": run,
+        "database": f"buddy_worker_acceptance_{run}_test",
+        "db_role": f"buddy_w_{run}",
+        "cluster": "buddy-staging",
+        "prefix": f"sources/acceptance/{run}/",
+        "region": "eu-central-1",
+        "bucket": "buddy-staging-549327541867-data",
+    }
+
+
+def test_isolated_target_accepted(operator, journal):
+    operator.validate_journal(journal)
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("run", "';DROP DATABASE buddy;--"),
+        ("database", "buddy"),
+        ("database", "some_other_test"),
+        ("db_role", "buddyadmin"),
+        ("cluster", "buddy-production"),
+        ("prefix", "sources/"),
+        ("region", "us-east-1"),
+        ("bucket", "buddy-production-data"),
+        ("roles", {"worker": {"name": "buddy-staging-worker", "arn": "unrelated"}}),
+        ("roles", {"unknown": {}}),
+        (
+            "queues",
+            ["https://sqs.eu-central-1.amazonaws.com/549327541867/buddy-staging-processing"],
+        ),
+        ("log_group", "/buddy/staging/api"),
+        ("runtime_secret", "arn:aws:secretsmanager:eu-central-1:549327541867:secret:database"),
+        (
+            "definitions",
+            ["arn:aws:ecs:eu-central-1:549327541867:task-definition/buddy-staging-api:10"],
+        ),
+        ("image_tag", "latest"),
+    ],
+)
+def test_cleanup_rejects_unrelated_targets_before_aws(operator, journal, key, value, monkeypatch):
+    def unexpected_network(*args, **kwargs):
+        raise AssertionError("Unsafe journal must be rejected before AWS access")
+
+    monkeypatch.setattr(operator.boto3, "client", unexpected_network)
+    with pytest.raises(ValueError):
+        operator.Acceptance("unused.json", {**journal, key: value})
+
+
+def test_cannot_stop_or_inspect_an_unowned_task(operator, journal):
+    class ECS:
+        def describe_tasks(self, **kwargs):
+            assert kwargs["include"] == ["TAGS"]
+            return {"tasks": [{"tags": [{"key": "Application", "value": "Buddy"}]}]}
+
+    acceptance = operator.Acceptance.__new__(operator.Acceptance)
+    acceptance.state = journal
+    acceptance.clients = {"ecs": ECS()}
+    with pytest.raises(ValueError, match="unowned ECS task"):
+        acceptance.describe("unrelated-task")

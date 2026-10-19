@@ -136,3 +136,50 @@ private staging RDS: startup, SQS/S3/DB access, real PDF output, failure and int
 recovery, verified health and cleanup. Run only through reviewed deployment paths and keep
 production untouched. A passing local/cloud-transport smoke alone does not establish this
 last deployment gate.
+
+### Disposable pre-merge ECS acceptance
+
+With explicit account-owner authorization for temporary resources and AWS charges,
+`backend/scripts/staging_worker_acceptance.py` can test a candidate before promotion.
+It is an operator-only exception, not a change to the main-only deployment workflow.
+It never updates an ECS service or migrates the application's `buddy` database.
+
+Build the candidate from a clean archive of its exact commit with
+`infra/container/Dockerfile.worker`. Supply short-lived operator credentials in memory,
+then run from the repository root on the Windows/WSL Docker operator workstation:
+
+```sh
+python backend/scripts/staging_worker_acceptance.py \
+  --commit <full-candidate-commit> --image <built-local-worker-image> \
+  --state build/worker-acceptance.json
+```
+
+This runner is deliberately restricted to the existing Buddy staging account/region.
+It reuses its RDS instance, network, KMS key, bucket and worker ECR repository. It creates
+one separate, uniquely named `_test` database and restricted SQL role, encrypted test
+queues, synthetic source prefix, runtime secret, task roles, log group and one-off tasks.
+No root/operator credentials enter a task or image. The admin helper alone reads the
+RDS master secret inside ECS; the worker cannot access it. The worker task role mirrors
+the Terraform permissions, further restricting source reads to the synthetic prefix.
+
+The installed candidate exercises real PDF processing, malformed input, duplicate
+delivery, running cancellation/retry, output persistence, actual ECS hard interruption
+and replacement recovery, and ECS health. The fault-drill task intentionally uses a
+two-second stop timeout while the controller holds the database completion fence;
+the replacement uses the normal 120 seconds. Temporary workers have bounded lifetimes.
+This tests replacement recovery, not ECS service auto-replacement or production rollout.
+
+The sanitized state journal records identifiers and results, never passwords or session
+tokens. Keep it outside version control. Cleanup stops tasks, drops only the marked
+test database/role and removes test objects including versions, queues, IAM roles,
+secret, logs, task definitions and image tag. If interrupted, retry cleanup with the
+same journal and fresh operator credentials:
+
+```sh
+python backend/scripts/staging_worker_acceptance.py \
+  --cleanup --state build/worker-acceptance.json
+```
+
+If database cleanup fails, the runner retains its admin-access path for retry and
+reports incomplete cleanup. Never discard the journal until cleanup is confirmed.
+Budget for small incremental AWS charges; billing/credit reporting may lag the run.
