@@ -21,7 +21,7 @@ def test_browser_page_native_broker_and_pkce_exchange_use_the_same_redirect(monk
         "eu-central-1_Example",
         "client123",
         "https://buddy.auth.eu-central-1.amazoncognito.com",
-        "https://api.example.test/auth/desktop/callback",
+        "http://localhost:8000/auth/desktop/callback",
     )
     owner = str(uuid4())
     calls = []

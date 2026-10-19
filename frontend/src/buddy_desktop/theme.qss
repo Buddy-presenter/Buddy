@@ -58,3 +58,15 @@ QMenuBar::item:selected, QMenu::item:selected { background: #30251F; }
 QMenu { background: #1C1D24; border: 1px solid #42434D; padding: 6px; }
 QMenu::item { padding: 8px 22px; }
 QToolTip { background: #292A33; color: #FFFFFF; border: 1px solid #575864; padding: 6px; }
+QProgressBar#uploadProgress {
+    border: 1px solid #363740;
+    border-radius: 4px;
+    background: #1D1E25;
+    color: #E5E5EB;
+    text-align: center;
+    min-height: 18px;
+}
+QProgressBar#uploadProgress::chunk {
+    background: #B45032;
+    border-radius: 3px;
+}

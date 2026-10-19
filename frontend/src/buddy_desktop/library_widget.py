@@ -4,6 +4,7 @@ import time
 from collections.abc import Callable
 from math import ceil
 from pathlib import Path
+from threading import Event
 from uuid import UUID, uuid4
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QSizePolicy,
     QStyle,
@@ -28,7 +30,12 @@ from PySide6.QtWidgets import (
 from buddy_desktop.account_widget import AccountWidget
 from buddy_desktop.config import AppConfig
 from buddy_desktop.library_service import LibraryAccessExpired, LibraryPage, LibraryService
-from buddy_desktop.presentation_service import DownloadedPDF, PresentationService, SavedPresentation
+from buddy_desktop.presentation_service import (
+    DownloadedPDF,
+    PresentationService,
+    SavedPresentation,
+    UploadRejected,
+)
 from buddy_desktop.tasks import TaskRunner
 from buddy_desktop.views import StatePanel
 from buddy_desktop.visuals import command, icon
@@ -50,6 +57,7 @@ class LibraryWidget(QWidget):
     activity_changed = Signal(bool)
     present_requested = Signal(object)
     private_invalidated = Signal()
+    upload_progress = Signal(object, str, int, int)
 
     def __init__(self, config: AppConfig, account: AccountWidget) -> None:
         super().__init__()
@@ -72,6 +80,10 @@ class LibraryWidget(QWidget):
         self.account_key: tuple[int, str | None, str] | None = None
         self.upload_keys: dict[tuple[Path, int, int], UUID] = {}
         self.upload_request: tuple[tuple[Path, int, int], UUID] | None = None
+        self.upload_cancelled: Event | None = None
+        self.upload_service: PresentationService | None = None
+        self.retry_path: Path | None = None
+        self.upload_progress.connect(self.update_upload_progress)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 24, 28, 24)
         layout.setSpacing(18)
@@ -120,6 +132,32 @@ class LibraryWidget(QWidget):
         actions.addWidget(self.open_button)
         actions.addStretch()
         layout.addLayout(actions)
+        self.upload_panel = QWidget()
+        upload_layout = QVBoxLayout(self.upload_panel)
+        upload_layout.setContentsMargins(0, 0, 0, 0)
+        self.upload_status = QLabel()
+        self.upload_status.setWordWrap(True)
+        self.upload_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.upload_status.setAccessibleName("Upload status")
+        upload_layout.addWidget(self.upload_status)
+        self.upload_bar = QProgressBar()
+        self.upload_bar.setObjectName("uploadProgress")
+        self.upload_bar.setAccessibleName("Presentation transfer progress")
+        upload_layout.addWidget(self.upload_bar)
+        upload_actions = QHBoxLayout()
+        self.cancel_upload_button = QPushButton("Cancel upload")
+        command(self.cancel_upload_button, "x")
+        self.cancel_upload_button.clicked.connect(self.cancel_upload)
+        self.retry_upload_button = QPushButton("Retry upload")
+        command(self.retry_upload_button, "refresh-cw")
+        self.retry_upload_button.clicked.connect(self.retry_upload)
+        for button in (self.cancel_upload_button, self.retry_upload_button):
+            button.setAccessibleName(button.text())
+            upload_actions.addWidget(button)
+        upload_actions.addStretch()
+        upload_layout.addLayout(upload_actions)
+        layout.addWidget(self.upload_panel)
+        self.upload_panel.hide()
         self.state = StatePanel()
         self.state.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self.state.retry.setAccessibleName("Retry library request")
@@ -234,6 +272,7 @@ class LibraryWidget(QWidget):
     def account_activity(self, busy: bool) -> None:
         self.account_busy = busy
         if busy:
+            self.clear_upload(clear_keys=False)
             self.invalidate()
             self.pending = False
             self.refresh.setEnabled(False)
@@ -252,6 +291,7 @@ class LibraryWidget(QWidget):
         if key is None or key != self.account_key:
             self.private_invalidated.emit()
         if key != self.account_key:
+            self.clear_upload()
             self.page = 1
             self.upload_keys.clear()
         self.account_key = key
@@ -317,12 +357,30 @@ class LibraryWidget(QWidget):
         return not self.closing and self.active and self.request_generation == self.generation
 
     def completed(self, _identifier: int, result: object) -> None:
+        if isinstance(result, LibraryAccessExpired) and self.upload_request and self.retry_path:
+            # Navigation must not hide an expired upload session. Identity changes
+            # clear retry_path, so a late old-account response cannot expire a new one.
+            self.account.expire_session(str(result))
+            return
+        if isinstance(result, UploadRejected):
+            if self.upload_request:
+                fingerprint, key = self.upload_request
+                if self.upload_keys.get(fingerprint) == key:
+                    del self.upload_keys[fingerprint]
+            self.failed(_identifier, str(result))
+            return
         # A confirmed upload retires its key even if a routine account check or
         # navigation invalidated the library response while transfer was running.
         if isinstance(result, SavedPresentation) and self.upload_request:
             fingerprint, key = self.upload_request
             if self.upload_keys.get(fingerprint) == key:
                 del self.upload_keys[fingerprint]
+            if self.retry_path is not None:
+                self.upload_status.setText("Presentation saved. Refresh Library to see it.")
+                self.upload_bar.setRange(0, 100)
+                self.upload_bar.setValue(100)
+                self.retry_path = None
+                self.retry_upload_button.hide()
         if not self.current():
             return
         if isinstance(result, LibraryAccessExpired):
@@ -418,14 +476,24 @@ class LibraryWidget(QWidget):
             self.detail.setPlainText(guidance + attempts + "\n\n" + deck.title)
 
     def failed(self, _identifier: int, message: str) -> None:
+        if self.upload_request and self.retry_path is not None and not self.closing:
+            self.upload_status.setText(message)
+            self.upload_bar.hide()
+            self.retry_upload_button.show()
+            self.state.hide()
+            return
         if self.current():
             self.state.show_state("Library unavailable", message, retry=True)
 
     def idle(self) -> None:
+        self.cancel_upload_button.hide()
+        self.upload_cancelled = None
+        self.upload_service = None
         self.upload_request = None
         self.activity_changed.emit(False)
         self.refresh.setEnabled(not self.closing and self.token() is not None)
         self.upload_button.setEnabled(not self.closing and self.token() is not None)
+        self.retry_upload_button.setEnabled(not self.closing and self.token() is not None)
         self.selection_changed()
         if self.pending and self.active and not self.closing:
             self.reload()
@@ -437,17 +505,75 @@ class LibraryWidget(QWidget):
             self, "Upload presentation", "", "Presentations (*.pdf *.pptx)"
         )
         if filename:
-            path = Path(filename)
+            self.start_upload(Path(filename))
+
+    def start_upload(self, path: Path) -> None:
+        if self.runner.busy or not self.token() or self.closing:
+            return
+        try:
+            info = path.stat()
+        except OSError:
+            self.state.show_state("File unavailable", "Choose a readable presentation file.")
+            return
+        fingerprint = (path, info.st_size, info.st_mtime_ns)
+        key = self.upload_keys.setdefault(fingerprint, uuid4())
+        self.upload_request = (fingerprint, key)
+        self.retry_path = path
+        cancelled = Event()
+        self.upload_cancelled = cancelled
+        self.upload_panel.show()
+        self.upload_bar.show()
+        self.upload_bar.setRange(0, 0)
+        self.upload_status.setText("Preparing presentation…")
+        self.cancel_upload_button.show()
+        self.cancel_upload_button.setEnabled(True)
+        self.retry_upload_button.hide()
+
+        def upload(service: PresentationService) -> object:
+            self.upload_service = service
+            service.cancelled = cancelled
+            service.progress = lambda phase, sent, total: self.upload_progress.emit(
+                cancelled, phase, sent, total
+            )
             try:
-                info = path.stat()
-            except OSError:
-                self.state.show_state("File unavailable", "Choose a readable presentation file.")
-                return
-            # Keep the same reservation key for retries during this account session.
-            fingerprint = (path, info.st_size, info.st_mtime_ns)
-            key = self.upload_keys.setdefault(fingerprint, uuid4())
-            self.upload_request = (fingerprint, key)
-            self.run_presentation(lambda service: service.upload(path, key))
+                return service.upload(path, key)
+            except UploadRejected as exc:
+                # Retire only on the GUI thread, through the normal completion path.
+                return exc
+
+        self.run_presentation(upload)
+
+    def retry_upload(self) -> None:
+        if self.retry_path is not None:
+            self.start_upload(self.retry_path)
+
+    def cancel_upload(self) -> None:
+        if self.upload_cancelled is not None:
+            self.upload_cancelled.set()
+            if self.upload_service is not None:
+                self.upload_service.cancel()
+            self.cancel_upload_button.setEnabled(False)
+            self.upload_status.setText("Stopping upload… The server may already have saved it.")
+
+    def clear_upload(self, *, clear_keys: bool = True) -> None:
+        self.cancel_upload()
+        self.retry_path = None
+        if clear_keys:
+            self.upload_keys.clear()
+        self.upload_panel.hide()
+
+    def update_upload_progress(self, operation: object, phase: str, sent: int, total: int) -> None:
+        if operation is not self.upload_cancelled or self.closing or self.retry_path is None:
+            return
+        if self.upload_cancelled is not None and self.upload_cancelled.is_set():
+            return
+        self.upload_status.setText(
+            f"{phase}: {sent / 1048576:.1f} of {total / 1048576:.1f} MiB sent"
+            if total
+            else phase + "…"
+        )
+        self.upload_bar.setRange(0, total if total else 0)
+        self.upload_bar.setValue(sent)
 
     def open_selected(self) -> None:
         row = self.table.currentRow()
@@ -468,6 +594,8 @@ class LibraryWidget(QWidget):
         self.refresh.setEnabled(False)
         self.state.show()
         self.state.show_state("Working…", "Transferring your private presentation…")
+        if self.upload_request is not None:
+            self.state.hide()
         self.activity_changed.emit(True)
         service = PresentationService(self.config, access)
 
@@ -480,6 +608,7 @@ class LibraryWidget(QWidget):
         self.runner.submit(work)
 
     def shutdown(self) -> None:
+        self.clear_upload()
         self.closing = True
         self.pending = False
         self.debounce.stop()

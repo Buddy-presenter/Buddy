@@ -19,6 +19,7 @@ from urllib.request import Request
 from keyring.backend import KeyringBackend
 
 from buddy_desktop.config import validate_api_url
+from buddy_desktop.https_handoff import https_browser_code
 from buddy_desktop.native_callback import pending_callback
 from buddy_identity.config import (
     SCOPES,
@@ -187,8 +188,15 @@ def browser_code(
         while not cancelled.is_set() and time.monotonic() < deadline:
             if attempt.received.wait(min(0.1, max(0, deadline - time.monotonic()))):
                 break
-        if cancelled.is_set() or not attempt.received.is_set() or not attempt.code:
-            raise IdentityError("Sign-in was cancelled, rejected, or timed out.")
+        if cancelled.is_set():
+            raise IdentityError("Sign-in was cancelled.")
+        if not attempt.received.is_set():
+            raise IdentityError(
+                "Buddy did not receive the browser return. Check the app-link registration "
+                "and start a fresh sign-in."
+            )
+        if not attempt.code:
+            raise IdentityError("Sign-in was rejected. Please try again.")
         return attempt.code
 
 
@@ -294,6 +302,9 @@ class AccountSession:
 
     def sign_in(self, action: str = "signin") -> str:
         state, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(64)
+        secure_handoff = self.config.callback_url.startswith("https://")
+        if secure_handoff:
+            state = "buddy-v1-" + state
         challenge = (
             base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
             .rstrip(b"=")
@@ -314,7 +325,8 @@ class AccountSession:
             "code_challenge": challenge,
             "prompt": "login",
         }
-        code = browser_code(
+        collect = https_browser_code if secure_handoff else browser_code
+        code = collect(
             self.config.domain + endpoint + "?" + urlencode(parameters), state, self.cancelled
         )
         return self.accept(
@@ -415,7 +427,7 @@ class AccountSession:
         if errors:
             raise IdentityError(" ".join(errors))
         # This URL contains public client metadata only. Tokens never enter the browser.
-        browser_code(
+        logout_url = (
             self.config.domain
             + "/logout?"
             + urlencode(
@@ -423,10 +435,12 @@ class AccountSession:
                     "client_id": self.config.client_id,
                     "logout_uri": self.config.logout_url,
                 }
-            ),
-            "",
-            self.cancelled,
-            timeout=30,
-            logout=True,
+            )
         )
+        if not self.config.callback_url.startswith("https://"):
+            browser_code(logout_url, "", self.cancelled, timeout=30, logout=True)
+        elif not webbrowser.open(logout_url):
+            raise IdentityError(
+                "Signed out locally, but the browser could not open to clear its session."
+            )
         return "Signed out."

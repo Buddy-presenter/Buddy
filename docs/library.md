@@ -1,5 +1,8 @@
 # Presentation library (#6)
 
+See [desktop upload progress and recovery](desktop-upload-flow.md) for upload phases,
+cancellation semantics and manual testing of the PDF/PPTX controls.
+
 The Library workspace lists the signed-in account's persisted decks. Sign in or resume
 on Home, then open Library. Changing workspaces and Refresh retrieve current backend
 data; search uses literal, case-insensitive title substrings. Sorting supports newest,
