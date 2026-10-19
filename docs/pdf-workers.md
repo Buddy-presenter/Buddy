@@ -1,7 +1,7 @@
 # Durable PDF analysis workers (#8, #12)
 
 The durable PDF worker performs page metadata inspection, submits the accepted original
-PDF unchanged to Amazon Bedrock GPT-6 Luna, persists ordered summaries and content-action
+PDF unchanged to Amazon Bedrock Claude Sonnet 4.6, persists ordered summaries and content-action
 candidates, then validates every action through the isolated #49 executor before completing
 the job. It does not extract PDF text/positions/shapes, perform OCR, convert PPTX, or save
 preview rasters. Existing PPTX upload/storage remains compatible; PPTX analysis and playback
@@ -41,8 +41,10 @@ replicas. Each worker process executes one job at a time. Its 45-second lease is
 every 10 seconds, but never beyond the 900-second attempt deadline. PDF inspection and
 ephemeral PDFium manifest hashing run in an isolated process with a 120-second deadline,
 1 GiB address-space ceiling, 30-second metadata parser limit and no persisted page images.
-Provider calls time out after 90 seconds. The provider boundary accepts at most a 32 MiB,
-200-page PDF, returns at most 12,000 tokens, and is attempted at most three times for a job.
+Provider calls time out after 90 seconds. The provider boundary accepts at most an 18 MiB,
+100-page PDF, returns at most 12,000 tokens, and is attempted at most three times for a job.
+The 18 MiB source limit leaves room for base64 expansion and request metadata under Bedrock's
+25 MiB InvokeModel body quota.
 The model context window and request/output limits bound token spend; validation is capped
 at 40 actions per deck and 15 seconds per isolated action run. Fargate independently bounds
 worker CPU/memory to 1 vCPU/2 GiB. SIGTERM drains bounded work, releases the lease and exits;
@@ -118,15 +120,16 @@ repository and supply the reviewed `worker_image` to the existing Terraform/rele
 workflow. Terraform mounts dedicated scratch, gives ECS an actual container health check
 and 120-second stop timeout, and grants the separate worker task role exact-version reads
 only under `sources/*`. Worker task, execution and database roles remain separate from
-API/migration roles. The worker task role can invoke only the configured GPT-6 Luna global
-inference profile and account default Bedrock project; it receives no long-lived provider
-key. The AWS account must be entitled to the model before rollout; a provider access-denied
+API/migration roles. The worker task role can invoke only the EU Claude Sonnet 4.6 inference
+profile, its routed foundation-model resources, and the account default Bedrock project; it
+receives no long-lived provider key. The AWS account must be entitled to the model before
+rollout; a provider access-denied
 response is recorded as a sanitized permanent failure instead of retrying a request that
 cannot succeed. Bedrock inference is billed to the AWS account; no OpenAI API key or
-separate OpenAI billing account is used. The global profile can route processing outside
-the source Region. Requests use
-`store:false` to disable Bedrock's default 30-day response retention. This does not create a
-residency guarantee or privacy-consent/policy system. No AWS/root credentials are embedded
+separate OpenAI billing account is used. The EU profile can route processing to supported
+regions within the EU geography. The adapter uses Bedrock's native InvokeModel API, which
+does not expose a response-retention option. This does not create a residency
+guarantee or privacy-consent/policy system. No AWS/root credentials are embedded
 in images, configuration or CI.
 
 `python -m buddy_api.processing --health` succeeds only with a fresh health timestamp

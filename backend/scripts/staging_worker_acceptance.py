@@ -340,6 +340,19 @@ with tempfile.TemporaryDirectory(prefix='buddy-acceptance-docker-') as folder:
                     ],
                     s["queue_arn"],
                 ),
+                statement(
+                    ["bedrock:InvokeModel"],
+                    [
+                        f"arn:aws:bedrock:{REGION}:{ACCOUNT}:inference-profile/eu.anthropic.claude-sonnet-4-6",
+                        f"arn:aws:bedrock:{REGION}::foundation-model/anthropic.claude-sonnet-4-6",
+                        "arn:aws:bedrock:eu-north-1::foundation-model/anthropic.claude-sonnet-4-6",
+                        "arn:aws:bedrock:eu-west-3::foundation-model/anthropic.claude-sonnet-4-6",
+                        "arn:aws:bedrock:eu-south-1::foundation-model/anthropic.claude-sonnet-4-6",
+                        "arn:aws:bedrock:eu-south-2::foundation-model/anthropic.claude-sonnet-4-6",
+                        "arn:aws:bedrock:eu-west-1::foundation-model/anthropic.claude-sonnet-4-6",
+                        f"arn:aws:bedrock:{REGION}:{ACCOUNT}:project/default",
+                    ],
+                ),
                 kms(["kms:Decrypt"], [f"s3.{REGION}.amazonaws.com", f"sqs.{REGION}.amazonaws.com"]),
             ],
         )

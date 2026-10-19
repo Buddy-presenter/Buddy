@@ -20,29 +20,28 @@ not prerequisites or release blockers for Sprint 2.
 
 ## Model request
 
-The worker sends the unchanged, checksum-verified original PDF as an `input_file` to the
-Amazon Bedrock Responses API with `store:false`. It does not submit extracted text,
+The worker sends the unchanged, checksum-verified original PDF as a base64 PDF document to
+Amazon Bedrock's native InvokeModel API for Claude Sonnet 4.6. It does not submit extracted text,
 rendered-page images, converted files, or sanitized/redacted copies. PDF content is
 untrusted input; the prompt says not to follow instructions embedded in the document, and
 the response is constrained to JSON summaries plus `zoom_region` and `highlight_region`
 objects. Buddy validates slide order, IDs, schema, catalog membership, coordinate bounds,
 ownership, source revision, and action hash before persistence.
 
-The worker is designed to use its ECS task role through SigV4; no OpenAI API key or
-long-lived AWS key is stored in application configuration. IAM permits `bedrock:InvokeModel` only on
-the configured GPT-6 Luna global inference profile and the account's default Bedrock
-project. GPT-6 Luna is not available in-region in Frankfurt, so the global inference
-profile may process a request in another supported commercial AWS Region. `store:false`
-disables Bedrock's default 30-day Responses API storage; it does not promise in-region
-processing or alter any provider-side operational handling outside that API retention
-setting.
+The worker uses its ECS task role through SigV4; no Anthropic API key or long-lived AWS key
+is stored in application configuration. IAM permits `bedrock:InvokeModel` only on the
+configured EU Claude Sonnet 4.6 inference profile, the profile's routed foundation-model
+resources, and the account's default Bedrock project. The EU profile can route a request
+among supported EU AWS Regions. The native InvokeModel API does not expose the Responses
+API's `store` option; this does not promise a particular provider-side retention behavior.
 
 ## Resource and spend limits
 
-- Original provider input: at most 32 MiB and 200 PDF pages. Oversized documents fail with
+- Original provider input: at most 18 MiB and 100 PDF pages. Oversized documents fail with
   a safe, explicit error; Buddy does not switch representations or silently truncate.
-- The Responses API call has a 90-second timeout, a 46 MiB encoded request bound, disabled
-  truncation, and a 12,000-token output cap. Each job has at most three lifetime attempts.
+- The InvokeModel call has a 90-second timeout and a 25 MiB encoded request bound, plus a
+  12,000-token output cap. The input-size bound accounts for base64 expansion. Each job has
+  at most three lifetime attempts.
 - The generated result is bounded by the existing #11 record limits and at most 40 actions
   per deck. Every action is independently run by the isolated #49 validator with a
   15-second execution limit. The whole job has a 900-second deadline, a bounded SQS
@@ -69,13 +68,11 @@ analysis revisions are not deleted by worker cleanup.
 ## Scope and deployment state
 
 Implemented in the issue #12 branch: the Bedrock adapter, bounded durable PDF pipeline,
-analysis persistence, action validation binding, and this baseline. AWS reports the global
-inference profile as active, but this account's real request was denied because GPT-6 Luna
-is not available to the account. No live model result or staging analysis acceptance is
-claimed. Resolve account access before live acceptance. This branch has not yet been merged
-or deployed; after access is available, staging must use a permissioned test PDF, verify
-visual factuality and coordinates, and record sanitized evidence after a reviewed worker
-image is deployed.
+analysis persistence, action validation binding, and this baseline. The account's EU Claude
+Sonnet 4.6 profile is authorized and live original-PDF evaluation has been performed on the
+permissioned model-evaluation corpus; results and limitations are recorded in the PR. This
+branch has not yet been merged or deployed; staging acceptance must still verify the
+reviewed worker image/task role, real staging output, and recovery behavior.
 
 User consent/terms UI, provider-retention approval workflows, cross-Region residency
 controls, content sanitization, general retention/deletion policy, PPTX analysis, preview

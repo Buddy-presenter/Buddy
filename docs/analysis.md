@@ -1,8 +1,8 @@
 # Stored presentation analysis v1 (#11)
 
-The durable PDF worker submits the checksum-verified original PDF to Amazon Bedrock
-GPT-6 Luna through its PDF-capable Responses API. It persists exactly three outputs:
-one presentation summary, one ordered content summary per page, and zero or more
+The durable PDF worker submits the checksum-verified original PDF to Amazon Bedrock's
+native PDF-capable InvokeModel API using Claude Sonnet 4.6. It persists exactly three
+outputs: one presentation summary, one ordered content summary per page, and zero or more
 parameterized content actions. Actions are limited to `zoom_region` and
 `highlight_region`; navigation and reset controls come from code. Existing PPTX upload
 and storage remain compatible, while PPTX analysis and playback are deferred.
@@ -23,7 +23,7 @@ revision/hash, extractor/schema version, slide IDs/order and aspect ratios must 
 existing owned extraction. The manifest pins the render, dimensions and image digests.
 PDFium computes these page-raster hashes in memory to bind coordinate provenance; Buddy
 does not save those pages as previews or send rasterized pages to the provider. The
-provider receives the original PDF through `input_file`.
+provider receives the original PDF as a native Claude PDF document block.
 Renderer, validator and display-profile identifiers describe the intended validation
 environment and must change when its behavior changes.
 

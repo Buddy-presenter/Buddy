@@ -121,17 +121,12 @@ def response_for(*, number: int = 1, output_text: str | None = None) -> dict[str
         }
     )
     return {
-        "status": "completed",
-        "output": [
-            {
-                "type": "message",
-                "content": [{"type": "output_text", "text": generated}],
-            }
-        ],
+        "stop_reason": "end_turn",
+        "content": [{"type": "text", "text": generated}],
     }
 
 
-def test_bedrock_request_submits_exact_pdf_and_disables_response_storage(monkeypatch):
+def test_bedrock_request_submits_exact_pdf_with_native_claude_api(monkeypatch):
     extraction, manifest = inputs()
     opener = Opener(response_for())
     monkeypatch.setattr(provider, "Session", Session)
@@ -147,15 +142,18 @@ def test_bedrock_request_submits_exact_pdf_and_disables_response_storage(monkeyp
     assert headers["authorization"].startswith("AWS4-HMAC-SHA256 ")
     assert headers["x-amz-security-token"] == "synthetic-session-token"
     body = json.loads(opener.request.data)
-    assert body["model"] == "global.openai.gpt-6-luna"
-    assert body["store"] is False and body["truncation"] == "disabled"
-    assert body["max_output_tokens"] == provider.MAX_OUTPUT_TOKENS
-    content = body["input"][0]["content"]
-    file_part = next(part for part in content if part["type"] == "input_file")
-    encoded = file_part["file_data"].split(",", 1)[1]
-    assert base64.b64decode(encoded, validate=True) == PDF
-    assert file_part["detail"] == "high"
-    schema = body["text"]["format"]["schema"]
+    assert opener.request.full_url.endswith("/model/eu.anthropic.claude-sonnet-4-6/invoke")
+    assert body["anthropic_version"] == "bedrock-2023-05-31"
+    assert body["max_tokens"] == provider.MAX_OUTPUT_TOKENS
+    assert body["temperature"] == 0
+    content = body["messages"][0]["content"]
+    document = next(part for part in content if part["type"] == "document")
+    assert document["source"]["media_type"] == "application/pdf"
+    assert base64.b64decode(document["source"]["data"], validate=True) == PDF
+    assert "exactly one of these forms" in next(
+        part["text"] for part in content if part["type"] == "text"
+    )
+    schema = body["output_config"]["format"]["schema"]
     assert schema["properties"]["slides"]["items"]["properties"]["number"]["enum"] == [1]
     action_schema = schema["properties"]["slides"]["items"]["properties"]["actions"]
     assert action_schema["items"]["properties"]["type"]["enum"] == [
@@ -193,6 +191,28 @@ def test_provider_rejects_invalid_page_order_and_duplicate_output_fields(monkeyp
         BedrockProvider("eu-central-1", opener=Opener(response_for(number=2))).analyze(
             PDF, extraction, str(DECK_ID), manifest
         )
+
+
+def test_provider_rejects_conflicting_summary_availability(monkeypatch):
+    extraction, manifest = inputs()
+    monkeypatch.setattr(provider, "Session", Session)
+    conflicting = json.dumps(
+        {
+            "presentation": {"text": "A readable summary.", "reason": "also unavailable"},
+            "slides": [
+                {
+                    "number": 1,
+                    "text": "A readable page.",
+                    "reason": None,
+                    "actions": [],
+                }
+            ],
+        }
+    )
+    with pytest.raises(ProviderFailure, match="provider_malformed_output"):
+        BedrockProvider(
+            "eu-central-1", opener=Opener(response_for(output_text=conflicting))
+        ).analyze(PDF, extraction, str(DECK_ID), manifest)
 
     duplicate = '{"presentation":{"text":"one","text":"two","reason":null},"slides":[]}'
     with pytest.raises(ProviderFailure, match="provider_malformed_output"):

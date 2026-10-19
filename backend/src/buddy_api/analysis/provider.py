@@ -1,28 +1,31 @@
-"""Bounded, original-PDF analysis through Amazon Bedrock's Responses API."""
+"""Bounded, original-PDF analysis through Amazon Bedrock's native model API."""
 
 import base64
 import json
 from collections.abc import Callable, Mapping
 from typing import Any, Literal
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from botocore.auth import SigV4Auth  # type: ignore[import-untyped]
 from botocore.awsrequest import AWSRequest  # type: ignore[import-untyped]
 from botocore.session import Session  # type: ignore[import-untyped]
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from buddy_api.analysis.contracts import Manifest
 from buddy_api.extraction.contracts import Extraction
 
-MODEL_ID = "global.openai.gpt-6-luna"
-MAX_FILE_BYTES = 32 * 1024 * 1024
-MAX_PAGES = 200
+MODEL_ID = "eu.anthropic.claude-sonnet-4-6"
+# InvokeModel JSON-encodes the PDF as base64. Keep its complete body below Bedrock's
+# 25 MiB invocation limit, including JSON/schema overhead.
+MAX_FILE_BYTES = 18 * 1024 * 1024
+MAX_PAGES = 100
 MAX_ACTIONS_PER_DECK = 40
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_OUTPUT_TOKENS = 12_000
 TIMEOUT_SECONDS = 90
-MAX_REQUEST_BYTES = 46 * 1024 * 1024
+MAX_REQUEST_BYTES = 25 * 1024 * 1024
 
 
 class ProviderFailure(Exception):
@@ -37,6 +40,14 @@ class ModelSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
     text: str | None = Field(max_length=16_000)
     reason: str | None = Field(max_length=512)
+
+    @model_validator(mode="after")
+    def validate_availability(self) -> "ModelSummary":
+        if (bool(self.text and self.text.strip())) == (bool(self.reason and self.reason.strip())):
+            raise ValueError("A summary must contain either text or an unavailable reason")
+        if self.text is not None and self.reason is not None:
+            raise ValueError("An available summary cannot include an unavailable reason")
+        return self
 
 
 class ModelAction(BaseModel):
@@ -55,6 +66,14 @@ class ModelSlide(BaseModel):
     text: str | None = Field(max_length=16_000)
     reason: str | None = Field(max_length=512)
     actions: tuple[ModelAction, ...] = Field(max_length=1)
+
+    @model_validator(mode="after")
+    def validate_availability(self) -> "ModelSlide":
+        if (bool(self.text and self.text.strip())) == (bool(self.reason and self.reason.strip())):
+            raise ValueError("A page summary must contain either text or an unavailable reason")
+        if self.text is not None and self.reason is not None:
+            raise ValueError("An available page summary cannot include an unavailable reason")
+        return self
 
 
 class ModelOutput(BaseModel):
@@ -138,7 +157,10 @@ def _prompt(extraction: Extraction, deck_id: str, manifest: Manifest) -> str:
         "Buddy canonical PDF source pixels at 144 dpi; keep each rectangle fully within the "
         "listed page dimensions. Do not propose navigation/reset actions or executable code. "
         "Use only the provided page numbers and preserve order. If visual content does not "
-        "support a useful action, return no action for that page. The entire deck is limited "
+        "support a useful action, return no action for that page. For every summary (overall "
+        "and per-page), return exactly one of these forms: available means non-empty text and "
+        "reason=null; unavailable means text=null and a concise non-empty reason. Never return "
+        "both text and reason. The entire deck is limited "
         f"to {MAX_ACTIONS_PER_DECK} actions.\n"
         f"Deck ID: {deck_id}\nRender ID: {manifest.render_id}\n"
         f"Ordered pages: {json.dumps(pages, separators=(',', ':'))}"
@@ -146,18 +168,15 @@ def _prompt(extraction: Extraction, deck_id: str, manifest: Manifest) -> str:
 
 
 def _response_text(response: Mapping[str, object]) -> str:
-    if response.get("status") != "completed" or response.get("incomplete_details"):
+    if response.get("stop_reason") not in {"end_turn", "stop_sequence"}:
         raise ProviderFailure("provider_incomplete_response")
-    output_text = response.get("output_text")
-    if isinstance(output_text, str):
-        return output_text
-    output = response.get("output")
-    if isinstance(output, list):
-        for item in output:
-            if isinstance(item, dict) and item.get("type") == "message":
-                for part in item.get("content", []):
-                    if isinstance(part, dict) and part.get("type") == "output_text":
-                        return str(part.get("text", ""))
+    content = response.get("content")
+    if isinstance(content, list):
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                text = part.get("text")
+                if isinstance(text, str):
+                    return text
     raise ProviderFailure("provider_malformed_response")
 
 
@@ -185,33 +204,31 @@ class BedrockProvider:
         schema = _json_schema(len(dims))
         body = json.dumps(
             {
-                "model": MODEL_ID,
-                "store": False,
-                "truncation": "disabled",
-                "max_output_tokens": MAX_OUTPUT_TOKENS,
-                "text": {
-                    "format": {
-                        "type": "json_schema",
-                        "name": "buddy_presentation_analysis",
-                        "strict": True,
-                        "schema": schema,
-                    }
-                },
-                "input": [
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": MAX_OUTPUT_TOKENS,
+                "temperature": 0,
+                "messages": [
                     {
                         "role": "user",
                         "content": [
                             {
-                                "type": "input_file",
-                                "filename": "presentation.pdf",
-                                "file_data": "data:application/pdf;base64,"
-                                + base64.b64encode(content).decode("ascii"),
-                                "detail": "high",
+                                "type": "document",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "application/pdf",
+                                    "data": base64.b64encode(content).decode("ascii"),
+                                },
                             },
-                            {"type": "input_text", "text": _prompt(extraction, deck_id, manifest)},
+                            {"type": "text", "text": _prompt(extraction, deck_id, manifest)},
                         ],
                     }
                 ],
+                "output_config": {
+                    "format": {
+                        "type": "json_schema",
+                        "schema": schema,
+                    }
+                },
             },
             separators=(",", ":"),
             allow_nan=False,
@@ -221,7 +238,10 @@ class BedrockProvider:
         credentials = Session().get_credentials()
         if credentials is None:
             raise ProviderFailure("provider_credentials_unavailable")
-        endpoint = f"https://bedrock-runtime.{self.region}.amazonaws.com/openai/v1/responses"
+        endpoint = (
+            f"https://bedrock-runtime.{self.region}.amazonaws.com/model/"
+            f"{quote(MODEL_ID, safe='')}/invoke"
+        )
         request = AWSRequest(
             method="POST", url=endpoint, data=body, headers={"Content-Type": "application/json"}
         )
