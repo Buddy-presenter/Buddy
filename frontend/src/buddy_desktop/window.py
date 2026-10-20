@@ -2,6 +2,7 @@
 
 import sys
 from dataclasses import replace
+from uuid import UUID
 
 from PySide6.QtCore import QByteArray, QSettings, QSize, Qt, Slot
 from PySide6.QtGui import QAction, QCloseEvent, QGuiApplication, QIcon, QKeySequence
@@ -26,6 +27,7 @@ from buddy_desktop.library_widget import LibraryWidget
 from buddy_desktop.present_widget import PresentWidget
 from buddy_desktop.presentation_service import DownloadedPDF
 from buddy_desktop.profile_page import ProfilePage
+from buddy_desktop.review_widget import ReviewWidget
 from buddy_desktop.services import Health, HealthService
 from buddy_desktop.slide_executor import Completion
 from buddy_desktop.tasks import TaskRunner
@@ -81,11 +83,12 @@ class MainWindow(QMainWindow):
         self.navigation.setObjectName("navigation")
         self.navigation.setIconSize(QSize(18, 18))
         self.navigation.setAccessibleName("Workspace navigation")
-        self.navigation.setFixedHeight(4 * 38)
+        self.navigation.setFixedHeight(5 * 38)
         self.navigation.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         for name, image in (
             ("Home", "house"),
             ("Library", "library-big"),
+            ("Review", "search"),
             ("Present", "presentation"),
             ("Settings", "settings-2"),
         ):
@@ -100,14 +103,19 @@ class MainWindow(QMainWindow):
         self.profile = ProfilePage(self.account)
         self.profile.controls_requested.connect(self._show_account_controls)
         self.library = LibraryWidget(config, self.account)
+        self.review = ReviewWidget(config, self.account)
         self.present = PresentWidget()
         self._private_presentation = False
         self.library.present_requested.connect(self._open_saved_pdf)
+        self.library.review_requested.connect(self._open_review)
+        self.review.back_requested.connect(lambda: self.navigation.setCurrentRow(1))
+        self.review.signin_requested.connect(self._show_account_controls)
         self.library.private_invalidated.connect(self._clear_private_pdf)
         self.present.executor.completed.connect(self._presentation_completed)
         self.present.executor.idle.connect(self._present_idle)
         self.present.powerpoint_runner.idle.connect(self._powerpoint_idle)
         self.library.activity_changed.connect(self._library_activity)
+        self.review.activity_changed.connect(self._review_activity)
         self.home.route_requested.connect(self._select_route)
         self.preferences = SettingsPage(config.api_url, environment_override=environment_override)
         self.preferences.save_requested.connect(self.save_settings)
@@ -120,6 +128,7 @@ class MainWindow(QMainWindow):
         page_widgets = [
             self.home,
             self.library,
+            self.review,
             self.present,
             self.preferences,
             self.profile,
@@ -219,14 +228,14 @@ class MainWindow(QMainWindow):
 
     def _create_menu(self) -> None:
         workspace_menu = self.menuBar().addMenu("&Workspace")
-        for index, label in enumerate(["&Home", "&Library", "&Present", "&Settings"]):
+        for index, label in enumerate(["&Home", "&Library", "&Review", "&Present", "&Settings"]):
             action = QAction(label, self)
             action.setShortcut(QKeySequence(f"Alt+{index + 1}"))
             action.triggered.connect(lambda checked=False, row=index: self._select_route(row))
             workspace_menu.addAction(action)
         workspace_menu.addSeparator()
         account_action = QAction("&Account profile", self)
-        account_action.setShortcut(QKeySequence("Alt+5"))
+        account_action.setShortcut(QKeySequence("Alt+6"))
         account_action.triggered.connect(self._show_account)
         workspace_menu.addAction(account_action)
         fullscreen_action = QAction("Presentation &full screen", self)
@@ -247,8 +256,14 @@ class MainWindow(QMainWindow):
         if self.present.executor.busy:
             return
         self._private_presentation = True
-        self.navigation.setCurrentRow(2)
+        self.navigation.setCurrentRow(3)
         self.present.load_pdf(result.content, deck_id=result.deck_id, revision=result.revision)
+
+    def _open_review(self, deck_id: object, title: str, status: str) -> None:
+        if not isinstance(deck_id, UUID):
+            return
+        self.review.set_deck(deck_id, title, status)
+        self.navigation.setCurrentRow(2)
 
     def _clear_private_pdf(self) -> None:
         if self._private_presentation:
@@ -273,7 +288,7 @@ class MainWindow(QMainWindow):
     def _show_account(self) -> None:
         self.account_popover.hide()
         self.navigation.setCurrentRow(-1)
-        self.navigate(4)
+        self.navigate(5)
         self.profile.controls.setFocus()
 
     @Slot()
@@ -367,14 +382,17 @@ class MainWindow(QMainWindow):
         if 0 <= index < self.pages.count():
             previous = self.pages.currentIndex()
             self.pages.setCurrentIndex(index)
-            self.route_title.setText(("Home", "Library", "Present", "Settings", "Profile")[index])
-            self.profile.activate(index == 4)
+            self.route_title.setText(
+                ("Home", "Library", "Review", "Present", "Settings", "Profile")[index]
+            )
+            self.profile.activate(index == 5)
             self.library.activate(index == 1)
-            if index == 2:
+            self.review.activate(index == 2)
+            if index == 3:
                 self.statusBar().showMessage(
                     "PDF presentation controls run locally after opening or downloading the file."
                 )
-            elif previous == 2:
+            elif previous == 3:
                 self.statusBar().clearMessage()
 
     @Slot(bool)
@@ -432,6 +450,7 @@ class MainWindow(QMainWindow):
                 not self.environment_override
                 and not self.account.runner.busy
                 and not self.library.runner.busy
+                and not self.review.runner.busy
             )
 
     @Slot(bool)
@@ -450,6 +469,7 @@ class MainWindow(QMainWindow):
             not busy
             and not self.runner.busy
             and not self.library.runner.busy
+            and not self.review.runner.busy
             and not self.environment_override
         )
         if self._closing and not busy:
@@ -463,13 +483,32 @@ class MainWindow(QMainWindow):
             not busy
             and not self.runner.busy
             and not self.account.runner.busy
+            and not self.review.runner.busy
+            and not self.environment_override
+        )
+        if self._closing and not busy:
+            self.close()
+
+    def _review_activity(self, busy: bool) -> None:
+        self._review_busy = busy
+        self._update_activity()
+        self.preferences.save.setEnabled(
+            not busy
+            and not self.runner.busy
+            and not self.account.runner.busy
+            and not self.library.runner.busy
             and not self.environment_override
         )
         if self._closing and not busy:
             self.close()
 
     def _update_activity(self) -> None:
-        busy = self._active_task is not None or self._account_busy or self._library_busy
+        busy = (
+            self._active_task is not None
+            or self._account_busy
+            or self._library_busy
+            or getattr(self, "_review_busy", False)
+        )
         self.activity_mark.setVisible(busy)
         self.activity_mark.set_activity(busy)
 
@@ -494,6 +533,7 @@ class MainWindow(QMainWindow):
             self.runner.busy
             or self.account.runner.busy
             or self.library.runner.busy
+            or self.review.runner.busy
             or self._closing
             or self.environment_override
         ):
@@ -514,6 +554,7 @@ class MainWindow(QMainWindow):
         self.config = replace(self.config, api_url=url)
         self.account.configure(url)
         self.library.configure(self.config)
+        self.review.configure(self.config)
         self.preferences.url.setText(url)
         self.preferences.set_endpoint(url)
         self.connection_status.setText("Connection not checked")
@@ -535,11 +576,13 @@ class MainWindow(QMainWindow):
         self.profile.activate(False)
         self.account.shutdown()
         self.library.shutdown()
+        self.review.shutdown()
         self.present.shutdown()
         if (
             self.runner.busy
             or self.account.runner.busy
             or self.library.runner.busy
+            or self.review.runner.busy
             or self.present.executor.busy
             or self.present.powerpoint_runner.busy
         ):

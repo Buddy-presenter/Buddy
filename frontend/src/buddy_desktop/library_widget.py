@@ -56,6 +56,7 @@ STATUS_TEXT = {
 class LibraryWidget(QWidget):
     activity_changed = Signal(bool)
     present_requested = Signal(object)
+    review_requested = Signal(object, str, str)
     private_invalidated = Signal()
     upload_progress = Signal(object, str, int, int)
     signin_requested = Signal()
@@ -139,6 +140,12 @@ class LibraryWidget(QWidget):
         self.open_button.setToolTip("Present the selected deck")
         self.open_button.setEnabled(False)
         self.open_button.clicked.connect(self.open_selected)
+        self.review_button = QPushButton("Review")
+        self.review_button.setAccessibleName("Review saved PDF")
+        command(self.review_button, "search", primary=True)
+        self.review_button.setToolTip("Review saved summaries and validation evidence")
+        self.review_button.setEnabled(False)
+        self.review_button.clicked.connect(self.review_selected)
         # Presentation action follows the selected deck details.
         self.upload_panel = QWidget()
         upload_layout = QVBoxLayout(self.upload_panel)
@@ -219,6 +226,7 @@ class LibraryWidget(QWidget):
         self.detail.setAccessibleName("Selected deck processing status")
         # Selected-deck details sit beside the action that uses them.
         actions.addWidget(self.detail, 1)
+        actions.addWidget(self.review_button, alignment=Qt.AlignmentFlag.AlignTop)
         actions.addWidget(self.open_button, alignment=Qt.AlignmentFlag.AlignTop)
         layout.addWidget(self.selection_actions)
         self.empty_space = QWidget()
@@ -283,6 +291,7 @@ class LibraryWidget(QWidget):
         self.previous.setEnabled(False)
         self.next.setEnabled(False)
         self.open_button.setEnabled(False)
+        self.review_button.setEnabled(False)
 
     def invalidate(self) -> None:
         self.generation += 1
@@ -514,8 +523,18 @@ class LibraryWidget(QWidget):
             elif deck.can_present:
                 guidance = "PDF is available to present. " + guidance
             self.open_button.setEnabled(deck.can_present and not self.runner.busy)
+            self.review_button.setEnabled(
+                deck.source_format == "pdf" and self.token() is not None and not self.runner.busy
+            )
             attempts = f" Processing attempts: {deck.attempts}." if deck.attempts else ""
             self.detail.setPlainText(deck.title + "\n" + guidance + attempts)
+
+    def review_selected(self) -> None:
+        row = self.table.currentRow()
+        if self.last_page and 0 <= row < len(self.last_page.items):
+            deck = self.last_page.items[row]
+            if deck.source_format == "pdf" and self.token():
+                self.review_requested.emit(deck.id, deck.title, deck.status)
 
     def failed(self, _identifier: int, message: str) -> None:
         if self.upload_request and self.retry_path is not None and not self.closing:

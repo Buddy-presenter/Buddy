@@ -15,7 +15,7 @@ FIXTURES = Path(__file__).parent / "fixtures" / "slide_actions"
 @pytest.fixture
 def present(desktop_window, qtbot):
     window = desktop_window()
-    window.navigation.setCurrentRow(2)
+    window.navigation.setCurrentRow(3)
     page = window.present
     page.load_manifest(FIXTURES / "manifest.json")
     qtbot.waitUntil(lambda: not page.executor.busy)
@@ -30,7 +30,7 @@ def region_fields(page, region):
 
 def test_open_dialog_and_all_six_buttons(desktop_window, qtbot, monkeypatch):
     window = desktop_window()
-    window.navigation.setCurrentRow(2)
+    window.navigation.setCurrentRow(3)
     page = window.present
     assert not page.next_button.isEnabled() and not page.highlight_button.isEnabled()
     monkeypatch.setattr(

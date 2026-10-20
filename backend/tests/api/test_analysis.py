@@ -475,14 +475,19 @@ def test_typed_api_auth_restart_no_public_validation_writes(
         try:
             async with db.transaction() as repos:
                 owner = await repos.users.create("owner")
-                await repos.users.create("other")
+                other = await repos.users.create("other")
                 deck = await repos.decks.create(owner_id=owner.id, title="Fixture")
                 saved = await create(repos, owner_id=owner.id, deck_id=deck.id, actions=True)
-                return saved.id
+                newer = await create(
+                    repos, owner_id=owner.id, deck_id=deck.id, version=2, actions=True
+                )
+                foreign_deck = await repos.decks.create(owner_id=other.id, title="Foreign")
+                empty_deck = await repos.decks.create(owner_id=owner.id, title="Not analyzed")
+                return saved.id, newer.id, deck.id, foreign_deck.id, empty_deck.id
         finally:
             await db.close()
 
-    identifier = asyncio.run(seed())
+    identifier, newer_identifier, deck_id, foreign_deck_id, empty_deck_id = asyncio.run(seed())
     monkeypatch.setattr(
         CognitoVerifier,
         "verify",
@@ -502,6 +507,27 @@ def test_typed_api_auth_restart_no_public_validation_writes(
     assert response.headers["Cache-Control"] == "no-store"
     assert "graph" not in response.text
     assert response.json()["data"]["publication"] == "awaiting_validation"
+    latest_path = f"/api/v1/analyses/by-deck/{deck_id}"
+    assert client.get(latest_path).status_code == 401
+    latest = client.get(latest_path, headers={"Authorization": "Bearer owner"})
+    assert latest.status_code == 200
+    assert latest.headers["Cache-Control"] == "no-store"
+    assert latest.json()["data"]["id"] == str(newer_identifier)
+    assert latest.json()["data"]["version"] == 2
+    assert (
+        client.get(
+            f"/api/v1/analyses/by-deck/{foreign_deck_id}",
+            headers={"Authorization": "Bearer owner"},
+        ).status_code
+        == 403
+    )
+    assert (
+        client.get(
+            f"/api/v1/analyses/by-deck/{empty_deck_id}",
+            headers={"Authorization": "Bearer owner"},
+        ).status_code
+        == 404
+    )
     fresh = api_client_factory(settings)
     assert (
         fresh.get(path, headers={"Authorization": "Bearer owner"}).json()["data"]

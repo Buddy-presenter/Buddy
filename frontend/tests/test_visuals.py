@@ -69,7 +69,7 @@ def test_applied_palette_text_is_readable(themed):
 def test_routes_fit_and_commands_have_accessible_names(desktop_window, qtbot, themed):
     window = desktop_window()
     window.resize(800, 600)  # The minimum window size is the binding layout constraint.
-    for route in range(4):
+    for route in range(5):
         window.navigation.setCurrentRow(route)
         themed.processEvents()
         scroll = window.pages.currentWidget()
@@ -80,13 +80,14 @@ def test_routes_fit_and_commands_have_accessible_names(desktop_window, qtbot, th
                 assert button.accessibleName()
                 assert button.toolTip()
                 assert button.width() >= button.minimumSizeHint().width()
-        assert window.route_title.text() == ("Home", "Library", "Present", "Settings")[route]
+        route_titles = ("Home", "Library", "Review", "Present", "Settings")
+        assert window.route_title.text() == route_titles[route]
     window.navigation.setCurrentRow(0)
     qtbot.mouseClick(window.home.library_action, Qt.MouseButton.LeftButton)
     assert window.pages.currentIndex() == 1
     window.navigation.setCurrentRow(0)
     qtbot.mouseClick(window.home.present_action, Qt.MouseButton.LeftButton)
-    assert window.pages.currentIndex() == 2
+    assert window.pages.currentIndex() == 3
     assert not window.present.coordinate_panel.isVisible()
     qtbot.mouseClick(window.present.coordinates_button, Qt.MouseButton.LeftButton)
     assert window.present.coordinate_panel.isVisible()
@@ -165,7 +166,7 @@ def test_loaded_presenter_with_coordinates_fits_minimum_window(
     fixture = Path(__file__).resolve().parents[2] / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf"
     window = desktop_window()
     window.resize(800, 600)
-    window.navigation.setCurrentRow(2)
+    window.navigation.setCurrentRow(3)
     page = window.present
     monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a: (str(fixture), ""))
     page.open_button.click()

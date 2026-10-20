@@ -55,6 +55,18 @@ class Analyses:
             raise RecordNotFound("Owned analysis was not found.")
         return value
 
+    async def latest_for_deck(self, deck_id: UUID, *, owner_id: UUID) -> AnalysisVersion:
+        """Return the newest immutable analysis revision for one owned deck."""
+        value = await self.session.scalar(
+            select(AnalysisVersion)
+            .where(AnalysisVersion.deck_id == deck_id, AnalysisVersion.owner_id == owner_id)
+            .order_by(AnalysisVersion.version.desc(), AnalysisVersion.id.desc())
+            .limit(1)
+        )
+        if value is None:
+            raise RecordNotFound("Owned deck analysis was not found.")
+        return value
+
     async def list(self, *, owner_id: UUID, limit: int = 100) -> list[AnalysisVersion]:
         if not 1 <= limit <= 100:
             raise ValueError("Repository limit must be from 1 to 100.")

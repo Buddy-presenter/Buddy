@@ -26,7 +26,7 @@ def test_pdf_renderer_order_rotation_crop_fractional_dimensions_and_pixels():
 
 def test_pdf_navigation_zoom_highlight_reset_and_private_clear(desktop_window, qtbot):
     window = desktop_window()
-    window.navigation.setCurrentRow(2)
+    window.navigation.setCurrentRow(3)
     page = window.present
     page.load_pdf(FIXTURE)
     qtbot.waitUntil(lambda: not page.executor.busy, timeout=10000)
@@ -83,7 +83,7 @@ def test_native_fullscreen_navigation_highlight_zoom_and_restore(
     desktop_window, qtbot, monkeypatch
 ):
     window = desktop_window()
-    window.navigation.setCurrentRow(2)
+    window.navigation.setCurrentRow(3)
     page = window.present
     assert not page.fullscreen_button.isEnabled()
     page.load_pdf(FIXTURE)
@@ -154,7 +154,7 @@ def test_routine_async_account_check_preserves_private_fullscreen(desktop_window
         account=lambda: "same-account",
     )
     account.session_changed.emit()
-    window.navigation.setCurrentRow(2)
+    window.navigation.setCurrentRow(3)
     page = window.present
     page.load_pdf(FIXTURE, deck_id="private-deck", revision="private-v1")
     qtbot.waitUntil(lambda: not page.executor.busy, timeout=10000)
