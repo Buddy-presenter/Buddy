@@ -38,6 +38,11 @@ variable "start_services" {
   type    = bool
   default = false
 }
+variable "alert_email_recipients" {
+  description = "Approved operational alert destinations. Store this input in protected operator configuration, not source control."
+  type        = set(string)
+  default     = []
+}
 variable "github_oidc_provider_arn" { type = string }
 variable "github_oidc_subject_prefix" {
   description = "Prefix reported by GitHub's repository OIDC customization API."
@@ -72,6 +77,7 @@ module "environment" {
   api_image                  = var.api_image
   worker_image               = var.worker_image
   start_services             = var.start_services
+  alert_email_recipients     = var.alert_email_recipients
   github_oidc_provider_arn   = var.github_oidc_provider_arn
   github_oidc_subject_prefix = var.github_oidc_subject_prefix
   vpc_cidr                   = "10.40.0.0/16"

@@ -1,6 +1,8 @@
 """ASGI request context, explicit host validation, and redacted failures."""
 
 import logging
+import os
+import time
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -9,6 +11,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from buddy_api.contracts import ErrorData, ErrorResponse
+from buddy_api.observability import emit_metric
 from buddy_identity.config import BROWSER_CALLBACK_PATH, BROWSER_SIGNOUT_PATH
 
 logger = logging.getLogger(__name__)
@@ -36,11 +39,47 @@ class RequestContextMiddleware:
         request_id = str(uuid4())
         scope.setdefault("state", {})["request_id"] = request_id
         started = False
+        response_status: int | None = None
+        started_at = time.perf_counter()
+
+        def report_upload() -> None:
+            path = scope.get("path", "")
+            method = scope.get("method", "")
+            upload_route = (method == "POST" and path.rstrip("/") == "/api/v1/uploads") or (
+                method == "PUT"
+                and path.startswith("/api/v1/uploads/")
+                and path.endswith("/content")
+            )
+            if not upload_route or response_status is None:
+                return
+            if 200 <= response_status < 300:
+                outcome = "success"
+            elif 400 <= response_status < 500:
+                outcome = "rejected"
+            elif 500 <= response_status < 600:
+                outcome = "failed"
+            else:
+                # Redirects are intermediate responses, not a final upload outcome.
+                return
+            for metric, value in (
+                ("UploadRequest", 1),
+                ("DurationMs", (time.perf_counter() - started_at) * 1000),
+            ):
+                emit_metric(
+                    environment=os.environ.get("BUDDY_ENVIRONMENT", "development"),
+                    service="api",
+                    stage="upload",
+                    outcome=outcome,
+                    metric=metric,
+                    value=value,
+                    correlation_ids={"request_id": request_id},
+                )
 
         async def send_response(message: Message) -> None:
-            nonlocal started
+            nonlocal started, response_status
             if message["type"] == "http.response.start":
                 started = True
+                response_status = int(message["status"])
                 headers = MutableHeaders(scope=message)
                 headers["X-Request-ID"] = request_id
                 headers["Cache-Control"] = "no-store"
@@ -70,6 +109,7 @@ class RequestContextMiddleware:
             return
         try:
             await self.app(scope, receive, send_response)
+            report_upload()
         except Exception:
             logger.error("Unexpected API failure request_id=%s", request_id)
             if started:
@@ -79,3 +119,4 @@ class RequestContextMiddleware:
                 "internal_error", "An unexpected error occurred.", request_id, 500
             )
             await response(scope, receive, send_response)
+            report_upload()

@@ -17,6 +17,25 @@ variables {
 }
 run "private_staging_before_images_exist" {
   command = plan
+  override_resource {
+    target = aws_sns_topic.operations
+    values = {
+      arn = "arn:aws:sns:eu-central-1:123456789012:buddy-staging-operations-alerts"
+    }
+    override_during = plan
+  }
+  assert {
+    condition = (
+      aws_cloudwatch_dashboard.operations.dashboard_name == "buddy-staging-operations" &&
+      aws_cloudwatch_metric_alarm.queue_age.threshold == 300 &&
+      aws_cloudwatch_metric_alarm.queue_backlog.threshold == 10 &&
+      aws_cloudwatch_metric_alarm.dead_letters.threshold == 0 &&
+      aws_cloudwatch_metric_alarm.worker_dead_letter.dimensions.Outcome == "dead_letter" &&
+      aws_cloudwatch_metric_alarm.worker_retry.dimensions.Outcome == "retry" &&
+      contains(aws_cloudwatch_metric_alarm.queue_age.alarm_actions, "arn:aws:sns:eu-central-1:123456789012:buddy-staging-operations-alerts")
+    )
+    error_message = "Staging must provision actionable queue/job alarms connected to the operations topic and a real dashboard."
+  }
   assert {
     condition     = alltrue([for rule in aws_s3_bucket_lifecycle_configuration.private["data"].rule : rule.filter[0].prefix == "auth-handoffs/" && rule.expiration[0].days == 1 && rule.noncurrent_version_expiration[0].noncurrent_days == 1 if rule.id == "expire-encrypted-desktop-handoffs"]) && length([for rule in aws_s3_bucket_lifecycle_configuration.private["data"].rule : rule if rule.id == "expire-encrypted-desktop-handoffs"]) == 1
     error_message = "Encrypted handoff current and historical versions need scoped one-day cleanup."
@@ -76,6 +95,29 @@ run "private_staging_before_images_exist" {
       ])
     )
     error_message = "The worker must have InvokeModel access only for the EU Claude Sonnet 4.6 profile, its regional destination model resources, and the default Bedrock project."
+  }
+}
+run "approved_alert_email_configuration" {
+  command = plan
+  variables {
+    alert_email_recipients = ["alerts@example.com"]
+  }
+  assert {
+    condition     = aws_sns_topic_subscription.email["alerts@example.com"].endpoint == "alerts@example.com"
+    error_message = "An approved email recipient must receive a confirmable SNS subscription."
+  }
+}
+run "staging_task_environment_and_disabled_service" {
+  command = plan
+  variables {
+    api_image = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+  assert {
+    condition = (
+      local.environment[0] == { name = "BUDDY_ENVIRONMENT", value = "staging" } &&
+      length(aws_ecs_service.worker) == 0
+    )
+    error_message = "Staging task telemetry must identify the staging environment, and monitoring must not start an undeployed worker."
   }
 }
 run "production_redundancy" {

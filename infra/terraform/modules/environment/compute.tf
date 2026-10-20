@@ -22,7 +22,7 @@ resource "aws_ecs_cluster" "main" {
 }
 locals {
   environment = [
-    { name = "BUDDY_ENVIRONMENT", value = "production" },
+    { name = "BUDDY_ENVIRONMENT", value = var.environment },
     { name = "BUDDY_BIND_HOST", value = "0.0.0.0" },
     { name = "BUDDY_ALLOWED_HOSTS", value = "${join(",", distinct(compact([var.api_domain, local.api_host, aws_lb.api.dns_name])))},localhost,127.0.0.1" },
     { name = "BUDDY_AWS_REGION", value = var.region },

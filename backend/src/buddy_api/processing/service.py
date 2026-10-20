@@ -3,6 +3,8 @@
 import asyncio
 import hashlib
 import logging
+import os
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import timedelta
@@ -31,6 +33,7 @@ from buddy_api.analysis.provider import (
 )
 from buddy_api.analysis.store import Analyses
 from buddy_api.extraction.contracts import Extraction, ExtractionError
+from buddy_api.observability import emit_metric
 from buddy_api.persistence.database import Database
 from buddy_api.persistence.models import (
     AnalysisVersion,
@@ -177,6 +180,54 @@ class Processor:
         assert job.lease_id is not None
         token = job.lease_id
         stage, saved_extraction_id = job.stage, job.extraction_id
+        job_started_at = time.perf_counter()
+        active_stage = stage
+        active_stage_started_at = job_started_at
+        environment = os.environ.get("BUDDY_ENVIRONMENT", "development")
+        analysis_id_context: UUID | None = None
+        analysis_version: int | None = None
+        job_correlation = {
+            "job_id": str(job.id),
+            "deck_id": str(source[6]),
+            "source_revision": str(source[4]),
+        }
+
+        def correlation_context() -> dict[str, str]:
+            result = dict(job_correlation)
+            if analysis_id_context is not None:
+                result["analysis_id"] = str(analysis_id_context)
+            return result
+
+        def stage_metric(name: str, result: str, started_at: float) -> None:
+            emit_metric(
+                environment=environment,
+                service="worker",
+                stage=name,
+                outcome=result,
+                metric="StageOutcome",
+                correlation_ids=correlation_context(),
+                analysis_version=analysis_version,
+            )
+            emit_metric(
+                environment=environment,
+                service="worker",
+                stage=name,
+                outcome=result,
+                metric="DurationMs",
+                value=(time.perf_counter() - started_at) * 1000,
+                correlation_ids=correlation_context(),
+                analysis_version=analysis_version,
+            )
+
+        emit_metric(
+            environment=environment,
+            service="worker",
+            stage=stage,
+            outcome="success",
+            metric="JobAttempt",
+            correlation_ids=correlation_context(),
+            analysis_version=analysis_version,
+        )
 
         def inspect() -> MetadataOutput:
             key, version, size, source_digest, revision, source_format, deck_id, _owner_id = source
@@ -240,6 +291,8 @@ class Processor:
                 )
             )
             if stage == "pdf_analysis.v1":
+                active_stage = "pdf_render"
+                active_stage_started_at = time.perf_counter()
                 if saved_extraction_id is None:
                     raise ExtractionError("saved_extraction_unavailable")
                 async with self.database.sessions() as session:
@@ -258,6 +311,7 @@ class Processor:
                     extraction = Extraction.model_validate(saved.document)
                 except ValueError:
                     raise ExtractionError("saved_extraction_invalid") from None
+                render_started_at = time.perf_counter()
                 alive, manifest = await fenced(
                     blocking(
                         partial(
@@ -271,11 +325,18 @@ class Processor:
                 )
                 if not alive:
                     return
+                stage_metric("pdf_render", "success", render_started_at)
+                active_stage = "pdf_analysis.v1"
+                active_stage_started_at = time.perf_counter()
                 extraction_id = saved_extraction_id
             else:
+                active_stage = "pdf_metadata.v1"
+                active_stage_started_at = time.perf_counter()
+                inspect_started_at = time.perf_counter()
                 alive, output = await fenced(blocking(inspect))
                 if not alive:
                     return
+                stage_metric("pdf_metadata.v1", "success", inspect_started_at)
                 async with self.database.sessions() as session, session.begin():
                     extraction_id = await store.save_metadata(session, job.id, token, output)
                 if extraction_id is None:
@@ -303,9 +364,13 @@ class Processor:
                         partial(self.provider.analyze, content, extraction, str(deck_id), manifest)
                     )
                 )
+                active_stage = "provider"
+                active_stage_started_at = time.perf_counter()
                 alive, generated = await fenced(provider_call)
                 if not alive:
                     return
+                active_stage = "pdf_analysis.v1"
+                active_stage_started_at = time.perf_counter()
                 document = self._analysis_document(
                     generated, extraction, manifest, deck_id, job.id, extraction_id
                 )
@@ -345,6 +410,8 @@ class Processor:
             async with self.database.sessions() as session:
                 analysis_result = await Analyses(session).read(analysis_id, owner_id=owner_id)
             analysis_hash = analysis_result.analysis_sha256
+            analysis_id_context = analysis_result.id
+            analysis_version = analysis_result.version
             if analysis_hash is None:
                 raise ProviderFailure("stored_analysis_unavailable")
             has_candidates = any(
@@ -361,6 +428,9 @@ class Processor:
                     assert self.validation is not None
                     action = action_result.action
                     retry_key = uuid5(analysis_id, "validation:" + action.instance_id)
+                    active_stage = "validation"
+                    validation_started_at = time.perf_counter()
+                    active_stage_started_at = validation_started_at
                     alive, stored = await fenced(
                         self.validation.validate(
                             owner_id,
@@ -374,6 +444,9 @@ class Processor:
                     )
                     if not alive:
                         return
+                    stage_metric("validation", "success", validation_started_at)
+                    active_stage = "pdf_analysis.v1"
+                    active_stage_started_at = time.perf_counter()
                     result = stored.result
                     validation_input = ValidationInput(
                         validation_id=uuid5(analysis_id, "result:" + action.instance_id),
@@ -403,12 +476,55 @@ class Processor:
                             owner_id=owner_id, result=validation_input
                         )
             async with self.database.sessions() as session, session.begin():
-                await store.complete(session, job.id, token, analysis_id)
+                completed = await store.complete(session, job.id, token, analysis_id)
+            if not completed:
+                return
+            emit_metric(
+                environment=environment,
+                service="worker",
+                stage=stage,
+                outcome="success",
+                metric="JobOutcome",
+                correlation_ids=correlation_context(),
+                analysis_version=analysis_version,
+            )
+            emit_metric(
+                environment=environment,
+                service="worker",
+                stage=stage,
+                outcome="success",
+                metric="DurationMs",
+                value=(time.perf_counter() - job_started_at) * 1000,
+                correlation_ids=correlation_context(),
+                analysis_version=analysis_version,
+            )
         except asyncio.CancelledError:
             # Shutdown drains local temporary work, then releases the durable lease.
             # Fenced work drains its provider, renderer, or validator child before cleanup.
             async with self.database.sessions() as session, session.begin():
                 await store.fail(session, job.id, token, self.settings, "worker_interrupted")
+                current = await session.get(ProcessingJob, job.id)
+                final_status = current.status if current is not None else "failed"
+            outcome = "dead_letter" if final_status == "dead_letter" else "retry"
+            emit_metric(
+                environment=environment,
+                service="worker",
+                stage=stage,
+                outcome=outcome,
+                metric="JobOutcome",
+                correlation_ids=correlation_context(),
+                analysis_version=analysis_version,
+            )
+            emit_metric(
+                environment=environment,
+                service="worker",
+                stage=stage,
+                outcome=outcome,
+                metric="DurationMs",
+                value=(time.perf_counter() - job_started_at) * 1000,
+                correlation_ids=correlation_context(),
+                analysis_version=analysis_version,
+            )
             raise
         except Exception as exc:
             if isinstance(exc, UploadError) and exc.code in {
@@ -440,6 +556,48 @@ class Processor:
                         isinstance(exc, ExtractionError)
                         or (isinstance(exc, ProviderFailure) and exc.permanent)
                     ),
+                )
+                current = await session.get(ProcessingJob, job.id)
+                final_status = current.status if current is not None else "failed"
+            outcome = "dead_letter" if final_status == "dead_letter" else "retry"
+            emit_metric(
+                environment=environment,
+                service="worker",
+                stage=stage,
+                outcome=outcome,
+                metric="JobOutcome",
+                correlation_ids=correlation_context(),
+                analysis_version=analysis_version,
+            )
+            emit_metric(
+                environment=environment,
+                service="worker",
+                stage=stage,
+                outcome=outcome,
+                metric="DurationMs",
+                value=(time.perf_counter() - job_started_at) * 1000,
+                correlation_ids=correlation_context(),
+                analysis_version=analysis_version,
+            )
+            if active_stage != "provider":
+                emit_metric(
+                    environment=environment,
+                    service="worker",
+                    stage=active_stage,
+                    outcome="failed",
+                    metric="StageOutcome",
+                    correlation_ids=correlation_context(),
+                    analysis_version=analysis_version,
+                )
+                emit_metric(
+                    environment=environment,
+                    service="worker",
+                    stage=active_stage,
+                    outcome="failed",
+                    metric="DurationMs",
+                    value=(time.perf_counter() - active_stage_started_at) * 1000,
+                    correlation_ids=correlation_context(),
+                    analysis_version=analysis_version,
                 )
         await blocking(lambda: self.queue.acknowledge(raw["ReceiptHandle"]))
 

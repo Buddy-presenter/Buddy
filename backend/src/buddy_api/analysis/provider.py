@@ -3,6 +3,8 @@
 import asyncio
 import base64
 import json
+import os
+import time
 from collections.abc import Mapping
 from typing import Literal
 from urllib.parse import quote
@@ -15,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from buddy_api.analysis.contracts import Manifest
 from buddy_api.extraction.contracts import Extraction
+from buddy_api.observability import emit_metric
 
 MODEL_ID = "eu.anthropic.claude-sonnet-4-6"
 # InvokeModel JSON-encodes the PDF as base64. Keep its complete body below Bedrock's
@@ -306,6 +309,8 @@ class BedrockProvider:
         self, content: bytes, extraction: Extraction, deck_id: str, manifest: Manifest
     ) -> ModelOutput:
         """Invoke Bedrock with a cancellable transport and one end-to-end deadline."""
+        started_at = time.perf_counter()
+        environment = os.environ.get("BUDDY_ENVIRONMENT", "development")
         try:
             async with asyncio.timeout(TIMEOUT_SECONDS):
                 endpoint, body, dims, headers = self._signed_request(
@@ -323,7 +328,76 @@ class BedrockProvider:
                         if len(raw) > MAX_RESPONSE_BYTES:
                             raise ProviderFailure("provider_response_limit", permanent=True)
         except TimeoutError:
+            self._record_metrics(
+                environment, deck_id, extraction.source_revision, started_at, None, "failed"
+            )
             raise ProviderFailure("provider_unavailable") from None
         except httpx.HTTPError:
+            self._record_metrics(
+                environment, deck_id, extraction.source_revision, started_at, None, "failed"
+            )
             raise ProviderFailure("provider_unavailable") from None
-        return self._decode_response(bytes(raw), dims)
+        except ProviderFailure:
+            self._record_metrics(
+                environment, deck_id, extraction.source_revision, started_at, None, "failed"
+            )
+            raise
+        try:
+            output = self._decode_response(bytes(raw), dims)
+        except ProviderFailure:
+            self._record_metrics(
+                environment, deck_id, extraction.source_revision, started_at, None, "failed"
+            )
+            raise
+        try:
+            usage = json.loads(bytes(raw)).get("usage")
+        except (ValueError, TypeError, AttributeError):
+            usage = None
+        self._record_metrics(
+            environment, deck_id, extraction.source_revision, started_at, usage, "success"
+        )
+        return output
+
+    @staticmethod
+    def _record_metrics(
+        environment: str,
+        deck_id: str,
+        source_revision: str,
+        started_at: float,
+        usage: object,
+        outcome: str,
+    ) -> None:
+        elapsed = (time.perf_counter() - started_at) * 1000
+        emit_metric(
+            environment=environment,
+            service="worker",
+            stage="provider",
+            outcome=outcome,
+            metric="StageOutcome",
+            correlation_ids={"deck_id": deck_id, "source_revision": source_revision},
+        )
+        emit_metric(
+            environment=environment,
+            service="worker",
+            stage="provider",
+            outcome=outcome,
+            metric="DurationMs",
+            value=elapsed,
+            correlation_ids={"deck_id": deck_id, "source_revision": source_revision},
+        )
+        if isinstance(usage, dict):
+            for field, metric in (
+                ("input_tokens", "InputTokens"),
+                ("output_tokens", "OutputTokens"),
+            ):
+                count = usage.get(field)
+                if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+                    emit_metric(
+                        environment=environment,
+                        service="worker",
+                        stage="provider",
+                        outcome=outcome,
+                        metric=metric,
+                        value=count,
+                        correlation_ids={"deck_id": deck_id, "source_revision": source_revision},
+                    )
