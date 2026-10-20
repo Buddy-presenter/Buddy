@@ -17,6 +17,13 @@ variables {
 }
 run "private_staging_before_images_exist" {
   command = plan
+  override_resource {
+    target = aws_sns_topic.operations
+    values = {
+      arn = "arn:aws:sns:eu-central-1:123456789012:buddy-staging-operations-alerts"
+    }
+    override_during = plan
+  }
   assert {
     condition = (
       aws_cloudwatch_dashboard.operations.dashboard_name == "buddy-staging-operations" &&
@@ -107,7 +114,7 @@ run "staging_task_environment_and_disabled_service" {
   }
   assert {
     condition = (
-      contains(jsondecode(aws_ecs_task_definition.service["api"].container_definitions)[0].environment, { name = "BUDDY_ENVIRONMENT", value = "staging" }) &&
+      local.environment[0] == { name = "BUDDY_ENVIRONMENT", value = "staging" } &&
       length(aws_ecs_service.worker) == 0
     )
     error_message = "Staging task telemetry must identify the staging environment, and monitoring must not start an undeployed worker."
