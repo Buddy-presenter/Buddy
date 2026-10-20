@@ -222,6 +222,10 @@ def build(
             "pywintypes",
             "--hidden-import",
             "win32com.client",
+            "--hidden-import",
+            "win32gui",
+            "--hidden-import",
+            "win32process",
         ]
     command += [str(ROOT / "frontend/scripts/release/desktop_entry.py")]
     build_environment = dict(os.environ)

@@ -29,7 +29,8 @@ redirects are disabled, and service bodies are never displayed as markup or erro
 The shell includes account controls (#5), the [deck library](library.md) (#6),
 private [PDF/PPTX uploads](uploads.md), [PDF presentations](pdf-presentations.md) with
 the six catalog controls and full-screen playback, and Windows desktop PowerPoint launch
-and slideshow connection (see [PowerPoint presentations](powerpoint-presentations.md)).
+and slideshow connection, navigation, and native drawing/erase controls
+(see [PowerPoint presentations](powerpoint-presentations.md)).
 Buddy's PDF surface and PowerPoint's own slideshow remain separate presentation paths.
 Feature guides own their contracts; this guide describes the desktop shell.
 

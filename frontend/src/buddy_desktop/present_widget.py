@@ -1,6 +1,7 @@
 """Local rendered-slide controls using the production six-command executor."""
 
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal, Slot
@@ -20,6 +21,13 @@ from PySide6.QtWidgets import (
 
 from buddy_desktop.fullscreen import FullscreenPresentation
 from buddy_desktop.powerpoint import PowerPointAutomation, PresentationInfo
+from buddy_desktop.powerpoint_contract import (
+    PowerPointAction,
+    PowerPointActionResult,
+    PowerPointError,
+    PowerPointFrame,
+)
+from buddy_desktop.powerpoint_controls import PowerPointControls
 from buddy_desktop.slide_contract import Region
 from buddy_desktop.slide_executor import Completion, SlideExecutor
 from buddy_desktop.slide_surface import SlideSurface
@@ -122,7 +130,11 @@ class PresentWidget(Page):
         self.powerpoint_runner = TaskRunner(self)
         self.powerpoint_runner.succeeded.connect(self._powerpoint_succeeded)
         self.powerpoint_runner.failed.connect(self._powerpoint_failed)
+        self.powerpoint_runner.idle.connect(self._powerpoint_idle)
         self._powerpoint_pending: dict[int, tuple[str, str | None]] = {}
+        self._queued_powerpoint_action: PowerPointAction | None = None
+        self._queued_powerpoint_preview: PresentationInfo | None = None
+        self._queued_powerpoint_operation: tuple[str, str | None] | None = None
         self._powerpoint_path: str | None = None
         self._powerpoint_info: PresentationInfo | None = None
         self._powerpoint_poll = QTimer(self)
@@ -198,6 +210,10 @@ class PresentWidget(Page):
             self.fields[name] = field
         self.coordinate_panel.hide()
         self.coordinates_button.toggled.connect(self.coordinate_panel.setVisible)
+        self.pdf_controls = QWidget()
+        pdf_actions = QVBoxLayout(self.pdf_controls)
+        pdf_actions.setContentsMargins(0, 0, 0, 0)
+        pdf_actions.setSpacing(8)
         commands = QHBoxLayout()
         commands.setSpacing(8)
         commands.addWidget(self.previous_button)
@@ -220,8 +236,9 @@ class PresentWidget(Page):
         for button in (self.zoom_button, self.highlight_button, self.reset_button):
             commands.addWidget(button)
         commands.addWidget(self.coordinates_button)
-        self.body.addLayout(commands)
-        self.body.addWidget(self.coordinate_panel)
+        pdf_actions.addLayout(commands)
+        pdf_actions.addWidget(self.coordinate_panel)
+        self.body.addWidget(self.pdf_controls)
         self.powerpoint_open_button = QPushButton("Open PowerPoint…")
         command(self.powerpoint_open_button, "presentation")
         self.powerpoint_open_button.setAccessibleName("Open a PowerPoint presentation")
@@ -266,6 +283,10 @@ class PresentWidget(Page):
             self.powerpoint_open_button.setEnabled(False)
             self.powerpoint_connect_button.setEnabled(False)
         powerpoint_layout.addWidget(self.powerpoint_status)
+        self.powerpoint_controls = PowerPointControls()
+        self.powerpoint_controls.action_requested.connect(self._queue_powerpoint_action)
+        self.powerpoint_controls.preview_requested.connect(self._queue_powerpoint_preview)
+        powerpoint_layout.addWidget(self.powerpoint_controls)
         self.body.addWidget(self.powerpoint_panel)
         self.feedback = StatusLabel()
         self.feedback.setObjectName("caption")
@@ -290,7 +311,12 @@ class PresentWidget(Page):
         self._submit_powerpoint("list")
 
     def _submit_powerpoint(self, action: str, path: str | None = None) -> None:
-        if sys.platform != "win32" or self._closing or self.powerpoint_runner.busy:
+        if sys.platform != "win32" or self._closing:
+            return
+        if self.powerpoint_runner.busy:
+            if action != "status" and self._queued_powerpoint_operation is None:
+                self._queued_powerpoint_operation = (action, path)
+                self._refresh()
             return
         if action != "status":
             self.powerpoint_status.setText(
@@ -303,11 +329,62 @@ class PresentWidget(Page):
                 "connect": lambda: self.powerpoint.connect(path or ""),
                 "status": lambda: self.powerpoint.status(path or ""),
             }[action]
-            request = self.powerpoint_runner.submit(operation)
+            self._submit_powerpoint_task(action, path, operation)
         except (KeyError, RuntimeError):
             self.powerpoint_status.setText("PowerPoint is busy. Try again when it is ready.")
             return
+
+    def _submit_powerpoint_task(
+        self, action: str, path: str | None, operation: Callable[[], object]
+    ) -> None:
+        request = self.powerpoint_runner.submit(operation)
         self._powerpoint_pending[request] = (action, path)
+        self._refresh()
+
+    @Slot(object)
+    def _queue_powerpoint_action(self, action: PowerPointAction) -> None:
+        if self._closing or self._powerpoint_info is None or self._queued_powerpoint_action:
+            return
+        try:
+            if not isinstance(action, PowerPointAction):
+                raise PowerPointError("Unsupported PowerPoint action.")
+            action.validate()
+        except PowerPointError as exc:
+            self.powerpoint_controls.feedback.setText(str(exc))
+            return
+        self._queued_powerpoint_action = action
+        self._refresh()
+        self._powerpoint_idle()
+
+    @Slot(object)
+    def _queue_powerpoint_preview(self, info: PresentationInfo | None) -> None:
+        if not self._closing and info is not None and self._powerpoint_info is not None:
+            self._queued_powerpoint_preview = info
+            self._powerpoint_idle()
+
+    @Slot()
+    def _powerpoint_idle(self) -> None:
+        if self._closing or self.powerpoint_runner.busy:
+            return
+        if self._queued_powerpoint_operation is not None:
+            operation, path = self._queued_powerpoint_operation
+            self._queued_powerpoint_operation = None
+            self._submit_powerpoint(operation, path)
+            return
+        if self._powerpoint_info is None:
+            return
+        if self._queued_powerpoint_action is not None:
+            action = self._queued_powerpoint_action
+            self._queued_powerpoint_action = None
+            self._submit_powerpoint_task(
+                "command", action.target.path, lambda: self.powerpoint.execute(action)
+            )
+        elif self._queued_powerpoint_preview is not None:
+            expected = self._queued_powerpoint_preview
+            self._queued_powerpoint_preview = None
+            self._submit_powerpoint_task(
+                "preview", expected.path, lambda: self.powerpoint.preview(expected)
+            )
         self._refresh()
 
     @Slot(int, object)
@@ -342,9 +419,42 @@ class PresentWidget(Page):
                     self.powerpoint_status.setText("PowerPoint connection cancelled.")
         elif action == "status":
             if isinstance(result, PresentationInfo):
-                self._attach_powerpoint_info(result)
+                if (
+                    self._powerpoint_info is not None
+                    and self._powerpoint_info.window_id != result.window_id
+                ):
+                    self._powerpoint_lost(
+                        "The PowerPoint slideshow changed. Connect again to select it."
+                    )
+                else:
+                    self._attach_powerpoint_info(result)
             else:
                 self._powerpoint_lost()
+        elif action == "preview" and isinstance(result, PowerPointFrame):
+            self.powerpoint_controls.set_frame(result)
+        elif action == "command" and isinstance(result, PowerPointActionResult):
+            self._attach_powerpoint_info(result.info)
+            self.powerpoint_controls.completed(result)
+            if result.action.kind in {
+                "draw_line",
+                "draw_arrow",
+                "draw_rectangle",
+                "draw_oval",
+                "draw_underline",
+                "draw_freehand",
+                "highlight_region",
+                "filled_rectangle",
+                "filled_oval",
+                "text_box",
+                "callout",
+                "undo_annotation",
+                "erase_region",
+                "erase_drawing",
+                "reset_view",
+            }:
+                # Shape annotations are part of the live slide. Re-export it so the
+                # larger reference matches what PowerPoint is actually showing.
+                self._queued_powerpoint_preview = result.info
         self._refresh()
 
     @Slot(int, str)
@@ -361,13 +471,21 @@ class PresentWidget(Page):
                     f"PowerPoint status check failed; retrying. {message}"
                 )
             self._powerpoint_poll.start()
+        elif action in {"command", "preview"}:
+            self.powerpoint_controls.feedback.setText(message)
         else:
             self.powerpoint_status.setText(message)
         self._refresh()
 
     def _attach_powerpoint_info(self, info: PresentationInfo) -> None:
+        previous = self._powerpoint_info
         self._powerpoint_info = info
         self._powerpoint_path = info.path
+        self.powerpoint_controls.set_info(info)
+        if (previous is None or previous.slide_key != info.slide_key) and min(
+            info.slide_width, info.slide_height
+        ) > 0:
+            self._queued_powerpoint_preview = info
         status = (
             f"Connected to {info.name} — slide {info.slide_index} of {info.slide_count}. "
             "PowerPoint is displaying the slideshow."
@@ -385,8 +503,11 @@ class PresentWidget(Page):
 
     def _powerpoint_lost(self, reason: str | None = None) -> None:
         self._powerpoint_poll.stop()
+        self._queued_powerpoint_action = None
+        self._queued_powerpoint_preview = None
         self._powerpoint_info = None
         self._powerpoint_path = None
+        self.powerpoint_controls.set_info(None)
         self.powerpoint_status.setText(
             reason
             or "PowerPoint slideshow disconnected. Connect again to explicitly select a slideshow."
@@ -398,8 +519,12 @@ class PresentWidget(Page):
         # Invalidate in-flight work: neither late success nor failure may restore
         # a connection or restart polling after the user explicitly disconnects.
         self._powerpoint_pending.clear()
+        self._queued_powerpoint_action = None
+        self._queued_powerpoint_preview = None
+        self._queued_powerpoint_operation = None
         self._powerpoint_info = None
         self._powerpoint_path = None
+        self.powerpoint_controls.set_info(None)
         self.powerpoint_status.setText(
             "Disconnected from Buddy. PowerPoint remains open and the slideshow is unchanged."
         )
@@ -560,14 +685,23 @@ class PresentWidget(Page):
     @Slot()
     def _refresh(self) -> None:
         loaded = self.executor.manifest is not None and not self._closing
-        self.surface.empty.setVisible(self.surface.slide is None)
+        powerpoint_connected = self._powerpoint_info is not None
+        show_pdf_surface = loaded or not powerpoint_connected
+        self.surface.setVisible(show_pdf_surface)
+        self.surface.empty.setVisible(show_pdf_surface and self.surface.slide is None)
+        self.pdf_controls.setVisible(loaded or not powerpoint_connected)
         ready = loaded and not self.executor.busy
         self.open_button.setEnabled(not self.executor.busy and not self._closing)
         # Fast status checks should not repeatedly disable and re-enable the visible
         # controls. Only user-initiated launch/connect/list operations lock them.
-        powerpoint_action_busy = self._closing or any(
-            action != "status" for action, _path in self._powerpoint_pending.values()
+        powerpoint_action_busy = (
+            self._closing
+            or self._queued_powerpoint_action is not None
+            or self._queued_powerpoint_operation is not None
+            or any(action != "status" for action, _path in self._powerpoint_pending.values())
         )
+        self.powerpoint_controls.busy = powerpoint_action_busy
+        self.powerpoint_controls.refresh()
         self.powerpoint_open_button.setEnabled(
             sys.platform == "win32" and not powerpoint_action_busy
         )
@@ -577,6 +711,8 @@ class PresentWidget(Page):
         self.powerpoint_disconnect_button.setEnabled(
             self._powerpoint_info is not None and not powerpoint_action_busy
         )
+        for widget in (self.target, self.go_button, self.fullscreen_button):
+            widget.setVisible(loaded)
         self.fullscreen_button.setEnabled(loaded)
         self.counter.setVisible(loaded)
         for widget in (self.previous_button, self.next_button, self.target, self.go_button):
@@ -591,6 +727,9 @@ class PresentWidget(Page):
 
     def shutdown(self) -> None:
         self._closing = True
+        self._queued_powerpoint_action = None
+        self._queued_powerpoint_preview = None
+        self._queued_powerpoint_operation = None
         if self.fullscreen is not None:
             self.fullscreen.close()
         self.executor.close()

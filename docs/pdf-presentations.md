@@ -2,10 +2,11 @@
 
 Buddy accepts **PDF and PPTX** originals. PDF remains Buddy's in-app rendered format.
 On Windows, Present can also launch a local `.pptx` in installed desktop PowerPoint and
-track its slideshow. This is a separate presentation path: Buddy does not convert the
-PPTX or render it in its own slide surface. The original remains unchanged. Slide
-navigation from Buddy is added by #109; drawing/erase by #110; region zoom remains under
-investigation in #111. Export to PDF when using Buddy's cross-platform rendered viewer.
+track its slideshow, navigate, and draw or erase native annotations (#116). This is a
+separate presentation path: Buddy exports a static reference for selection while
+PowerPoint displays the slideshow; the original remains unchanged. Region zoom remains
+under investigation in #111. See [PowerPoint presentations](powerpoint-presentations.md).
+Export to PDF when using Buddy's cross-platform rendered viewer.
 
 ## Desktop flow
 
