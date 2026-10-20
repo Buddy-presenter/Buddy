@@ -60,7 +60,7 @@ STATUS_TEXT = {
 PROCESSING_TEXT = {
     "uploaded": ("Uploaded", "The PDF is saved and waiting for a processing job."),
     "queued": ("Queued", "Waiting for a processing worker."),
-    "inspecting_pdf_metadata": ("Inspecting PDF metadata", "Checking page order and dimensions."),
+    "inspecting_pdf_metadata": ("Inspecting PDF", "Checking page order and dimensions."),
     "analyzing": ("Analyzing", "Preparing slide summaries and suggested actions."),
     "validating": ("Validating", "Checking suggested actions against the source PDF."),
     "review_ready": ("Review ready", "Summaries and action evidence are available to review."),
