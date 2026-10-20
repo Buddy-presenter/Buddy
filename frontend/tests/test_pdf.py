@@ -24,7 +24,7 @@ def test_pdf_renderer_order_rotation_crop_fractional_dimensions_and_pixels():
     assert open_pdf(FIXTURE)[0].slides[0].slide_id == manifest.slides[0].slide_id
 
 
-def test_pdf_navigation_zoom_highlight_reset_and_private_clear(desktop_window, qtbot, tmp_path):
+def test_pdf_navigation_zoom_highlight_reset_and_private_clear(desktop_window, qtbot):
     window = desktop_window()
     window.navigation.setCurrentRow(2)
     page = window.present
@@ -35,7 +35,6 @@ def test_pdf_navigation_zoom_highlight_reset_and_private_clear(desktop_window, q
     page.send("zoom_region", {"region": {"x": 96, "y": 410, "width": 480, "height": 240}})
     page.send("highlight_region", {"region": {"x": 100, "y": 450, "width": 100, "height": 40}})
     assert page.surface.highlight == Region(100, 450, 100, 40)
-    page.surface.grab().save(str(tmp_path / "pdf-zoom-highlight.png"))
     page.send("next_slide")
     qtbot.waitUntil(lambda: not page.executor.busy, timeout=10000)
     assert page.counter.text() == "Slide 2 of 3"

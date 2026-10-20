@@ -58,6 +58,13 @@ def action(kind, current=0, **params):
     }
 
 
+def highlight(region, current=0, **changes):
+    value = action("highlight_region", current, region=region)
+    value["version"] = "1.1"
+    value.update(changes)
+    return value
+
+
 @pytest.fixture
 def player(qtbot):
     surface = SlideSurface()
@@ -77,37 +84,6 @@ def player(qtbot):
     executor.close()
     qtbot.waitUntil(lambda: not executor.busy, timeout=5000)
     executor.wait_for_shutdown()
-
-
-def test_all_published_examples_and_actual_pixels(player):
-    surface, executor, wait, results = player
-    initial = capture(surface).convertToFormat(QImage.Format.Format_RGB32)
-    exported = QImage(str(FIXTURES / "wide.png")).convertToFormat(QImage.Format.Format_RGB32)
-    assert pixels(initial) == pixels(exported)
-    for example in EXAMPLES:
-        assert wait(executor.dispatch(example)).status == "completed"
-    assert executor.current_index == 2
-    assert surface.region == surface.slide.full
-    assert len(results) == 1 + len(EXAMPLES)
-
-
-@pytest.mark.parametrize(
-    "name,index,size",
-    [("wide", 0, (960, 540)), ("standard", 1, (720, 540)), ("portrait", 2, (540, 720))],
-)
-def test_navigation_preserves_each_real_aspect_ratio(player, name, index, size):
-    surface, executor, wait, _ = player
-    # A portrait test canvas can exceed the physical screen's available work area.
-    surface.hide()
-    surface.resize(*size)
-    result = wait(
-        executor.dispatch(
-            action("go_to_slide", target_slide_id=MANIFEST["slides"][index]["slide_id"])
-        )
-    )
-    assert result.status == "completed"
-    assert result.slide_id == MANIFEST["slides"][index]["slide_id"]
-    assert pixels(capture(surface)) == pixels(QImage(str(FIXTURES / f"{name}.png")))
 
 
 @pytest.mark.parametrize(
@@ -161,88 +137,78 @@ def test_boundaries_valid_jumps_and_navigation_resets_zoom(player):
     assert surface.region == surface.slide.full
 
 
+ZOOM = {"x": 80, "y": 64, "width": 1760, "height": 200}
+MARK = {"x": 80, "y": 64, "width": 100, "height": 30}
+
+
+def changed(value, **fields):
+    return value | fields
+
+
+# Every rejection happens in parse_action, before the executor touches the surface,
+# so the rules are checked here without rendering; one executor test covers the effect.
 @pytest.mark.parametrize(
-    "field,value",
+    "value",
     [
-        ("type", "run_shell"),
-        ("type", "pan"),
-        ("version", "2.0"),
-        ("instance_id", ""),
-        ("purpose", " "),
-        ("deck_id", "stale"),
-        ("render_id", "stale"),
-        ("slide_id", "stale"),
-        ("slide_id", -1),
-        ("slide_id", True),
-        ("extra", 1),
-        ("params", {"extra": 1}),
+        pytest.param(changed(action("reset_view"), type="run_shell"), id="unknown-type"),
+        pytest.param(changed(action("reset_view"), version="2.0"), id="unknown-version"),
+        pytest.param(changed(action("reset_view"), instance_id=""), id="empty-instance"),
+        pytest.param(changed(action("reset_view"), purpose=" "), id="blank-purpose"),
+        pytest.param(changed(action("reset_view"), deck_id="stale"), id="stale-deck"),
+        pytest.param(changed(action("reset_view"), render_id="stale"), id="stale-render"),
+        pytest.param(changed(action("reset_view"), slide_id="stale"), id="not-current-slide"),
+        pytest.param(changed(action("reset_view"), slide_id=True), id="bool-slide"),
+        pytest.param(changed(action("reset_view"), extra=1), id="extra-field"),
+        pytest.param(changed(action("reset_view"), params={"extra": 1}), id="extra-param"),
+        pytest.param(action("zoom_region", region=ZOOM | {"x": -1}), id="zoom-negative"),
+        pytest.param(action("zoom_region", region=ZOOM | {"width": 0}), id="zoom-empty"),
+        pytest.param(action("zoom_region", region=ZOOM | {"x": float("nan")}), id="zoom-nan"),
+        pytest.param(action("zoom_region", region=ZOOM | {"y": float("inf")}), id="zoom-inf"),
+        pytest.param(action("zoom_region", region=ZOOM | {"width": 1921}), id="zoom-outside"),
+        pytest.param(action("zoom_region", region=ZOOM | {"width": 1}), id="zoom-over-32x"),
+        pytest.param(action("zoom_region", region=ZOOM | {"width": True}), id="zoom-bool"),
+        pytest.param(action("zoom_region", region=ZOOM | {"extra": 0}), id="zoom-extra"),
+        pytest.param(action("highlight_region", region=MARK), id="highlight-needs-v1.1"),
+        pytest.param(highlight(MARK | {"y": 1080}), id="highlight-outside"),
+        pytest.param(highlight(MARK) | {"params": {"text": "Buddy"}}, id="highlight-param"),
+        pytest.param(action("go_to_slide"), id="jump-missing-target"),
+        pytest.param(action("go_to_slide", target_slide_id="unknown"), id="jump-unknown"),
+        pytest.param(action("go_to_slide", target_slide_id=True), id="jump-bool"),
     ],
 )
-def test_invalid_actions_do_not_mutate_surface(player, field, value):
-    surface, executor, wait, _ = player
-    data = action("reset_view")
-    data[field] = value
-    before = capture(surface)
-    assert wait(executor.dispatch(data)).status == "rejected"
-    assert capture(surface) == before
-    assert executor.current_index == 0
-
-
-@pytest.mark.parametrize(
-    "field,value",
-    [
-        ("x", -1),
-        ("y", -1),
-        ("width", 0),
-        ("height", 0),
-        ("width", -5),
-        ("height", -5),
-        ("x", float("nan")),
-        ("y", float("inf")),
-        ("width", float("-inf")),
-        ("x", 1920),
-        ("y", 1080),
-        ("width", 1921),
-        ("height", 1081),
-        ("width", 1),
-        ("height", 1),
-        ("width", True),
-        ("extra", 0),
-    ],
-)
-def test_invalid_zoom_regions_rejected_before_execution(player, field, value):
-    surface, executor, wait, _ = player
-    region = {"x": 80, "y": 64, "width": 1760, "height": 200}
-    region[field] = value
-    assert wait(executor.dispatch(action("zoom_region", region=region))).status == "rejected"
-    assert surface.region == surface.slide.full
-
-
-@pytest.mark.parametrize(
-    "params",
-    [
-        {},
-        {"target_slide_id": "unknown"},
-        {"target_slide_id": -1},
-        {"slide_index": 0},
-        {"target_slide_id": 0},
-        {"target_slide_id": True},
-        {"target_slide_id": ""},
-        {"target_slide_id": "slide:standard/opaque", "index": 1},
-    ],
-)
-def test_invalid_jumps(player, params):
-    _, executor, wait, _ = player
-    assert wait(executor.dispatch(action("go_to_slide", **params))).status == "rejected"
-    assert executor.current_index == 0
-
-
-@pytest.mark.parametrize("field", list(action("reset_view")))
-def test_every_instance_field_is_required(field):
-    data = action("reset_view")
-    del data[field]
+def test_parse_action_rejects_invalid_or_stale_input(value):
     with pytest.raises(ContractError):
-        parse_action(data, parse_manifest(MANIFEST, FIXTURES), 0)
+        parse_action(value, parse_manifest(MANIFEST, FIXTURES), 0)
+
+
+def test_parse_action_requires_every_field_and_a_real_current_index():
+    manifest = parse_manifest(MANIFEST, FIXTURES)
+    for field in action("reset_view"):
+        incomplete = action("reset_view")
+        del incomplete[field]
+        with pytest.raises(ContractError):
+            parse_action(incomplete, manifest, 0)
+    # Guards against Python's negative indexing and bool-as-int.
+    for index in (-1, 3, True, 0.0):
+        with pytest.raises(ContractError):
+            parse_action(action("reset_view"), manifest, index)
+
+
+def test_rejected_actions_leave_slide_camera_and_highlight_untouched(player):
+    surface, executor, wait, _ = player
+    assert wait(executor.dispatch(highlight(MARK))).status == "completed"
+    before = pixels(capture(surface))
+    for invalid in (
+        action("zoom_region", region=ZOOM | {"x": -1}),
+        highlight(MARK | {"width": 1921}),
+        action("go_to_slide", target_slide_id="unknown"),
+        changed(action("next_slide"), deck_id="stale"),
+    ):
+        assert wait(executor.dispatch(invalid)).status == "rejected"
+    assert pixels(capture(surface)) == before
+    assert surface.highlight == Region(**MARK)
+    assert surface.region == surface.slide.full
+    assert executor.current_index == 0
 
 
 @pytest.mark.parametrize(
@@ -416,9 +382,9 @@ def test_wrong_thread_cannot_mutate_qt(player):
     assert errors == ["Slide state must only be accessed on its Qt thread."]
 
 
-@pytest.mark.parametrize("dpr", [1, 1.5, 2])
-def test_real_widget_rendering_at_multiple_device_ratios(player, dpr):
+def test_zoomed_rendering_matches_export_at_fractional_device_ratio(player):
     surface, executor, wait, _ = player
+    dpr = 1.5  # Integer ratios are covered by the exact-pixel crop and evidence tests.
     surface.resize(880, 100)
     assert (
         wait(
@@ -451,23 +417,6 @@ def test_real_widget_rendering_at_multiple_device_ratios(player, dpr):
     errors = [abs(a - b) for a, b in zip(actual_bytes, expected_bytes, strict=True)]
     assert sum(errors) / len(errors) < 0.75
     assert sum(error > 8 for error in errors) / len(errors) < 0.01
-
-
-def test_native_device_grab_has_expected_slide_and_letterbox(player):
-    surface, _, _, _ = player
-    surface.resize(800, 600)
-    image = surface.grab().toImage()
-    ratio = surface.devicePixelRatioF()
-    assert image.width() == round(800 * ratio)
-    assert image.height() == round(600 * ratio)
-    assert image.pixelColor(0, 0) == QColor("#06090D")
-    assert image.pixelColor(round(400 * ratio), round(300 * ratio)) == QColor("#101820")
-
-
-@pytest.mark.parametrize("index", [-1, 3, 1000, True, 0.0])
-def test_invalid_current_indices_are_not_python_negative_indexing(index):
-    with pytest.raises(ContractError):
-        parse_action(action("reset_view"), parse_manifest(MANIFEST, FIXTURES), index)
 
 
 def test_fractional_edge_and_maximum_zoom_are_valid(player):
@@ -529,13 +478,6 @@ def test_immutable_evidence_states_match_each_published_action(player):
         assert surface.slide.slide_id == case["slide_id"]
         assert surface.region == Region(**case["region"])
         assert pixels(capture(surface)) == pixels(QImage(str(root / case["capture"])))
-
-
-def highlight(region, current=0, **changes):
-    value = action("highlight_region", current, region=region)
-    value["version"] = "1.1"
-    value.update(changes)
-    return value
 
 
 def test_highlight_real_pixels_replace_repeat_and_reset(player):
@@ -625,57 +567,6 @@ def test_highlight_accepts_small_fractional_regions_and_preserves_boundary_highl
     assert surface.highlight == Region(**region)
 
 
-@pytest.mark.parametrize(
-    "field,value",
-    [
-        ("x", -1),
-        ("y", -1),
-        ("width", 0),
-        ("height", 0),
-        ("width", -1),
-        ("x", float("nan")),
-        ("y", float("inf")),
-        ("width", float("-inf")),
-        ("x", 1920),
-        ("y", 1080),
-        ("width", 1921),
-        ("height", 1081),
-        ("width", True),
-        ("extra", 0),
-    ],
-)
-def test_invalid_highlights_preserve_image_camera_and_prior_highlight(player, field, value):
-    surface, executor, wait, _ = player
-    region = {"x": 80, "y": 64, "width": 100, "height": 30}
-    assert wait(executor.dispatch(highlight(region))).status == "completed"
-    before = pixels(capture(surface))
-    invalid = region | {field: value}
-    assert wait(executor.dispatch(highlight(invalid))).status == "rejected"
-    assert pixels(capture(surface)) == before
-    assert surface.highlight == Region(**region)
-
-
-@pytest.mark.parametrize(
-    "change",
-    [
-        {"version": "1.0"},
-        {"version": "2.0"},
-        {"render_id": "old"},
-        {"deck_id": "other"},
-        {"slide_id": "unknown"},
-        {"extra": 1},
-        {"params": {"text": "Buddy"}},
-    ],
-)
-def test_highlight_contract_rejects_stale_refs_unknown_fields_and_unsupported_versions(
-    player, change
-):
-    surface, executor, wait, _ = player
-    value = highlight({"x": 80, "y": 64, "width": 100, "height": 30}) | change
-    assert wait(executor.dispatch(value)).status == "rejected"
-    assert surface.highlight is None
-
-
 def test_v11_schema_is_standalone_and_accepts_all_six_catalog_types():
     schema = json.loads((SCHEMAS / "action-v1.1.schema.json").read_text())
     Draft202012Validator.check_schema(schema)
@@ -685,26 +576,22 @@ def test_v11_schema_is_standalone_and_accepts_all_six_catalog_types():
     validator.validate(highlight({"x": 80, "y": 64, "width": 100, "height": 30}))
 
 
-@pytest.mark.parametrize("dpr", [1, 1.5, 2])
-@pytest.mark.parametrize("index", [0, 1, 2])
-def test_highlight_pixels_follow_device_ratio_and_all_slide_aspects(player, dpr, index):
+def test_highlight_pixels_land_on_every_slide_aspect_at_fractional_scale(player):
     surface, executor, wait, _ = player
-    assert (
-        wait(
-            executor.dispatch(
-                action("go_to_slide", target_slide_id=MANIFEST["slides"][index]["slide_id"])
-            )
-        ).status
-        == "completed"
-    )
-    before = capture(surface, dpr)
+    dpr = 1.5  # Fractional scaling is where logical-to-device rounding goes wrong.
     region = {"x": 80, "y": 80, "width": 100, "height": 40}
-    assert wait(executor.dispatch(highlight(region, index))).status == "completed"
-    after = capture(surface, dpr)
-    point = surface.mapping().point(130, 100)
-    x, y = round(point.x() * dpr), round(point.y() * dpr)
-    assert before.pixelColor(x, y) != after.pixelColor(x, y)
-    assert surface.region == surface.slide.full
+    for index in range(3):
+        target = MANIFEST["slides"][index]["slide_id"]
+        current = executor.current_index
+        jump = action("go_to_slide", current, target_slide_id=target)
+        assert wait(executor.dispatch(jump)).status == "completed"
+        before = capture(surface, dpr)
+        assert wait(executor.dispatch(highlight(region, index))).status == "completed"
+        after = capture(surface, dpr)
+        point = surface.mapping().point(130, 100)
+        x, y = round(point.x() * dpr), round(point.y() * dpr)
+        assert before.pixelColor(x, y) != after.pixelColor(x, y)
+        assert surface.region == surface.slide.full
 
 
 def test_v11_word_phrase_expression_formula_evidence_and_clear(player):

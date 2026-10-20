@@ -36,27 +36,28 @@ def profile(desktop_window, monkeypatch, qapp):
 
 
 def open_profile(window, qtbot):
-    qtbot.mouseClick(window.account_button, Qt.MouseButton.LeftButton)
+    window._show_account()
     qtbot.waitUntil(lambda: not window.account.runner.busy)
 
 
-@pytest.mark.parametrize("size", [(800, 600), (1200, 800)])
-def test_verified_profile_navigation_keyboard_and_layout(profile, qtbot, qapp, size):
+def test_verified_profile_navigation_keyboard_and_layout(profile, qtbot, qapp):
     window, response, calls = profile
     old_style, old_palette = qapp.styleSheet(), qapp.palette()
     apply_theme(qapp)
     try:
-        window.resize(*size)
+        window.resize(800, 600)  # The minimum window size is the binding layout constraint.
         response["data"]["email"] = "long" * 64 + "@example.test"
         window.account_button.setFocus()
         qtbot.keyClick(window.account_button, Qt.Key.Key_Space)
+        qtbot.waitUntil(lambda: not window.account.runner.busy)
+        qtbot.mouseClick(window.profile_action, Qt.MouseButton.LeftButton)
         qtbot.waitUntil(lambda: not window.account.runner.busy)
         page = window.profile
         assert window.pages.currentIndex() == 4 and window.navigation.count() == 4
         assert page.email.text() == response["data"]["email"]
         assert page.verification.text() == "Email verified"
         assert page.email.textFormat() == Qt.TextFormat.PlainText
-        assert len(calls) == 1 and calls[0][0] != get_ident()
+        assert calls and all(call[0] != get_ident() for call in calls)
         scroll = window.pages.currentWidget()
         assert isinstance(scroll, QScrollArea)
         qapp.processEvents()
@@ -67,7 +68,11 @@ def test_verified_profile_navigation_keyboard_and_layout(profile, qtbot, qapp, s
         window._show_account()
         qtbot.waitUntil(lambda: not window.account.runner.busy)
         page.controls.click()
-        assert window.pages.currentIndex() == 0 and page.email.text() == ""
+        assert window.account_popover.isVisible()
+        assert window.pages.currentIndex() == 4
+        window.account_popover.reject()
+        window.navigation.setCurrentRow(0)
+        assert page.email.text() == ""
     finally:
         qapp.setStyleSheet(old_style)
         qapp.setPalette(old_palette)
@@ -163,10 +168,52 @@ def test_signed_out_profile_has_account_guidance(desktop_window, qtbot):
     assert "Sign in" in window.profile.state.title.text()
     assert window.profile.email.text() == "" and not window.profile.refresh.isEnabled()
     window.profile.controls.click()
-    assert window.pages.currentIndex() == 0
+    assert window.account_popover.isVisible()
+    assert window.pages.currentIndex() == 4
 
 
-@pytest.mark.parametrize("action", ["signin", "signup", "recovery", "resume"])
+def test_browser_sign_in_remains_cancellable_after_popup_dismisses(profile, monkeypatch, qtbot):
+    window, _, _ = profile
+    account = window.account
+    assert account.session is not None
+    account.session.tokens = None
+    account.account_id = None
+    account.idle()
+    window._account_identity()
+    entered_browser, cancelled_browser = Event(), Event()
+
+    def wait_for_browser_cancel(_url, _state, cancelled, **_kwargs):
+        entered_browser.set()
+        assert cancelled.wait(5), "Browser authentication did not receive cancellation"
+        cancelled_browser.set()
+        raise IdentityError("Sign-in was cancelled.")
+
+    monkeypatch.setattr(auth, "browser_code", wait_for_browser_cancel)
+    window._show_account_controls()
+    qtbot.mouseClick(account.buttons["signin"], Qt.MouseButton.LeftButton)
+    try:
+        qtbot.waitUntil(entered_browser.is_set)
+        qtbot.waitUntil(lambda: window.cancel_auth_button.isVisible())
+
+        # The system browser takes focus and Qt dismisses the account popup. The
+        # main-window cancel action must remain available while OAuth is pending.
+        window.account_popover.hide()
+        assert not window.account_popover.isVisible()
+        assert window.cancel_auth_button.isVisible()
+        assert window.cancel_auth_button.isEnabled()
+        assert window.cancel_auth_button.accessibleName() == "Cancel browser sign-in"
+
+        qtbot.mouseClick(window.cancel_auth_button, Qt.MouseButton.LeftButton)
+        qtbot.waitUntil(cancelled_browser.is_set)
+        qtbot.waitUntil(lambda: not account.runner.busy)
+        assert not window.cancel_auth_button.isVisible()
+    finally:
+        account.cancel_operation()
+        account.runner.wait_for_shutdown()
+
+
+# Sign-up and recovery share sign-in's browser path; resume is the other token path.
+@pytest.mark.parametrize("action", ["signin", "resume"])
 @pytest.mark.parametrize("outcome", ["success", "failure", "cancel", "navigate"])
 def test_open_profile_during_authentication_tracks_completion(
     profile, monkeypatch, qtbot, action, outcome

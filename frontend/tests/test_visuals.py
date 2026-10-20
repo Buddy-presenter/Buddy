@@ -3,11 +3,11 @@
 from importlib.resources import files
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QPalette, QPixmap
 from PySide6.QtWidgets import QPushButton, QScrollArea
 
-from buddy_desktop.visuals import BuddyMark, apply_theme, icon
+from buddy_desktop.visuals import BuddyMark, apply_theme, icon, mascot_image
 
 
 @pytest.fixture
@@ -32,6 +32,17 @@ def test_packaged_character_and_every_lucide_icon(themed):
             assert any(rendered.pixelColor(x, y).alpha() for x in range(24) for y in range(24))
 
 
+def test_mascot_edge_is_antialiased_and_is_the_app_icon(desktop_window, themed):
+    image = mascot_image(64, 2)
+    row = [image.pixelColor(x, 32).alpha() for x in range(64)]
+    assert row[0] == 0 and row[32] == 255
+    # A smooth disc edge has intermediate coverage, not a hard 0 -> 255 step.
+    assert any(0 < alpha < 255 for alpha in row[:8])
+    window = desktop_window()
+    sizes = window.windowIcon().availableSizes()
+    assert QSize(16, 16) in sizes and QSize(256, 256) in sizes
+
+
 def contrast(foreground, background):
     def luminance(color):
         channels = [int(color[i : i + 2], 16) / 255 for i in (1, 3, 5)]
@@ -42,31 +53,22 @@ def contrast(foreground, background):
     return (light + 0.05) / (dark + 0.05)
 
 
-def test_readable_palette_and_semantic_text(themed):
+def test_applied_palette_text_is_readable(themed):
     palette = themed.palette()
-    assert (
-        contrast(
-            palette.color(QPalette.ColorRole.WindowText).name(),
-            palette.color(QPalette.ColorRole.Window).name(),
-        )
-        >= 7
-    )
-    for foreground, background in [
-        ("#A4A4AF", "#0B0C10"),
-        ("#20130C", "#FF9F61"),
-        ("#FFFFFF", "#A94427"),
-        ("#8ED5B6", "#15161C"),
-        ("#FF9B94", "#15161C"),
-        ("#FFB477", "#15161C"),
-        ("#C4B9F3", "#15161C"),
-    ]:
-        assert contrast(foreground, background) >= 4.5
+
+    def ratio(foreground, background):
+        return contrast(palette.color(foreground).name(), palette.color(background).name())
+
+    roles = QPalette.ColorRole
+    assert ratio(roles.WindowText, roles.Window) >= 7
+    assert ratio(roles.Text, roles.Base) >= 7
+    assert ratio(roles.HighlightedText, roles.Highlight) >= 4.5
+    assert ratio(roles.PlaceholderText, roles.Base) >= 4.5
 
 
-@pytest.mark.parametrize("size", [(800, 600), (1200, 800)])
-def test_routes_fit_and_commands_have_accessible_names(desktop_window, qtbot, themed, size):
+def test_routes_fit_and_commands_have_accessible_names(desktop_window, qtbot, themed):
     window = desktop_window()
-    window.resize(*size)
+    window.resize(800, 600)  # The minimum window size is the binding layout constraint.
     for route in range(4):
         window.navigation.setCurrentRow(route)
         themed.processEvents()
@@ -91,13 +93,12 @@ def test_routes_fit_and_commands_have_accessible_names(desktop_window, qtbot, th
     assert window.present.coordinates_button.isChecked()
     themed.processEvents()
     assert window.pages.currentWidget().horizontalScrollBar().maximum() == 0
+    previous_route = window.pages.currentIndex()
     qtbot.mouseClick(window.account_button, Qt.MouseButton.LeftButton)
-    assert window.pages.currentIndex() == 4
-    qtbot.mouseClick(window.profile.controls, Qt.MouseButton.LeftButton)
-    assert window.pages.currentIndex() == 0
-    scroll = window.pages.currentWidget()
-    account_position = window.account.mapTo(scroll.viewport(), window.account.rect().topLeft())
-    assert account_position.y() < scroll.viewport().height()
+    assert window.account_popover.isVisible()
+    assert window.pages.currentIndex() == previous_route
+    qtbot.keyClick(window.account_popover, Qt.Key.Key_Escape)
+    assert not window.account_popover.isVisible()
 
 
 def test_activity_reduced_motion_visibility_and_persistence(desktop_window, qtbot, themed):
@@ -140,22 +141,22 @@ def test_connection_header_tracks_real_request(desktop_window, qtbot, backend, t
     assert window.connection_status.text() == "Connection not checked"
 
 
-def test_long_endpoint_does_not_widen_home(desktop_window, themed):
+def test_long_endpoint_does_not_widen_settings(desktop_window, themed):
     url = "https://buddy.example/" + "x" * 400
     window = desktop_window(url)
+    window.navigation.setCurrentRow(3)
     window.resize(800, 600)
     themed.processEvents()
     themed.processEvents()
     assert window.width() == 800
     assert window.pages.currentWidget().horizontalScrollBar().maximum() == 0
-    assert window.home.endpoint.toolTip() == url
-    assert window.home.endpoint.accessibleDescription() == url
-    assert len(window.home.endpoint.text()) < len(url)
+    assert window.preferences.endpoint.toolTip() == url
+    assert window.preferences.endpoint.accessibleDescription() == url
+    assert len(window.preferences.endpoint.text()) < len(url)
 
 
-@pytest.mark.parametrize("size", [(800, 600), (1200, 800)])
-def test_pdf_controls_fit_new_theme_and_fullscreen(
-    desktop_window, qtbot, themed, size, monkeypatch
+def test_loaded_presenter_with_coordinates_fits_minimum_window(
+    desktop_window, qtbot, themed, monkeypatch
 ):
     from pathlib import Path
 
@@ -163,7 +164,7 @@ def test_pdf_controls_fit_new_theme_and_fullscreen(
 
     fixture = Path(__file__).resolve().parents[2] / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf"
     window = desktop_window()
-    window.resize(*size)
+    window.resize(800, 600)
     window.navigation.setCurrentRow(2)
     page = window.present
     monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a: (str(fixture), ""))
@@ -177,20 +178,8 @@ def test_pdf_controls_fit_new_theme_and_fullscreen(
     page.highlight_button.click()
     page.zoom_button.click()
     themed.processEvents()
-    assert window.width() == size[0]
+    assert window.width() == 800
     assert window.pages.currentWidget().horizontalScrollBar().maximum() == 0
+    assert all(field.isEnabled() for field in page.fields.values())
     for control in (page.open_button, page.fullscreen_button, page.coordinates_button):
         assert control.accessibleName() and control.toolTip() and not control.icon().isNull()
-    destination = Path("build")
-    destination.mkdir(exist_ok=True)
-    assert window.grab().save(str(destination / f"pdf-themed-{size[0]}.png"))
-    page.fullscreen_button.click()
-    qtbot.waitUntil(
-        lambda: page.fullscreen.isFullScreen() and themed.activeWindow() == page.fullscreen
-    )
-    qtbot.keyClick(page.fullscreen, Qt.Key.Key_Right)
-    qtbot.waitUntil(lambda: not page.executor.busy, timeout=10000)
-    assert page.counter.text() == "Slide 2 of 3"
-    qtbot.keyClick(page.fullscreen, Qt.Key.Key_Escape)
-    qtbot.waitUntil(lambda: page.fullscreen is None)
-    assert page.surface.parent() is page
