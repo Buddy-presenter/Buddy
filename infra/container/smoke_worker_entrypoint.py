@@ -3,11 +3,19 @@
 import hashlib
 import os
 
+from buddy_api.analysis.contracts import Manifest
 from buddy_api.analysis.provider import BedrockProvider, ModelOutput, ModelSlide, ModelSummary
+from buddy_api.extraction.contracts import Extraction
 from buddy_api.processing.__main__ import main
 
 
-def deterministic_analysis(self, content, extraction, deck_id, manifest):
+async def deterministic_analysis(
+    self: BedrockProvider,
+    content: bytes,
+    extraction: Extraction,
+    deck_id: str,
+    manifest: Manifest,
+) -> ModelOutput:
     expected = os.environ["BUDDY_SMOKE_PDF_SHA256"]
     actual = hashlib.sha256(content).hexdigest()
     if actual != expected or extraction.source_sha256 != expected:
@@ -26,5 +34,5 @@ def deterministic_analysis(self, content, extraction, deck_id, manifest):
     )
 
 
-BedrockProvider.analyze = deterministic_analysis
+BedrockProvider.analyze_async = deterministic_analysis
 raise SystemExit(main())

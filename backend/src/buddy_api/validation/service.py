@@ -284,20 +284,17 @@ class ValidationService:
             if row.status == "pending" and row.expires_at > datetime.now(UTC):
                 return
             row.status = "cleanup"
-            await session.flush()
-            owner_id, deck_id = row.owner_id, row.deck_id
-
-        # Keep the cleanup reservation committed while external storage is unavailable.
-        # Reconciliation can retry these exact private keys without blocking worker startup.
-        for kind in KINDS:
-            key = f"sources/{owner_id}/{deck_id}/validation/{identifier}/{kind}.{KINDS[kind][0]}"
-            await blocking(partial(self.uploads.storage.remove, key))
-
+        # The cleanup reservation is committed before external I/O so failures remain
+        # retryable. Re-lock it while deleting: validation may reuse a failed reservation,
+        # and an older cleaner must not delete evidence written by that retry.
         async with self.uploads.transaction() as session:
             row = await session.get(ActionCheck, identifier, with_for_update=True)
-            if row is not None and row.status == "cleanup":
-                row.status = "failed"
-                row.storage_bytes = 0
+            if row is None or row.status != "cleanup":
+                return
+            for kind in KINDS:
+                await blocking(partial(self.uploads.storage.remove, self.key(row, kind)))
+            row.status = "failed"
+            row.storage_bytes = 0
 
     async def reconcile(self) -> None:
         async with self.uploads.transaction() as session:

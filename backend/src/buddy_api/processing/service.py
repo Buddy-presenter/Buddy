@@ -29,7 +29,6 @@ from buddy_api.analysis.provider import (
     ModelOutput,
     ProviderFailure,
 )
-from buddy_api.analysis.rendering import render_manifest
 from buddy_api.analysis.store import Analyses
 from buddy_api.extraction.contracts import Extraction, ExtractionError
 from buddy_api.persistence.database import Database
@@ -44,7 +43,7 @@ from buddy_api.processing import store
 from buddy_api.processing.config import WorkerSettings
 from buddy_api.processing.contracts import Message, MetadataOutput, PDFSource
 from buddy_api.processing.queue import Queue
-from buddy_api.processing.stage import execute
+from buddy_api.processing.stage import execute, execute_manifest
 from buddy_api.uploads.contracts import UploadError
 from buddy_api.uploads.service import UploadService, blocking
 from buddy_api.uploads.storage import SourceStorage
@@ -260,7 +259,15 @@ class Processor:
                 except ValueError:
                     raise ExtractionError("saved_extraction_invalid") from None
                 alive, manifest = await fenced(
-                    blocking(partial(render_manifest, content, extraction, str(deck_id)))
+                    blocking(
+                        partial(
+                            execute_manifest,
+                            content,
+                            extraction,
+                            str(deck_id),
+                            min(120, self.settings.runtime_seconds - 15),
+                        )
+                    )
                 )
                 if not alive:
                     return

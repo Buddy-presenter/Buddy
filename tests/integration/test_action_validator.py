@@ -1,5 +1,6 @@
 """Real isolated executor, deterministic predefined actions, and private API evidence."""
 
+import asyncio
 import hashlib
 import json
 import sys
@@ -22,7 +23,7 @@ from backend.tests.support.database import database_settings as database_setting
 
 from buddy_api.persistence.models import ActionCheck, Deck
 from buddy_api.validation.config import ValidatorSettings
-from buddy_api.validation.contracts import ProcessRequest, ProcessResult
+from buddy_api.validation.contracts import ProcessRequest, ProcessResult, ValidationRequest
 from buddy_api.validation.runner import run_validation
 from buddy_api.validation.service import ValidationService
 
@@ -305,6 +306,81 @@ def test_evidence_failure_cleanup_retries_and_expired_run_reconciliation(upload_
                 assert (await session.get(ActionCheck, accepted.id)).status == "complete"
 
         client.portal.call(interrupted)
+
+
+@pytest.mark.postgres
+def test_concurrent_cleanup_cannot_delete_evidence_from_reused_reservation(upload_app):
+    with upload_app() as (client, cloud, uploads):
+        validator = ValidationService(uploads, ValidatorSettings(python=sys.executable))
+        client.app.state.validator = validator
+        body = {**metadata(CONTENT), "filename": "deck.pdf", "content_type": "application/pdf"}
+        identifier = initialize(client, body=body).json()["data"]["id"]
+        deck = client.put(
+            f"/api/v1/uploads/{identifier}/content",
+            content=CONTENT,
+            headers={"Content-Type": "application/pdf"},
+        ).json()["data"]["deck"]
+        request = {"action": action(identifier, revision=deck["source_revision"])}
+        retry_key = uuid4()
+        endpoint = f"/api/v1/decks/{identifier}/action-validations"
+        initial = client.post(endpoint, json=request, headers={"Idempotency-Key": str(retry_key)})
+        assert initial.status_code == 200, initial.text
+        check_id = UUID(initial.json()["data"]["id"])
+
+        async def prepare():
+            async with uploads.transaction() as session:
+                row = await session.get(ActionCheck, check_id)
+                assert row is not None and row.status == "complete"
+                owner_id, deck_id = row.owner_id, row.deck_id
+                row.status = "cleanup"
+            return owner_id, deck_id
+
+        owner_id, deck_id = client.portal.call(prepare)
+        started, release = Event(), Event()
+        remove = uploads.storage.remove
+
+        def blocked_remove(key):
+            if not started.is_set():
+                started.set()
+                if not release.wait(10):
+                    raise TimeoutError("test cleanup barrier timed out")
+            remove(key)
+
+        uploads.storage.remove = blocked_remove
+
+        async def race():
+            first = asyncio.create_task(validator.cleanup(check_id))
+            assert await asyncio.to_thread(started.wait, 10)
+            second = asyncio.create_task(validator.cleanup(check_id))
+            retry = asyncio.create_task(
+                validator.validate(
+                    owner_id,
+                    deck_id,
+                    retry_key,
+                    ValidationRequest.model_validate(request),
+                )
+            )
+            await asyncio.sleep(0.1)
+            assert not retry.done()
+            release.set()
+            await asyncio.gather(first, second)
+            result = await retry
+            assert result.id == check_id
+
+        try:
+            client.portal.call(race)
+        finally:
+            release.set()
+
+        async def verify_completed():
+            async with uploads.transaction() as session:
+                completed = await session.get(ActionCheck, check_id)
+                assert completed.status == "complete"
+                for artifact in completed.artifacts:
+                    key = validator.key(completed, artifact["kind"])
+                    assert cloud.objects[key][0] == artifact["version"]
+
+        client.portal.call(verify_completed)
 
 
 @pytest.mark.postgres
