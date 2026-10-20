@@ -255,6 +255,7 @@ def test_pending_validation_defers_without_spending_attempt_and_resumes_analysis
 
             waiting = await row(db, job.id)
             assert waiting.status == "retry_wait"
+            assert waiting.stage == "validation"
             assert waiting.attempts == 0
             assert waiting.extraction_id is not None
             assert provider.calls == 1 and validator.calls == 1
@@ -271,6 +272,7 @@ def test_pending_validation_defers_without_spending_attempt_and_resumes_analysis
             assert not failures, failures
 
             finished = await row(db, job.id)
+            assert finished.stage == "validation" and finished.stage_state == "succeeded"
             assert (finished.status, finished.error_code, finished.attempts) == (
                 "analysis_ready",
                 None,
@@ -433,8 +435,15 @@ def test_cancel_retry_race_fences_outputs_and_partial_persistence_rolls_back(mig
             async with db.sessions() as session, session.begin():
                 claimed = await store.claim(session, Message(job_id=job.id, generation=0), WORKER)
                 token = claimed.lease_id
+                assert await store.advance_stage(session, job.id, token, "provider", 60)
+                claimed = await session.get(ProcessingJob, job.id)
+                assert claimed.stage == "provider" and claimed.progress == 60
+                assert await store.advance_stage(session, job.id, token, "validation", 80)
+                assert claimed.stage == "validation" and claimed.progress == 80
             async with db.sessions() as session, session.begin():
                 await store.cancel(session, await store.owned(session, owner.id, job.id))
+            async with db.sessions() as session, session.begin():
+                assert not await store.advance_stage(session, job.id, token, "provider", 60)
             async with db.sessions() as session, session.begin():
                 assert await store.save_metadata(session, job.id, token, output) is None
                 await store.retry(session, await store.owned(session, owner.id, job.id), WORKER)

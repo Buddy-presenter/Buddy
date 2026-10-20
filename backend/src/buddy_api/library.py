@@ -14,7 +14,7 @@ from starlette.responses import Response
 
 from buddy_api.auth import Principal, authenticated
 from buddy_api.contracts import ErrorResponse
-from buddy_api.persistence.models import AnalysisVersion, Deck, ProcessingJob
+from buddy_api.persistence.models import AnalysisVersion, Deck, DeckExtraction, ProcessingJob
 from buddy_api.uploads.contracts import UploadError
 from buddy_api.uploads.router import service
 from buddy_api.uploads.service import blocking
@@ -27,6 +27,29 @@ class DeckStatus(StrEnum):
     FAILED = "failed"
     READY = "ready"
     INCOMPLETE = "incomplete"
+
+
+class ProcessingState(StrEnum):
+    UPLOADED = "uploaded"
+    QUEUED = "queued"
+    INSPECTING = "inspecting_pdf_metadata"
+    ANALYZING = "analyzing"
+    VALIDATING = "validating"
+    REVIEW_READY = "review_ready"
+    PARTIAL = "partial"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class LibraryProcessing(BaseModel):
+    job_id: UUID | None = None
+    state: ProcessingState
+    stage: str | None = None
+    progress: int = Field(ge=0, le=100)
+    attempts: int = Field(ge=0)
+    error_code: str | None = Field(default=None, max_length=64)
+    can_retry: bool = False
+    can_cancel: bool = False
 
 
 class LibrarySort(StrEnum):
@@ -44,6 +67,7 @@ class LibraryDeck(BaseModel):
     attempts: int = Field(ge=0)
     source_format: Literal["pptx", "pdf"] = "pptx"
     can_present: bool = False
+    processing: LibraryProcessing | None = None
 
 
 class LibraryData(BaseModel):
@@ -100,6 +124,30 @@ def library_router() -> APIRouter:
             .correlate(Deck)
             .scalar_subquery()
         )
+        current_extraction = (
+            select(AnalysisVersion.extraction_id)
+            .where(AnalysisVersion.id == current_analysis)
+            .correlate(Deck)
+            .scalar_subquery()
+        )
+        analysis_source_revision = (
+            select(DeckExtraction.source_revision)
+            .where(DeckExtraction.id == current_extraction)
+            .correlate(Deck)
+            .scalar_subquery()
+        )
+        analysis_source_sha256 = (
+            select(DeckExtraction.source_sha256)
+            .where(DeckExtraction.id == current_extraction)
+            .correlate(Deck)
+            .scalar_subquery()
+        )
+        analysis_source_format = (
+            select(DeckExtraction.document["source_format"].as_string())
+            .where(DeckExtraction.id == current_extraction)
+            .correlate(Deck)
+            .scalar_subquery()
+        )
         order = {
             LibrarySort.NEWEST: Deck.created_at.desc(),
             LibrarySort.OLDEST: Deck.created_at.asc(),
@@ -112,8 +160,15 @@ def library_router() -> APIRouter:
                 ProcessingJob.id,
                 ProcessingJob.status,
                 ProcessingJob.attempts,
+                ProcessingJob.stage,
+                ProcessingJob.progress,
+                ProcessingJob.error_code,
+                ProcessingJob.source_revision,
                 AnalysisVersion.job_id,
                 AnalysisVersion.publication,
+                analysis_source_revision,
+                analysis_source_sha256,
+                analysis_source_format,
             )
             .outerjoin(ProcessingJob, ProcessingJob.id == latest_job)
             .outerjoin(AnalysisVersion, AnalysisVersion.id == current_analysis)
@@ -129,8 +184,36 @@ def library_router() -> APIRouter:
                 total = await session.scalar(select(func.count()).select_from(Deck).where(*filters))
                 records = (await session.execute(query)).all()
                 items = []
-                for deck, job_id, job_status, attempts, analysis_job_id, publication in records:
-                    has_analysis = analysis_job_id == job_id and publication == "published"
+                worker_settings = request.app.state.worker_settings
+                for (
+                    deck,
+                    job_id,
+                    job_status,
+                    attempts,
+                    job_stage,
+                    progress,
+                    error_code,
+                    job_revision,
+                    analysis_job_id,
+                    publication,
+                    analysis_revision,
+                    analysis_sha256,
+                    analysis_format,
+                ) in records:
+                    analysis_matches_source = bool(
+                        analysis_revision == deck.source_revision
+                        and analysis_sha256 == deck.source_sha256
+                        and (deck.source_format != "pdf" or analysis_format == "pdf")
+                    )
+                    source_matches = bool(
+                        job_id and job_revision and job_revision == deck.source_revision
+                    )
+                    has_analysis = (
+                        source_matches
+                        and analysis_job_id == job_id
+                        and publication == "published"
+                        and analysis_matches_source
+                    )
                     # RenderedAsset currently has no slide identity, render revision, order,
                     # or checksum. Neither its presence nor a matching row count can prove
                     # that every raster in this analysis's manifest exists. Fail closed
@@ -158,6 +241,34 @@ def library_router() -> APIRouter:
                             else DeckStatus.INCOMPLETE
                         ),
                     }[job_status]
+                    processing_state = {
+                        None: ProcessingState.UPLOADED,
+                        "pending": ProcessingState.QUEUED,
+                        "queued": ProcessingState.QUEUED,
+                        "retry_wait": ProcessingState.QUEUED,
+                        "running": {
+                            "pdf_metadata.v1": ProcessingState.INSPECTING,
+                            "pdf_render": ProcessingState.ANALYZING,
+                            "provider": ProcessingState.ANALYZING,
+                            "pdf_analysis.v1": ProcessingState.ANALYZING,
+                            "validation": ProcessingState.VALIDATING,
+                        }.get(job_stage, ProcessingState.ANALYZING),
+                        "analysis_ready": ProcessingState.REVIEW_READY,
+                        "succeeded": ProcessingState.REVIEW_READY,
+                        "metadata_ready": ProcessingState.FAILED,
+                        "analysis_partial": ProcessingState.PARTIAL,
+                        "dead_letter": ProcessingState.FAILED,
+                        "failed": ProcessingState.FAILED,
+                        "cancelled": ProcessingState.CANCELLED,
+                    }[job_status]
+                    if processing_state == ProcessingState.REVIEW_READY and not has_analysis:
+                        processing_state = ProcessingState.FAILED
+                    retryable = job_status in {
+                        "metadata_ready",
+                        "dead_letter",
+                        "failed",
+                        "cancelled",
+                    }
                     items.append(
                         LibraryDeck(
                             id=deck.id,
@@ -168,6 +279,27 @@ def library_router() -> APIRouter:
                             source_format=deck.source_format,
                             can_present=deck.source_format == "pdf"
                             and bool(deck.source_version_id),
+                            processing=LibraryProcessing(
+                                job_id=job_id,
+                                state=processing_state,
+                                stage=job_stage,
+                                progress=progress or 0,
+                                attempts=attempts or 0,
+                                error_code=(
+                                    "analysis_unavailable"
+                                    if job_status in {"analysis_ready", "succeeded"}
+                                    and not has_analysis
+                                    else error_code
+                                ),
+                                can_retry=bool(
+                                    retryable
+                                    and worker_settings is not None
+                                    and attempts < worker_settings.max_attempts
+                                    and job_revision == deck.source_revision
+                                ),
+                                can_cancel=job_status in {"queued", "retry_wait", "running"}
+                                and source_matches,
+                            ),
                         )
                     )
         except (SQLAlchemyError, OSError, TimeoutError):

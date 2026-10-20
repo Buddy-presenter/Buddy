@@ -3,7 +3,7 @@ import time
 from datetime import UTC, datetime
 from threading import Event
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from PySide6.QtCore import Qt, QTimer
@@ -15,6 +15,8 @@ from buddy_desktop.library_service import (
     LibraryAccessExpired,
     LibraryPage,
     LibraryService,
+    ProcessingDetail,
+    ProcessingResult,
 )
 from buddy_desktop.services import ServiceError
 from buddy_desktop.visuals import apply_theme
@@ -49,6 +51,34 @@ def test_real_http_library_and_typed_payload(backend):
     page = service(backend).list("test-token", search="", sort="newest", page=1)
     assert page.items[0].title == "Saved deck"
     assert page.items[0].created_at.tzinfo is not None
+
+
+def test_processing_detail_is_typed_and_retry_calls_owned_job_endpoint(backend):
+    job_id = str(uuid4())
+    value = payload()
+    value["data"]["items"][0]["processing"] = {
+        "job_id": job_id,
+        "state": "failed",
+        "stage": "provider",
+        "progress": 60,
+        "attempts": 2,
+        "error_code": "provider_unavailable",
+        "can_retry": True,
+        "can_cancel": False,
+    }
+    backend.body = json.dumps(value).encode()
+    library = service(backend)
+    deck = library.list("test-token", search="", sort="newest", page=1).items[0]
+    assert deck.processing is not None
+    assert deck.processing.state == "failed" and deck.processing.can_retry
+    backend.body = json.dumps(
+        {"data": {"id": job_id, "status": "queued", "stage": "pdf_metadata.v1"}}
+    ).encode()
+    result = library.operate_job("test-token", UUID(job_id), "retry")
+    assert result.job_id == UUID(job_id) and result.status == "queued"
+    assert backend.method == "POST"
+    assert backend.path == f"/api/v1/jobs/{job_id}/retry"
+    assert backend.authorization == "Bearer test-token"
 
 
 @pytest.mark.parametrize("code", [401, 403, 429, 503, 302])
@@ -330,6 +360,43 @@ def test_poll_uses_current_filters_and_stops_when_leaving(desktop_window, monkey
     assert calls == ["", "Deck", "Deck"]
     window.navigation.setCurrentRow(0)
     assert not library.poll.isActive()
+
+
+def test_library_exposes_retry_for_failed_job_and_refreshes_after_action(
+    desktop_window, monkeypatch, qtbot
+):
+    job_id = uuid4()
+    deck = DeckSummary(
+        uuid4(),
+        "Failed PDF",
+        datetime.now(UTC),
+        "incomplete",
+        2,
+        "pdf",
+        True,
+        ProcessingDetail(job_id, "failed", "provider", 60, 2, "provider_unavailable", True, False),
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(
+        LibraryService,
+        "list",
+        lambda self, *args, **kwargs: LibraryPage((deck,), 1, 1, 20),
+    )
+
+    def operate(self, access, actual_job, operation):
+        calls.append(operation)
+        return ProcessingResult(actual_job, "queued", "pdf_metadata.v1")
+
+    monkeypatch.setattr(LibraryService, "operate_job", operate)
+    window = desktop_window()
+    library = signed_in(window)
+    qtbot.waitUntil(lambda: not library.runner.busy)
+    assert library.retry_job_button.isVisible()
+    assert not library.cancel_job_button.isVisible()
+    library.retry_job_button.click()
+    qtbot.waitUntil(lambda: not library.runner.busy and len(calls) == 1)
+    qtbot.waitUntil(lambda: library.table.rowCount() == 1)
+    assert calls == ["retry"]
 
 
 def test_native_layout_with_long_titles(desktop_window, monkeypatch, qtbot, qapp):

@@ -8,7 +8,13 @@ from sqlalchemy.exc import SQLAlchemyError
 from buddy_api.auth import CognitoVerifier, VerifiedIdentity
 from buddy_api.config import Environment, Settings
 from buddy_api.persistence.database import Database
-from buddy_api.persistence.models import AnalysisVersion, ProcessingJob, RenderedAsset
+from buddy_api.persistence.models import (
+    AnalysisVersion,
+    Deck,
+    DeckExtraction,
+    ProcessingJob,
+    RenderedAsset,
+)
 from buddy_api.persistence.repositories import Repositories
 from buddy_identity.config import IdentityConfig, SessionExpired
 
@@ -264,3 +270,64 @@ def test_new_candidate_revision_is_not_hidden_by_old_published_revision(library_
         historical = client.get(f"/api/v1/analyses/{identifier}", headers=HEADERS)
         assert historical.status_code == 200
         assert historical.json()["data"]["publication"] == publication
+
+
+@pytest.mark.postgres
+def test_processing_review_ready_requires_published_analysis_for_current_pdf_revision(library_api):
+    client, ids, owner, settings = library_api
+
+    async def seed():
+        db = Database(settings.database)
+        try:
+            async with db.sessions() as session, session.begin():
+                repos = Repositories.for_session(session)
+                deck = await session.get(Deck, ids[5])
+                job = ProcessingJob(owner_id=owner, deck_id=deck.id, status="analysis_ready")
+                job.stage, job.stage_state, job.progress, job.attempts = (
+                    "validation",
+                    "succeeded",
+                    100,
+                    1,
+                )
+                session.add(job)
+                await session.flush()
+                from backend.tests.support.analysis import create
+
+                analysis = await create(
+                    repos, owner_id=owner, deck_id=deck.id, job_id=job.id, actions=False
+                )
+                extraction = await session.get(DeckExtraction, analysis.extraction_id)
+                extraction.document = {**extraction.document, "source_format": "pdf"}
+                deck.source_format = "pdf"
+                deck.source_revision = job.source_revision = extraction.source_revision
+                deck.source_sha256 = extraction.source_sha256
+                deck.source_key = "private-pdf"
+                deck.source_version_id = "immutable-version"
+                deck.source_size_bytes = 100
+                return deck.id
+        finally:
+            await db.close()
+
+    deck_id = asyncio.run(seed())
+    response = client.get("/api/v1/decks", headers=HEADERS)
+    assert response.status_code == 200
+    item = next(row for row in response.json()["data"]["items"] if row["id"] == str(deck_id))
+    assert item["status"] == "incomplete"  # Legacy clients still require render proof.
+    assert item["processing"]["state"] == "review_ready"
+    assert item["processing"]["stage"] == "validation"
+    assert item["processing"]["progress"] == 100
+
+    async def change_source():
+        db = Database(settings.database)
+        try:
+            async with db.sessions() as session, session.begin():
+                deck = await session.get(Deck, deck_id)
+                deck.source_revision = "newer-source-revision"
+        finally:
+            await db.close()
+
+    asyncio.run(change_source())
+    stale = client.get("/api/v1/decks", headers=HEADERS).json()["data"]["items"]
+    stale_item = next(row for row in stale if row["id"] == str(deck_id))
+    assert stale_item["processing"]["state"] == "failed"
+    assert stale_item["processing"]["error_code"] == "analysis_unavailable"

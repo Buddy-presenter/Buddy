@@ -85,6 +85,13 @@ and marks `analysis_ready` only after every proposed action has a terminal recor
 Unavailable summaries produce `analysis_partial`; unsafe or uncertain actions remain
 rejected or needs-review and cannot be used.
 
+The library's additive processing detail mirrors these stored stages as uploaded, queued,
+PDF metadata inspection, analysis, validation, review ready, partial, failed or cancelled.
+The worker persists render/provider/validation transitions under its lease; expired workers
+cannot advance a newer attempt. A retry reuses source-bound metadata and saved analysis,
+while publication and validation identities keep repeated writes from duplicating outputs.
+The older coarse library status remains unchanged for old desktop clients.
+
 Migration 0010 expands the existing status CHECK without rewriting legacy records.
 Jobs with NULL `source_revision` are legacy and are not claimed, reconciled or controlled
 by the new worker. Compatibility library mapping:
@@ -97,6 +104,11 @@ by the new worker. Compatibility library mapping:
 | succeeded | existing analysis/render-proof mapping, otherwise incomplete |
 | metadata_ready / analysis_partial / cancelled | incomplete |
 | analysis_ready | ready only if separate complete render evidence exists; currently incomplete |
+
+New clients also consume `processing.state`: `metadata_ready` is shown as failed/recoverable
+and may be retried if the source is still current and the lifetime attempt budget allows it;
+`analysis_partial` remains reviewable, and only a latest published analysis for the current
+source revision is `review_ready`. The legacy status table above is retained for older apps.
 
 PDF presentation remains available directly from its pinned original. Metadata-ready is
 not analysis-ready or review-ready. Old four-state records and new-state mapping have
