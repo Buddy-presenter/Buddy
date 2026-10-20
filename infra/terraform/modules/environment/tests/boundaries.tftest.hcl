@@ -32,7 +32,7 @@ run "private_staging_before_images_exist" {
       aws_cloudwatch_metric_alarm.dead_letters.threshold == 0 &&
       aws_cloudwatch_metric_alarm.worker_dead_letter.dimensions.Outcome == "dead_letter" &&
       aws_cloudwatch_metric_alarm.worker_retry.dimensions.Outcome == "retry" &&
-      aws_cloudwatch_metric_alarm.queue_age.alarm_actions[0] == "arn:aws:sns:eu-central-1:123456789012:buddy-staging-operations-alerts"
+      contains(aws_cloudwatch_metric_alarm.queue_age.alarm_actions, "arn:aws:sns:eu-central-1:123456789012:buddy-staging-operations-alerts")
     )
     error_message = "Staging must provision actionable queue/job alarms connected to the operations topic and a real dashboard."
   }
