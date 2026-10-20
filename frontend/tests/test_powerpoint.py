@@ -412,7 +412,7 @@ def test_powerpoint_takes_available_page_space_when_no_pdf_is_loaded(desktop_win
     from buddy_desktop.powerpoint import PresentationInfo
 
     window = desktop_window()
-    window.navigation.setCurrentRow(2)
+    window.navigation.setCurrentRow(3)
     page = window.present
     assert page.surface.isVisible()
     assert page.pdf_controls.isVisible()

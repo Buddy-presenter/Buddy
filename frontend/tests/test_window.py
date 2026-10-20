@@ -25,8 +25,8 @@ def test_keyboard_navigation(qtbot, qapp, tmp_path):
     qapp.processEvents()
     qtbot.keyClick(window.navigation, Qt.Key.Key_Down)
     assert window.pages.currentIndex() == 1
-    qtbot.keyClick(window, Qt.Key.Key_4, modifier=Qt.KeyboardModifier.AltModifier)
-    assert window.pages.currentIndex() == 3
+    qtbot.keyClick(window, Qt.Key.Key_5, modifier=Qt.KeyboardModifier.AltModifier)
+    assert window.pages.currentIndex() == 4
 
 
 def test_settings_persist_and_invalid_input_does_not_replace_config(qtbot, tmp_path, monkeypatch):
@@ -76,8 +76,8 @@ def test_real_http_check_keeps_ui_responsive_and_returns_through_signals(qtbot, 
     qtbot.waitUntil(backend.entered.is_set)
     qtbot.waitUntil(lambda: len(ticks) >= 3)
     assert not window.preferences.check.isEnabled()
-    window.navigation.setCurrentRow(3)
-    assert window.pages.currentIndex() == 3
+    window.navigation.setCurrentRow(4)
+    assert window.pages.currentIndex() == 4
     assert window.runner.busy
     backend.release.set()
     qtbot.waitUntil(lambda: not window.runner.busy)
@@ -88,7 +88,7 @@ def test_real_http_check_keeps_ui_responsive_and_returns_through_signals(qtbot, 
 def test_backend_failure_can_be_retried(qtbot, tmp_path, backend):
     window = make_window(qtbot, tmp_path, f"http://127.0.0.1:{backend.server_port}")
     backend.response_code = 404
-    window.navigation.setCurrentRow(3)
+    window.navigation.setCurrentRow(4)
     window.check_connection()
     qtbot.waitUntil(lambda: not window.runner.busy)
     assert window.preferences.connection.retry.isVisible()

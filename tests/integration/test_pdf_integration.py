@@ -74,7 +74,7 @@ def test_pdf_upload_and_open_from_library_with_real_transport(
             assert cloud.puts == 1
             library.open_button.click()
             qtbot.waitUntil(lambda: window.present.executor.manifest is not None, timeout=15000)
-            assert window.navigation.currentRow() == 2
+            assert window.navigation.currentRow() == 3
             manifest = window.present.executor.manifest
             assert len(manifest.slides) == 3
             assert manifest.pdf_content == FIXTURE.read_bytes()

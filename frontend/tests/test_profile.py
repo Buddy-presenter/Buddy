@@ -53,7 +53,7 @@ def test_verified_profile_navigation_keyboard_and_layout(profile, qtbot, qapp):
         qtbot.mouseClick(window.profile_action, Qt.MouseButton.LeftButton)
         qtbot.waitUntil(lambda: not window.account.runner.busy)
         page = window.profile
-        assert window.pages.currentIndex() == 4 and window.navigation.count() == 4
+        assert window.pages.currentIndex() == 5 and window.navigation.count() == 5
         assert page.email.text() == response["data"]["email"]
         assert page.verification.text() == "Email verified"
         assert page.email.textFormat() == Qt.TextFormat.PlainText
@@ -63,13 +63,13 @@ def test_verified_profile_navigation_keyboard_and_layout(profile, qtbot, qapp):
         qapp.processEvents()
         assert scroll.horizontalScrollBar().maximum() == 0
         assert page.refresh.accessibleName() and page.controls.accessibleName()
-        window.navigation.setCurrentRow(3)
+        window.navigation.setCurrentRow(4)
         assert page.email.text() == ""
         window._show_account()
         qtbot.waitUntil(lambda: not window.account.runner.busy)
         page.controls.click()
         assert window.account_popover.isVisible()
-        assert window.pages.currentIndex() == 4
+        assert window.pages.currentIndex() == 5
         window.account_popover.reject()
         window.navigation.setCurrentRow(0)
         assert page.email.text() == ""
@@ -169,7 +169,7 @@ def test_signed_out_profile_has_account_guidance(desktop_window, qtbot):
     assert window.profile.email.text() == "" and not window.profile.refresh.isEnabled()
     window.profile.controls.click()
     assert window.account_popover.isVisible()
-    assert window.pages.currentIndex() == 4
+    assert window.pages.currentIndex() == 5
 
 
 def test_browser_sign_in_remains_cancellable_after_popup_dismisses(profile, monkeypatch, qtbot):

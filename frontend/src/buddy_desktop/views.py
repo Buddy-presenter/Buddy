@@ -196,7 +196,7 @@ class HomePage(Page):
         self.library_action = StartCard(
             "library-big", "Library", "Upload and manage the decks saved to your account."
         )
-        for button, route in ((self.present_action, 2), (self.library_action, 1)):
+        for button, route in ((self.present_action, 3), (self.library_action, 1)):
             button.clicked.connect(lambda checked=False, row=route: self.route_requested.emit(row))
             actions.addWidget(button, 1)
         layout.addLayout(actions)
