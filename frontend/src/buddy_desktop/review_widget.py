@@ -127,6 +127,7 @@ class ReviewWidget(Page):
         self.closing = False
         self.account_busy = False
         self.pending_operation = ""
+        self.pending_load = False
 
         toolbar = QHBoxLayout()
         self.back = QPushButton("Back to library")
@@ -242,17 +243,18 @@ class ReviewWidget(Page):
     def set_deck(self, deck_id: UUID, title: str, status: str = "uploaded") -> None:
         self.deck_id, self.deck_title, self.deck_status = deck_id, title, status
         self.clear_private(keep_deck=True)
+        self.pending_load = True
+        if self.active:
+            self.load()
 
     def activate(self, active: bool) -> None:
         self.active = active
-        if (
-            active
-            and self.deck_id is not None
-            and self.token()
-            and not self.runner.busy
-            and self.pdf_content is None
-        ):
-            self.load()
+        if active and self.deck_id is not None and self.token() and self.pdf_content is None:
+            if self.runner.busy:
+                if self.request_generation != self.generation:
+                    self.pending_load = True
+            else:
+                self.load()
 
     def account_activity(self, busy: bool) -> None:
         self.account_busy = busy
@@ -299,14 +301,19 @@ class ReviewWidget(Page):
         self.summary.clear()
         self.slide_summary.clear()
         self.content.hide()
+        self.pending_load = False
         if not keep_deck:
             self.deck_id = None
             self.deck_title = ""
 
     def load(self) -> None:
         deck_id, deck_status, access = self.deck_id, self.deck_status, self.token()
-        if deck_id is None or not access or self.runner.busy or self.closing:
+        if deck_id is None or not access or self.closing:
             return
+        if self.runner.busy:
+            self.pending_load = True
+            return
+        self.pending_load = False
         self.generation += 1
         self.request_generation = self.generation
         self.pending_operation = "load"
@@ -443,6 +450,15 @@ class ReviewWidget(Page):
         self.content.hide()
 
     def idle(self) -> None:
+        if (
+            self.pending_load
+            and self.active
+            and self.deck_id is not None
+            and self.token()
+            and not self.closing
+        ):
+            self.load()
+            return
         self.activity_changed.emit(False)
 
     def show_page(self, index: int) -> None:

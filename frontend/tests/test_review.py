@@ -201,3 +201,70 @@ def test_review_widget_loads_read_only_saved_page_and_clears_on_signout(
     assert review.pdf_content is None
     assert review.analysis is None
     assert review.action_table.rowCount() == 0
+
+
+def test_review_queues_new_deck_while_stale_load_is_finishing(desktop_window, monkeypatch, qtbot):
+    content = b"%PDF-1.7 queued review fixture"
+    digest = hashlib.sha256(content).hexdigest()
+    first_deck, first_payload = analysis_payload(source_sha256=digest)
+    second_deck, second_payload = analysis_payload(source_sha256=digest)
+    first_record = parse_analysis(first_payload, first_deck)
+    second_record = parse_analysis(second_payload, second_deck)
+    first_started, release_first = Event(), Event()
+    second_started, release_second = Event(), Event()
+    calls = []
+
+    def analysis(_service, deck_id):
+        calls.append(deck_id)
+        if deck_id == first_deck:
+            first_started.set()
+            if not release_first.wait(5):
+                raise TimeoutError("First review request was not released.")
+            return first_record
+        second_started.set()
+        if not release_second.wait(5):
+            raise TimeoutError("Second review request was not released.")
+        return second_record
+
+    monkeypatch.setattr(ReviewService, "analysis", analysis)
+    monkeypatch.setattr(
+        ReviewService,
+        "source",
+        lambda _self, deck_id: DownloadedPDF(content, str(deck_id), "revision-1"),
+    )
+    image = QImage(100, 100, QImage.Format.Format_ARGB32)
+    image.fill(QColor("white"))
+    monkeypatch.setattr(
+        review_widget,
+        "render",
+        lambda _content, _index: ({"sizes": [[100, 100]]}, image.copy()),
+    )
+    window = desktop_window()
+    window.account.session = SimpleNamespace(
+        tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
+    )
+    window.account.session_changed.emit()
+    review = window.review
+
+    try:
+        review.set_deck(first_deck, "First deck")
+        review.activate(True)
+        qtbot.waitUntil(first_started.is_set)
+
+        review.activate(False)
+        review.set_deck(second_deck, "Second deck")
+        review.activate(True)
+        assert review.pending_load
+
+        release_first.set()
+        qtbot.waitUntil(second_started.is_set)
+        assert calls == [first_deck, second_deck]
+        assert review.analysis is None
+
+        release_second.set()
+        qtbot.waitUntil(lambda: not review.runner.busy and not review.content.isHidden())
+        assert review.heading.text() == "Second deck"
+        assert review.analysis is second_record
+    finally:
+        release_first.set()
+        release_second.set()
