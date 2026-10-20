@@ -7,6 +7,7 @@ import json
 import re
 import secrets
 import subprocess
+import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -234,22 +235,18 @@ class Acceptance:
         password = base64.b64decode(auth["authorizationToken"]).decode().split(":", 1)[1]
         registry = f"{ACCOUNT}.dkr.ecr.{REGION}.amazonaws.com"
         target = registry + "/" + REPOSITORY + ":" + s["image_tag"]
-        # Docker credentials exist only in a temporary WSL directory, removed even on failure.
-        code = """import subprocess,sys,tempfile
-password=sys.stdin.read()
-with tempfile.TemporaryDirectory(prefix='buddy-acceptance-docker-') as folder:
-    prefix=['docker','--config',folder]
-    subprocess.run(prefix+['login','--username','AWS','--password-stdin',sys.argv[1]],input=password,text=True,check=True)
-    subprocess.run(prefix+['tag',sys.argv[2],sys.argv[3]],check=True)
-    subprocess.run(prefix+['push',sys.argv[3]],check=True)
-"""
-        subprocess.run(
-            ["wsl", "--exec", "python3", "-c", code, registry, image, target],
-            input=password,
-            text=True,
-            check=True,
-            timeout=420,
-        )
+        # Docker credentials exist only in a temporary config, removed even on failure.
+        with tempfile.TemporaryDirectory(prefix="buddy-acceptance-docker-") as folder:
+            prefix = ["docker", "--config", folder]
+            subprocess.run(
+                prefix + ["login", "--username", "AWS", "--password-stdin", registry],
+                input=password,
+                text=True,
+                check=True,
+                timeout=60,
+            )
+            subprocess.run(prefix + ["tag", image, target], check=True, timeout=60)
+            subprocess.run(prefix + ["push", target], check=True, timeout=420)
         digest = self.client("ecr").describe_images(
             repositoryName=REPOSITORY, imageIds=[{"imageTag": s["image_tag"]}]
         )["imageDetails"][0]["imageDigest"]
@@ -340,7 +337,30 @@ with tempfile.TemporaryDirectory(prefix='buddy-acceptance-docker-') as folder:
                     ],
                     s["queue_arn"],
                 ),
+                statement(
+                    ["bedrock:InvokeModel"],
+                    [
+                        f"arn:aws:bedrock:{REGION}:{ACCOUNT}:inference-profile/eu.anthropic.claude-sonnet-4-6",
+                        f"arn:aws:bedrock:{REGION}::foundation-model/anthropic.claude-sonnet-4-6",
+                        "arn:aws:bedrock:eu-north-1::foundation-model/anthropic.claude-sonnet-4-6",
+                        "arn:aws:bedrock:eu-west-3::foundation-model/anthropic.claude-sonnet-4-6",
+                        "arn:aws:bedrock:eu-south-1::foundation-model/anthropic.claude-sonnet-4-6",
+                        "arn:aws:bedrock:eu-south-2::foundation-model/anthropic.claude-sonnet-4-6",
+                        "arn:aws:bedrock:eu-west-1::foundation-model/anthropic.claude-sonnet-4-6",
+                        f"arn:aws:bedrock:{REGION}:{ACCOUNT}:project/default",
+                    ],
+                ),
                 kms(["kms:Decrypt"], [f"s3.{REGION}.amazonaws.com", f"sqs.{REGION}.amazonaws.com"]),
+                statement(
+                    ["s3:ListBucketVersions"],
+                    f"arn:aws:s3:::{BUCKET}",
+                    Condition={"StringLike": {"s3:prefix": "sources/*/*/validation/*"}},
+                ),
+                statement(
+                    ["s3:PutObject", "s3:DeleteObjectVersion"],
+                    f"arn:aws:s3:::{BUCKET}/sources/*/*/validation/*",
+                ),
+                kms(["kms:GenerateDataKey"], f"s3.{REGION}.amazonaws.com"),
             ],
         )
         self.controller_policy = [
@@ -510,6 +530,7 @@ with tempfile.TemporaryDirectory(prefix='buddy-acceptance-docker-') as folder:
                 "started",
                 "acceptance_result",
                 "acceptance_failed",
+                "unexpected_job_state",
                 "initial_processing_passed",
                 "fault_injected_waiting_for_replacement",
                 "replacement_recovery_passed",

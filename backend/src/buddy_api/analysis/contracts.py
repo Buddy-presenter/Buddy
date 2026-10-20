@@ -142,7 +142,7 @@ class AnalysisInput(Model):
         if [s.slide_id for s in self.slides] != [s.slide_id for s in self.manifest.slides]:
             raise ValueError("Every manifest slide must occur exactly once in order.")
         ids: set[str] = set()
-        for slide, rendered in zip(self.slides, self.manifest.slides, strict=True):
+        for slide, _rendered in zip(self.slides, self.manifest.slides, strict=True):
             for action in slide.actions:
                 if action.instance_id in ids:
                     raise ValueError("Duplicate action instance ID.")
@@ -153,16 +153,9 @@ class AnalysisInput(Model):
                     slide.slide_id,
                 ):
                     raise ValueError("Stale action references.")
-                region = action.params.region
-                if region.x + region.width > rendered.source.width or (
-                    region.y + region.height > rendered.source.height
-                ):
-                    raise ValueError("Action region exceeds source bounds.")
-                if action.type == "zoom_region" and (
-                    region.width < rendered.source.width / 32
-                    or region.height < rendered.source.height / 32
-                ):
-                    raise ValueError("Zoom exceeds catalog magnification limit.")
+                # Keep bounded model suggestions even when their geometry is unsafe.
+                # The isolated executor must see and reject them so the published
+                # analysis preserves the suggestion together with its reason/evidence.
         if len(ids) > 1000 or len(self.model_dump_json().encode()) > 8 * 1024 * 1024:
             raise ValueError("Analysis exceeds the bounded record limit.")
         return self

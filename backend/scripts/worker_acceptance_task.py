@@ -1,13 +1,16 @@
 """Operator-invoked ECS acceptance payload; never a deployed application entry point."""
 
 import asyncio
+import hashlib
 import json
 import os
 import re
 import ssl
 import sys
+import tempfile
 import time
 from datetime import timedelta
+from pathlib import Path
 
 import asyncpg
 import boto3
@@ -262,6 +265,27 @@ async def permissions(config):
                 }
                 denied += 1
         assert denied == 4, "Worker task role exceeded its privileges"
+        evidence_key = f"sources/acceptance/{config['run']}/validation/permission-check.json"
+        evidence = b'{"acceptance":"issue12"}'
+        saved = False
+        with tempfile.TemporaryDirectory(prefix="buddy-evidence-permission-") as directory:
+            path = Path(directory) / "report.json"
+            path.write_bytes(evidence)
+            try:
+                storage.put(
+                    evidence_key,
+                    path,
+                    size=len(evidence),
+                    sha256=hashlib.sha256(evidence).hexdigest(),
+                    revision=config["run"],
+                    content_type="application/json",
+                )
+                saved = True
+                storage.remove(evidence_key)
+                saved = False
+            finally:
+                if saved:
+                    storage.remove(evidence_key)
     finally:
         storage.close()
     return {
@@ -269,7 +293,8 @@ async def permissions(config):
             "runtime_role_tls",
             "runtime_ddl_and_version_writes_denied",
             "worker_version_pinned_s3_read",
-            "worker_s3_write_delete_denied",
+            "worker_source_write_delete_denied",
+            "worker_encrypted_evidence_write_and_version_cleanup",
             "worker_queue_publish_denied",
             "worker_admin_secret_denied",
         ]
@@ -294,13 +319,28 @@ async def exercise(config):
             (await session.get(JobOutbox, job.id)).available_at = store.now()
 
     async def wait(label, status):
+        expected = {status} if isinstance(status, str) else set(status)
+        terminal = {
+            "metadata_ready",
+            "analysis_ready",
+            "analysis_partial",
+            "dead_letter",
+            "cancelled",
+        }
         while time.monotonic() < deadline:
             await processor.maintain()
             async with database.sessions() as session:
                 job = await session.get(ProcessingJob, identifiers[label])
-            if job.status == status:
+            if job.status in expected:
                 return job
-            if job.status in {"dead_letter", "metadata_ready"}:
+            if job.status in terminal:
+                event(
+                    "unexpected_job_state",
+                    job=label,
+                    status=job.status,
+                    error_code=job.error_code,
+                    attempts=job.attempts,
+                )
                 raise RuntimeError("Unexpected terminal state for " + label)
             await asyncio.sleep(0.05 if status == "running" else 1)
         raise TimeoutError("Acceptance attempt budget exhausted")
@@ -310,7 +350,7 @@ async def exercise(config):
         await arm("bad")
         await processor.maintain()
         await asyncio.to_thread(queue.publish, Message(job_id=identifiers["good"], generation=0))
-        first = await wait("good", "metadata_ready")
+        first = await wait("good", {"analysis_ready", "analysis_partial"})
         assert first.attempts == 1
         bad = await wait("bad", "dead_letter")
         assert bad.error_code == "pdf_inspection_failed" and bad.extraction_id is None
@@ -335,7 +375,7 @@ async def exercise(config):
                 ecs.stop_task,
                 cluster=config["cluster"],
                 task=config["fault_task"],
-                reason="Isolated issue8 acceptance interruption",
+                reason="Isolated issue12 acceptance interruption",
             )
             await asyncio.to_thread(
                 ecs.get_waiter("tasks_stopped").wait,
@@ -344,7 +384,7 @@ async def exercise(config):
                 WaiterConfig={"Delay": 2, "MaxAttempts": 40},
             )
         event("fault_injected_waiting_for_replacement")
-        recovered = await wait("restart", "metadata_ready")
+        recovered = await wait("restart", {"analysis_ready", "analysis_partial"})
         assert recovered.attempts == 2 and recovered.extraction_id is not None
         checks.append("actual_task_interruption_and_replacement_recovery")
         event("replacement_recovery_passed")
@@ -360,7 +400,7 @@ async def exercise(config):
             cancelled = await store.owned(session, UUID(config["owner"]), identifiers["cancel"])
             assert cancelled.status == "cancelled" and cancelled.extraction_id is None
             await store.retry(session, cancelled, settings)
-        retried = await wait("cancel", "metadata_ready")
+        retried = await wait("cancel", {"analysis_ready", "analysis_partial"})
         assert retried.attempts == 2
         checks.append("running_cancellation_and_explicit_retry")
         async with database.transaction() as repos:
@@ -373,8 +413,39 @@ async def exercise(config):
                 assert all(
                     page["width"] > 0 and page["height"] > 0 for page in result.document["slides"]
                 )
-            assert await repos.analyses.list(owner_id=UUID(config["owner"])) == []
-        checks += ["durable_page_metadata_and_warnings", "no_false_analysis_success"]
+            analyses = await repos.analyses.list(owner_id=UUID(config["owner"]))
+            assert len(analyses) == 3
+            assert {analysis.job_id for analysis in analyses} == {
+                identifiers["good"],
+                identifiers["restart"],
+                identifiers["cancel"],
+            }
+            action_count = 0
+            for analysis in analyses:
+                result = await repos.analyses.read(analysis.id, owner_id=UUID(config["owner"]))
+                assert len(result.slides) == 3
+                assert result.publication in {"published", "partial"}
+                assert analysis.summary_status in {"available", "unavailable"}
+                assert all(
+                    slide.summary.status in {"available", "unavailable"} for slide in result.slides
+                )
+                assert all(
+                    action.state != "candidate"
+                    for slide in result.slides
+                    for action in slide.actions
+                )
+                assert all(
+                    action.validation is not None
+                    for slide in result.slides
+                    for action in slide.actions
+                )
+                action_count += sum(len(slide.actions) for slide in result.slides)
+            assert action_count > 0, "The real PDF corpus must exercise slide-action validation"
+        checks += [
+            "durable_page_metadata_and_warnings",
+            "persisted_slide_and_presentation_summaries",
+            "action_lists_have_completed_validation_states",
+        ]
         return {"checks": checks}
     finally:
         await database.close()

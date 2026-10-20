@@ -1,8 +1,11 @@
-# Durable PDF metadata workers
+# Durable PDF analysis workers (#8, #12)
 
-Issue #8 adds a backend-only PDF metadata stage. It does not run an LLM, extract PDF
-text/positions/shapes, render previews, perform OCR, validate generated actions, or process
-PPTX. Provider analysis remains #12. Existing PPTX storage/extraction remains compatible.
+The durable PDF worker performs page metadata inspection, submits the accepted original
+PDF unchanged to Amazon Bedrock Claude Sonnet 4.6, persists ordered summaries and content-action
+candidates, then validates every action through the isolated #49 executor before completing
+the job. It does not extract PDF text/positions/shapes, perform OCR, convert PPTX, or save
+preview rasters. Existing PPTX upload/storage remains compatible; PPTX analysis and playback
+are deferred.
 
 ## Scheduling and publication
 
@@ -22,8 +25,11 @@ Multiple dispatchers lock job rows with SKIP LOCKED. No polling thread holds sou
 
 ## States and limits
 
-New jobs transition `queued -> running -> metadata_ready`. Transient failures enter
-`retry_wait`, with 2/4/8-second backoff and at most three lifetime execution attempts.
+New jobs transition `queued -> running` through `pdf_metadata.v1` and `pdf_analysis.v1`,
+then finish as `analysis_ready` or explicitly `analysis_partial`. A partial status means
+one or more summaries were unavailable; it never implies completion of missing content.
+Transient failures enter `retry_wait`, with 2/4/8-second backoff and at most three lifetime
+execution attempts.
 Malformed/unsupported PDFs and exhausted jobs enter `dead_letter`. This durable terminal
 state is the business failure record; malformed SQS envelopes are left unacknowledged for
 the queue's physical three-receive DLQ policy. Healthy duplicate/obsolete messages are
@@ -31,20 +37,27 @@ acknowledged; capacity misses retain their wakeup. No message contains source ke
 credentials, presentation contents, owner identity or raw failure diagnostics.
 
 The global DB admission lock bounds claimed work to two jobs by default, across worker
-replicas. Each worker process executes one stage at a time. Its 45-second lease is renewed
-every 10 seconds, but never beyond the 120-second attempt deadline. The complete S3
-download/parser process has a 105-second hard deadline; the existing parser additionally
-enforces 30 seconds, 512 MiB, 64 MiB source, 500 pages and 16 MiB result limits. The outer
-stage has a 1 GiB address-space ceiling on Linux or Windows process-tree containment;
-Fargate independently bounds worker CPU/memory to 1 vCPU/2 GiB. SIGTERM drains bounded
-work, releases the lease and exits; abrupt termination recovers through lease expiry.
+replicas. Each worker process executes one job at a time. Its 45-second lease is renewed
+every 10 seconds, but never beyond the 900-second attempt deadline. PDF inspection and
+ephemeral PDFium manifest hashing run in an isolated process with a 120-second deadline,
+1 GiB address-space ceiling, 30-second metadata parser limit and no persisted page images.
+Provider calls time out after 90 seconds. The provider boundary accepts at most an 18 MiB,
+100-page PDF, returns at most 12,000 tokens, and is attempted at most three times for a job.
+The 18 MiB source limit leaves room for base64 expansion and request metadata under Bedrock's
+25 MiB InvokeModel body quota.
+The model context window and request/output limits bound token spend; validation is capped
+at 40 actions per deck and 15 seconds per isolated action run. Fargate independently bounds
+worker CPU/memory to 1 vCPU/2 GiB. SIGTERM drains bounded work, releases the lease and exits;
+abrupt termination recovers through lease expiry.
 
 Each claim has a random lease token. Cancel/retry/reconciliation invalidates that token
-and increments the message generation. Result persistence locks and rechecks the job,
-lease/deadline, source revision/format/SHA and owner in the same transaction that saves the
-immutable extraction and completion status. A partial save rolls back both. Late results
-cannot resurrect cancelled or superseded work. S3 reads use the accepted VersionId and
-verify size, media type and SHA before inspection. Originals are never deleted by jobs.
+and increments the message generation. Metadata persistence locks and rechecks the job,
+lease/deadline, source revision/format/SHA and owner in the transaction that saves the
+immutable extraction. Analysis persistence is idempotent per job; restarts reuse saved
+provider output and resume only missing validations. Each action report is bound to its
+analysis/action hashes and renderer/profile before final completion. Late results cannot
+resurrect cancelled or superseded work. S3 reads use the accepted VersionId and verify size,
+media type and SHA before inspection or provider submission. Originals are never deleted.
 
 Container scratch must not be shared between worker replicas. An exclusive OS lock
 protects its worker-owned `buddy-processing` directory; startup removes only abandoned
@@ -64,14 +77,15 @@ All routes require verified account authentication and return `Cache-Control: no
 - `POST /api/v1/jobs/{job_id}/retry`: requeue cancelled or failed work if its lifetime
   attempt budget and owner quota permit. Repeated retries of active work return 409.
 
-`PDFSource`, `Message`, and `MetadataOutput` are versioned typed boundaries. The only
-implemented stage is `pdf_metadata.v1`; its output wraps the existing extraction v1
-document, with ordered stable page IDs, EMU dimensions and PDF limitations/warnings.
-`analysis_ready` is always false here. A later stage must add an explicit contract,
-implementation and tests before it may claim success; metadata does not imply that a
-provider/validation stage ran. No analysis record is created by this worker.
+`PDFSource`, `Message`, and `MetadataOutput` are versioned typed boundaries. The metadata
+output wraps extraction v1 with ordered stable page IDs, EMU dimensions and PDF
+limitations/warnings, plus a transient manifest whose image hashes are computed in memory.
+The worker then creates an immutable `AnalysisInput`, runs the independent action validator,
+and marks `analysis_ready` only after every proposed action has a terminal recorded result.
+Unavailable summaries produce `analysis_partial`; unsafe or uncertain actions remain
+rejected or needs-review and cannot be used.
 
-Migration 0009 expands the existing status CHECK without rewriting legacy records.
+Migration 0010 expands the existing status CHECK without rewriting legacy records.
 Jobs with NULL `source_revision` are legacy and are not claimed, reconciled or controlled
 by the new worker. Compatibility library mapping:
 
@@ -81,7 +95,8 @@ by the new worker. Compatibility library mapping:
 | running | processing |
 | failed / dead_letter | failed |
 | succeeded | existing analysis/render-proof mapping, otherwise incomplete |
-| metadata_ready / cancelled | incomplete |
+| metadata_ready / analysis_partial / cancelled | incomplete |
+| analysis_ready | ready only if separate complete render evidence exists; currently incomplete |
 
 PDF presentation remains available directly from its pinned original. Metadata-ready is
 not analysis-ready or review-ready. Old four-state records and new-state mapping have
@@ -105,7 +120,17 @@ repository and supply the reviewed `worker_image` to the existing Terraform/rele
 workflow. Terraform mounts dedicated scratch, gives ECS an actual container health check
 and 120-second stop timeout, and grants the separate worker task role exact-version reads
 only under `sources/*`. Worker task, execution and database roles remain separate from
-API/migration roles. No AWS/root credentials are embedded in images, configuration or CI.
+API/migration roles. The worker task role can invoke only the EU Claude Sonnet 4.6 inference
+profile, its routed foundation-model resources, and the account default Bedrock project; it
+receives no long-lived provider key. The AWS account must be entitled to the model before
+rollout; a provider access-denied
+response is recorded as a sanitized permanent failure instead of retrying a request that
+cannot succeed. Bedrock inference is billed to the AWS account; no OpenAI API key or
+separate OpenAI billing account is used. The EU profile can route processing to supported
+regions within the EU geography. The adapter uses Bedrock's native InvokeModel API, which
+does not expose a response-retention option. This does not create a residency
+guarantee or privacy-consent/policy system. No AWS/root credentials are embedded
+in images, configuration or CI.
 
 `python -m buddy_api.processing --health` succeeds only with a fresh health timestamp
 maintained by real DB readiness and SQS access checks. A dependency failure exits the

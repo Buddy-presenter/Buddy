@@ -156,7 +156,7 @@ class ProcessingJob(OwnedRecord):
         UniqueConstraint("id", "deck_id", "owner_id"),
         CheckConstraint(
             "status IN ('pending','running','succeeded','failed','queued','retry_wait',"
-            "'metadata_ready','cancelled','dead_letter')",
+            "'metadata_ready','analysis_ready','analysis_partial','cancelled','dead_letter')",
             name="status",
         ),
         CheckConstraint("attempts >= 0", name="attempts_nonnegative"),

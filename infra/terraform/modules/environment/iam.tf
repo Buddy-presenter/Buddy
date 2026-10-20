@@ -61,6 +61,39 @@ resource "aws_iam_role_policy" "worker_versions" {
     { Effect = "Allow", Action = ["s3:GetObjectVersion"], Resource = "${aws_s3_bucket.private["data"].arn}/sources/*" }
   ] })
 }
+resource "aws_iam_role_policy" "worker_validation_evidence" {
+  role = aws_iam_role.task["worker"].id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [
+    { Effect = "Allow", Action = ["s3:ListBucketVersions"], Resource = aws_s3_bucket.private["data"].arn,
+    Condition = { StringLike = { "s3:prefix" = "sources/*/*/validation/*" } } },
+    { Effect = "Allow", Action = ["s3:PutObject", "s3:DeleteObjectVersion"],
+    Resource = "${aws_s3_bucket.private["data"].arn}/sources/*/*/validation/*" }
+  ] })
+}
+resource "aws_iam_role_policy" "worker_validation_evidence_kms" {
+  role = aws_iam_role.task["worker"].id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [
+    { Effect = "Allow", Action = ["kms:GenerateDataKey"], Resource = aws_kms_key.data.arn,
+    Condition = { StringEquals = { "kms:ViaService" = "s3.${var.region}.amazonaws.com" } } }
+  ] })
+}
+resource "aws_iam_role_policy" "worker_bedrock_analysis" {
+  role = aws_iam_role.task["worker"].id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [
+    {
+      Effect = "Allow", Action = ["bedrock:InvokeModel"], Resource = [
+        "arn:aws:bedrock:${var.region}:${var.account_id}:inference-profile/eu.anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:${var.region}::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:eu-north-1::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:eu-west-3::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:eu-south-1::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:eu-south-2::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:eu-west-1::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:${var.region}:${var.account_id}:project/default"
+      ]
+    }
+  ] })
+}
 resource "aws_iam_role" "github" {
   for_each = toset(["deploy", "release"])
   name     = "${local.name}-${each.key}"

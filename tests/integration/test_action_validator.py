@@ -1,5 +1,6 @@
 """Real isolated executor, deterministic predefined actions, and private API evidence."""
 
+import asyncio
 import hashlib
 import json
 import sys
@@ -7,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from importlib.resources import files
 from pathlib import Path
 from threading import Event
-from uuid import NAMESPACE_URL, uuid4, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import pytest
 from backend.tests.api.conftest import migrated_database as migrated_database
@@ -20,10 +21,9 @@ from backend.tests.api.test_uploads import (
 )
 from backend.tests.support.database import database_settings as database_settings
 
-from buddy_api.persistence.models import ActionCheck
-from buddy_api.uploads.contracts import UploadError
+from buddy_api.persistence.models import ActionCheck, Deck
 from buddy_api.validation.config import ValidatorSettings
-from buddy_api.validation.contracts import ProcessRequest, ProcessResult
+from buddy_api.validation.contracts import ProcessRequest, ProcessResult, ValidationRequest
 from buddy_api.validation.runner import run_validation
 from buddy_api.validation.service import ValidationService
 
@@ -293,8 +293,10 @@ def test_evidence_failure_cleanup_retries_and_expired_run_reconciliation(upload_
             orphan_key = validator.key(orphan, "after_image")
             cloud.objects[orphan_key] = ("orphan-version", b"incomplete")
             cloud.fail_delete = True
-            with pytest.raises(UploadError):
-                await validator.reconcile()
+            await validator.reconcile()
+            async with uploads.transaction() as session:
+                deferred = await session.get(ActionCheck, orphan.id)
+                assert deferred.status == "cleanup"
             cloud.fail_delete = False
             await validator.reconcile()
             assert orphan_key not in cloud.objects and original_key in cloud.objects
@@ -304,3 +306,156 @@ def test_evidence_failure_cleanup_retries_and_expired_run_reconciliation(upload_
                 assert (await session.get(ActionCheck, accepted.id)).status == "complete"
 
         client.portal.call(interrupted)
+
+
+@pytest.mark.postgres
+def test_concurrent_cleanup_cannot_delete_evidence_from_reused_reservation(upload_app):
+    with upload_app() as (client, cloud, uploads):
+        validator = ValidationService(uploads, ValidatorSettings(python=sys.executable))
+        client.app.state.validator = validator
+        body = {**metadata(CONTENT), "filename": "deck.pdf", "content_type": "application/pdf"}
+        identifier = initialize(client, body=body).json()["data"]["id"]
+        deck = client.put(
+            f"/api/v1/uploads/{identifier}/content",
+            content=CONTENT,
+            headers={"Content-Type": "application/pdf"},
+        ).json()["data"]["deck"]
+        request = {"action": action(identifier, revision=deck["source_revision"])}
+        retry_key = uuid4()
+        endpoint = f"/api/v1/decks/{identifier}/action-validations"
+        initial = client.post(endpoint, json=request, headers={"Idempotency-Key": str(retry_key)})
+        assert initial.status_code == 200, initial.text
+        check_id = UUID(initial.json()["data"]["id"])
+
+        async def prepare():
+            async with uploads.transaction() as session:
+                row = await session.get(ActionCheck, check_id)
+                assert row is not None and row.status == "complete"
+                owner_id, deck_id = row.owner_id, row.deck_id
+                row.status = "cleanup"
+            return owner_id, deck_id
+
+        owner_id, deck_id = client.portal.call(prepare)
+        started, release = Event(), Event()
+        remove = uploads.storage.remove
+
+        def blocked_remove(key):
+            if not started.is_set():
+                started.set()
+                if not release.wait(10):
+                    raise TimeoutError("test cleanup barrier timed out")
+            remove(key)
+
+        uploads.storage.remove = blocked_remove
+
+        async def race():
+            first = asyncio.create_task(validator.cleanup(check_id))
+            assert await asyncio.to_thread(started.wait, 10)
+            second = asyncio.create_task(validator.cleanup(check_id))
+            retry = asyncio.create_task(
+                validator.validate(
+                    owner_id,
+                    deck_id,
+                    retry_key,
+                    ValidationRequest.model_validate(request),
+                )
+            )
+            await asyncio.sleep(0.1)
+            assert not retry.done()
+            release.set()
+            await asyncio.gather(first, second)
+            result = await retry
+            assert result.id == check_id
+
+        try:
+            client.portal.call(race)
+        finally:
+            release.set()
+
+        async def verify_completed():
+            async with uploads.transaction() as session:
+                completed = await session.get(ActionCheck, check_id)
+                assert completed.status == "complete"
+                for artifact in completed.artifacts:
+                    key = validator.key(completed, artifact["kind"])
+                    assert cloud.objects[key][0] == artifact["version"]
+
+        client.portal.call(verify_completed)
+
+
+@pytest.mark.postgres
+def test_interrupted_validation_reservation_is_reclaimed_and_retried(upload_app):
+    with upload_app() as (client, cloud, uploads):
+        validator = ValidationService(uploads, ValidatorSettings(python=sys.executable))
+        client.app.state.validator = validator
+        body = {**metadata(CONTENT), "filename": "deck.pdf", "content_type": "application/pdf"}
+        identifier = initialize(client, body=body).json()["data"]["id"]
+        deck = client.put(
+            f"/api/v1/uploads/{identifier}/content",
+            content=CONTENT,
+            headers={"Content-Type": "application/pdf"},
+        ).json()["data"]["deck"]
+        request = {"action": action(identifier, revision=deck["source_revision"])}
+        retry_key = uuid4()
+        process_request = ProcessRequest(
+            deck_id=UUID(identifier),
+            source_revision=deck["source_revision"],
+            source_sha256=DIGEST,
+            **request,
+        )
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                process_request.model_dump(mode="json"),
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        reservation_id = uuid4()
+
+        async def reserve():
+            async with uploads.transaction() as session:
+                deck_row = await session.get(Deck, UUID(identifier))
+                assert deck_row is not None
+                session.add(
+                    ActionCheck(
+                        id=reservation_id,
+                        owner_id=deck_row.owner_id,
+                        deck_id=deck_row.id,
+                        retry_key=retry_key,
+                        request_sha256=fingerprint,
+                        storage_bytes=32 * 1024 * 1024,
+                        status="pending",
+                        artifacts=[],
+                        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+                    )
+                )
+
+        client.portal.call(reserve)
+        endpoint = f"/api/v1/decks/{identifier}/action-validations"
+        waiting = client.post(endpoint, json=request, headers={"Idempotency-Key": str(retry_key)})
+        assert waiting.status_code == 409
+        assert waiting.headers["retry-after"] == "300"
+        assert waiting.json()["error"]["code"] == "validation_pending"
+
+        async def expire_and_cleanup():
+            async with uploads.transaction() as session:
+                row = await session.get(ActionCheck, reservation_id)
+                assert row is not None
+                row.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+            await validator.reconcile()
+
+        client.portal.call(expire_and_cleanup)
+        recovered = client.post(endpoint, json=request, headers={"Idempotency-Key": str(retry_key)})
+        assert recovered.status_code == 200, recovered.text
+        result = recovered.json()["data"]
+        assert result["id"] == str(reservation_id)
+        assert result["result"]["state"] == "validated"
+        assert len(result["evidence"]) == 3
+
+        async def completed_status():
+            async with uploads.transaction() as session:
+                row = await session.get(ActionCheck, reservation_id)
+                assert row is not None
+                return row.status
+
+        assert client.portal.call(completed_status) == "complete"

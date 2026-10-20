@@ -61,6 +61,22 @@ run "private_staging_before_images_exist" {
     condition     = aws_wafv2_web_acl.main.visibility_config[0].sampled_requests_enabled == false
     error_message = "Identity request samples can contain sensitive parameters."
   }
+  assert {
+    condition = (
+      jsondecode(aws_iam_role_policy.worker_bedrock_analysis.policy).Statement[0].Action == ["bedrock:InvokeModel"] &&
+      toset(jsondecode(aws_iam_role_policy.worker_bedrock_analysis.policy).Statement[0].Resource) == toset([
+        "arn:aws:bedrock:eu-central-1:123456789012:inference-profile/eu.anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:eu-central-1::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:eu-north-1::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:eu-west-3::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:eu-south-1::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:eu-south-2::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:eu-west-1::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:eu-central-1:123456789012:project/default"
+      ])
+    )
+    error_message = "The worker must have InvokeModel access only for the EU Claude Sonnet 4.6 profile, its regional destination model resources, and the default Bedrock project."
+  }
 }
 run "production_redundancy" {
   command = plan
@@ -283,6 +299,15 @@ run "private_upload_runtime_and_version_cleanup" {
       ])
     )
     error_message = "The PDF worker needs pinned source reads, not unversioned reads or object writes."
+  }
+  assert {
+    condition = (
+      jsondecode(aws_iam_role_policy.worker_validation_evidence.policy).Statement[0].Condition.StringLike["s3:prefix"] == "sources/*/*/validation/*" &&
+      jsondecode(aws_iam_role_policy.worker_validation_evidence.policy).Statement[1].Resource == "${aws_s3_bucket.private["data"].arn}/sources/*/*/validation/*" &&
+      toset(jsondecode(aws_iam_role_policy.worker_validation_evidence.policy).Statement[1].Action) == toset(["s3:PutObject", "s3:DeleteObjectVersion"]) &&
+      jsondecode(aws_iam_role_policy.worker_validation_evidence_kms.policy).Statement[0].Action == ["kms:GenerateDataKey"]
+    )
+    error_message = "The worker may write and clean only isolated validation evidence, encrypted with the data key."
   }
   assert {
     condition = (

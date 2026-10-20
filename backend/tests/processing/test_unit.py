@@ -1,6 +1,9 @@
+import io
 import subprocess
 import sys
 import time
+from pathlib import Path
+from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
@@ -30,7 +33,14 @@ def test_envelope_has_no_untrusted_source_or_stage():
             job_id="10000000-0000-0000-0000-000000000001", generation=0, source_key="other-owner"
         )
     with pytest.raises(ValidationError):
-        PDFSource(key="source", version="version", size=2**30, sha256="a" * 64, revision="v1")
+        PDFSource(
+            key="source",
+            version="version",
+            size=2**30,
+            sha256="a" * 64,
+            revision="v1",
+            deck_id=UUID("10000000-0000-0000-0000-000000000001"),
+        )
 
 
 def test_health_requires_fresh_real_runtime_tick(monkeypatch, tmp_path):
@@ -98,7 +108,14 @@ def test_whole_stage_timeout_kills_process_and_removes_its_scratch(monkeypatch, 
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     monkeypatch.setattr(stage.subprocess, "Popen", stalled)
     monkeypatch.setenv("BUDDY_DATABASE_URL", "must-not-reach-parser")
-    source = PDFSource(key="source", version="version", size=1, sha256="a" * 64, revision="v1")
+    source = PDFSource(
+        key="source",
+        version="version",
+        size=1,
+        sha256="a" * 64,
+        revision="v1",
+        deck_id=UUID("10000000-0000-0000-0000-000000000001"),
+    )
     storage = UploadSettings(
         bucket="buddy-test",
         region="eu-central-1",
@@ -108,3 +125,34 @@ def test_whole_stage_timeout_kills_process_and_removes_its_scratch(monkeypatch, 
         stage.execute(source, storage, seconds=0.2)
     assert children and children[0].poll() is not None
     assert list(tmp_path.glob("stage-*")) == []
+
+
+def test_resumed_pdf_manifest_timeout_kills_bounded_renderer(monkeypatch, tmp_path):
+    import tempfile
+
+    from buddy_api.extraction.runner import extract_pdf
+    from buddy_api.processing import stage
+
+    content = (
+        Path(__file__).resolve().parents[3] / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf"
+    ).read_bytes()
+    extraction = extract_pdf(io.BytesIO(content), source_revision="v1")
+    original = subprocess.Popen
+    children = []
+
+    def stalled(_command, **kwargs):
+        assert "BUDDY_DATABASE_URL" not in kwargs["env"]
+        child = original(
+            [sys.executable, "-c", "import sys,time; sys.stdin.buffer.read(); time.sleep(30)"],
+            **kwargs,
+        )
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(stage.subprocess, "Popen", stalled)
+    monkeypatch.setenv("BUDDY_DATABASE_URL", "must-not-reach-renderer")
+    with pytest.raises(TimeoutError, match="deadline"):
+        stage.execute_manifest(content, extraction, "10000000-0000-0000-0000-000000000001", 0.2)
+    assert children and children[0].poll() is not None
+    assert list(tmp_path.glob("stage-render-*")) == []

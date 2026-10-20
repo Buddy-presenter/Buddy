@@ -5,8 +5,15 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
-from buddy_api.persistence.models import Deck, DeckExtraction, JobOutbox, ProcessingJob
+from buddy_api.persistence.models import (
+    AnalysisVersion,
+    Deck,
+    DeckExtraction,
+    JobOutbox,
+    ProcessingJob,
+)
 from buddy_api.persistence.repositories import Extractions
 from buddy_api.processing.config import WorkerSettings
 from buddy_api.processing.contracts import ACTIVE, JobData, Message, MetadataOutput
@@ -111,6 +118,7 @@ async def retry(session: AsyncSession, job: ProcessingJob, settings: WorkerSetti
     await quota(session, job.owner_id, settings.owner_quota)
     job.generation += 1
     job.status, job.stage_state, job.progress = "queued", "pending", 0
+    job.stage = "pdf_analysis.v1" if job.extraction_id else "pdf_metadata.v1"
     job.error_code = None
     job.not_before = now()
     outbox = await session.get(JobOutbox, job.id)
@@ -130,7 +138,7 @@ async def claim(
         or job.generation != message.generation
         or job.status not in {"queued", "retry_wait"}
         or job.source_revision is None
-        or job.stage != "pdf_metadata.v1"
+        or job.stage not in {"pdf_metadata.v1", "pdf_analysis.v1"}
         or job.not_before > now()
     ):
         return None
@@ -184,14 +192,14 @@ async def heartbeat(
     return True
 
 
-async def complete(
+async def save_metadata(
     session: AsyncSession, identifier: UUID, token: UUID, output: MetadataOutput
-) -> bool:
+) -> UUID | None:
     job = await session.scalar(
         select(ProcessingJob).where(ProcessingJob.id == identifier).with_for_update()
     )
     if job is None or not valid_lease(job, token):
-        return False
+        return None
     deck = await session.get(Deck, job.deck_id)
     metadata = output.metadata
     if (
@@ -208,12 +216,42 @@ async def complete(
         owner_id=job.owner_id, deck_id=job.deck_id, extraction=metadata
     )
     job.extraction_id = extraction.id
-    job.status, job.stage_state, job.progress, job.error_code = (
-        "metadata_ready",
-        "succeeded",
-        100,
+    job.stage, job.stage_state, job.progress, job.error_code = (
+        "pdf_analysis.v1",
+        "running",
+        35,
         None,
     )
+    return extraction.id
+
+
+async def complete(session: AsyncSession, identifier: UUID, token: UUID, analysis_id: UUID) -> bool:
+    job = await session.scalar(
+        select(ProcessingJob).where(ProcessingJob.id == identifier).with_for_update()
+    )
+    if job is None or not valid_lease(job, token):
+        return False
+    deck = await session.get(Deck, job.deck_id)
+    analysis = await session.scalar(
+        select(AnalysisVersion).where(
+            AnalysisVersion.id == analysis_id,
+            AnalysisVersion.job_id == job.id,
+            AnalysisVersion.deck_id == job.deck_id,
+            AnalysisVersion.owner_id == job.owner_id,
+        )
+    )
+    if (
+        deck is None
+        or deck.owner_id != job.owner_id
+        or deck.source_format != "pdf"
+        or deck.source_revision != job.source_revision
+        or analysis is None
+        or analysis.extraction_id != job.extraction_id
+        or analysis.publication not in {"published", "partial"}
+    ):
+        raise UploadError(409, "analysis_incomplete", "The analysis is not ready for completion.")
+    job.status = "analysis_partial" if analysis.publication == "partial" else "analysis_ready"
+    job.stage_state, job.progress, job.error_code = "succeeded", 100, None
     job.lease_id = job.lease_until = job.deadline_at = None
     return True
 
@@ -244,7 +282,104 @@ async def fail(
     job.not_before = outbox.available_at
 
 
+async def defer(
+    session: AsyncSession,
+    identifier: UUID,
+    token: UUID,
+    delay_seconds: int,
+) -> None:
+    """Release a job while a durable validator reservation is still in flight.
+
+    This is a wait, not a failed processing attempt. Keep the existing extraction and
+    analysis so the next delivery resumes at the same idempotent validation request.
+    """
+    job = await session.scalar(
+        select(ProcessingJob).where(ProcessingJob.id == identifier).with_for_update()
+    )
+    if job is None or job.status != "running" or job.lease_id != token:
+        return
+    job.attempts = max(0, job.attempts - 1)
+    job.generation += 1
+    job.status, job.stage_state = "retry_wait", "pending"
+    job.error_code = None
+    job.lease_id = job.lease_until = job.deadline_at = None
+    outbox = await session.get(JobOutbox, job.id)
+    assert outbox is not None
+    outbox.available_at = now() + timedelta(seconds=max(1, min(delay_seconds, 300)))
+    job.not_before = outbox.available_at
+
+
 async def reconcile(session: AsyncSession, settings: WorkerSettings) -> None:
+    # Prior worker versions stopped at metadata_ready. Resume those durable jobs at
+    # analysis without changing their owner, source revision or extraction. Analysis gets
+    # its own bounded attempt budget because the earlier successful metadata attempt predates it.
+    await admission_lock(session)
+    active_job = aliased(ProcessingJob)
+    active_count = (
+        select(func.count())
+        .select_from(active_job)
+        .where(active_job.owner_id == ProcessingJob.owner_id, active_job.status.in_(ACTIVE))
+        .correlate(ProcessingJob)
+        .scalar_subquery()
+    )
+    candidates = (
+        select(
+            ProcessingJob.id.label("job_id"),
+            ProcessingJob.created_at.label("created_at"),
+            func.row_number()
+            .over(
+                partition_by=ProcessingJob.owner_id,
+                order_by=(ProcessingJob.created_at, ProcessingJob.id),
+            )
+            .label("owner_rank"),
+            (settings.owner_quota - active_count).label("available_slots"),
+        )
+        .where(
+            ProcessingJob.source_revision.is_not(None),
+            ProcessingJob.extraction_id.is_not(None),
+            ProcessingJob.status == "metadata_ready",
+        )
+        .subquery()
+    )
+    candidate_ids = (
+        await session.scalars(
+            select(candidates.c.job_id)
+            .where(candidates.c.owner_rank <= candidates.c.available_slots)
+            .order_by(candidates.c.created_at, candidates.c.job_id)
+            .limit(16)
+        )
+    ).all()
+    metadata_jobs = (
+        await session.scalars(
+            select(ProcessingJob)
+            .where(ProcessingJob.id.in_(candidate_ids))
+            .order_by(ProcessingJob.created_at, ProcessingJob.id)
+            .with_for_update(skip_locked=True)
+        )
+    ).all()
+    active_counts = dict(
+        (
+            await session.execute(
+                select(ProcessingJob.owner_id, func.count())
+                .where(ProcessingJob.status.in_(ACTIVE))
+                .group_by(ProcessingJob.owner_id)
+            )
+        ).all()
+    )
+    for job in metadata_jobs:
+        job.generation += 1
+        job.status, job.stage, job.stage_state = "queued", "pdf_analysis.v1", "pending"
+        job.progress, job.error_code = 35, None
+        job.attempts = 0
+        job.lease_id = job.lease_until = job.deadline_at = None
+        job.not_before = now()
+        outbox = await session.get(JobOutbox, job.id)
+        if outbox is None:
+            session.add(JobOutbox(job_id=job.id, available_at=job.not_before))
+        else:
+            outbox.available_at = job.not_before
+        active_counts[job.owner_id] = active_counts.get(job.owner_id, 0) + 1
+
     # Bounded work; expired workers lose their token before another attempt starts.
     jobs = (
         await session.scalars(

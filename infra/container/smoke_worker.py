@@ -1,4 +1,4 @@
-"""Real read-only worker lifecycle, PostgreSQL and PDF parser; fake only AWS HTTP transport."""
+"""Real worker, PostgreSQL and PDF path with fakes at external service boundaries."""
 
 import argparse
 import hashlib
@@ -190,14 +190,28 @@ def verify(image):
             "--cpus=1",
             "--tmpfs",
             "/var/lib/buddy-upload:rw,noexec,nosuid,size=512m,uid=10001,gid=10001",
+            "-v",
+            str(ROOT / "infra/container/smoke_worker_entrypoint.py")
+            + ":/smoke_worker_entrypoint.py:ro",
+            "-e",
+            "BUDDY_SMOKE_PDF_SHA256=" + hashlib.sha256(source).hexdigest(),
             *args,
+            "--entrypoint",
+            "python",
             image,
+            "/smoke_worker_entrypoint.py",
         )
         containers.append(worker)
         for _ in range(90):
             state = sql(f"SELECT status FROM processing_jobs WHERE id='{job}'")
-            if state == "metadata_ready":
+            if state == "analysis_ready":
                 break
+            if state in {"dead_letter", "failed"}:
+                error = sql(f"SELECT error_code FROM processing_jobs WHERE id='{job}'")
+                raise RuntimeError(
+                    f"Worker smoke failed analysis: status={state}, error={error}; "
+                    + docker("logs", worker)
+                )
             if json.loads(docker("inspect", worker))[0]["State"]["Status"] != "running":
                 raise RuntimeError("Worker smoke exited: " + docker("logs", worker))
             time.sleep(1)
@@ -205,13 +219,14 @@ def verify(image):
             raise RuntimeError("Worker smoke did not complete PDF inspection: " + state)
         assert sql(f"SELECT attempts FROM processing_jobs WHERE id='{job}'") == "2"
         assert sql("SELECT jsonb_array_length(document->'slides') FROM deck_extractions") == "3"
-        assert sql("SELECT count(*) FROM analysis_versions") == "0"
+        assert sql("SELECT count(*) FROM analysis_versions") == "1"
         assert accesses and "versionId=pinned" in accesses[0]
         docker("exec", worker, "python", "-m", "buddy_api.processing", "--health")
         docker("restart", worker)
         time.sleep(3)
-        assert sql(f"SELECT status FROM processing_jobs WHERE id='{job}'") == "metadata_ready"
+        assert sql(f"SELECT status FROM processing_jobs WHERE id='{job}'") == "analysis_ready"
         assert sql("SELECT count(*) FROM deck_extractions") == "1"
+        assert sql("SELECT count(*) FROM analysis_versions") == "1"
         docker("stop", "--time", "120", worker)
         source = b"Malformed PDF fixture"
         bad_deck, bad_job = str(uuid4()), str(uuid4())
@@ -245,8 +260,9 @@ def verify(image):
         assert sql("SELECT count(*) FROM deck_extractions") == "1"
         docker("stop", "--time", "120", worker)
         print(
-            "Worker image: startup, restricted DB role, real PDF, lease recovery, "
-            "pinned S3 HTTP, malformed-PDF failure, restart and shutdown passed."
+            "Worker image: startup, restricted DB role, real PDF, exact original-PDF hash, "
+            "provider-boundary response, analysis persistence, lease recovery, pinned S3 HTTP, "
+            "malformed-PDF failure, restart and shutdown passed."
         )
     finally:
         for name in reversed(containers):

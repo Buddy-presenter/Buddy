@@ -3,9 +3,11 @@
 import asyncio
 import hashlib
 import json
+import logging
 import tempfile
 from datetime import UTC, datetime, timedelta
 from functools import partial
+from math import ceil
 from pathlib import Path
 from threading import Event
 from typing import Any
@@ -31,6 +33,7 @@ KINDS = {
     "after_image": ("png", "image/png"),
     "report": ("json", "application/json"),
 }
+logger = logging.getLogger(__name__)
 
 
 class ValidationService:
@@ -96,7 +99,13 @@ class ValidationService:
         return content, mime
 
     async def validate(
-        self, owner: UUID, deck_id: UUID, key: UUID, inputs: ValidationRequest
+        self,
+        owner: UUID,
+        deck_id: UUID,
+        key: UUID,
+        inputs: ValidationRequest,
+        *,
+        source_content: bytes | None = None,
     ) -> StoredResult:
         if self.uploads.parser_slot.locked():
             raise UploadError(
@@ -136,8 +145,25 @@ class ValidationService:
                         raise UploadError(
                             409, "idempotency_conflict", "Retry key belongs to another validation."
                         )
-                    if row.status != "failed":
+                    if row.status == "complete":
                         return self.public(row)
+                    if row.status == "pending":
+                        remaining = max(
+                            1, ceil((row.expires_at - datetime.now(UTC)).total_seconds())
+                        )
+                        raise UploadError(
+                            409,
+                            "validation_pending",
+                            "Validation is still reserved; retry after its lease expires.",
+                            remaining,
+                        )
+                    if row.status == "cleanup":
+                        raise UploadError(
+                            503,
+                            "cleanup_pending",
+                            "Validation cleanup is still in progress; retry later.",
+                            30,
+                        )
                 if (
                     await self.uploads.storage_usage(session, owner) + 32 * 1024 * 1024
                     > self.uploads.settings.quota_bytes
@@ -172,11 +198,27 @@ class ValidationService:
                 )
                 if not source_key or not version or not size:
                     raise UploadError(409, "source_unavailable", "Saved source is unavailable.")
-                content = await blocking(
-                    lambda: self.uploads.storage.read(
-                        source_key, version=version, size=size, sha256=digest, source_format="pdf"
+                content = (
+                    source_content
+                    if source_content is not None
+                    else await blocking(
+                        lambda: self.uploads.storage.read(
+                            source_key,
+                            version=version,
+                            size=size,
+                            sha256=digest,
+                            source_format="pdf",
+                        )
                     )
                 )
+                if (
+                    len(content) != size
+                    or hashlib.sha256(content).hexdigest() != digest
+                    or not content.startswith(b"%PDF-")
+                ):
+                    raise UploadError(
+                        409, "source_mismatch", "Saved source does not match its accepted revision."
+                    )
                 cancelled = Event()
                 task = asyncio.create_task(
                     asyncio.to_thread(run_validation, content, request, self.settings, cancelled)
@@ -242,6 +284,13 @@ class ValidationService:
             if row.status == "pending" and row.expires_at > datetime.now(UTC):
                 return
             row.status = "cleanup"
+        # The cleanup reservation is committed before external I/O so failures remain
+        # retryable. Re-lock it while deleting: validation may reuse a failed reservation,
+        # and an older cleaner must not delete evidence written by that retry.
+        async with self.uploads.transaction() as session:
+            row = await session.get(ActionCheck, identifier, with_for_update=True)
+            if row is None or row.status != "cleanup":
+                return
             for kind in KINDS:
                 await blocking(partial(self.uploads.storage.remove, self.key(row, kind)))
             row.status = "failed"
@@ -263,4 +312,8 @@ class ValidationService:
                 )
             )
         for identifier in ids:
-            await self.cleanup(identifier)
+            try:
+                await self.cleanup(identifier)
+            except UploadError:
+                # A private-object deletion failure is durable and retried independently.
+                logger.warning("Validation evidence cleanup deferred; reservation retained")
