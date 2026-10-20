@@ -21,7 +21,6 @@ from backend.tests.api.test_uploads import (
 from backend.tests.support.database import database_settings as database_settings
 
 from buddy_api.persistence.models import ActionCheck, Deck
-from buddy_api.uploads.contracts import UploadError
 from buddy_api.validation.config import ValidatorSettings
 from buddy_api.validation.contracts import ProcessRequest, ProcessResult
 from buddy_api.validation.runner import run_validation
@@ -293,8 +292,10 @@ def test_evidence_failure_cleanup_retries_and_expired_run_reconciliation(upload_
             orphan_key = validator.key(orphan, "after_image")
             cloud.objects[orphan_key] = ("orphan-version", b"incomplete")
             cloud.fail_delete = True
-            with pytest.raises(UploadError):
-                await validator.reconcile()
+            await validator.reconcile()
+            async with uploads.transaction() as session:
+                deferred = await session.get(ActionCheck, orphan.id)
+                assert deferred.status == "cleanup"
             cloud.fail_delete = False
             await validator.reconcile()
             assert orphan_key not in cloud.objects and original_key in cloud.objects

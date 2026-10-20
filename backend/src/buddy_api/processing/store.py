@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from buddy_api.persistence.models import (
     AnalysisVersion,
@@ -309,6 +310,76 @@ async def defer(
 
 
 async def reconcile(session: AsyncSession, settings: WorkerSettings) -> None:
+    # Prior worker versions stopped at metadata_ready. Resume those durable jobs at
+    # analysis without changing their owner, source revision or extraction. Analysis gets
+    # its own bounded attempt budget because the earlier successful metadata attempt predates it.
+    await admission_lock(session)
+    active_job = aliased(ProcessingJob)
+    active_count = (
+        select(func.count())
+        .select_from(active_job)
+        .where(active_job.owner_id == ProcessingJob.owner_id, active_job.status.in_(ACTIVE))
+        .correlate(ProcessingJob)
+        .scalar_subquery()
+    )
+    candidates = (
+        select(
+            ProcessingJob.id.label("job_id"),
+            ProcessingJob.created_at.label("created_at"),
+            func.row_number()
+            .over(
+                partition_by=ProcessingJob.owner_id,
+                order_by=(ProcessingJob.created_at, ProcessingJob.id),
+            )
+            .label("owner_rank"),
+            (settings.owner_quota - active_count).label("available_slots"),
+        )
+        .where(
+            ProcessingJob.source_revision.is_not(None),
+            ProcessingJob.extraction_id.is_not(None),
+            ProcessingJob.status == "metadata_ready",
+        )
+        .subquery()
+    )
+    candidate_ids = (
+        await session.scalars(
+            select(candidates.c.job_id)
+            .where(candidates.c.owner_rank <= candidates.c.available_slots)
+            .order_by(candidates.c.created_at, candidates.c.job_id)
+            .limit(16)
+        )
+    ).all()
+    metadata_jobs = (
+        await session.scalars(
+            select(ProcessingJob)
+            .where(ProcessingJob.id.in_(candidate_ids))
+            .order_by(ProcessingJob.created_at, ProcessingJob.id)
+            .with_for_update(skip_locked=True)
+        )
+    ).all()
+    active_counts = dict(
+        (
+            await session.execute(
+                select(ProcessingJob.owner_id, func.count())
+                .where(ProcessingJob.status.in_(ACTIVE))
+                .group_by(ProcessingJob.owner_id)
+            )
+        ).all()
+    )
+    for job in metadata_jobs:
+        job.generation += 1
+        job.status, job.stage, job.stage_state = "queued", "pdf_analysis.v1", "pending"
+        job.progress, job.error_code = 35, None
+        job.attempts = 0
+        job.lease_id = job.lease_until = job.deadline_at = None
+        job.not_before = now()
+        outbox = await session.get(JobOutbox, job.id)
+        if outbox is None:
+            session.add(JobOutbox(job_id=job.id, available_at=job.not_before))
+        else:
+            outbox.available_at = job.not_before
+        active_counts[job.owner_id] = active_counts.get(job.owner_id, 0) + 1
+
     # Bounded work; expired workers lose their token before another attempt starts.
     jobs = (
         await session.scalars(

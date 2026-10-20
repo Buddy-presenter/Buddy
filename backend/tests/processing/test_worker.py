@@ -20,7 +20,7 @@ from buddy_api.app import create_app
 from buddy_api.auth import Principal, authenticated
 from buddy_api.config import Environment, Settings
 from buddy_api.persistence.database import Database
-from buddy_api.persistence.models import DeckExtraction, JobOutbox, ProcessingJob
+from buddy_api.persistence.models import ActionCheck, DeckExtraction, JobOutbox, ProcessingJob
 from buddy_api.processing import store
 from buddy_api.processing.config import WorkerSettings
 from buddy_api.processing.contracts import Message, PDFSource
@@ -28,8 +28,11 @@ from buddy_api.processing.service import Processor
 from buddy_api.processing.stage import inspect_source
 from buddy_api.uploads.config import UploadSettings
 from buddy_api.uploads.contracts import UploadError
+from buddy_api.uploads.service import UploadService
 from buddy_api.uploads.storage import SourceStorage
+from buddy_api.validation.config import ValidatorSettings
 from buddy_api.validation.contracts import ProcessResult, StoredResult, action_digest
+from buddy_api.validation.service import ValidationService
 
 PDF = Path(__file__).resolve().parents[3] / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf"
 WORKER = WorkerSettings(
@@ -282,6 +285,59 @@ def test_pending_validation_defers_without_spending_attempt_and_resumes_analysis
                 assert action.state == "rejected"
                 assert action.validation is not None
                 assert action.validation.reasons == ("invalid_action_parameters",)
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_failed_evidence_cleanup_does_not_block_worker_start_or_other_jobs(migrated_database):
+    class StorageWithBrokenCleanup(S3):
+        def list_object_versions(self, **_kwargs):
+            raise OSError("simulated object-store outage")
+
+    async def scenario():
+        db = Database(migrated_database)
+        try:
+            owner, deck, job = await seed(db)
+            storage = SourceStorage(UPLOADS, StorageWithBrokenCleanup(PDF.read_bytes()))
+            uploads = UploadService(db, UPLOADS, storage)
+            validator = ValidationService(
+                uploads, ValidatorSettings(python=sys.executable, seconds=5)
+            )
+            async with db.sessions() as session, session.begin():
+                reservation = ActionCheck(
+                    owner_id=owner.id,
+                    deck_id=deck.id,
+                    retry_key=uuid4(),
+                    request_sha256="a" * 64,
+                    status="pending",
+                    expires_at=store.now() - timedelta(seconds=1),
+                    storage_bytes=1024,
+                    artifacts=[],
+                )
+                session.add(reservation)
+                await session.flush()
+                reservation_id = reservation.id
+
+            queue = SQS()
+            processor = make_processor(db, storage, WORKER, queue, validation=validator)
+            # This is the worker's startup reconciliation path. Cleanup failure is retained,
+            # while the independent accepted PDF remains eligible for consumption.
+            await processor.maintain(publish=False)
+            async with db.sessions() as session:
+                deferred = await session.get(ActionCheck, reservation_id)
+                assert deferred.status == "cleanup"
+            assert (await row(db, job.id)).status == "queued"
+
+            await processor.maintain()
+            assert len(queue.messages) == 1
+            await processor.run_message(queue.messages[0])
+            finished = await row(db, job.id)
+            assert finished.status == "analysis_ready"
+            async with db.sessions() as session:
+                deferred = await session.get(ActionCheck, reservation_id)
+                assert deferred.status == "cleanup"
         finally:
             await db.close()
 
@@ -609,5 +665,108 @@ def test_pre_worker_records_survive_forward_migration_and_schema_matches(databas
                 await db.close()
         finally:
             await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_preupgrade_metadata_ready_pdf_is_resumed_into_analysis(database_settings):
+    from alembic import command
+
+    from buddy_api.persistence.engine import create_engine
+    from buddy_api.persistence.migration_config import migration_config
+
+    class CountingProvider(SyntheticProvider):
+        calls = 0
+
+        def analyze(self, *args):
+            self.calls += 1
+            return super().analyze(*args)
+
+    async def migrate_to(revision):
+        engine = create_engine(database_settings)
+        try:
+            async with engine.connect() as connection:
+                await connection.run_sync(
+                    lambda sync: command.upgrade(
+                        migration_config(database_settings, sync), revision
+                    )
+                )
+        finally:
+            await engine.dispose()
+
+    async def scenario():
+        await migrate_to("0009_pdf_workers")
+        db = Database(database_settings)
+        storage = SourceStorage(UPLOADS, S3(PDF.read_bytes()))
+        owner, deck, job = await seed(db)
+        metadata = inspect_source(
+            PDFSource(
+                key=deck.source_key,
+                version=deck.source_version_id,
+                size=deck.source_size_bytes,
+                sha256=deck.source_sha256,
+                revision=deck.source_revision,
+                deck_id=deck.id,
+            ),
+            storage,
+        )
+        async with db.transaction() as repos:
+            extraction = await repos.extractions.save(
+                owner_id=owner.id, deck_id=deck.id, extraction=metadata.metadata
+            )
+        async with db.sessions() as session, session.begin():
+            old_job = await session.get(ProcessingJob, job.id)
+            old_job.status = "metadata_ready"
+            old_job.stage, old_job.stage_state, old_job.progress = (
+                "pdf_metadata.v1",
+                "succeeded",
+                100,
+            )
+            old_job.attempts = 1
+            old_job.extraction_id = extraction.id
+            old_generation = old_job.generation
+        await db.close()
+
+        # This simulates deploying the analysis worker over a real 0009-completed PDF.
+        await migrate_to("head")
+        db = Database(database_settings)
+        queue, provider = SQS(), CountingProvider()
+        processor = Processor(
+            db,
+            storage,
+            WORKER,
+            queue,
+            inspector=lambda _source: pytest.fail("saved metadata must be reused"),
+            provider=provider,
+        )
+        try:
+            await processor.maintain()
+            assert len(queue.messages) == 1
+            migrated = await row(db, job.id)
+            assert (migrated.status, migrated.stage, migrated.extraction_id) == (
+                "queued",
+                "pdf_analysis.v1",
+                extraction.id,
+            )
+            assert migrated.generation == old_generation + 1
+            assert migrated.attempts == 0
+
+            await processor.run_message(queue.messages[0])
+            finished = await row(db, job.id)
+            assert (finished.status, finished.attempts, finished.extraction_id) == (
+                "analysis_ready",
+                1,
+                extraction.id,
+            )
+            assert provider.calls == 1
+            async with db.transaction() as repos:
+                analyses = await repos.analyses.list(owner_id=owner.id)
+                assert len(analyses) == 1
+                assert analyses[0].job_id == job.id
+                assert analyses[0].extraction_id == extraction.id
+                result = await repos.analyses.read(analyses[0].id, owner_id=owner.id)
+                assert result.publication == "published"
+        finally:
+            await db.close()
 
     asyncio.run(scenario())

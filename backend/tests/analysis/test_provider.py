@@ -1,11 +1,12 @@
 """The external provider boundary preserves bytes and rejects untrusted output."""
 
+import asyncio
 import base64
 import hashlib
 import json
-from urllib.error import HTTPError
 from uuid import UUID
 
+import httpx
 import pytest
 
 from buddy_api.analysis import provider
@@ -64,20 +65,6 @@ def inputs():
     return extraction, manifest
 
 
-class Response:
-    def __init__(self, value: dict[str, object]):
-        self.value = json.dumps(value).encode()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args):
-        return None
-
-    def read(self, size: int) -> bytes:
-        return self.value[:size]
-
-
 class Credentials:
     access_key = "AKIDEXAMPLE"
     secret_key = "not-a-real-secret"
@@ -94,11 +81,13 @@ class Session:
 
 class Opener:
     def __init__(self, response: dict[str, object]):
-        self.response, self.request, self.timeout = response, None, None
+        self.response, self.request = response, None
 
-    def __call__(self, request, *, timeout):
-        self.request, self.timeout = request, timeout
-        return Response(self.response)
+        async def handler(request):
+            self.request = request
+            return httpx.Response(200, json=self.response)
+
+        self.transport = httpx.MockTransport(handler)
 
 
 class OversizedPdf(bytes):
@@ -131,18 +120,17 @@ def test_bedrock_request_submits_exact_pdf_with_native_claude_api(monkeypatch):
     opener = Opener(response_for())
     monkeypatch.setattr(provider, "Session", Session)
 
-    result = BedrockProvider("eu-central-1", opener=opener).analyze(
+    result = BedrockProvider("eu-central-1", transport=opener.transport).analyze(
         PDF, extraction, str(DECK_ID), manifest
     )
 
     assert result.slides[0].number == 1
-    assert opener.timeout == provider.TIMEOUT_SECONDS
     assert opener.request is not None
-    headers = {key.lower(): value for key, value in opener.request.header_items()}
+    headers = opener.request.headers
     assert headers["authorization"].startswith("AWS4-HMAC-SHA256 ")
     assert headers["x-amz-security-token"] == "synthetic-session-token"
-    body = json.loads(opener.request.data)
-    assert opener.request.full_url.endswith("/model/eu.anthropic.claude-sonnet-4-6/invoke")
+    body = json.loads(opener.request.content)
+    assert opener.request.url.path.endswith("/model/eu.anthropic.claude-sonnet-4-6/invoke")
     assert body["anthropic_version"] == "bedrock-2023-05-31"
     assert body["max_tokens"] == provider.MAX_OUTPUT_TOKENS
     assert body["temperature"] == 0
@@ -191,7 +179,7 @@ def test_provider_rejects_invalid_page_order_and_duplicate_output_fields(monkeyp
     extraction, manifest = inputs()
     monkeypatch.setattr(provider, "Session", Session)
     with pytest.raises(ProviderFailure, match="provider_slide_order"):
-        BedrockProvider("eu-central-1", opener=Opener(response_for(number=2))).analyze(
+        BedrockProvider("eu-central-1", transport=Opener(response_for(number=2)).transport).analyze(
             PDF, extraction, str(DECK_ID), manifest
         )
 
@@ -214,14 +202,14 @@ def test_provider_rejects_conflicting_summary_availability(monkeypatch):
     )
     with pytest.raises(ProviderFailure, match="provider_malformed_output"):
         BedrockProvider(
-            "eu-central-1", opener=Opener(response_for(output_text=conflicting))
+            "eu-central-1", transport=Opener(response_for(output_text=conflicting)).transport
         ).analyze(PDF, extraction, str(DECK_ID), manifest)
 
     duplicate = '{"presentation":{"text":"one","text":"two","reason":null},"slides":[]}'
     with pytest.raises(ProviderFailure, match="provider_malformed_output"):
-        BedrockProvider("eu-central-1", opener=Opener(response_for(output_text=duplicate))).analyze(
-            PDF, extraction, str(DECK_ID), manifest
-        )
+        BedrockProvider(
+            "eu-central-1", transport=Opener(response_for(output_text=duplicate)).transport
+        ).analyze(PDF, extraction, str(DECK_ID), manifest)
 
 
 def test_provider_rejects_oversized_file_before_network(monkeypatch):
@@ -230,7 +218,7 @@ def test_provider_rejects_oversized_file_before_network(monkeypatch):
     monkeypatch.setattr(provider, "Session", Session)
 
     with pytest.raises(ProviderFailure, match="provider_file_limit"):
-        BedrockProvider("eu-central-1", opener=opener).analyze(
+        BedrockProvider("eu-central-1", transport=opener.transport).analyze(
             OversizedPdf(PDF), extraction, str(DECK_ID), manifest
         )
     assert opener.request is None
@@ -245,7 +233,7 @@ def test_provider_rejects_oversized_deck_before_network(monkeypatch):
     monkeypatch.setattr(provider, "Session", Session)
 
     with pytest.raises(ProviderFailure, match="provider_page_limit"):
-        BedrockProvider("eu-central-1", opener=opener).analyze(
+        BedrockProvider("eu-central-1", transport=opener.transport).analyze(
             PDF, extraction, str(DECK_ID), manifest
         )
     assert opener.request is None
@@ -255,12 +243,105 @@ def test_provider_access_denial_is_permanent_and_sanitized(monkeypatch):
     extraction, manifest = inputs()
     monkeypatch.setattr(provider, "Session", Session)
 
-    def denied(_request, *, timeout):
-        raise HTTPError("https://bedrock.invalid", 403, "denied", {}, None)
+    denied = httpx.MockTransport(lambda _request: httpx.Response(403, text="denied"))
 
     with pytest.raises(ProviderFailure, match="provider_access_denied") as failure:
-        BedrockProvider("eu-central-1", opener=denied).analyze(
+        BedrockProvider("eu-central-1", transport=denied).analyze(
             PDF, extraction, str(DECK_ID), manifest
         )
     assert failure.value.permanent
     assert str(failure.value) == "provider_access_denied"
+
+
+def test_async_provider_uses_signed_request_and_returns_validated_output(monkeypatch):
+    extraction, manifest = inputs()
+    monkeypatch.setattr(provider, "Session", Session)
+    captured = {}
+
+    async def handler(request):
+        captured["authorization"] = request.headers["authorization"]
+        body = json.loads(request.content)
+        document = next(
+            part for part in body["messages"][0]["content"] if part["type"] == "document"
+        )
+        captured["pdf"] = base64.b64decode(document["source"]["data"], validate=True)
+        return httpx.Response(200, json=response_for())
+
+    async def scenario():
+        transport = httpx.MockTransport(handler)
+        result = await BedrockProvider("eu-central-1", transport=transport).analyze_async(
+            PDF, extraction, str(DECK_ID), manifest
+        )
+        assert result.slides[0].number == 1
+
+    asyncio.run(scenario())
+    assert captured["authorization"].startswith("AWS4-HMAC-SHA256 ")
+    assert captured["pdf"] == PDF
+
+
+def test_async_provider_deadline_stops_trickling_response(monkeypatch):
+    extraction, manifest = inputs()
+    monkeypatch.setattr(provider, "Session", Session)
+    monkeypatch.setattr(provider, "TIMEOUT_SECONDS", 0.04)
+
+    class Trickle(httpx.AsyncByteStream):
+        def __init__(self):
+            self.closed = asyncio.Event()
+
+        async def __aiter__(self):
+            try:
+                while True:
+                    yield b" "
+                    await asyncio.sleep(0.005)
+            finally:
+                self.closed.set()
+
+        async def aclose(self):
+            self.closed.set()
+
+    async def scenario():
+        stream = Trickle()
+        transport = httpx.MockTransport(lambda _request: httpx.Response(200, stream=stream))
+        with pytest.raises(ProviderFailure, match="provider_unavailable"):
+            await BedrockProvider("eu-central-1", transport=transport).analyze_async(
+                PDF, extraction, str(DECK_ID), manifest
+            )
+        assert stream.closed.is_set()
+
+    asyncio.run(scenario())
+
+
+def test_async_provider_cancellation_closes_outstanding_response(monkeypatch):
+    extraction, manifest = inputs()
+    monkeypatch.setattr(provider, "Session", Session)
+
+    class WaitingStream(httpx.AsyncByteStream):
+        def __init__(self):
+            self.started, self.closed = asyncio.Event(), asyncio.Event()
+
+        async def __aiter__(self):
+            self.started.set()
+            try:
+                await asyncio.Event().wait()
+                yield b"never"
+            finally:
+                self.closed.set()
+
+        async def aclose(self):
+            self.closed.set()
+
+    async def scenario():
+        stream = WaitingStream()
+        transport = httpx.MockTransport(lambda _request: httpx.Response(200, stream=stream))
+        task = asyncio.create_task(
+            BedrockProvider("eu-central-1", transport=transport).analyze_async(
+                PDF, extraction, str(DECK_ID), manifest
+            )
+        )
+        await asyncio.wait_for(stream.started.wait(), timeout=1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert stream.closed.is_set()
+
+    asyncio.run(scenario())

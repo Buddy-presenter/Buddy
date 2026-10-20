@@ -29,6 +29,7 @@ from buddy_api.analysis.provider import (
     ModelOutput,
     ProviderFailure,
 )
+from buddy_api.analysis.rendering import render_manifest
 from buddy_api.analysis.store import Analyses
 from buddy_api.extraction.contracts import Extraction, ExtractionError
 from buddy_api.persistence.database import Database
@@ -176,6 +177,7 @@ class Processor:
             return
         assert job.lease_id is not None
         token = job.lease_id
+        stage, saved_extraction_id = job.stage, job.extraction_id
 
         def inspect() -> MetadataOutput:
             key, version, size, source_digest, revision, source_format, deck_id, _owner_id = source
@@ -211,7 +213,10 @@ class Processor:
                     async with self.database.sessions() as session, session.begin():
                         alive = await store.heartbeat(session, job.id, token, self.settings)
                     if not alive:
-                        await task
+                        if not task.done():
+                            task.cancel()
+                        with suppress(Exception, asyncio.CancelledError):
+                            await task
                         return False, None
                 return True, await task
             except asyncio.CancelledError:
@@ -222,17 +227,10 @@ class Processor:
                 raise
 
         try:
-            alive, output = await fenced(blocking(inspect))
-            if not alive:
-                return
-            async with self.database.sessions() as session, session.begin():
-                extraction_id = await store.save_metadata(session, job.id, token, output)
-            if extraction_id is None:
-                return
-
             key, version, size, source_digest, revision, _format, deck_id, owner_id = source
             if not key or not version or not size or not source_digest:
                 raise ExtractionError("invalid_pdf_source")
+            extraction_id: UUID | None = None
             content = await blocking(
                 lambda: self.storage.read(
                     key,
@@ -242,6 +240,43 @@ class Processor:
                     source_format="pdf",
                 )
             )
+            if stage == "pdf_analysis.v1":
+                if saved_extraction_id is None:
+                    raise ExtractionError("saved_extraction_unavailable")
+                async with self.database.sessions() as session:
+                    saved = await session.get(DeckExtraction, saved_extraction_id)
+                if (
+                    saved is None
+                    or saved.owner_id != owner_id
+                    or saved.deck_id != deck_id
+                    or saved.source_revision != revision
+                    or saved.source_sha256 != source_digest
+                ):
+                    raise UploadError(
+                        409, "source_changed", "Saved extraction is no longer current."
+                    )
+                try:
+                    extraction = Extraction.model_validate(saved.document)
+                except ValueError:
+                    raise ExtractionError("saved_extraction_invalid") from None
+                alive, manifest = await fenced(
+                    blocking(partial(render_manifest, content, extraction, str(deck_id)))
+                )
+                if not alive:
+                    return
+                extraction_id = saved_extraction_id
+            else:
+                alive, output = await fenced(blocking(inspect))
+                if not alive:
+                    return
+                async with self.database.sessions() as session, session.begin():
+                    extraction_id = await store.save_metadata(session, job.id, token, output)
+                if extraction_id is None:
+                    return
+                extraction, manifest = output.metadata, output.manifest
+            if extraction_id is None:
+                return
+
             async with self.database.sessions() as session:
                 existing = await session.scalar(
                     select(AnalysisVersion).where(
@@ -253,21 +288,19 @@ class Processor:
             if existing is None:
                 if hashlib.sha256(content).hexdigest() != source_digest:
                     raise UploadError(409, "source_mismatch", "Accepted PDF source changed.")
-                alive, generated = await fenced(
-                    blocking(
-                        partial(
-                            self.provider.analyze,
-                            content,
-                            output.metadata,
-                            str(deck_id),
-                            output.manifest,
-                        )
+                analyze_async = getattr(self.provider, "analyze_async", None)
+                provider_call = (
+                    analyze_async(content, extraction, str(deck_id), manifest)
+                    if analyze_async is not None
+                    else blocking(
+                        partial(self.provider.analyze, content, extraction, str(deck_id), manifest)
                     )
                 )
+                alive, generated = await fenced(provider_call)
                 if not alive:
                     return
                 document = self._analysis_document(
-                    generated, output.metadata, output.manifest, deck_id, job.id, extraction_id
+                    generated, extraction, manifest, deck_id, job.id, extraction_id
                 )
                 async with self.database.sessions() as session, session.begin():
                     current = await session.scalar(

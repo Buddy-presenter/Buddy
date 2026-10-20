@@ -1,13 +1,13 @@
 """Bounded, original-PDF analysis through Amazon Bedrock's native model API."""
 
+import asyncio
 import base64
 import json
-from collections.abc import Callable, Mapping
-from typing import Any, Literal
-from urllib.error import HTTPError, URLError
+from collections.abc import Mapping
+from typing import Literal
 from urllib.parse import quote
-from urllib.request import Request, urlopen
 
+import httpx
 from botocore.auth import SigV4Auth  # type: ignore[import-untyped]
 from botocore.awsrequest import AWSRequest  # type: ignore[import-untyped]
 from botocore.session import Session  # type: ignore[import-untyped]
@@ -193,12 +193,17 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
 
 
 class BedrockProvider:
-    def __init__(self, region: str, *, opener: Callable[..., Any] = urlopen):
-        self.region, self.opener = region, opener
+    def __init__(
+        self,
+        region: str,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ):
+        self.region, self.transport = region, transport
 
-    def analyze(
+    def _signed_request(
         self, content: bytes, extraction: Extraction, deck_id: str, manifest: Manifest
-    ) -> ModelOutput:
+    ) -> tuple[str, bytes, list[tuple[int, int]], dict[str, str]]:
         if not content.startswith(b"%PDF-") or len(content) > MAX_FILE_BYTES:
             raise ProviderFailure("provider_file_limit", permanent=True)
         if not 1 <= len(extraction.slides) <= MAX_PAGES:
@@ -249,24 +254,14 @@ class BedrockProvider:
             method="POST", url=endpoint, data=body, headers={"Content-Type": "application/json"}
         )
         SigV4Auth(credentials.get_frozen_credentials(), "bedrock", self.region).add_auth(request)
+        return endpoint, body, dims, dict(request.headers)
+
+    @staticmethod
+    def _decode_response(raw: bytes, dims: list[tuple[int, int]]) -> ModelOutput:
+        if len(raw) > MAX_RESPONSE_BYTES:
+            raise ProviderFailure("provider_response_limit", permanent=True)
         try:
-            with self.opener(
-                Request(endpoint, data=body, headers=dict(request.headers), method="POST"),
-                timeout=TIMEOUT_SECONDS,
-            ) as response:
-                raw = response.read(MAX_RESPONSE_BYTES + 1)
-            if len(raw) > MAX_RESPONSE_BYTES:
-                raise ProviderFailure("provider_response_limit", permanent=True)
             decoded = json.loads(raw, object_pairs_hook=_unique_object)
-        except HTTPError as exc:
-            # Do not expose provider diagnostics, prompt content, or credentials in logs/errors.
-            if exc.code == 403:
-                raise ProviderFailure("provider_access_denied", permanent=True) from None
-            if exc.code in {400, 413, 415, 422}:
-                raise ProviderFailure("provider_rejected", permanent=True) from None
-            raise ProviderFailure("provider_unavailable") from None
-        except (TimeoutError, URLError, OSError):
-            raise ProviderFailure("provider_unavailable") from None
         except (ValueError, RecursionError):
             raise ProviderFailure("provider_malformed_response") from None
         try:
@@ -287,3 +282,48 @@ class BedrockProvider:
         if sum(len(item.actions) for item in result.slides) > MAX_ACTIONS_PER_DECK:
             raise ProviderFailure("provider_action_limit", permanent=True)
         return result
+
+    @staticmethod
+    def _http_failure(status: int) -> ProviderFailure:
+        # Never expose provider diagnostics, prompt content, or credentials.
+        if status == 403:
+            return ProviderFailure("provider_access_denied", permanent=True)
+        if status in {400, 413, 415, 422}:
+            return ProviderFailure("provider_rejected", permanent=True)
+        return ProviderFailure("provider_unavailable")
+
+    def analyze(
+        self, content: bytes, extraction: Extraction, deck_id: str, manifest: Manifest
+    ) -> ModelOutput:
+        """Synchronous compatibility wrapper using the same cancellable deadline."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self.analyze_async(content, extraction, deck_id, manifest))
+        raise RuntimeError("Use analyze_async from an active event loop")
+
+    async def analyze_async(
+        self, content: bytes, extraction: Extraction, deck_id: str, manifest: Manifest
+    ) -> ModelOutput:
+        """Invoke Bedrock with a cancellable transport and one end-to-end deadline."""
+        try:
+            async with asyncio.timeout(TIMEOUT_SECONDS):
+                endpoint, body, dims, headers = self._signed_request(
+                    content, extraction, deck_id, manifest
+                )
+                async with (
+                    httpx.AsyncClient(transport=self.transport, timeout=None) as client,
+                    client.stream("POST", endpoint, content=body, headers=headers) as response,
+                ):
+                    if response.status_code >= 400:
+                        raise self._http_failure(response.status_code)
+                    raw = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        raw.extend(chunk)
+                        if len(raw) > MAX_RESPONSE_BYTES:
+                            raise ProviderFailure("provider_response_limit", permanent=True)
+        except TimeoutError:
+            raise ProviderFailure("provider_unavailable") from None
+        except httpx.HTTPError:
+            raise ProviderFailure("provider_unavailable") from None
+        return self._decode_response(bytes(raw), dims)

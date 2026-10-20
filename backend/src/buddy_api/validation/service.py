@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 import tempfile
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -32,6 +33,7 @@ KINDS = {
     "after_image": ("png", "image/png"),
     "report": ("json", "application/json"),
 }
+logger = logging.getLogger(__name__)
 
 
 class ValidationService:
@@ -282,10 +284,20 @@ class ValidationService:
             if row.status == "pending" and row.expires_at > datetime.now(UTC):
                 return
             row.status = "cleanup"
-            for kind in KINDS:
-                await blocking(partial(self.uploads.storage.remove, self.key(row, kind)))
-            row.status = "failed"
-            row.storage_bytes = 0
+            await session.flush()
+            owner_id, deck_id = row.owner_id, row.deck_id
+
+        # Keep the cleanup reservation committed while external storage is unavailable.
+        # Reconciliation can retry these exact private keys without blocking worker startup.
+        for kind in KINDS:
+            key = f"sources/{owner_id}/{deck_id}/validation/{identifier}/{kind}.{KINDS[kind][0]}"
+            await blocking(partial(self.uploads.storage.remove, key))
+
+        async with self.uploads.transaction() as session:
+            row = await session.get(ActionCheck, identifier, with_for_update=True)
+            if row is not None and row.status == "cleanup":
+                row.status = "failed"
+                row.storage_bytes = 0
 
     async def reconcile(self) -> None:
         async with self.uploads.transaction() as session:
@@ -303,4 +315,8 @@ class ValidationService:
                 )
             )
         for identifier in ids:
-            await self.cleanup(identifier)
+            try:
+                await self.cleanup(identifier)
+            except UploadError:
+                # A private-object deletion failure is durable and retried independently.
+                logger.warning("Validation evidence cleanup deferred; reservation retained")
