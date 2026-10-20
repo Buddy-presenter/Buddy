@@ -65,7 +65,10 @@ def test_metric_rejects_non_finite_and_negative_values(capsys):
     assert capsys.readouterr().out == ""
 
 
-@pytest.mark.parametrize(("status", "expected"), [(201, "success"), (413, "rejected")])
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [(201, "success"), (413, "rejected"), (500, "failed"), (307, None)],
+)
 def test_upload_middleware_emits_success_and_rejection_without_path_identifiers(
     capsys, status, expected
 ):
@@ -96,6 +99,9 @@ def test_upload_middleware_emits_success_and_rejection_without_path_identifiers(
         message["status"] for message in messages if message["type"] == "http.response.start"
     ] == [status]
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    if expected is None:
+        assert events == []
+        return
     assert len(events) == 2
     assert {event["Outcome"] for event in events} == {expected}
     assert all(event["Stage"] == "upload" and event["Service"] == "api" for event in events)

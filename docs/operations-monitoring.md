@@ -7,7 +7,7 @@ service log groups. `Buddy/Operational` contains:
 
 | Signal | Source | Meaning |
 | --- | --- | --- |
-| UploadRequest | API | Count of accepted or rejected upload initialization/content-transfer requests. |
+| UploadRequest | API | Count of successful (2xx), rejected (4xx), and failed (5xx) upload initialization/content-transfer responses. Redirects (3xx) are excluded as intermediate responses. |
 | JobAttempt / JobOutcome | Worker | Claimed attempts and their success, retry, or dead-letter outcome. |
 | DurationMs | API/worker | Upload request, complete job, metadata/manifest work, validation, and Bedrock call durations. |
 | StageOutcome | Worker | Metadata inspection, manifest rendering, action validation, Bedrock call, and failure outcomes. |

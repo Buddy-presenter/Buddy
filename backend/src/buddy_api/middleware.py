@@ -52,7 +52,15 @@ class RequestContextMiddleware:
             )
             if not upload_route or response_status is None:
                 return
-            outcome = "success" if 200 <= response_status < 300 else "rejected"
+            if 200 <= response_status < 300:
+                outcome = "success"
+            elif 400 <= response_status < 500:
+                outcome = "rejected"
+            elif 500 <= response_status < 600:
+                outcome = "failed"
+            else:
+                # Redirects are intermediate responses, not a final upload outcome.
+                return
             for metric, value in (
                 ("UploadRequest", 1),
                 ("DurationMs", (time.perf_counter() - started_at) * 1000),
