@@ -13,7 +13,7 @@ same account. An out-of-range page after data changes returns to the last availa
 Controls have keyboard focus, accessible names and tooltips. Deck titles remain plain
 text; long titles are elided in the table with their full value in the tooltip and the
 selected-deck details. Details include processing guidance and actual job attempts.
-Queued/running pages refresh every 15 seconds only while Library is active. Search
+Active PDF jobs refresh every 15 seconds only while Library is active. Search
 requests are debounced and serialized; late replies cannot overwrite newer filters,
 account changes or a closed window. There are no automatic network retries.
 
@@ -23,8 +23,9 @@ account changes or a closed window. There are no automatic network retries.
 Bearer header. It uses the same live verification and persisted account resolution as
 other private resources. The server always filters by that verified owner, including
 the total and every joined job/analysis/asset record. It does not accept an owner UUID
-as authorization. Results contain only deck ID, title, creation time, derived status
-and job attempts; no storage keys, summary/action bodies, credentials or private provider errors.
+as authorization. Results contain only deck ID, title, creation time, the backward-compatible
+coarse status, job attempts and a typed processing summary; no storage keys, summary/action
+bodies, credentials or private provider errors.
 Successful responses have Cache-Control: no-store and the normal request-ID envelope.
 
 Query parameters: `search` (up to 256 characters), `sort` (`newest`, `oldest`,
@@ -51,19 +52,29 @@ successful attempt. All records are from the account's own deck:
 | Successful job missing current publication or complete render proof | Assets unavailable (`incomplete`) |
 
 The current analysis is the highest persisted version for the deck; an older published
-version cannot mask a newer candidate/partial revision. Complete render proof must bind
-every ordered manifest slide to its render revision and raster checksum. Current asset
-metadata lacks those fields, so the library conservatively reports `incomplete` for
-succeeded jobs until the renderer supplies that proof. An arbitrary asset row, matching
-filename, or matching row count is insufficient. No fabricated
-progress percentage or arbitrary worker exception is displayed. Until #8 provides job
-progress/retry contracts, users see the actual lifecycle and attempt count and are
-directed to support after failures. Refresh retries listing, not processing.
+version cannot mask a newer candidate/partial revision. The additive `processing` object
+reports `uploaded`, `queued`, `inspecting_pdf_metadata`, `analyzing`, `validating`,
+`review_ready`, `partial`, `failed` or `cancelled`, plus the durable stage, real worker
+progress, attempts and safe error code. `review_ready` requires the latest published
+analysis to belong to the latest job for the deck and the same PDF source revision.
+Publication verifies the ordered manifest, source hash/revision, complete typed summaries
+and terminal action outcomes. It does not require an S3 raster row: review renders the
+pinned source PDF locally with the canonical renderer. A candidate or one render asset
+cannot establish readiness. The legacy coarse `status` field retains its conservative
+render-proof mapping for older desktop clients.
 
-No upload, processing worker, preview download, rename, delete or presentation action
-is added by #6. Those belong to #7-#12, #13, #32 and #37. No migration is needed;
-this view reads the existing durable tables. Without decks produced by those workflows,
-the genuine empty library is shown. Local tests seed disposable PostgreSQL records;
+The selected deck exposes Cancel processing only for an active, current-source job and
+Retry processing only for a recoverable current-source job below the configured lifetime
+attempt limit. Both call the authenticated owner-scoped job API; server quota and attempt
+checks remain authoritative. A lost response is safe to recover by refreshing. The worker
+persists metadata, render, provider and validation stage transitions under its active lease;
+expired leases cannot overwrite newer state. Retry reuses the saved source and extraction,
+and analysis/validation writes remain tied to the job and source revision. Manual PDF
+presentation remains available as soon as the immutable PDF is saved, regardless of
+analysis state. The review page stays read-only and explains partial or unavailable data.
+
+No migration is needed: additive library fields read existing durable records and stage
+values fit the existing bounded job column. Local tests seed disposable PostgreSQL records;
 the application never injects sample decks or reads a backend database directly.
 
 ## Verification
