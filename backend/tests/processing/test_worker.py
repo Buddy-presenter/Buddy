@@ -348,8 +348,10 @@ def test_failed_evidence_cleanup_does_not_block_worker_start_or_other_jobs(migra
     asyncio.run(scenario())
 
 
-def test_successful_publish_reconciles_before_redrive_or_retention(migrated_database):
+def test_successful_publish_reconciles_before_redrive_or_retention(migrated_database, monkeypatch):
     async def scenario():
+        fixed_now = store.now()
+        monkeypatch.setattr(store, "now", lambda: fixed_now)
         db = Database(migrated_database)
         try:
             _, _, job = await seed(db)
