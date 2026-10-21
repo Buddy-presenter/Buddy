@@ -53,6 +53,50 @@ stack takes the approved alert email as a deploy-time parameter; no email addres
 committed to source control. The recipient must confirm the SNS subscription before email
 delivery is active.
 
+### Safe staging ownership handoff
+
+Do the read-only preflight below before creating the CloudFormation stack or applying any
+staging Terraform plan. Use the staging backend configuration and AWS account/region. The
+expected result is no monitoring resource addresses in Terraform state and no matching
+CloudWatch dashboard, alarms, or SNS topic in AWS. The staging state and account were
+checked for this PR and contained none of these monitoring resources; consequently there
+are no existing alarms or email subscription confirmations to transfer, and no Terraform
+state removal is needed for the initial CloudFormation deployment.
+
+```powershell
+terraform -chdir=infra/terraform/environments/staging init -backend-config=backend.hcl
+terraform -chdir=infra/terraform/environments/staging state list |
+  Select-String 'aws_(cloudwatch_dashboard|cloudwatch_metric_alarm|sns_topic|sns_topic_policy|sns_topic_subscription)'
+
+aws cloudwatch describe-alarms --alarm-name-prefix buddy-staging `
+  --profile buddy-dev --region eu-central-1 `
+  --query 'MetricAlarms[].AlarmName' --output json
+aws cloudwatch list-dashboards --dashboard-name-prefix buddy-staging `
+  --profile buddy-dev --region eu-central-1 `
+  --query 'DashboardEntries[].DashboardName' --output json
+aws sns list-topics --profile buddy-dev --region eu-central-1 `
+  --query 'Topics[?contains(TopicArn, `buddy-staging-operations-alerts`)].TopicArn' --output json
+```
+
+All four checks must return no matching items before proceeding. If any Terraform address
+or AWS resource is found, **stop**: do not apply the staging Terraform configuration with
+monitoring disabled and do not create this stack. Terraform would otherwise plan to destroy
+resources still in its state, while CloudFormation creation would collide with live names.
+Keep the existing alarms, topic, policy and subscriptions in place and prepare a separate,
+reviewed import/ownership-transfer plan for the exact resources found. Preserve any
+confirmed SNS subscription and its endpoint; do not unsubscribe, delete, or recreate it as
+part of a normal stack create. Verify CloudFormation import support and identifiers for
+every resource before that separate migration, since a partial import is not a safe
+handoff.
+
+When the preflight is clean, no Terraform apply or state surgery is required to transfer
+ownership: the state contains no monitoring addresses, and the reviewed staging config
+keeps Terraform from creating them in future plans. Create a CloudFormation change set,
+inspect it before execution, and require it to contain only additions for this stack. Then
+execute it and verify the dashboard, five alarms, topic policy, and SNS subscription. The
+new subscription starts pending and its owner must confirm it before email delivery works.
+After deployment, confirm a Terraform plan still contains no monitoring-resource changes.
+
 Validate the template before creating a change set:
 
 ```powershell
