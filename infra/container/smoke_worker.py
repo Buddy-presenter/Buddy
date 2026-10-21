@@ -216,7 +216,14 @@ def verify(image, schema_image=None):
                 raise RuntimeError("Worker smoke exited: " + docker("logs", worker))
             time.sleep(1)
         else:
-            raise RuntimeError("Worker smoke did not complete PDF inspection: " + state)
+            error = sql(
+                f"SELECT COALESCE(error_code, '<none>') FROM processing_jobs WHERE id='{job}'"
+            )
+            stage = sql(f"SELECT stage || ':' || stage_state FROM processing_jobs WHERE id='{job}'")
+            raise RuntimeError(
+                f"Worker smoke did not complete PDF inspection: status={state}, "
+                f"stage={stage}, error={error}; " + docker("logs", worker)
+            )
         assert sql(f"SELECT attempts FROM processing_jobs WHERE id='{job}'") == "2"
         assert sql("SELECT jsonb_array_length(document->'slides') FROM deck_extractions") == "3"
         assert sql("SELECT count(*) FROM analysis_versions") == "1"
