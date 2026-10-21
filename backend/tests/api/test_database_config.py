@@ -43,6 +43,24 @@ def test_production_requires_verified_tls_and_repr_hides_credentials():
         Settings(Environment.PRODUCTION)
 
 
+def test_staging_requires_verified_database_and_explicit_hosts():
+    with pytest.raises(ConfigurationError, match="BUDDY_ALLOWED_HOSTS"):
+        Settings.from_environment({"BUDDY_ENVIRONMENT": "staging"})
+
+    values = {
+        "BUDDY_ENVIRONMENT": "staging",
+        "BUDDY_ALLOWED_HOSTS": "api.staging.example.com",
+        "BUDDY_DATABASE_URL": "postgresql://buddy:secret@db.example.com/buddy?sslmode=verify-full",
+    }
+    settings = Settings.from_environment(values)
+    assert settings.environment is Environment.STAGING
+    assert settings.database is not None and settings.database.production
+
+    values["BUDDY_DATABASE_URL"] = "postgresql://buddy:secret@db.example.com/buddy?sslmode=disable"
+    with pytest.raises(ConfigurationError):
+        Settings.from_environment(values)
+
+
 def test_remote_database_requires_verified_tls():
     with pytest.raises(DatabaseConfigurationError):
         DatabaseSettings("postgresql://buddy:secret@db.example.com/db?sslmode=disable")
