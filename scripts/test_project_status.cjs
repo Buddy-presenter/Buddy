@@ -45,9 +45,9 @@ console.log('Per-PR concurrency configuration and queue regression checks passed
 const script = yaml.split('          script: |\n')[1].split('\n').map(l => l.slice(12)).join('\n');
 const execute = new (Object.getPrototypeOf(async function() {}).constructor)('github', 'context', 'core', script);
 const pageInfo = {hasNextPage:false};
-async function check({draft=false, state='open', merged=false, events=[], reviews=[], closedIssue=false, archived=false, requests=null, itemPages=null, links=null}, expected) {
+async function check({draft=false, state='open', merged=false, events=[], reviews=[], closedIssue=false, archived=false, requests=null, itemPages=null, links=null, body='', title=''}, expected) {
   const mutations = [];
-  const pr = {number:55, draft, state, merged, base:{ref:'main'},user:{login:'author'}};
+  const pr = {number:55, draft, state, merged, title, body, base:{ref:'main'},user:{login:'author'}};
   const github = {rest:{pulls:{list:'list', get:async()=>({data:pr}), listReviews:'reviews'}},
     paginate:async(endpoint)=>{assert.equal(endpoint,'reviews');return reviews;},
     graphql:async(q,v)=>{
@@ -70,6 +70,10 @@ async function check({draft=false, state='open', merged=false, events=[], review
         return {node:{items:{pageInfo:{hasNextPage:index + 1 < batches.length,endCursor:String(index + 1)},nodes:batches[index]}}};
       }
       if(q.includes('closingIssuesReferences')) return {repository:{pullRequest:{closingIssuesReferences:{pageInfo,nodes:links ?? [{id:'issue',state:closedIssue?'CLOSED':'OPEN',repository:{nameWithOwner:'Buddy-presenter/Buddy'}}]}}}};
+      if(q.includes('issue(number:$number)')) {
+        assert.equal(v.number,46);
+        return {repository:{issue:{id:'issue',number:46,state:'OPEN',repository:{nameWithOwner:'Buddy-presenter/Buddy'}}}};
+      }
       if(q.includes('reviewRequests(first:100')) return {repository:{pullRequest:{reviewRequests:{pageInfo,nodes:requests ?? (events.some(e=>e.__typename==='ReviewRequestedEvent')?[{requestedReviewer:{__typename:'User'}}]:[])}}}};
       if(q.includes('timelineItems')) return {repository:{pullRequest:{timelineItems:{pageInfo,nodes:events}}}};
       throw Error(q);
@@ -115,6 +119,11 @@ async function check({draft=false, state='open', merged=false, events=[], review
  await check({itemPages:[[{...issueItem,id:'archived',isArchived:true},{...issueItem,id:'foreign',content:{...issueItem.content,repository:{nameWithOwner:'elsewhere/repo'}}},issueItem]]},'progress');
  // Merely mentioning an issue is not a closing link.
  await check({links:[]},null);
+ // Explicit non-closing association updates status without closing the issue.
+ await check({links:[],body:'This PR is part of #46'},'progress');
+ await check({links:[],body:'This PR is part of #46',events:[request]},'waiting');
+ // A bare issue mention is not enough to associate unrelated work.
+ await check({links:[],body:'Discusses #46'},null);
  // Do not undo Done even when somebody has manually reopened an issue.
  await check({itemPages:[[{...issueItem,fieldValueByName:{optionId:'done'}}]]},null);
  // Even explicit closing links to an already-closed issue cannot affect it.
