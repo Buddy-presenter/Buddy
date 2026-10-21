@@ -158,6 +158,136 @@ def test_rollback_preflight_uses_retained_feature_schema_after_app_rollback(monk
     assert observed["schema_image"] == IMAGE  # database still expanded
 
 
+def test_bridge_preflight_uses_the_exact_current_service_image_as_its_schema_baseline(
+    monkeypatch, tmp_path
+):
+    import json
+    import sys
+
+    from backend.scripts.release import prepare_compatibility as preflight
+
+    ecs, s3 = Ecs(), S3()
+    clients = {"ecs": ecs, "s3": s3, "sts": Sts()}
+    monkeypatch.setattr(preflight.boto3, "client", lambda service, **kw: clients[service])
+    monkeypatch.setattr(preflight, "image_digest", lambda config, value, service: value)
+    observed = {}
+
+    def verify(previous, candidate, **kwargs):
+        observed.update(previous=previous, candidate=candidate, **kwargs)
+        return {"passed": True}
+
+    monkeypatch.setattr(preflight, "verify_images", verify)
+    monkeypatch.setenv("BUDDY_DEPLOYMENT_CONFIG", json.dumps(CONFIG))
+    bridge = (
+        f"{CONFIG['account_id']}.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:"
+        + "c" * 64
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "preflight",
+            "--revision",
+            "c" * 40,
+            "--candidate-image",
+            bridge,
+            "--future-image",
+            IMAGE,
+            "--base-image",
+            OLD_IMAGE,
+            "--output",
+            str(tmp_path / "proof.json"),
+        ],
+    )
+
+    preflight.main()
+
+    assert observed == {
+        "previous": OLD_IMAGE,
+        "candidate": bridge,
+        "future": IMAGE,
+        "baseline_image": OLD_IMAGE,
+        "schema_image": None,
+    }
+
+
+def test_bridge_preflight_stops_if_the_live_api_image_changed_after_build(monkeypatch, tmp_path):
+    import json
+    import sys
+
+    from backend.scripts.release import prepare_compatibility as preflight
+
+    ecs, s3 = Ecs(), S3()
+    clients = {"ecs": ecs, "s3": s3, "sts": Sts()}
+    monkeypatch.setattr(preflight.boto3, "client", lambda service, **kw: clients[service])
+    monkeypatch.setattr(preflight, "image_digest", lambda config, value, service: value)
+    monkeypatch.setattr(
+        preflight, "verify_images", lambda *args, **kwargs: pytest.fail("must not test drift")
+    )
+    monkeypatch.setenv("BUDDY_DEPLOYMENT_CONFIG", json.dumps(CONFIG))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "preflight",
+            "--revision",
+            "c" * 40,
+            "--candidate-image",
+            IMAGE,
+            "--future-image",
+            IMAGE,
+            "--base-image",
+            IMAGE,
+            "--output",
+            str(tmp_path / "proof.json"),
+        ],
+    )
+
+    with pytest.raises(DeploymentError, match="drifted"):
+        preflight.main()
+
+
+def test_bridge_compatibility_fixture_starts_from_the_live_image_schema(monkeypatch):
+    import json
+
+    from backend.scripts.release import image_compatibility as compatibility
+
+    initial, baseline, bridge, future = "initial", "current", "bridge", "feature"
+    calls = []
+
+    def docker(*args, **kwargs):
+        calls.append(args)
+        if "/checks/rollback_probe.py" in args:
+            return json.dumps(
+                {
+                    "ready": True,
+                    "analysis": True,
+                    "session": True,
+                    "owner_isolation": True,
+                }
+            )
+        return "ok"
+
+    monkeypatch.setattr(compatibility, "docker", docker)
+    monkeypatch.setattr(compatibility.subprocess, "run", lambda *args, **kwargs: None)
+
+    report = compatibility.verify_images(
+        baseline,
+        bridge,
+        initial=initial,
+        baseline_image=baseline,
+        future=future,
+        pull_images=False,
+    )
+
+    migrations = [call[-4] for call in calls if call[:3] == ("run", "--rm", "--entrypoint")]
+    assert migrations == [initial, baseline, future]
+    probes = [call[-1] for call in calls if "/checks/rollback_probe.py" in call]
+    assert probes == ["seed", "seed", "baseline", "typed", "write", "read"]
+    assert report["baseline_image"] == baseline
+    assert report["rollback_image"] == baseline
+
+
 @pytest.mark.parametrize("state", ["draining", "pending", "in_progress"])
 @pytest.mark.parametrize("when", ["before_registration", "before_migration"])
 def test_unfinished_source_rollout_blocks_migration(state, when):

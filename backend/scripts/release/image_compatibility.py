@@ -41,6 +41,7 @@ def verify_images(
     *,
     initial: str = INITIAL_IMAGE,
     future: str | None = None,
+    baseline_image: str | None = None,
     schema_image: str | None = None,
     pull_images: bool = True,
 ) -> dict:
@@ -136,6 +137,7 @@ for attempt in range(30):
                     initial,
                     previous,
                     candidate,
+                    *([baseline_image] if baseline_image else []),
                     *([future] if future else []),
                     *([schema_image] if schema_image else []),
                 ]
@@ -177,7 +179,12 @@ for attempt in range(30):
         migrate(initial)
         probe(initial, "seed")
         if future:
-            # Bridge must work before the expansion and after the feature schema.
+            # A newly built bridge starts from the exact currently deployed image,
+            # not the repository's historical first deployment. Seed that image's
+            # own schema before proving the bridge on both sides of the expansion.
+            baseline = baseline_image or initial
+            migrate(baseline)
+            probe(baseline, "seed")
             probe(candidate, "baseline")
             migrate(future)
             probe(future, "typed")
@@ -201,6 +208,7 @@ for attempt in range(30):
             "rollback_image": previous,
             "candidate_image": candidate,
             "future_image": future,
+            "baseline_image": baseline_image or (initial if future else None),
             "schema_image": schema_image or future or candidate,
         }
     finally:
@@ -218,6 +226,7 @@ def main() -> None:
     parser.add_argument("--previous-image", required=True)
     parser.add_argument("--candidate-image", required=True)
     parser.add_argument("--initial-image", default=INITIAL_IMAGE)
+    parser.add_argument("--baseline-image")
     parser.add_argument("--future-image")
     parser.add_argument(
         "--local-images",
@@ -230,6 +239,7 @@ def main() -> None:
         args.previous_image,
         args.candidate_image,
         initial=args.initial_image,
+        baseline_image=args.baseline_image,
         future=args.future_image,
         pull_images=not args.local_images,
     )
