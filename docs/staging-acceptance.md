@@ -7,9 +7,11 @@ databases, buckets, queues, secrets, Cognito clients and protected-environment O
 Staging uses `ingress_mode = "aws_https"`, CloudFront's AWS hostname and an internal ALB.
 Its `service_egress_mode = "public_ip"` removes NAT: tasks have public IPs for outbound
 HTTPS but API ingress stays restricted to the ALB security group; RDS stays private.
-An owned domain can be added later without changing the ingress mode. No worker image
-or worker service is supplied by this issue. See [infrastructure](infrastructure.md)
-for configuration, the TLS policy limitation and the private HTTP origin boundary.
+An owned domain can be added later without changing the ingress mode. This issue provisions
+staging ingress and API infrastructure; the reviewed #24 release path bootstraps the worker
+service paused and promotes it only after exact-image compatibility checks. See
+[infrastructure](infrastructure.md) for configuration, the TLS policy limitation and the
+private HTTP origin boundary.
 
 The requester chose to retain the AWS Free account plan after live provisioning rejected
 seven-day RDS backup retention. Staging now requests one-day automated backup retention;

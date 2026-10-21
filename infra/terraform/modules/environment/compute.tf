@@ -109,7 +109,7 @@ resource "aws_ecs_service" "worker" {
   name             = "worker"
   cluster          = aws_ecs_cluster.main.id
   task_definition  = aws_ecs_task_definition.service["worker"].arn
-  desired_count    = var.start_services ? (local.production ? 2 : 1) : 0
+  desired_count    = var.start_services && var.worker_start_services ? (local.production ? 2 : 1) : 0
   launch_type      = "FARGATE"
   platform_version = "1.4.0"
   deployment_circuit_breaker {
@@ -123,7 +123,9 @@ resource "aws_ecs_service" "worker" {
   }
   # Keep active service revisions under the same release-driver ownership as API.
   lifecycle {
-    ignore_changes = [task_definition]
+    # Terraform creates the service paused; the reviewed release driver owns the
+    # active digest and desired count from the first promotion onward.
+    ignore_changes = [task_definition, desired_count]
   }
   depends_on = [aws_iam_role_policy.execution]
 }

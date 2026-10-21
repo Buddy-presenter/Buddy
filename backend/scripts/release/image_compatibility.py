@@ -3,6 +3,7 @@
 import argparse
 import json
 import subprocess
+import sys
 from pathlib import Path
 from uuid import uuid4
 
@@ -35,6 +36,30 @@ def docker(*args: str, timeout: int = 180) -> str:
     return result.stdout.strip()
 
 
+def verify_worker_image(worker_image: str, schema_image: str) -> None:
+    """Run an exact worker image against a disposable database at the release schema."""
+    smoke = CHECKS.parents[2] / "infra/container/smoke_worker.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(smoke),
+            "--image",
+            worker_image,
+            "--schema-image",
+            schema_image,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=900,
+        check=False,
+    )
+    if result.returncode:
+        raise RuntimeError(
+            "Worker image compatibility check failed: "
+            + (result.stdout + "\n" + result.stderr)[-4000:]
+        )
+
+
 def verify_images(
     previous: str,
     candidate: str,
@@ -43,6 +68,8 @@ def verify_images(
     future: str | None = None,
     baseline_image: str | None = None,
     schema_image: str | None = None,
+    worker_image: str | None = None,
+    previous_worker_image: str | None = None,
     pull_images: bool = True,
 ) -> dict:
     prefix = "buddy-compat-" + uuid4().hex[:12]
@@ -140,6 +167,8 @@ for attempt in range(30):
                     *([baseline_image] if baseline_image else []),
                     *([future] if future else []),
                     *([schema_image] if schema_image else []),
+                    *([worker_image] if worker_image else []),
+                    *([previous_worker_image] if previous_worker_image else []),
                 ]
             ):
                 docker("pull", image, timeout=600)
@@ -195,6 +224,11 @@ for attempt in range(30):
             probe(schema_image or candidate, "typed")
             probe(previous, "write")
             probe(candidate, "read")
+        worker_schema = schema_image or future or candidate
+        if worker_image:
+            verify_worker_image(worker_image, worker_schema)
+        if previous_worker_image:
+            verify_worker_image(previous_worker_image, worker_schema)
         return {
             "passed": True,
             "checks": {
@@ -210,6 +244,16 @@ for attempt in range(30):
             "future_image": future,
             "baseline_image": baseline_image or (initial if future else None),
             "schema_image": schema_image or future or candidate,
+            "worker_compatibility": (
+                {
+                    "passed": True,
+                    "target_image": worker_image,
+                    "previous_image": previous_worker_image,
+                    "schema_image": worker_schema,
+                }
+                if worker_image
+                else None
+            ),
         }
     finally:
         for name in reversed(created):
@@ -228,6 +272,8 @@ def main() -> None:
     parser.add_argument("--initial-image", default=INITIAL_IMAGE)
     parser.add_argument("--baseline-image")
     parser.add_argument("--future-image")
+    parser.add_argument("--worker-image")
+    parser.add_argument("--previous-worker-image")
     parser.add_argument(
         "--local-images",
         action="store_true",
@@ -241,6 +287,8 @@ def main() -> None:
         initial=args.initial_image,
         baseline_image=args.baseline_image,
         future=args.future_image,
+        worker_image=args.worker_image,
+        previous_worker_image=args.previous_worker_image,
         pull_images=not args.local_images,
     )
     args.output.write_text(json.dumps(report, indent=2))

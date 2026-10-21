@@ -63,6 +63,15 @@ variable "start_services" {
     error_message = "A real API image is required before starting services."
   }
 }
+variable "worker_start_services" {
+  description = "Whether Terraform should start a newly provisioned worker; staging keeps it paused until the reviewed release driver promotes it."
+  type        = bool
+  default     = true
+  validation {
+    condition     = !var.worker_start_services || (var.start_services && var.worker_image != null)
+    error_message = "Starting a worker requires start_services and a real worker image."
+  }
+}
 variable "vpc_cidr" { type = string }
 variable "service_egress_mode" {
   description = "Staging may avoid NAT using public task IPs with SG-restricted inbound traffic."

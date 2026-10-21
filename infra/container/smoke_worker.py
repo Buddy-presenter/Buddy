@@ -20,7 +20,7 @@ def docker(*args, timeout=180):
     return result.stdout.strip()
 
 
-def verify(image):
+def verify(image, schema_image=None):
     prefix = "buddy-worker-smoke-" + uuid4().hex[:10]
     pg, worker = prefix + "-pg", prefix + "-worker"
     source = (ROOT / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf").read_bytes()
@@ -118,7 +118,7 @@ def verify(image):
             *environment,
             "--entrypoint",
             "python",
-            image,
+            schema_image or image,
             "-m",
             "buddy_api.persistence.migrate",
             "upgrade",
@@ -275,8 +275,12 @@ def verify(image):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True)
+    parser.add_argument(
+        "--schema-image",
+        help="API image whose migrations define the schema used to test worker compatibility.",
+    )
     args = parser.parse_args()
-    verify(args.image)
+    verify(args.image, args.schema_image)
 
 
 if __name__ == "__main__":

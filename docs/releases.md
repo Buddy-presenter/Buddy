@@ -61,8 +61,12 @@ pushes an immutable run-specific tag to this environment's ECR registry with OID
 and deploys its resolved @sha256 digest. The standalone driver also accepts reviewed
 digests for operator recovery. There is no user-supplied API image override in the
 workflow, mutable-tag deployment or cross-account/cross-environment image promotion.
-Supply worker_image only when a real reviewed worker task/image exists with a container
-health check. #8 owns that implementation; the release never invents a worker image.
+For staging feature releases, the workflow builds the worker from the same reviewed main
+revision as the API, pins its ECR digest, and runs the exact image against a disposable
+database and synthetic PDF before promotion. The first worker service is bootstrapped
+separately through Terraform in a paused state; the workflow never creates infrastructure
+or starts a worker during that bootstrap run. Production continues to accept only an
+explicit reviewed worker digest.
 
 Backend promotion and rollback registers tagged definitions with reviewed digests, runs
 an explicit one-shot migration, waits for exit code zero, then promotes services. It
@@ -134,7 +138,7 @@ then python frontend/scripts/release/smoke_package.py packaged on a disposable n
 
 No AWS deployment, Apple notarization or trusted Windows signing is claimed until real
 protected environments, provider access and signing identities are supplied. Live staging
-recovery drills remain pending, as does the real worker implementation. These are
+recovery drills remain pending, as does live worker deployment and acceptance. These are
 explicit completion gates for live staging #73 and production #76. Issue #38 covers the
 reviewed pipeline preparation; simulated tests do not establish deployment acceptance.
 

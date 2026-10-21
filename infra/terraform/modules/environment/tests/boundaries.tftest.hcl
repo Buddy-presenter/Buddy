@@ -140,6 +140,19 @@ run "staging_task_environment_and_disabled_service" {
     error_message = "Staging task telemetry must identify the staging environment, and monitoring must not start an undeployed worker."
   }
 }
+run "staging_worker_is_provisioned_paused_for_release_promotion" {
+  command = plan
+  variables {
+    api_image             = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    worker_image          = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    start_services        = true
+    worker_start_services = false
+  }
+  assert {
+    condition     = length(aws_ecs_service.worker) == 1 && aws_ecs_service.worker[0].desired_count == 0
+    error_message = "Terraform must create the worker as a paused service so the verified release driver controls its first start."
+  }
+}
 run "production_redundancy" {
   command = plan
   variables {

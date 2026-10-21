@@ -168,3 +168,15 @@ def test_workflow_checks_out_selected_sha_and_keeps_serialization():
     assert "Prove exact rollback-image compatibility before staging DDL" in workflow
     assert '--revision "$RELEASE_REVISION"' in workflow
     assert '--revision "$GITHUB_SHA"' not in workflow
+
+
+def test_worker_bootstrap_is_explicit_paused_and_release_is_digest_pinned():
+    workflow = Path(".github/workflows/release-backend.yml").read_text()
+    assert "bootstrap_worker_image" in workflow
+    assert "terraform-managed staging worker service" in workflow.lower()
+    assert "docker build -f infra/container/Dockerfile.worker" in workflow
+    assert 'worker_image="$registry/$worker_repository@$worker_digest"' in workflow
+    assert "name: staging-release-images" in workflow
+    assert '"worker_service_exists": os.environ["WORKER_SERVICE_EXISTS"] == "true"' in workflow
+    assert "worker_start_services = false" in Path("docs/infrastructure.md").read_text()
+    assert "paused" in Path("docs/infrastructure.md").read_text().lower()

@@ -1,6 +1,7 @@
 """Explicit ECS migration/promotion with health checks and recorded safe rollback."""
 
 import argparse
+import copy
 import json
 import os
 import re
@@ -107,7 +108,12 @@ class Deployment:
             raise DeploymentError("AWS identity does not match deployment account.")
 
     def compatible(
-        self, candidate: str, rollback: dict[str, dict[str, Any]], before: dict[str, dict[str, Any]]
+        self,
+        candidate: str,
+        rollback: dict[str, dict[str, Any]],
+        before: dict[str, dict[str, Any]],
+        *,
+        worker_image: str | None = None,
     ) -> None:
         """Bind tested container results to the actual immediate rollback target."""
         if self.config["environment"] != "staging":
@@ -122,9 +128,10 @@ class Deployment:
             "immutability",
         }
         checks = proof.get("checks")
+        worker_compatibility = proof.get("worker_compatibility")
         if (
-            set(rollback) != {"api"}
-            or set(before) != {"api"}
+            set(rollback) not in ({"api"}, {"api", "worker"})
+            or set(before) != set(rollback)
             or not isinstance(checks, dict)
             or proof.get("passed") is not True
             or proof.get("before") != before
@@ -141,29 +148,48 @@ class Deployment:
         if len(containers) != 1 or containers[0]["image"] != proof.get("rollback_image"):
             raise DeploymentError("Rollback image drifted from compatibility evidence.")
         image_digest(self.config, proof["rollback_image"], "api")
+        if "worker" in rollback:
+            if not worker_image or not isinstance(worker_compatibility, dict):
+                raise DeploymentError(
+                    "Staging worker releases require exact-image compatibility evidence."
+                )
+            prior_worker_image = self.task_image(before["worker"]["taskDefinition"], "worker")
+            if (
+                worker_compatibility.get("passed") is not True
+                or worker_compatibility.get("target_image") != worker_image
+                or worker_compatibility.get("previous_image") != prior_worker_image
+                or worker_compatibility.get("schema_image") != proof.get("schema_image")
+            ):
+                raise DeploymentError("Worker image compatibility evidence does not match staging.")
+            image_digest(self.config, worker_image, "worker")
+            image_digest(self.config, prior_worker_image, "worker")
+        elif worker_image is not None:
+            raise DeploymentError("Worker compatibility evidence has no matching ECS service.")
 
     def require_stable_source(self, expected: dict[str, dict[str, Any]]) -> None:
         """Do not migrate while incompatible tasks from an earlier rollout still drain."""
         if self.config["environment"] != "staging":
             return
-        response = self.ecs.describe_services(cluster=self.config["cluster"], services=["api"])
+        response = self.ecs.describe_services(
+            cluster=self.config["cluster"], services=list(expected)
+        )
         services = response.get("services", [])
-        if response.get("failures") or len(services) != 1:
+        if response.get("failures") or len(services) != len(expected):
             raise DeploymentError("The staging rollback source is unavailable.")
-        service = services[0]
-        deployments = service.get("deployments", [])
-        target = expected["api"]
-        if (
-            service.get("taskDefinition") != target["taskDefinition"]
-            or service.get("desiredCount") != target["desiredCount"]
-            or service.get("runningCount") != target["desiredCount"]
-            or service.get("pendingCount") != 0
-            or len(deployments) != 1
-            or deployments[0].get("status") != "PRIMARY"
-            or deployments[0].get("rolloutState") != "COMPLETED"
-            or deployments[0].get("taskDefinition") != target["taskDefinition"]
-        ):
-            raise DeploymentError("Staging must finish its previous rollout before migration.")
+        for service in services:
+            target = expected[service["serviceName"]]
+            deployments = service.get("deployments", [])
+            if (
+                service.get("taskDefinition") != target["taskDefinition"]
+                or service.get("desiredCount") != target["desiredCount"]
+                or service.get("runningCount") != target["desiredCount"]
+                or service.get("pendingCount") != 0
+                or len(deployments) != 1
+                or deployments[0].get("status") != "PRIMARY"
+                or deployments[0].get("rolloutState") != "COMPLETED"
+                or deployments[0].get("taskDefinition") != target["taskDefinition"]
+            ):
+                raise DeploymentError("Staging must finish its previous rollout before migration.")
 
     def states(self, services: list[str]) -> dict[str, dict[str, Any]]:
         response = self.ecs.describe_services(cluster=self.config["cluster"], services=services)
@@ -177,8 +203,37 @@ class Deployment:
             }
         return result
 
+    def service_states(self) -> dict[str, dict[str, Any]]:
+        """Return API state and the worker state when Terraform has provisioned it."""
+        result = self.states(["api"])
+        response = self.ecs.describe_services(cluster=self.config["cluster"], services=["worker"])
+        if response.get("services"):
+            if response.get("failures") or len(response["services"]) != 1:
+                raise DeploymentError("The worker service is ambiguous or unavailable.")
+            worker = response["services"][0]
+            result["worker"] = {
+                "taskDefinition": worker["taskDefinition"],
+                "desiredCount": worker["desiredCount"],
+            }
+        elif response.get("failures") and all(
+            item.get("reason") in {"MISSING", "MISSING_RESOURCE"} for item in response["failures"]
+        ):
+            return result
+        elif response.get("failures"):
+            raise DeploymentError("Could not safely determine whether the worker service exists.")
+        return result
+
+    def task_image(self, task_definition: str, service: str) -> str:
+        definition = self.ecs.describe_task_definition(taskDefinition=task_definition)[
+            "taskDefinition"
+        ]
+        containers = definition.get("containerDefinitions", [])
+        if len(containers) != 1 or containers[0].get("name") != service:
+            raise DeploymentError("Unexpected ECS task container layout.")
+        return containers[0]["image"]
+
     def task(self, service: str, image: str) -> str:
-        arn = self.config["tasks"][service]
+        arn = self.config["tasks"].get(service, f"buddy-{self.config['environment']}-{service}")
         source = self.ecs.describe_task_definition(taskDefinition=arn)["taskDefinition"]
         allowed = (
             "family",
@@ -240,6 +295,7 @@ class Deployment:
             services=list(expected),
             WaiterConfig={"Delay": 15, "MaxAttempts": 80},
         )
+        self.require_stable_source(expected)
         actual = self.states(list(expected))
         if actual != expected:
             raise DeploymentError("Service rolled back or drifted from the expected revision.")
@@ -298,7 +354,7 @@ class Deployment:
         self, revision: str, api_image: str, worker_image: str | None = None
     ) -> dict[str, Any]:
         validate(self.config, revision)
-        services = ["api"] + (["worker"] if worker_image else [])
+        services = ["api"]
         audit = {
             **self.audit("deploy", revision),
             "status": "started",
@@ -311,11 +367,22 @@ class Deployment:
         # A retained start without a terminal record also identifies interrupted runs.
         self.record(revision, audit, finished=False)
         try:
-            previous = self.states(services)
+            previous = self.service_states()
+            if worker_image and "worker" not in previous:
+                raise DeploymentError(
+                    "Provision the paused worker ECS service through Terraform before promotion."
+                )
+            if worker_image:
+                services.append("worker")
             audit["previous"] = previous
             audit["stage"] = "compatibility"
             self.require_stable_source(previous)
-            self.compatible(api_image, previous, previous)
+            compatibility_worker_image = worker_image or (
+                self.task_image(previous["worker"]["taskDefinition"], "worker")
+                if "worker" in previous
+                else None
+            )
+            self.compatible(api_image, previous, previous, worker_image=compatibility_worker_image)
             audit["compatibility"] = self.compatibility_report
             audit["stage"] = "definition_setup"
             definitions = {"api": self.task("api", api_image)}
@@ -337,7 +404,7 @@ class Deployment:
             }
             audit["target"] = target
             audit["stage"] = "migration"
-            if self.states(services) != previous:
+            if self.service_states() != previous:
                 raise DeploymentError(
                     "Service changed after compatibility testing; no migration started."
                 )
@@ -409,7 +476,7 @@ class Deployment:
                     "Rollback requires a healthy audit record from this environment."
                 )
             audit["stage"] = "validate_target"
-            previous = value["previous"]
+            previous = copy.deepcopy(value["previous"])
             if not isinstance(previous, dict) or "api" not in previous:
                 raise DeploymentError("Invalid rollback target.")
             # The authenticated audit record remains constrained to this account/family.
@@ -424,16 +491,36 @@ class Deployment:
                     or not 0 <= state["desiredCount"] <= 100
                 ):
                     raise DeploymentError("Invalid rollback target.")
+            before = self.service_states()
+            if "worker" in before and "worker" not in previous:
+                # Retain the Terraform-managed service but stop it when restoring
+                # an API-only deployment that predates worker provisioning.
+                previous["worker"] = {
+                    "taskDefinition": before["worker"]["taskDefinition"],
+                    "desiredCount": 0,
+                }
+            if "worker" in previous and "worker" not in before:
+                raise DeploymentError("The rollback target requires an unavailable worker service.")
+            if set(before) != set(previous):
+                raise DeploymentError("API/worker service set changed since the rollback audit.")
             audit["target"] = previous
             audit["target_audit_key"] = value.get("audit_key")
-            audit["before"] = self.states(list(previous))
+            audit["before"] = before
             audit["stage"] = "compatibility"
-            current = self.ecs.describe_task_definition(
-                taskDefinition=audit["before"]["api"]["taskDefinition"]
-            )["taskDefinition"]
-            self.compatible(current["containerDefinitions"][0]["image"], previous, audit["before"])
+            current_api_image = self.task_image(before["api"]["taskDefinition"], "api")
+            target_worker_image = (
+                self.task_image(previous["worker"]["taskDefinition"], "worker")
+                if "worker" in previous
+                else None
+            )
+            self.compatible(
+                current_api_image,
+                previous,
+                before,
+                worker_image=target_worker_image,
+            )
             audit["compatibility"] = self.compatibility_report
-            if self.states(list(previous)) != audit["before"]:
+            if self.states(list(previous)) != before:
                 raise DeploymentError("Service changed after rollback compatibility testing.")
             audit["stage"] = "restore"
             self.restore(previous)

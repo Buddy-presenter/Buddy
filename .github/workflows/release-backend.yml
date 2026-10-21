@@ -16,8 +16,12 @@ on:
         options: [feature, compatibility]
         default: feature
       worker_image:
-        description: 'Optional reviewed worker digest with a real container health check'
+        description: 'Optional immutable worker digest for production-only promotion'
         type: string
+      bootstrap_worker_image:
+        description: 'Publish and test a staging worker image for the one-time paused Terraform service bootstrap'
+        type: boolean
+        default: false
       rollback_revision:
         description: 'Healthy deployment SHA whose previous task definitions should be restored'
         type: string
@@ -95,6 +99,17 @@ jobs:
         run: |
           actual_account=$(aws sts get-caller-identity --query Account --output text)
           test "$actual_account" = "$EXPECTED_AWS_ACCOUNT"
+      - name: Detect the Terraform-managed staging worker service
+        if: (inputs.target || 'staging') == 'staging'
+        id: worker_service
+        shell: bash
+        env:
+          BUDDY_DEPLOYMENT_CONFIG: ${{ vars.BUDDY_DEPLOYMENT_CONFIG }}
+        run: |
+          cluster=$(python -c 'import json,os; print(json.loads(os.environ["BUDDY_DEPLOYMENT_CONFIG"])["cluster"])')
+          response=$(aws ecs describe-services --cluster "$cluster" --services worker --output json)
+          exists=$(python -c 'import json,sys; data=json.load(sys.stdin); print("true" if len(data.get("services", [])) == 1 and not data.get("failures") else "false")' <<< "$response")
+          echo "exists=$exists" >> "$GITHUB_OUTPUT"
       - run: python -m pip install boto3==1.40.50
       - name: Build and push this exact reviewed revision
         if: ${{ !inputs.rollback_revision }}
@@ -106,6 +121,8 @@ jobs:
           BUDDY_DEPLOYMENT_CONFIG: ${{ vars.BUDDY_DEPLOYMENT_CONFIG }}
           RELEASE_TARGET: ${{ inputs.target || 'staging' }}
           ROLLOUT_PHASE: ${{ inputs.rollout_phase || 'feature' }}
+          WORKER_SERVICE_EXISTS: ${{ steps.worker_service.outputs.exists || 'false' }}
+          BOOTSTRAP_WORKER_IMAGE: ${{ inputs.bootstrap_worker_image || 'false' }}
         run: |
           registry="$AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com"
           repository="buddy-$RELEASE_TARGET/api"
@@ -129,6 +146,18 @@ jobs:
             echo "future_image=$feature_image" >> "$GITHUB_OUTPUT"
           fi
           echo "api_image=$api_image" >> "$GITHUB_OUTPUT"
+          if [ "$RELEASE_TARGET" = staging ] && [ "$ROLLOUT_PHASE" = feature ] && { [ "$WORKER_SERVICE_EXISTS" = true ] || [ "$BOOTSTRAP_WORKER_IMAGE" = true ]; }; then
+            worker_repository="buddy-$RELEASE_TARGET/worker"
+            worker_tag="$RELEASE_REVISION-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            docker build -f infra/container/Dockerfile.worker --label "org.opencontainers.image.revision=$RELEASE_REVISION" -t "$registry/$worker_repository:$worker_tag" .
+            docker push "$registry/$worker_repository:$worker_tag"
+            worker_digest=$(aws ecr describe-images --repository-name "$worker_repository" --image-ids "imageTag=$worker_tag" --query 'imageDetails[0].imageDigest' --output text)
+            worker_image="$registry/$worker_repository@$worker_digest"
+            echo "worker_image=$worker_image" >> "$GITHUB_OUTPUT"
+          elif [ "$RELEASE_TARGET" = staging ] && [ "$BOOTSTRAP_WORKER_IMAGE" = true ]; then
+            echo "A bootstrap image can only be published during the staging feature phase." >&2
+            exit 1
+          fi
           docker logout "$registry"
       - name: Prove exact rollback-image compatibility before staging DDL
         if: (inputs.target || 'staging') == 'staging'
@@ -140,6 +169,7 @@ jobs:
           ROLLBACK_REVISION: ${{ inputs.rollback_revision }}
           AWS_ACCOUNT: ${{ vars.BUDDY_AWS_ACCOUNT_ID }}
           AWS_REGION: ${{ vars.BUDDY_AWS_REGION }}
+          STAGING_WORKER_IMAGE: ${{ steps.image.outputs.worker_image }}
         shell: bash
         run: |
           registry="$AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com"
@@ -148,6 +178,7 @@ jobs:
           args=(--revision "$RELEASE_REVISION" --output compatibility-report.json)
           if [ -n "$ROLLBACK_REVISION" ]; then args+=(--rollback-revision "$ROLLBACK_REVISION"); else args+=(--candidate-image "$API_IMAGE"); fi
           if [ -n "$FUTURE_IMAGE" ]; then args+=(--future-image "$FUTURE_IMAGE" --base-image "$BASE_IMAGE"); fi
+          if [ -n "$STAGING_WORKER_IMAGE" ]; then args+=(--worker-image "$STAGING_WORKER_IMAGE"); fi
           python -m backend.scripts.release.prepare_compatibility "${args[@]}"
       - name: Retain credential-free compatibility evidence
         if: (inputs.target || 'staging') == 'staging' && hashFiles('compatibility-report.json') != ''
@@ -155,12 +186,39 @@ jobs:
         with:
           name: staging-rollback-compatibility
           path: compatibility-report.json
+      - name: Prepare exact image references for paused worker provisioning
+        if: (inputs.target || 'staging') == 'staging' && steps.image.outputs.worker_image != ''
+        shell: bash
+        env:
+          API_IMAGE: ${{ steps.image.outputs.api_image }}
+          WORKER_IMAGE: ${{ steps.image.outputs.worker_image }}
+          WORKER_SERVICE_EXISTS: ${{ steps.worker_service.outputs.exists || 'false' }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path("staging-images.json").write_text(json.dumps({
+              "api_image": os.environ["API_IMAGE"],
+              "worker_image": os.environ["WORKER_IMAGE"],
+              "worker_service_exists": os.environ["WORKER_SERVICE_EXISTS"] == "true",
+          }, indent=2) + "\n")
+          PY
+          if [ "$WORKER_SERVICE_EXISTS" = false ]; then
+            echo "Worker image: `$WORKER_IMAGE` (tested; service not yet provisioned)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: (inputs.target || 'staging') == 'staging' && steps.image.outputs.worker_image != ''
+        with:
+          name: staging-release-images
+          path: staging-images.json
+          if-no-files-found: error
       - name: Migrate then promote, or restore an audited deployment
         env:
           GH_TOKEN: ${{ github.token }}
           BUDDY_DEPLOYMENT_CONFIG: ${{ vars.BUDDY_DEPLOYMENT_CONFIG }}
           API_IMAGE: ${{ steps.image.outputs.api_image }}
-          WORKER_IMAGE: ${{ inputs.worker_image }}
+          WORKER_IMAGE: ${{ steps.image.outputs.worker_image || inputs.worker_image }}
+          WORKER_SERVICE_EXISTS: ${{ steps.worker_service.outputs.exists || 'false' }}
           ROLLBACK_REVISION: ${{ inputs.rollback_revision }}
           RELEASE_TARGET: ${{ inputs.target || 'staging' }}
         shell: bash
@@ -171,6 +229,6 @@ jobs:
             args+=(--rollback-revision "$ROLLBACK_REVISION")
           else
             args+=(--api-image "$API_IMAGE")
-            if [ -n "$WORKER_IMAGE" ]; then args+=(--worker-image "$WORKER_IMAGE"); fi
+            if [ -n "$WORKER_IMAGE" ] && { [ "$RELEASE_TARGET" != staging ] || [ "$WORKER_SERVICE_EXISTS" = true ]; }; then args+=(--worker-image "$WORKER_IMAGE"); fi
           fi
           python backend/scripts/release/deploy.py "${args[@]}"

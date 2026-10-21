@@ -11,20 +11,42 @@ from backend.scripts.release.deploy import Deployment, DeploymentError, image_di
 from backend.scripts.release.image_compatibility import verify_images
 
 
-def image(ecs, state):
+def image(ecs, state, service="api"):
     definition = ecs.describe_task_definition(taskDefinition=state["taskDefinition"])[
         "taskDefinition"
     ]
     containers = definition["containerDefinitions"]
-    if len(containers) != 1 or containers[0]["name"] != "api":
+    if len(containers) != 1 or containers[0]["name"] != service:
         raise DeploymentError("Unsupported rollback container layout.")
     return containers[0]["image"]
+
+
+def current_states(driver):
+    """Read API and an optional Terraform-provisioned, possibly paused worker."""
+    state = driver.states(["api"])
+    response = driver.ecs.describe_services(cluster=driver.config["cluster"], services=["worker"])
+    if response.get("services"):
+        if response.get("failures") or len(response["services"]) != 1:
+            raise DeploymentError("The staging worker service is ambiguous or unavailable.")
+        worker = response["services"][0]
+        state["worker"] = {
+            "taskDefinition": worker["taskDefinition"],
+            "desiredCount": worker["desiredCount"],
+        }
+    elif response.get("failures") and all(
+        failure.get("reason") in {"MISSING", "MISSING_RESOURCE"} for failure in response["failures"]
+    ):
+        return state
+    elif response.get("failures"):
+        raise DeploymentError("Could not safely determine whether the staging worker exists.")
+    return state
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--revision", required=True)
     parser.add_argument("--candidate-image")
+    parser.add_argument("--worker-image")
     parser.add_argument("--future-image")
     parser.add_argument("--base-image")
     parser.add_argument("--rollback-revision")
@@ -37,7 +59,7 @@ def main() -> None:
     ecs = boto3.client("ecs", region_name=config["region"])
     s3 = boto3.client("s3", region_name=config["region"])
     driver = Deployment(config, ecs, s3, boto3.client("sts", region_name=config["region"]))
-    before = driver.states(["api"])
+    before = current_states(driver)
     if not args.rollback_revision:
         driver.require_stable_source(before)
     rollback = before
@@ -65,9 +87,40 @@ def main() -> None:
             raise DeploymentError("Rollback needs a retained feature-schema image.")
         image_digest(config, schema_image, "api")
         rollback = audit["previous"]
+        # A worker added after an older API-only deployment must be paused if
+        # that API revision is restored; it must not keep processing with a
+        # schema-incompatible image during rollback.
+        if "worker" in before and "worker" not in rollback:
+            rollback["worker"] = {
+                "taskDefinition": before["worker"]["taskDefinition"],
+                "desiredCount": 0,
+            }
         candidate = image(ecs, before["api"])
-    if not candidate or set(rollback) != {"api"}:
-        raise DeploymentError("This staging transition covers the existing API only.")
+    if not candidate or "api" not in rollback or not set(rollback) <= {"api", "worker"}:
+        raise DeploymentError("Staging release has an invalid API/worker service target.")
+    worker_image = args.worker_image
+    previous_worker_image = None
+    if "worker" in rollback:
+        rollback_worker = rollback["worker"]
+        if not isinstance(rollback_worker, dict) or not re.fullmatch(
+            rf"arn:aws:ecs:{config['region']}:{config['account_id']}:task-definition/buddy-staging-worker:\d+",
+            rollback_worker.get("taskDefinition", ""),
+        ):
+            raise DeploymentError("Invalid staging worker target.")
+        worker_image = (
+            image(ecs, rollback_worker, "worker")
+            if args.rollback_revision
+            else (worker_image or image(ecs, rollback_worker, "worker"))
+        )
+        worker_image = image_digest(config, worker_image, "worker")
+    if "worker" in before:
+        previous_worker_image = image_digest(
+            config, image(ecs, before["worker"], "worker"), "worker"
+        )
+    if "worker" in before and not worker_image:
+        raise DeploymentError("The live staging worker requires a paired worker image release.")
+    if worker_image:
+        worker_image = image_digest(config, worker_image, "worker")
     state = rollback["api"]
     expected = (
         f"arn:aws:ecs:{config['region']}:{config['account_id']}:task-definition/buddy-staging-api:"
@@ -90,13 +143,17 @@ def main() -> None:
         if previous_image != base_image:
             raise DeploymentError("Bridge base image drifted from the stable staging service.")
         image_digest(config, args.future_image, "api")
-    report = verify_images(
-        previous_image,
-        candidate,
-        future=args.future_image,
-        baseline_image=previous_image if args.future_image else None,
-        schema_image=schema_image,
-    )
+    compatibility_args = {
+        "future": args.future_image,
+        "baseline_image": previous_image if args.future_image else None,
+        "schema_image": schema_image,
+    }
+    if worker_image:
+        compatibility_args.update(
+            worker_image=worker_image,
+            previous_worker_image=previous_worker_image,
+        )
+    report = verify_images(previous_image, candidate, **compatibility_args)
     report.update(
         revision=args.revision,
         environment="staging",
@@ -104,7 +161,7 @@ def main() -> None:
         before=before,
         rollback=rollback,
     )
-    if driver.states(["api"]) != before:
+    if current_states(driver) != before:
         raise DeploymentError("Service changed while compatibility tests were running.")
     args.output.write_text(json.dumps(report, indent=2))
 
