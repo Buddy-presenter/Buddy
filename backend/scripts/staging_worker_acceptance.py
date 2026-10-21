@@ -383,7 +383,7 @@ class Acceptance:
             else "admin"
         )
         env = {
-            "BUDDY_ENVIRONMENT": "production",
+            "BUDDY_ENVIRONMENT": "staging",
             "BUDDY_AWS_REGION": REGION,
             "BUDDY_UPLOADS_ENABLED": "true",
             "BUDDY_DATA_BUCKET": BUCKET,

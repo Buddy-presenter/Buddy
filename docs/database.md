@@ -62,7 +62,7 @@ starting new application processes. Back up and test restoration before producti
 
 | Variable | Behavior |
 | --- | --- |
-| `BUDDY_DATABASE_URL` | PostgreSQL URL with host, database and user. `postgresql://` and `postgresql+asyncpg://` accepted. URL-encode reserved password characters. Only the `sslmode` query parameter is allowed. Required for migration commands and production API startup. |
+| `BUDDY_DATABASE_URL` | PostgreSQL URL with host, database and user. `postgresql://` and `postgresql+asyncpg://` accepted. URL-encode reserved password characters. Only the `sslmode` query parameter is allowed. Required for migration commands and staging/production API startup, with `sslmode=verify-full` enforced. |
 | `BUDDY_DATABASE_SCHEMA` | Default `public`; simple lowercase SQL identifier. An operator must create a non-default schema and grant access before migration. |
 | `BUDDY_DATABASE_TIMEOUT_SECONDS` | Default 3, finite 0.1–30 seconds. Bounds pool acquisition, connection, SQL/lock and driver command waits. |
 

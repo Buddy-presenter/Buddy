@@ -22,7 +22,12 @@ class ConfigurationError(ValueError):
 class Environment(StrEnum):
     DEVELOPMENT = "development"
     TEST = "test"
+    STAGING = "staging"
     PRODUCTION = "production"
+
+    @property
+    def requires_verified_database(self) -> bool:
+        return self in {Environment.STAGING, Environment.PRODUCTION}
 
 
 def valid_host(value: str) -> bool:
@@ -51,7 +56,9 @@ class Settings:
 
     def __post_init__(self) -> None:
         if not isinstance(self.environment, Environment):
-            raise ConfigurationError("BUDDY_ENVIRONMENT must be development, test, or production.")
+            raise ConfigurationError(
+                "BUDDY_ENVIRONMENT must be development, test, staging, or production."
+            )
         if not self.allowed_hosts or not all(valid_host(host) for host in self.allowed_hosts):
             raise ConfigurationError(
                 "BUDDY_ALLOWED_HOSTS needs exact hosts, without ports/wildcards."
@@ -62,11 +69,11 @@ class Settings:
             raise ConfigurationError("BUDDY_PORT must be an integer from 1 to 65535.")
         if not math.isfinite(self.readiness_timeout) or not 0.1 <= self.readiness_timeout <= 30:
             raise ConfigurationError("BUDDY_READINESS_TIMEOUT_SECONDS must be from 0.1 to 30.")
-        if self.environment is Environment.PRODUCTION and (
+        if self.environment.requires_verified_database and (
             self.database is None or not self.database.production
         ):
             raise ConfigurationError(
-                "Production requires a verified production BUDDY_DATABASE_URL."
+                "Staging and production require a verified BUDDY_DATABASE_URL."
             )
 
     @classmethod
@@ -76,10 +83,11 @@ class Settings:
             environment = Environment(values["BUDDY_ENVIRONMENT"])
         except (KeyError, ValueError) as exc:
             raise ConfigurationError(
-                "Set BUDDY_ENVIRONMENT to development, test, or production before starting the API."
+                "Set BUDDY_ENVIRONMENT to development, test, staging, or production "
+                "before starting the API."
             ) from exc
-        if environment is Environment.PRODUCTION and not values.get("BUDDY_ALLOWED_HOSTS"):
-            raise ConfigurationError("Production requires explicit BUDDY_ALLOWED_HOSTS.")
+        if environment.requires_verified_database and not values.get("BUDDY_ALLOWED_HOSTS"):
+            raise ConfigurationError("Staging and production require explicit BUDDY_ALLOWED_HOSTS.")
         hosts = tuple(
             host.strip().lower()
             for host in values.get("BUDDY_ALLOWED_HOSTS", "localhost,127.0.0.1,::1").split(",")
@@ -94,7 +102,7 @@ class Settings:
         try:
             database = (
                 DatabaseSettings.from_environment(
-                    values, production=environment is Environment.PRODUCTION
+                    values, production=environment.requires_verified_database
                 )
                 if values.get("BUDDY_DATABASE_URL")
                 else None

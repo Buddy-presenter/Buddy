@@ -41,12 +41,12 @@ UI. Signed installers/service distribution remain separate release work.
 
 | Variable | Requirement/default |
 | --- | --- |
-| `BUDDY_ENVIRONMENT` | Required: `development`, `test`, or `production`; missing/invalid values exit with code 2 before binding a socket. |
-| `BUDDY_ALLOWED_HOSTS` | Comma-separated exact hosts, without schemes/ports/wildcards. Default `localhost,127.0.0.1,::1` in development/test. Explicit value required in production. |
+| `BUDDY_ENVIRONMENT` | Required: `development`, `test`, `staging`, or `production`; staging and production require explicit allowed hosts and a verified TLS database URL. Missing/invalid values exit with code 2 before binding a socket. |
+| `BUDDY_ALLOWED_HOSTS` | Comma-separated exact hosts, without schemes/ports/wildcards. Default `localhost,127.0.0.1,::1` in development/test. Explicit value required in staging and production. |
 | `BUDDY_BIND_HOST` | Default `127.0.0.1`. Exposing another interface is an explicit deployment choice. |
 | `BUDDY_PORT` | Default `8000`; integer 1–65535. |
 | `BUDDY_READINESS_TIMEOUT_SECONDS` | Default `2`; finite 0.1–30 seconds per asynchronous dependency probe. |
-| `BUDDY_DATABASE_URL` | PostgreSQL connection secret. Required for production; absent development/test database fails readiness with 503. See the database guide for verified TLS and explicit migrations. |
+| `BUDDY_DATABASE_URL` | PostgreSQL connection secret. Required with verified TLS in staging and production; absent development/test database fails readiness with 503. See the database guide for verified TLS and explicit migrations. |
 | `BUDDY_DATABASE_SCHEMA` | Default `public`; operator-created lowercase schema identifier. |
 | `BUDDY_DATABASE_TIMEOUT_SECONDS` | Default `3`; finite 0.1–30 seconds. |
 
@@ -54,9 +54,9 @@ Database credentials come from the backend environment/secret manager, never a b
 file or desktop configuration. Liveness can run without a database in development;
 readiness requires a reachable, explicitly migrated database. Errors never echo configured values.
 
-Production requires a TLS ingress and private deployment configuration owned by #27/#26;
-setting `production` is not evidence that authentication, quotas or other release controls
-are implemented. Interactive docs/schema routes are disabled in production. Proxy-header
+Staging and production require a TLS ingress and private deployment configuration owned by #27/#26;
+setting either environment is not evidence that authentication, quotas or other release controls
+are implemented. Interactive docs/schema routes are disabled in staging and production. Proxy-header
 trust and access logging are disabled by default to avoid trusting forwarded identity
 or logging sensitive URLs. Configure trusted ingress deliberately in the deployment work.
 

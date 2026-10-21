@@ -73,6 +73,11 @@ variable "service_egress_mode" {
     error_message = "Use private_nat, or staging-only public_ip. Production retains private task addresses."
   }
 }
+variable "enable_terraform_monitoring" {
+  description = "Manage CloudWatch/SNS monitoring with Terraform. Set false when another reviewed IaC stack owns the monitoring resources."
+  type        = bool
+  default     = true
+}
 variable "github_repository" {
   type    = string
   default = "Buddy-presenter/Buddy"

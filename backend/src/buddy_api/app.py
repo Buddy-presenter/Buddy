@@ -139,9 +139,13 @@ def create_app(
         version=__version__,
         description="Versioned service foundation for the Buddy desktop client and workers.",
         lifespan=lifespan,
-        docs_url="/docs" if config.environment is not Environment.PRODUCTION else None,
+        docs_url="/docs"
+        if config.environment not in {Environment.STAGING, Environment.PRODUCTION}
+        else None,
         redoc_url=None,
-        openapi_url="/openapi.json" if config.environment is not Environment.PRODUCTION else None,
+        openapi_url="/openapi.json"
+        if config.environment not in {Environment.STAGING, Environment.PRODUCTION}
+        else None,
     )
     app.add_middleware(UploadMetadataLimitMiddleware)
     app.add_middleware(HandoffLimitMiddleware)

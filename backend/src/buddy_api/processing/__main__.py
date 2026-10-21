@@ -23,9 +23,11 @@ HEALTH = root() / "health"
 
 async def run() -> None:
     environment = os.environ.get("BUDDY_ENVIRONMENT")
-    if environment not in {"development", "test", "production"}:
+    if environment not in {"development", "test", "staging", "production"}:
         raise ValueError("Worker requires an explicit environment")
-    database_settings = DatabaseSettings.from_environment(production=environment == "production")
+    database_settings = DatabaseSettings.from_environment(
+        production=environment in {"staging", "production"}
+    )
     uploads = UploadSettings.from_environment(os.environ)
     settings = WorkerSettings.from_environment(os.environ)
     if not uploads or not settings:
