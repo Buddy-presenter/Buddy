@@ -295,15 +295,19 @@ class Processor:
             if not key or not version or not size or not source_digest:
                 raise ExtractionError("invalid_pdf_source")
             extraction_id: UUID | None = None
-            content = await blocking(
-                lambda: self.storage.read(
-                    key,
-                    version=version,
-                    size=size,
-                    sha256=source_digest,
-                    source_format="pdf",
+            alive, content = await fenced(
+                blocking(
+                    lambda: self.storage.read(
+                        key,
+                        version=version,
+                        size=size,
+                        sha256=source_digest,
+                        source_format="pdf",
+                    )
                 )
             )
+            if not alive:
+                return
             if saved_extraction_id is not None:
                 active_stage = "pdf_render"
                 active_stage_started_at = time.perf_counter()

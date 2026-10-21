@@ -31,9 +31,7 @@ def verify(image, schema_image=None):
             "ReceiptHandle": "synthetic-receipt",
             # Startup reconciliation fences the expired seeded lease by advancing its
             # generation from 1 to 2 before the worker consumes this wake-up.
-            "Body": json.dumps(
-                {"schema_version": "buddy.job.v1", "job_id": job, "generation": 2}
-            ),
+            "Body": json.dumps({"schema_version": "buddy.job.v1", "job_id": job, "generation": 2}),
         }
     ]
     accesses, acknowledged = [], []
@@ -226,7 +224,8 @@ def verify(image, schema_image=None):
             stage = sql(f"SELECT stage || ':' || stage_state FROM processing_jobs WHERE id='{job}'")
             raise RuntimeError(
                 f"Worker smoke did not complete PDF inspection: status={state}, "
-                f"stage={stage}, error={error}; " + docker("logs", worker)
+                f"stage={stage}, error={error}, source_requests={accesses}; "
+                + docker("logs", worker)
             )
         assert sql(f"SELECT attempts FROM processing_jobs WHERE id='{job}'") == "2"
         assert sql("SELECT jsonb_array_length(document->'slides') FROM deck_extractions") == "3"

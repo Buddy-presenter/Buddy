@@ -6,6 +6,8 @@ import io
 import os
 import subprocess
 import sys
+import threading
+import time
 from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -460,6 +462,39 @@ def test_expired_lease_rejects_old_output_and_recovers_after_restart(migrated_da
             await processor.run_message(queue.messages[-1])
             assert (await row(db, job.id)).status == "analysis_ready"
             assert (await row(db, job.id)).attempts == 2
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_slow_source_download_renews_worker_lease(migrated_database):
+    class SlowFirstReadS3(S3):
+        def __init__(self, content):
+            super().__init__(content)
+            self.first_read_started = threading.Event()
+
+        def get_object(self, **kwargs):
+            if not self.requests:
+                self.first_read_started.set()
+                time.sleep(12)
+            return super().get_object(**kwargs)
+
+    async def scenario():
+        db = Database(migrated_database)
+        try:
+            _, _, job = await seed(db)
+            sqs, s3 = SQS(), SlowFirstReadS3(PDF.read_bytes())
+            processor = make_processor(db, SourceStorage(UPLOADS, s3), WORKER, sqs)
+            await processor.maintain()
+            attempt = asyncio.create_task(processor.run_message(sqs.messages[0]))
+            assert await asyncio.to_thread(s3.first_read_started.wait, 5)
+            await asyncio.sleep(11)
+            current = await row(db, job.id)
+            assert current.status == "running"
+            assert current.lease_until > store.now() + timedelta(seconds=40)
+            await attempt
+            assert (await row(db, job.id)).status == "analysis_ready"
         finally:
             await db.close()
 
