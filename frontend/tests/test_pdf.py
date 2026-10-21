@@ -71,9 +71,19 @@ def test_pdf_byte_limit():
 def test_finished_pdf_worker_before_monitor_attachment_is_accepted(monkeypatch):
     import buddy_desktop.pdf_document as module
 
+    original_popen = module.subprocess.Popen
+
+    def finished_before_return(*args, **kwargs):
+        process = original_popen(*args, **kwargs)
+        process.wait(timeout=20)
+        return process
+
     def finished(pid):
         raise module.psutil.NoSuchProcess(pid)
 
+    # Make the race deterministic: the subprocess has exited before psutil tries
+    # to attach, rather than merely pretending it exited while it may still run.
+    monkeypatch.setattr(module.subprocess, "Popen", finished_before_return)
     monkeypatch.setattr(module.psutil, "Process", finished)
     manifest, image = open_pdf(FIXTURE)
     assert len(manifest.slides) == 3 and not image.isNull()
