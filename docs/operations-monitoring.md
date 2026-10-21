@@ -43,12 +43,29 @@ undocumented or stale price.
 
 ## Dashboard and alert thresholds
 
-Terraform creates `${environment}-operations` dashboard, an SNS topic and alarms. Set
-`alert_email_recipients` to the approved team destinations in the protected operator
-configuration; every recipient must confirm the AWS SNS subscription before delivery is
-active. No email address is committed to source control. An empty recipient set leaves
-alarms visible in CloudWatch but does not deliver email, so verify subscriptions before
-calling alert delivery enabled.
+The reviewed CloudFormation stack in `infra/cloudformation/staging-monitoring.yaml` owns
+the staging `buddy-staging-operations` dashboard, SNS topic and alarms. Staging Terraform
+explicitly disables these same resources so there is one owner and no name collision.
+Production remains Terraform-managed. This split is deliberate: the AWS Terraform provider
+download was rejected by the workstation's regional trade-controls endpoint, while AWS
+CloudFormation manages these AWS-native resources without downloading that provider. The
+stack takes the approved alert email as a deploy-time parameter; no email address is
+committed to source control. The recipient must confirm the SNS subscription before email
+delivery is active.
+
+Validate the template before creating a change set:
+
+```powershell
+aws cloudformation validate-template `
+  --template-body file://infra/cloudformation/staging-monitoring.yaml `
+  --profile buddy-dev --region eu-central-1
+```
+
+For deployment, review the change set before executing it and pass the approved destination
+from protected operator configuration. Do not put a recipient address in source control or
+deployment logs. Verify the stack outputs, all five alarms, the dashboard and the confirmed
+SNS subscription after deployment. The stack is CloudFormation-managed; do not import or
+recreate its resources in the staging Terraform state.
 
 Initial thresholds are intentionally conservative and based on the current worker limits:
 
@@ -91,12 +108,11 @@ alert; there is no hard spend cap.
 ## Acceptance status and cost
 
 Automated tests validate EMF dimensions, correlation-ID restrictions and rejection of
-unsafe values. Terraform creates the dashboard, queue/worker alarms and configurable SNS
-email subscriptions. These code/configuration checks do not prove that SNS emails arrive.
-The worker is not currently deployed to staging. Per the agreed #39 then #24 sequence, run
-the controlled worker failure, verify SNS delivery, and confirm recovery **after #24 deploys
-the API and worker**. Keep that staging acceptance explicitly pending until the deployment
-and delivery test are recorded.
+unsafe values. The CloudFormation template and Terraform boundary checks validate resource
+definitions, but they do not prove that SNS emails arrive. Per the agreed #39 then #24
+sequence, deploy the reviewed API/worker, run the controlled worker failure, verify SNS
+delivery, and confirm recovery **after #24 deploys the API and worker**. Keep live staging
+acceptance pending until the deployment and delivery test are recorded.
 
 EMF log ingestion, custom metric storage, dashboards, alarms and SNS delivery incur AWS
 charges. EMF emits a small number of metrics for each bounded dimension set; identifiers

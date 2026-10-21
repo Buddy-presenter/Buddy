@@ -1,0 +1,231 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Buddy staging upload and PDF analysis dashboard and operational alarms.
+
+Parameters:
+  AlertEmail:
+    Type: String
+    Description: Approved operations recipient. The endpoint owner must confirm the SNS subscription.
+    AllowedPattern: '^[^\s@]+@[^\s@]+\.[^\s@]+$'
+    ConstraintDescription: Enter one valid email address; do not commit recipient values to source control.
+
+Resources:
+  OperationsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: buddy-staging-operations-alerts
+      DisplayName: Buddy staging operations
+      Tags:
+        - Key: Application
+          Value: Buddy
+        - Key: Environment
+          Value: staging
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  OperationsTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref OperationsTopic
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowBuddyStagingCloudWatchAlarms
+            Effect: Allow
+            Principal:
+              Service: cloudwatch.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref OperationsTopic
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:buddy-staging-*
+
+  OperationsEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref OperationsTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  OperationsDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: buddy-staging-operations
+      DashboardBody: !Sub |
+        {
+          "start": "-PT6H",
+          "periodOverride": "inherit",
+          "widgets": [
+            {
+              "type": "metric", "x": 0, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "Upload outcomes and worker processing",
+                "view": "timeSeries", "region": "${AWS::Region}", "stat": "Sum", "period": 300,
+                "metrics": [
+                  ["Buddy/Operational", "UploadRequest", "Environment", "staging", "Service", "api", "Outcome", "success", {"label": "Uploads accepted"}],
+                  ["Buddy/Operational", "UploadRequest", "Environment", "staging", "Service", "api", "Outcome", "rejected", {"label": "Uploads rejected"}],
+                  ["Buddy/Operational", "JobOutcome", "Environment", "staging", "Service", "worker", "Outcome", "success", {"label": "Jobs completed"}],
+                  ["Buddy/Operational", "JobOutcome", "Environment", "staging", "Service", "worker", "Outcome", "retry", {"label": "Jobs retrying"}],
+                  ["Buddy/Operational", "JobOutcome", "Environment", "staging", "Service", "worker", "Outcome", "dead_letter", {"label": "Jobs dead-lettered"}]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 12, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "Processing queue and dead-letter queue",
+                "view": "timeSeries", "region": "${AWS::Region}", "stat": "Maximum", "period": 300,
+                "metrics": [
+                  ["AWS/SQS", "ApproximateAgeOfOldestMessage", "QueueName", "buddy-staging-processing", {"label": "Oldest message age (seconds)"}],
+                  ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "buddy-staging-processing", {"label": "Visible backlog"}],
+                  ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "buddy-staging-processing-dead", {"label": "Dead-letter queue"}]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 0, "y": 6, "width": 12, "height": 6,
+              "properties": {
+                "title": "Worker and provider durations",
+                "view": "timeSeries", "region": "${AWS::Region}", "stat": "Average", "period": 300,
+                "metrics": [
+                  ["Buddy/Operational", "DurationMs", "Environment", "staging", "Service", "worker", "Stage", "pdf_metadata.v1", "Outcome", "success", {"label": "Full job from metadata stage (ms)"}],
+                  ["Buddy/Operational", "DurationMs", "Environment", "staging", "Service", "worker", "Stage", "provider", "Outcome", "success", {"label": "Bedrock analysis (ms)"}],
+                  ["Buddy/Operational", "DurationMs", "Environment", "staging", "Service", "worker", "Stage", "pdf_render", "Outcome", "success", {"label": "PDF render-manifest retry (ms)"}],
+                  ["Buddy/Operational", "DurationMs", "Environment", "staging", "Service", "worker", "Stage", "validation", "Outcome", "success", {"label": "Action validation (ms)"}]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 12, "y": 6, "width": 12, "height": 6,
+              "properties": {
+                "title": "Provider token usage (input includes document processing)",
+                "view": "timeSeries", "region": "${AWS::Region}", "stat": "Sum", "period": 3600,
+                "metrics": [
+                  ["Buddy/Operational", "InputTokens", "Environment", "staging", "Service", "worker", "Stage", "provider", "Outcome", "success", {"label": "Input tokens"}],
+                  ["Buddy/Operational", "OutputTokens", "Environment", "staging", "Service", "worker", "Stage", "provider", "Outcome", "success", {"label": "Output tokens"}]
+                ]
+              }
+            },
+            {
+              "type": "metric", "x": 0, "y": 12, "width": 12, "height": 4,
+              "properties": {
+                "title": "Account-wide estimated AWS charges (USD; billing data may lag)",
+                "view": "timeSeries", "region": "us-east-1", "stat": "Maximum", "period": 21600,
+                "metrics": [["AWS/Billing", "EstimatedCharges", "Currency", "USD", {"label": "Estimated account charges"}]]
+              }
+            }
+          ]
+        }
+
+  QueueAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: buddy-staging-queue-age
+      AlarmDescription: A PDF job has waited over five minutes; inspect worker health, queue depth and recent worker errors before retrying.
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions:
+        - Name: QueueName
+          Value: buddy-staging-processing
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 300
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OperationsTopic]
+      OKActions: [!Ref OperationsTopic]
+
+  QueueBacklogAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: buddy-staging-queue-backlog
+      AlarmDescription: More than ten PDFs are waiting; check worker desired/running tasks and processing failures.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: buddy-staging-processing
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OperationsTopic]
+      OKActions: [!Ref OperationsTopic]
+
+  DeadLetterQueueAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: buddy-staging-dead-letter-jobs
+      AlarmDescription: A message reached the SQS dead-letter queue; inspect its opaque job ID and sanitized worker logs, then follow the recovery runbook.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: buddy-staging-processing-dead
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OperationsTopic]
+      OKActions: [!Ref OperationsTopic]
+
+  WorkerDeadLetterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: buddy-staging-worker-dead-letter-job
+      AlarmDescription: A processing job entered the durable dead_letter state; follow the PDF worker runbook before using the owner's bounded retry control.
+      Namespace: Buddy/Operational
+      MetricName: JobOutcome
+      Dimensions:
+        - Name: Environment
+          Value: staging
+        - Name: Service
+          Value: worker
+        - Name: Outcome
+          Value: dead_letter
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OperationsTopic]
+      OKActions: [!Ref OperationsTopic]
+
+  WorkerRetryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: buddy-staging-worker-retry
+      AlarmDescription: A worker job failed and is scheduled for retry; inspect its sanitized stage logs and queue/worker health.
+      Namespace: Buddy/Operational
+      MetricName: JobOutcome
+      Dimensions:
+        - Name: Environment
+          Value: staging
+        - Name: Service
+          Value: worker
+        - Name: Outcome
+          Value: retry
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref OperationsTopic]
+      OKActions: [!Ref OperationsTopic]
+
+Outputs:
+  DashboardName:
+    Value: !Ref OperationsDashboard
+  TopicArn:
+    Value: !Ref OperationsTopic
+  AlarmNames:
+    Value: buddy-staging-queue-age,buddy-staging-queue-backlog,buddy-staging-dead-letter-jobs,buddy-staging-worker-dead-letter-job,buddy-staging-worker-retry
