@@ -145,10 +145,11 @@ class Processor:
                     retry_seconds = min(900, 30 * (2 ** min(outbox.publish_attempts - 1, 5)))
                     outbox.available_at = store.now() + timedelta(seconds=retry_seconds)
                 else:
-                    # SQS retains this wake-up for the configured retention window. Reconcile
-                    # only after it can expire, rather than publishing a duplicate every 30s.
+                    # Reconcile a valid job before its wake-up can expire or reach the DLQ.
+                    # This leaves one visibility interval for the dispatcher to republish
+                    # after repeated receives, without the old 30-second duplicate churn.
                     outbox.available_at = store.now() + timedelta(
-                        seconds=self.settings.queue_message_retention_seconds
+                        seconds=self.settings.queue_reconciliation_seconds
                     )
 
     async def run_message(self, raw: dict[str, Any]) -> None:

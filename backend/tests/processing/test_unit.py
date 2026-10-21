@@ -22,6 +22,7 @@ from buddy_api.processing.contracts import Message, PDFSource
         ("max_attempts", 6),
         ("runtime_seconds", 1),
         ("queue_message_retention_seconds", 1209601),
+        ("queue_redrive_max_receive_count", 1),
     ],
 )
 def test_operator_limits_are_bounded(field, value):
@@ -39,10 +40,28 @@ def test_queue_retention_is_loaded_from_operator_environment():
             "BUDDY_PROCESSING_QUEUE_URL": "https://sqs.eu-central-1.amazonaws.com/123456789012/test",
             "BUDDY_AWS_REGION": "eu-central-1",
             "BUDDY_WORKER_QUEUE_MESSAGE_RETENTION_SECONDS": "604800",
+            "BUDDY_WORKER_RUNTIME_SECONDS": "600",
+            "BUDDY_WORKER_QUEUE_REDRIVE_MAX_RECEIVE_COUNT": "5",
         }
     )
     assert settings is not None
     assert settings.queue_message_retention_seconds == 604800
+    assert settings.runtime_seconds == 600
+    assert settings.queue_redrive_max_receive_count == 5
+    assert settings.queue_reconciliation_seconds == 2400
+
+
+def test_queue_reconciliation_precedes_redrive_and_retention_horizons():
+    settings = WorkerSettings(
+        queue_url="https://sqs.eu-central-1.amazonaws.com/123456789012/test",
+        region="eu-central-1",
+    )
+
+    assert settings.queue_reconciliation_seconds == 1800
+    assert settings.queue_reconciliation_seconds < (
+        settings.runtime_seconds * settings.queue_redrive_max_receive_count
+    )
+    assert settings.queue_reconciliation_seconds < settings.queue_message_retention_seconds
 
 
 def test_envelope_has_no_untrusted_source_or_stage():

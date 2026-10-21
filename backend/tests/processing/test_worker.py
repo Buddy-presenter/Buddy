@@ -348,7 +348,7 @@ def test_failed_evidence_cleanup_does_not_block_worker_start_or_other_jobs(migra
     asyncio.run(scenario())
 
 
-def test_successful_publish_waits_for_sqs_retention_before_reconciliation(migrated_database):
+def test_successful_publish_reconciles_before_redrive_or_retention(migrated_database):
     async def scenario():
         db = Database(migrated_database)
         try:
@@ -364,12 +364,18 @@ def test_successful_publish_waits_for_sqs_retention_before_reconciliation(migrat
             async with db.sessions() as session, session.begin():
                 outbox = await session.get(JobOutbox, job.id)
                 assert outbox.publish_attempts == 1
-                assert outbox.available_at >= started + timedelta(
+                assert outbox.available_at == started + timedelta(
+                    seconds=WORKER.queue_reconciliation_seconds
+                )
+                assert outbox.available_at < started + timedelta(
+                    seconds=WORKER.runtime_seconds * WORKER.queue_redrive_max_receive_count
+                )
+                assert outbox.available_at < started + timedelta(
                     seconds=WORKER.queue_message_retention_seconds
                 )
             await processor.maintain()
             assert len(queue.messages) == 1
-            # Once SQS's copy expires, reconciliation can safely publish a fresh wake-up.
+            # Reconciliation is bounded by the redrive horizon, not message retention.
             async with db.sessions() as session, session.begin():
                 outbox = await session.get(JobOutbox, job.id)
                 outbox.available_at = store.now() - timedelta(seconds=1)
@@ -377,6 +383,52 @@ def test_successful_publish_waits_for_sqs_retention_before_reconciliation(migrat
             assert len(queue.messages) == 2
             await asyncio.gather(*(processor.run_message(m) for m in queue.messages))
             assert (await row(db, job.id)).attempts == 1
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_outbox_republishes_valid_job_after_wakeup_reaches_dlq(migrated_database, monkeypatch):
+    async def scenario():
+        now = store.now()
+        clock = {"now": now}
+        monkeypatch.setattr(store, "now", lambda: clock["now"])
+        db = Database(migrated_database)
+        try:
+            _, _, job = await seed(db)
+            queue = SQS()
+            processor = make_processor(
+                db, SourceStorage(UPLOADS, S3(PDF.read_bytes())), WORKER, queue
+            )
+            first_publish = clock["now"]
+            await processor.maintain()
+            expired_wakeup = queue.messages[0]
+
+            async with db.sessions() as session:
+                outbox = await session.get(JobOutbox, job.id)
+                reconcile_at = outbox.available_at
+            redrive_at = first_publish + timedelta(
+                seconds=WORKER.runtime_seconds * WORKER.queue_redrive_max_receive_count
+            )
+            retention_at = first_publish + timedelta(seconds=WORKER.queue_message_retention_seconds)
+            assert reconcile_at < redrive_at < retention_at
+
+            # The publisher refreshes the wake-up before the original can be redriven.
+            clock["now"] = reconcile_at + timedelta(seconds=1)
+            await processor.maintain()
+            assert len(queue.messages) == 2
+            replacement = queue.messages[1]
+            assert Message.model_validate_json(replacement["Body"]).generation == job.generation
+
+            # Model SQS moving the original delivery to the DLQ at its redrive horizon.
+            clock["now"] = redrive_at
+            assert queue.messages.pop(0) is expired_wakeup
+            assert queue.messages == [replacement]
+            assert (await row(db, job.id)).status == "queued"
+
+            await processor.run_message(replacement)
+            assert (await row(db, job.id)).status == "analysis_ready"
         finally:
             await db.close()
 

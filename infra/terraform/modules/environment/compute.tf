@@ -21,6 +21,8 @@ resource "aws_ecs_cluster" "main" {
   }
 }
 locals {
+  processing_visibility_timeout_seconds = 900
+  processing_max_receive_count          = 3
   environment = [
     { name = "BUDDY_ENVIRONMENT", value = var.environment },
     { name = "BUDDY_BIND_HOST", value = "0.0.0.0" },
@@ -35,6 +37,8 @@ locals {
     { name = "BUDDY_VALIDATOR_PYTHON", value = "/opt/buddy-validator/bin/python" },
     { name = "BUDDY_PROCESSING_QUEUE_URL", value = aws_sqs_queue.processing.url },
     { name = "BUDDY_WORKER_QUEUE_MESSAGE_RETENTION_SECONDS", value = tostring(aws_sqs_queue.processing.message_retention_seconds) },
+    { name = "BUDDY_WORKER_RUNTIME_SECONDS", value = tostring(local.processing_visibility_timeout_seconds) },
+    { name = "BUDDY_WORKER_QUEUE_REDRIVE_MAX_RECEIVE_COUNT", value = tostring(local.processing_max_receive_count) },
     { name = "SSL_CERT_FILE", value = "/etc/ssl/certs/ca-certificates.crt" },
     { name = "PGSSLROOTCERT", value = "/etc/ssl/certs/ca-certificates.crt" },
   ]

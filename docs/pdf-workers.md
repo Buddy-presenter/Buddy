@@ -20,9 +20,11 @@ failures retain the upload's same-key retry path after capacity becomes availabl
 The API publishes identifier-only `buddy.job.v1` messages through SQS. Publish failure
 leaves the outbox durable and retries with bounded exponential backoff (30 seconds up to
 15 minutes); a send followed by a lost commit can still produce a safe duplicate. After a
-successful send, reconciliation waits for the queue's configured message-retention window
-before publishing a replacement, so an idle or absent worker does not create a duplicate
-every 30 seconds. A capacity miss acknowledges the current delivery and schedules one
+successful send, reconciliation schedules a replacement before the earlier of SQS message
+retention expiry or the configured redrive horizon (with one visibility interval reserved
+for recovery). An idle or absent worker therefore does not create a duplicate every 30
+seconds, and a valid job cannot remain dormant until the full 24-hour retention expires
+after its wake-up reaches the DLQ. A capacity miss acknowledges the current delivery and schedules one
 replacement after a 60-second cooldown, avoiding repeated SQS receives and DLQing work just
 because concurrency is temporarily full. Processing failures reset the outbox to their
 existing bounded job retry schedule. Only the API role sends; workers receive/delete and
