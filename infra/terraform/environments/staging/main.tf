@@ -65,21 +65,22 @@ provider "aws" {
   }
 }
 module "environment" {
-  source                     = "../../modules/environment"
-  providers                  = { aws = aws, aws.edge = aws.edge }
-  ingress_mode               = var.ingress_mode
-  service_egress_mode        = var.service_egress_mode
-  environment                = "staging"
-  account_id                 = var.account_id
-  region                     = var.region
-  api_domain                 = var.api_domain
-  zone_id                    = var.zone_id
-  api_image                  = var.api_image
-  worker_image               = var.worker_image
-  start_services             = var.start_services
-  alert_email_recipients     = var.alert_email_recipients
-  github_oidc_provider_arn   = var.github_oidc_provider_arn
-  github_oidc_subject_prefix = var.github_oidc_subject_prefix
-  vpc_cidr                   = "10.40.0.0/16"
+  source                      = "../../modules/environment"
+  providers                   = { aws = aws, aws.edge = aws.edge }
+  ingress_mode                = var.ingress_mode
+  service_egress_mode         = var.service_egress_mode
+  environment                 = "staging"
+  account_id                  = var.account_id
+  region                      = var.region
+  api_domain                  = var.api_domain
+  zone_id                     = var.zone_id
+  api_image                   = var.api_image
+  worker_image                = var.worker_image
+  start_services              = var.start_services
+  enable_terraform_monitoring = false
+  alert_email_recipients      = var.alert_email_recipients
+  github_oidc_provider_arn    = var.github_oidc_provider_arn
+  github_oidc_subject_prefix  = var.github_oidc_subject_prefix
+  vpc_cidr                    = "10.40.0.0/16"
 }
 output "deployment" { value = module.environment }

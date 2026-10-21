@@ -10,7 +10,7 @@ variable "alert_email_recipients" {
 
 locals {
   monitoring_namespace = "Buddy/Operational"
-  alarm_actions        = [aws_sns_topic.operations.arn]
+  alarm_actions        = var.enable_terraform_monitoring ? [aws_sns_topic.operations[0].arn] : []
   dashboard_body = {
     start          = "-PT6H"
     periodOverride = "inherit"
@@ -80,11 +80,13 @@ locals {
 }
 
 resource "aws_sns_topic" "operations" {
-  name = "${local.name}-operations-alerts"
+  count = var.enable_terraform_monitoring ? 1 : 0
+  name  = "${local.name}-operations-alerts"
 }
 
 resource "aws_sns_topic_policy" "operations" {
-  arn = aws_sns_topic.operations.arn
+  count = var.enable_terraform_monitoring ? 1 : 0
+  arn   = aws_sns_topic.operations[0].arn
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -92,7 +94,7 @@ resource "aws_sns_topic_policy" "operations" {
       Effect    = "Allow"
       Principal = { Service = "cloudwatch.amazonaws.com" }
       Action    = "sns:Publish"
-      Resource  = aws_sns_topic.operations.arn
+      Resource  = aws_sns_topic.operations[0].arn
       Condition = {
         StringEquals = { "aws:SourceAccount" = var.account_id }
         ArnLike      = { "aws:SourceArn" = "arn:aws:cloudwatch:${var.region}:${var.account_id}:alarm:${local.name}-*" }
@@ -102,18 +104,20 @@ resource "aws_sns_topic_policy" "operations" {
 }
 
 resource "aws_sns_topic_subscription" "email" {
-  for_each  = var.alert_email_recipients
-  topic_arn = aws_sns_topic.operations.arn
+  for_each  = var.enable_terraform_monitoring ? var.alert_email_recipients : toset([])
+  topic_arn = aws_sns_topic.operations[0].arn
   protocol  = "email"
   endpoint  = each.value
 }
 
 resource "aws_cloudwatch_dashboard" "operations" {
+  count          = var.enable_terraform_monitoring ? 1 : 0
   dashboard_name = "${local.name}-operations"
   dashboard_body = jsonencode(local.dashboard_body)
 }
 
 resource "aws_cloudwatch_metric_alarm" "queue_age" {
+  count               = var.enable_terraform_monitoring ? 1 : 0
   alarm_name          = "${local.name}-queue-age"
   alarm_description   = "A PDF job has waited over five minutes; inspect worker health, queue depth and recent worker errors before retrying."
   namespace           = "AWS/SQS"
@@ -130,6 +134,7 @@ resource "aws_cloudwatch_metric_alarm" "queue_age" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "queue_backlog" {
+  count               = var.enable_terraform_monitoring ? 1 : 0
   alarm_name          = "${local.name}-queue-backlog"
   alarm_description   = "More than ten PDFs are waiting; check worker desired/running tasks and processing failures."
   namespace           = "AWS/SQS"
@@ -146,6 +151,7 @@ resource "aws_cloudwatch_metric_alarm" "queue_backlog" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "dead_letters" {
+  count               = var.enable_terraform_monitoring ? 1 : 0
   alarm_name          = "${local.name}-dead-letter-jobs"
   alarm_description   = "A message reached the SQS dead-letter queue; inspect its opaque job ID and sanitized worker logs, then follow the recovery runbook."
   namespace           = "AWS/SQS"
@@ -162,6 +168,7 @@ resource "aws_cloudwatch_metric_alarm" "dead_letters" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "worker_dead_letter" {
+  count               = var.enable_terraform_monitoring ? 1 : 0
   alarm_name          = "${local.name}-worker-dead-letter-job"
   alarm_description   = "A processing job entered the durable dead_letter state; follow the PDF worker runbook before using the owner's bounded retry control."
   namespace           = local.monitoring_namespace
@@ -178,6 +185,7 @@ resource "aws_cloudwatch_metric_alarm" "worker_dead_letter" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "worker_retry" {
+  count               = var.enable_terraform_monitoring ? 1 : 0
   alarm_name          = "${local.name}-worker-retry"
   alarm_description   = "A worker job failed and is scheduled for retry; inspect its sanitized stage logs and queue/worker health."
   namespace           = local.monitoring_namespace
