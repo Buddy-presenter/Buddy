@@ -16,7 +16,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         settings = DatabaseSettings.from_environment(
-            production=os.environ.get("BUDDY_ENVIRONMENT") == "production"
+            production=os.environ.get("BUDDY_ENVIRONMENT") in {"staging", "production"}
         )
     except DatabaseConfigurationError as exc:
         print(str(exc), file=sys.stderr)

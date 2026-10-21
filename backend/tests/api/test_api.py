@@ -190,9 +190,10 @@ def test_unknown_and_http_errors_are_redacted(caplog):
     assert "private-secret" not in caplog.text
 
 
-def test_production_docs_are_disabled():
+@pytest.mark.parametrize("environment", [Environment.STAGING, Environment.PRODUCTION])
+def test_deployed_environment_docs_are_disabled(environment):
     settings = Settings(
-        Environment.PRODUCTION,
+        environment,
         ("testserver",),
         database=DatabaseSettings(
             "postgresql://buddy:synthetic@localhost/buddy?sslmode=verify-full", production=True

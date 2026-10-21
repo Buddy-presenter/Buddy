@@ -11,7 +11,7 @@ from buddy_api.persistence.models import Base
 from buddy_api.persistence.settings import DatabaseSettings
 
 settings = context.config.attributes.get("database_settings") or DatabaseSettings.from_environment(
-    production=os.environ.get("BUDDY_ENVIRONMENT") == "production"
+    production=os.environ.get("BUDDY_ENVIRONMENT") in {"staging", "production"}
 )
 
 
