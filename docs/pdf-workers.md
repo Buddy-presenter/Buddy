@@ -18,10 +18,18 @@ retry enforce the owner quota (four active jobs by default); a full quota return
 failures retain the upload's same-key retry path after capacity becomes available.
 
 The API publishes identifier-only `buddy.job.v1` messages through SQS. Publish failure
-leaves the outbox durable; a send followed by a lost commit can duplicate delivery safely.
-Every unclaimed intent is republished after 30 seconds, including wakeups lost to SQS
-retention/DLQ. Only the API role sends; workers receive/delete and reconcile DB leases.
-Multiple dispatchers lock job rows with SKIP LOCKED. No polling thread holds source bytes.
+leaves the outbox durable and retries with bounded exponential backoff (30 seconds up to
+15 minutes); a send followed by a lost commit can still produce a safe duplicate. After a
+successful send, reconciliation schedules a replacement before the earlier of SQS message
+retention expiry or the configured redrive horizon (with one visibility interval reserved
+for recovery). An idle or absent worker therefore does not create a duplicate every 30
+seconds, and a valid job cannot remain dormant until the full 24-hour retention expires
+after its wake-up reaches the DLQ. A capacity miss acknowledges the current delivery and schedules one
+replacement after a 60-second cooldown, avoiding repeated SQS receives and DLQing work just
+because concurrency is temporarily full. Processing failures reset the outbox to their
+existing bounded job retry schedule. Only the API role sends; workers receive/delete and
+reconcile DB leases. Multiple dispatchers lock job rows with SKIP LOCKED. No polling thread
+holds source bytes.
 
 ## States and limits
 
@@ -33,8 +41,9 @@ execution attempts.
 Malformed/unsupported PDFs and exhausted jobs enter `dead_letter`. This durable terminal
 state is the business failure record; malformed SQS envelopes are left unacknowledged for
 the queue's physical three-receive DLQ policy. Healthy duplicate/obsolete messages are
-acknowledged; capacity misses retain their wakeup. No message contains source keys,
-credentials, presentation contents, owner identity or raw failure diagnostics.
+acknowledged; capacity misses are rescheduled through the durable outbox. No message
+contains source keys, credentials, presentation contents, owner identity or raw failure
+diagnostics.
 
 The global DB admission lock bounds claimed work to two jobs by default, across worker
 replicas. Each worker process executes one job at a time. Its 45-second lease is renewed
@@ -124,8 +133,11 @@ normal backend database/private storage configuration plus `BUDDY_PROCESSING_QUE
 and `BUDDY_AWS_REGION`. `BUDDY_WORKER_OWNER_QUOTA`, `CONCURRENCY`, `MAX_ATTEMPTS`,
 `LEASE_SECONDS`, `RUNTIME_SECONDS` (each prefixed `BUDDY_WORKER_`) have validated bounds;
 configuration is operator-owned, never accepted from a desktop/API request. Queue
-configuration also enables the API outbox dispatcher. Without it, accepted jobs remain
-durably queued, not falsely successful. Apply migrations explicitly; startup never runs DDL.
+configuration also enables the API outbox dispatcher. Terraform sets
+`BUDDY_WORKER_QUEUE_MESSAGE_RETENTION_SECONDS` from the SQS queue's retention attribute so
+the API and worker reconcile against the deployed queue policy. Without queue configuration,
+accepted jobs remain durably queued, not falsely successful. Apply migrations explicitly;
+startup never runs DDL.
 
 Build `infra/container/Dockerfile.worker`, push an immutable digest to the worker ECR
 repository and supply the reviewed `worker_image` to the existing Terraform/release

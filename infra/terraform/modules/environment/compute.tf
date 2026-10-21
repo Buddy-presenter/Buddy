@@ -21,6 +21,8 @@ resource "aws_ecs_cluster" "main" {
   }
 }
 locals {
+  processing_visibility_timeout_seconds = 900
+  processing_max_receive_count          = 3
   environment = [
     { name = "BUDDY_ENVIRONMENT", value = var.environment },
     { name = "BUDDY_BIND_HOST", value = "0.0.0.0" },
@@ -34,6 +36,9 @@ locals {
     { name = "BUDDY_UPLOADS_ENABLED", value = "true" },
     { name = "BUDDY_VALIDATOR_PYTHON", value = "/opt/buddy-validator/bin/python" },
     { name = "BUDDY_PROCESSING_QUEUE_URL", value = aws_sqs_queue.processing.url },
+    { name = "BUDDY_WORKER_QUEUE_MESSAGE_RETENTION_SECONDS", value = tostring(aws_sqs_queue.processing.message_retention_seconds) },
+    { name = "BUDDY_WORKER_RUNTIME_SECONDS", value = tostring(local.processing_visibility_timeout_seconds) },
+    { name = "BUDDY_WORKER_QUEUE_REDRIVE_MAX_RECEIVE_COUNT", value = tostring(local.processing_max_receive_count) },
     { name = "SSL_CERT_FILE", value = "/etc/ssl/certs/ca-certificates.crt" },
     { name = "PGSSLROOTCERT", value = "/etc/ssl/certs/ca-certificates.crt" },
   ]
@@ -109,7 +114,7 @@ resource "aws_ecs_service" "worker" {
   name             = "worker"
   cluster          = aws_ecs_cluster.main.id
   task_definition  = aws_ecs_task_definition.service["worker"].arn
-  desired_count    = var.start_services ? (local.production ? 2 : 1) : 0
+  desired_count    = var.start_services && var.worker_start_services ? (local.production ? 2 : 1) : 0
   launch_type      = "FARGATE"
   platform_version = "1.4.0"
   deployment_circuit_breaker {
@@ -123,7 +128,9 @@ resource "aws_ecs_service" "worker" {
   }
   # Keep active service revisions under the same release-driver ownership as API.
   lifecycle {
-    ignore_changes = [task_definition]
+    # Terraform creates the service paused; the reviewed release driver owns the
+    # active digest and desired count from the first promotion onward.
+    ignore_changes = [task_definition, desired_count]
   }
   depends_on = [aws_iam_role_policy.execution]
 }

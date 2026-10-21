@@ -174,6 +174,30 @@ async def claim(
     return job
 
 
+async def defer_for_capacity(session: AsyncSession, message: Message) -> bool:
+    """Reschedule a valid wake-up when worker concurrency is temporarily full."""
+    job = await session.scalar(
+        select(ProcessingJob).where(ProcessingJob.id == message.job_id).with_for_update()
+    )
+    if (
+        job is None
+        or job.generation != message.generation
+        or job.status not in {"queued", "retry_wait"}
+        or job.source_revision is None
+        or job.stage
+        not in {"pdf_metadata.v1", "pdf_analysis.v1", "pdf_render", "provider", "validation"}
+        or job.not_before > now()
+    ):
+        return False
+    outbox = await session.get(JobOutbox, job.id)
+    if outbox is None:
+        return False
+    # Acknowledge this delivery and schedule one replacement after a short cooldown
+    # rather than consuming SQS receives while worker concurrency is full.
+    outbox.available_at = now() + timedelta(seconds=60)
+    return True
+
+
 def valid_lease(job: ProcessingJob, token: UUID) -> bool:
     return bool(
         job.status == "running"

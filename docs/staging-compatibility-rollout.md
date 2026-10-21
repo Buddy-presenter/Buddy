@@ -24,9 +24,15 @@ on reviewed `main`, target `staging`:
    rollback target. It applies the forward repair through 0008 and promotes the feature
    image. Failed promotion restores the tested bridge without downgrading the database.
 
-Do not supply a worker image for this transition. The worker needs its own compatibility
-contract when implemented. Production promotion retains its separate existing acceptance
-policy; this staging transition does not certify production readiness.
+During the compatibility phase, do not promote a new worker image: the existing worker
+stays on its current digest and is smoke-tested against the bridge schema. During the
+feature phase, staging builds the worker from that same reviewed revision, smoke-tests the
+candidate and the prior worker image against the feature schema, then promotes API and
+worker together when the Terraform-managed worker service exists. If this is the first
+worker rollout, first create the service paused as described in
+[infrastructure provisioning](infrastructure.md#reproducible-provisioning), then rerun
+the feature promotion. Production promotion retains its separate acceptance policy; this
+staging transition does not certify production readiness.
 
 ## Mandatory proof before live migration
 
@@ -56,6 +62,13 @@ application has already rolled back to the bridge. Recovery never infers the dat
 head from an old application. This conservatively forbids restoring the original
 pre-bridge image through explicit rollback, including before expansion. The original image fails this test after
 schema expansion; selecting an old healthy audit cannot bypass it.
+
+Worker proof uses the exact immutable ECR digest and the same isolated PostgreSQL harness
+as CI's worker smoke. It applies the release schema with the API image, processes a
+permissioned synthetic PDF through the real worker entrypoint, checks persisted results,
+lease recovery, malformed-PDF failure and restart idempotency, and then runs the previous
+worker image against that same schema when one exists. It uses deterministic fakes only at
+the external SQS/S3/provider boundaries; no live queue, user PDF or Bedrock call is used.
 
 PR CI builds an old-source fixture from the pinned image's exact source commit and tests
 both phases without AWS credentials. This checks the source contract, not the private

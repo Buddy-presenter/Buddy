@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class WorkerSettings(BaseModel):
@@ -16,6 +16,26 @@ class WorkerSettings(BaseModel):
     max_attempts: int = Field(default=3, ge=1, le=5)
     lease_seconds: int = Field(default=45, ge=30, le=120)
     runtime_seconds: int = Field(default=900, ge=300, le=900)
+    queue_message_retention_seconds: int = Field(default=86400, ge=60, le=1209600)
+    queue_redrive_max_receive_count: int = Field(default=3, ge=2, le=1000)
+
+    @model_validator(mode="after")
+    def validate_reconciliation_window(self) -> "WorkerSettings":
+        if self.queue_message_retention_seconds < self.runtime_seconds * 2:
+            raise ValueError(
+                "Queue retention must allow at least one worker visibility interval "
+                "before reconciliation."
+            )
+        return self
+
+    @property
+    def queue_reconciliation_seconds(self) -> int:
+        """Re-publish before either source retention expiry or SQS redrive to its DLQ."""
+        invalidation_horizon = min(
+            self.queue_message_retention_seconds,
+            self.runtime_seconds * self.queue_redrive_max_receive_count,
+        )
+        return invalidation_horizon - self.runtime_seconds
 
     @classmethod
     def from_environment(cls, values: Mapping[str, str]) -> "WorkerSettings | None":
@@ -33,6 +53,8 @@ class WorkerSettings(BaseModel):
                         "max_attempts",
                         "lease_seconds",
                         "runtime_seconds",
+                        "queue_message_retention_seconds",
+                        "queue_redrive_max_receive_count",
                     )
                     if "BUDDY_WORKER_" + name.upper() in values
                 },

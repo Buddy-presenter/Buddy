@@ -41,7 +41,8 @@ jobs:
           terraform -chdir=infra/terraform/bootstrap test
           terraform -chdir=infra/terraform/modules/environment init -backend=false -lockfile=readonly
           terraform -chdir=infra/terraform/modules/environment test
-          test "$(grep -c 'ignore_changes = \[task_definition\]' infra/terraform/modules/environment/compute.tf)" -eq 2
+          grep -q 'ignore_changes = \[task_definition\]' infra/terraform/modules/environment/compute.tf
+          grep -q 'ignore_changes = \[task_definition, desired_count\]' infra/terraform/modules/environment/compute.tf
           terraform -chdir=infra/terraform/tests/release-handoff init -backend=false -lockfile=readonly
           terraform -chdir=infra/terraform/tests/release-handoff test
 

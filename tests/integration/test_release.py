@@ -19,6 +19,12 @@ ACCOUNT = "123456789012"
 PREFIX = f"arn:aws:ecs:eu-central-1:{ACCOUNT}:task-definition/buddy-staging-"
 OLD_IMAGE = f"{ACCOUNT}.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:" + "d" * 64
 IMAGE = f"{ACCOUNT}.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:" + "b" * 64
+OLD_WORKER_IMAGE = (
+    f"{ACCOUNT}.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/worker@sha256:" + "e" * 64
+)
+WORKER_IMAGE = (
+    f"{ACCOUNT}.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/worker@sha256:" + "c" * 64
+)
 CONFIG = {
     "environment": "staging",
     "account_id": ACCOUNT,
@@ -72,6 +78,8 @@ class Ecs:
         self.runs = []
 
     def describe_services(self, **kwargs):
+        names = kwargs["services"]
+        present = [name for name in names if name in self.state]
         return {
             "services": [
                 {
@@ -87,8 +95,13 @@ class Ecs:
                         }
                     ],
                 }
-                for name in kwargs["services"]
-            ]
+                for name in present
+            ],
+            "failures": [
+                {"arn": name, "reason": "MISSING", "detail": "synthetic absent service"}
+                for name in names
+                if name not in self.state
+            ],
         }
 
     def describe_task_definition(self, **kwargs):
@@ -100,7 +113,20 @@ class Ecs:
                 "containerDefinitions": [
                     {
                         "name": name,
-                        "image": IMAGE if kwargs["taskDefinition"].endswith(":2") else OLD_IMAGE,
+                        "image": (
+                            (
+                                WORKER_IMAGE
+                                if kwargs["taskDefinition"].endswith(":2")
+                                else OLD_WORKER_IMAGE
+                            )
+                            if name == "worker"
+                            else (IMAGE if kwargs["taskDefinition"].endswith(":2") else OLD_IMAGE)
+                        ),
+                        **(
+                            {"healthCheck": {"command": ["CMD", "python", "--health"]}}
+                            if name == "worker"
+                            else {}
+                        ),
                     }
                 ],
                 "requiresCompatibilities": ["FARGATE"],
@@ -148,14 +174,15 @@ class PreparedDeployment(Deployment):
     Deployment directly to reject missing, stale, mismatched and drifted evidence.
     """
 
-    def evidence(self, candidate, rollback):
+    def evidence(self, candidate, rollback, worker_image=None, before=None):
+        before = before or self.ecs.state
         self.compatibility_report = {
             "passed": True,
             "candidate_image": candidate,
             "rollback_image": OLD_IMAGE
             if rollback["api"]["taskDefinition"].endswith(":1")
             else IMAGE,
-            "before": copy.deepcopy(self.ecs.state),
+            "before": copy.deepcopy(before),
             "rollback": copy.deepcopy(rollback),
             "checks": dict.fromkeys(
                 [
@@ -168,10 +195,28 @@ class PreparedDeployment(Deployment):
                 ],
                 True,
             ),
+            "schema_image": candidate,
         }
+        if worker_image:
+            previous_worker_image = None
+            if "worker" in before:
+                previous_worker_image = self.ecs.describe_task_definition(
+                    taskDefinition=before["worker"]["taskDefinition"]
+                )["taskDefinition"]["containerDefinitions"][0]["image"]
+            self.compatibility_report["worker_compatibility"] = {
+                "passed": True,
+                "target_image": worker_image,
+                "previous_image": previous_worker_image,
+                "schema_image": candidate,
+            }
 
     def deploy(self, revision, api_image, worker_image=None):
-        self.evidence(api_image, self.ecs.state)
+        evidence_worker = worker_image
+        if evidence_worker is None and "worker" in self.ecs.state:
+            evidence_worker = self.ecs.describe_task_definition(
+                taskDefinition=self.ecs.state["worker"]["taskDefinition"]
+            )["taskDefinition"]["containerDefinitions"][0]["image"]
+        self.evidence(api_image, self.ecs.state, evidence_worker)
         return super().deploy(revision, api_image, worker_image)
 
     def rollback(self, revision, previous_revision):
@@ -180,7 +225,12 @@ class PreparedDeployment(Deployment):
         if not isinstance(target, dict) or not isinstance(target.get("api"), dict):
             target = self.ecs.state
         candidate = IMAGE if self.ecs.state["api"]["taskDefinition"].endswith(":2") else OLD_IMAGE
-        self.evidence(candidate, target)
+        worker_image = None
+        if isinstance(target, dict) and isinstance(target.get("worker"), dict):
+            worker_image = self.ecs.describe_task_definition(
+                taskDefinition=target["worker"]["taskDefinition"]
+            )["taskDefinition"]["containerDefinitions"][0]["image"]
+        self.evidence(candidate, target, worker_image, before=self.ecs.state)
         return super().rollback(revision, previous_revision)
 
 
@@ -307,6 +357,64 @@ def test_healthy_deployment_is_auditable_and_explicit_rollback_works():
     assert s3.records[f"staging/backend/{SHA}.json"] == lookup
     assert ecs.state["api"]["taskDefinition"] == PREFIX + "api:1"
     assert ecs.waits.count("tasks_stopped") == 1  # rollback never downgrades the DB
+
+
+def test_worker_promotion_updates_and_rolls_back_api_and_worker_together():
+    ecs, s3 = Ecs(), S3()
+    ecs.state["worker"] = {
+        "taskDefinition": PREFIX + "worker:1",
+        "desiredCount": 0,
+    }
+    config = copy.deepcopy(CONFIG)
+    config["tasks"]["worker"] = PREFIX + "worker:1"
+    deployment = PreparedDeployment(config, ecs, s3, Sts(), lambda _: None)
+
+    result = deployment.deploy(SHA, IMAGE, WORKER_IMAGE)
+
+    assert result["status"] == "healthy"
+    assert ecs.state["api"] == {"taskDefinition": PREFIX + "api:2", "desiredCount": 1}
+    assert ecs.state["worker"] == {"taskDefinition": PREFIX + "worker:2", "desiredCount": 1}
+    assert {item["service"] for item in ecs.updates} == {"api", "worker"}
+    assert result["previous"]["worker"]["desiredCount"] == 0
+    assert result["target"]["worker"]["desiredCount"] == 1
+
+    restored = deployment.rollback("c" * 40, SHA)
+
+    assert restored["status"] == "rolled_back"
+    assert ecs.state["api"] == {"taskDefinition": PREFIX + "api:1", "desiredCount": 1}
+    assert ecs.state["worker"] == {"taskDefinition": PREFIX + "worker:1", "desiredCount": 0}
+
+
+def test_worker_image_cannot_be_promoted_before_terraform_provisions_service():
+    ecs, s3 = Ecs(), S3()
+    deployment = PreparedDeployment(CONFIG, ecs, s3, Sts(), lambda _: None)
+
+    with pytest.raises(DeploymentError, match="deployment setup was rejected"):
+        deployment.deploy(SHA, IMAGE, WORKER_IMAGE)
+
+    assert not ecs.registered and not ecs.runs and not ecs.updates
+
+
+def test_api_only_compatibility_phase_keeps_an_existing_worker_on_its_image():
+    ecs, s3 = Ecs(), S3()
+    ecs.state["worker"] = {
+        "taskDefinition": PREFIX + "worker:1",
+        "desiredCount": 1,
+    }
+    config = copy.deepcopy(CONFIG)
+    config["tasks"]["worker"] = PREFIX + "worker:1"
+    deployment = PreparedDeployment(config, ecs, s3, Sts(), lambda _: None)
+
+    result = deployment.deploy(SHA, IMAGE)
+
+    assert result["status"] == "healthy"
+    assert ecs.state["worker"] == {
+        "taskDefinition": PREFIX + "worker:1",
+        "desiredCount": 1,
+    }
+    assert [update["service"] for update in ecs.updates] == ["api"]
+    assert set(result["previous"]) == {"api", "worker"}
+    assert set(result["target"]) == {"api"}
 
 
 @pytest.mark.parametrize("failure", ["update", "readiness"])

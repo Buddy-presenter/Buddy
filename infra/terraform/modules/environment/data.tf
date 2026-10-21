@@ -135,10 +135,13 @@ resource "aws_sqs_queue" "dead" {
 resource "aws_sqs_queue" "processing" {
   name                       = "${local.name}-processing"
   kms_master_key_id          = aws_kms_key.data.arn
-  visibility_timeout_seconds = 900
+  visibility_timeout_seconds = local.processing_visibility_timeout_seconds
   message_retention_seconds  = 86400
   receive_wait_time_seconds  = 20
-  redrive_policy             = jsonencode({ deadLetterTargetArn = aws_sqs_queue.dead.arn, maxReceiveCount = 3 })
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.dead.arn
+    maxReceiveCount     = local.processing_max_receive_count
+  })
 }
 resource "aws_sqs_queue_policy" "tls" {
   queue_url = aws_sqs_queue.processing.id

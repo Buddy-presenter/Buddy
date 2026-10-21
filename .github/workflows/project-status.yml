@@ -99,6 +99,20 @@ jobs:
                   } }
                 }
               }`, {number:pr.number}, d => d.repository.pullRequest.closingIssuesReferences);
+              // Explicit non-closing associations keep issues open for live acceptance
+              // after the implementation PR merges (for example, #24 requires staging).
+              const relatedNumbers = new Set([...`${pr.title || ""}\n${pr.body || ""}`.matchAll(
+                /\bpart of\s+#([1-9][0-9]*)\b/gi
+              )].map(match => Number(match[1])));
+              for (const number of relatedNumbers) {
+                const result = await github.graphql(`query($number:Int!) {
+                  repository(owner:"Buddy-presenter",name:"Buddy") {
+                    issue(number:$number) { id number state repository { nameWithOwner } }
+                  }
+                }`, {number});
+                const issue = result.repository?.issue;
+                if (issue && !issues.some(existing => existing.id === issue.id)) issues.push(issue);
+              }
               let status = progress;
               if (pr.state === "open" && !pr.draft) {
                 const events = await pages(`query($number:Int!,$cursor:String) {

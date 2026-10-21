@@ -6,6 +6,8 @@ import io
 import os
 import subprocess
 import sys
+import threading
+import time
 from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -346,7 +348,7 @@ def test_failed_evidence_cleanup_does_not_block_worker_start_or_other_jobs(migra
     asyncio.run(scenario())
 
 
-def test_publish_failure_and_send_commit_loss_are_reconciled(migrated_database):
+def test_successful_publish_reconciles_before_redrive_or_retention(migrated_database):
     async def scenario():
         db = Database(migrated_database)
         try:
@@ -355,16 +357,28 @@ def test_publish_failure_and_send_commit_loss_are_reconciled(migrated_database):
             processor = make_processor(
                 db, SourceStorage(UPLOADS, S3(PDF.read_bytes())), WORKER, queue
             )
-            queue.fail = True
+            started = store.now()
             await processor.maintain()
+            assert len(queue.messages) == 1
             assert (await row(db, job.id)).status == "queued"
             async with db.sessions() as session, session.begin():
                 outbox = await session.get(JobOutbox, job.id)
                 assert outbox.publish_attempts == 1
-                outbox.available_at = store.now() - timedelta(seconds=1)
-            queue.fail = False
+                assert outbox.available_at >= started + timedelta(
+                    seconds=WORKER.queue_reconciliation_seconds
+                )
+                assert outbox.available_at < started + timedelta(
+                    seconds=WORKER.queue_reconciliation_seconds + 5
+                )
+                assert outbox.available_at < started + timedelta(
+                    seconds=WORKER.runtime_seconds * WORKER.queue_redrive_max_receive_count
+                )
+                assert outbox.available_at < started + timedelta(
+                    seconds=WORKER.queue_message_retention_seconds
+                )
             await processor.maintain()
-            # Successful send followed by a failed commit must leave a republishable intent.
+            assert len(queue.messages) == 1
+            # Reconciliation is bounded by the redrive horizon, not message retention.
             async with db.sessions() as session, session.begin():
                 outbox = await session.get(JobOutbox, job.id)
                 outbox.available_at = store.now() - timedelta(seconds=1)
@@ -372,6 +386,102 @@ def test_publish_failure_and_send_commit_loss_are_reconciled(migrated_database):
             assert len(queue.messages) == 2
             await asyncio.gather(*(processor.run_message(m) for m in queue.messages))
             assert (await row(db, job.id)).attempts == 1
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_outbox_republishes_valid_job_after_wakeup_reaches_dlq(migrated_database, monkeypatch):
+    async def scenario():
+        now = store.now()
+        clock = {"now": now}
+        monkeypatch.setattr(store, "now", lambda: clock["now"])
+        db = Database(migrated_database)
+        try:
+            _, _, job = await seed(db)
+            queue = SQS()
+            processor = make_processor(
+                db, SourceStorage(UPLOADS, S3(PDF.read_bytes())), WORKER, queue
+            )
+            first_publish = clock["now"]
+            await processor.maintain()
+            expired_wakeup = queue.messages[0]
+
+            async with db.sessions() as session:
+                outbox = await session.get(JobOutbox, job.id)
+                reconcile_at = outbox.available_at
+            redrive_at = first_publish + timedelta(
+                seconds=WORKER.runtime_seconds * WORKER.queue_redrive_max_receive_count
+            )
+            retention_at = first_publish + timedelta(seconds=WORKER.queue_message_retention_seconds)
+            assert reconcile_at < redrive_at < retention_at
+
+            # The publisher refreshes the wake-up before the original can be redriven.
+            clock["now"] = reconcile_at + timedelta(seconds=1)
+            await processor.maintain()
+            assert len(queue.messages) == 2
+            replacement = queue.messages[1]
+            assert Message.model_validate_json(replacement["Body"]).generation == job.generation
+
+            # Model SQS moving the original delivery to the DLQ at its redrive horizon.
+            clock["now"] = redrive_at
+            assert queue.messages.pop(0) is expired_wakeup
+            assert queue.messages == [replacement]
+            assert (await row(db, job.id)).status == "queued"
+
+            await processor.run_message(replacement)
+            assert (await row(db, job.id)).status == "analysis_ready"
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_publish_failures_back_off_and_capacity_miss_reschedules_one_wakeup(migrated_database):
+    async def scenario():
+        db = Database(migrated_database)
+        try:
+            _, _, first = await seed(db, subject="first-worker-owner")
+            _, _, waiting = await seed(db, subject="second-worker-owner")
+            queue = SQS()
+            settings = WORKER.model_copy(update={"concurrency": 1})
+            processor = make_processor(
+                db, SourceStorage(UPLOADS, S3(PDF.read_bytes())), settings, queue
+            )
+            queue.fail = True
+            await processor.maintain()
+            assert len(queue.messages) == 0
+            async with db.sessions() as session, session.begin():
+                first_outbox = await session.get(JobOutbox, first.id)
+                waiting_outbox = await session.get(JobOutbox, waiting.id)
+                assert first_outbox.publish_attempts == waiting_outbox.publish_attempts == 1
+                assert first_outbox.available_at > store.now()
+                first_outbox.available_at = store.now() - timedelta(seconds=1)
+            await processor.maintain()
+            async with db.sessions() as session, session.begin():
+                first_outbox = await session.get(JobOutbox, first.id)
+                waiting_outbox = await session.get(JobOutbox, waiting.id)
+                assert first_outbox.publish_attempts == 2
+                assert first_outbox.available_at >= store.now() + timedelta(seconds=59)
+                first_outbox.available_at = store.now() - timedelta(seconds=1)
+                waiting_outbox.available_at = store.now() - timedelta(seconds=1)
+            queue.fail = False
+            await processor.maintain()
+            assert len(queue.messages) == 2
+            async with db.sessions() as session, session.begin():
+                claimed = await store.claim(
+                    session, Message(job_id=first.id, generation=0), settings
+                )
+                assert claimed is not None
+            await processor.run_message(queue.messages[1])
+            assert queue.messages[1]["ReceiptHandle"] in queue.acked
+            assert (await row(db, waiting.id)).status == "queued"
+            async with db.sessions() as session, session.begin():
+                outbox = await session.get(JobOutbox, waiting.id)
+                assert outbox.available_at > store.now()
+            await processor.maintain()
+            assert len(queue.messages) == 2
         finally:
             await db.close()
 
@@ -407,6 +517,39 @@ def test_expired_lease_rejects_old_output_and_recovers_after_restart(migrated_da
             await processor.run_message(queue.messages[-1])
             assert (await row(db, job.id)).status == "analysis_ready"
             assert (await row(db, job.id)).attempts == 2
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_slow_source_download_renews_worker_lease(migrated_database):
+    class SlowFirstReadS3(S3):
+        def __init__(self, content):
+            super().__init__(content)
+            self.first_read_started = threading.Event()
+
+        def get_object(self, **kwargs):
+            if not self.requests:
+                self.first_read_started.set()
+                time.sleep(12)
+            return super().get_object(**kwargs)
+
+    async def scenario():
+        db = Database(migrated_database)
+        try:
+            _, _, job = await seed(db)
+            sqs, s3 = SQS(), SlowFirstReadS3(PDF.read_bytes())
+            processor = make_processor(db, SourceStorage(UPLOADS, s3), WORKER, sqs)
+            await processor.maintain()
+            attempt = asyncio.create_task(processor.run_message(sqs.messages[0]))
+            assert await asyncio.to_thread(s3.first_read_started.wait, 5)
+            await asyncio.sleep(11)
+            current = await row(db, job.id)
+            assert current.status == "running"
+            assert current.lease_until > store.now() + timedelta(seconds=40)
+            await attempt
+            assert (await row(db, job.id)).status == "analysis_ready"
         finally:
             await db.close()
 

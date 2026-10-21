@@ -82,7 +82,7 @@ the installed applications, beyond pytest's editable-install checks.
 Issue #43 is complete for its accepted desktop/API test foundations. Issue #8 supplies
 the real processing worker. With the disposable PostgreSQL URL configured, run
 `python scripts/test.py worker`: real migrations, PDF inspection, persisted output,
-restart/expired leases, duplicates, outbox publish recovery, quota/concurrency,
+restart/expired leases, duplicates, retention-aware outbox publish recovery, quota/concurrency,
 retry/cancel fencing, rollback on partial persistence and owner-only APIs are exercised.
 Only external S3/SQS boundaries are substituted in these deterministic tests.
 

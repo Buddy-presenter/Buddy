@@ -4,7 +4,18 @@ import copy
 
 import pytest
 from backend.scripts.release.deploy import Deployment, DeploymentError
-from test_release import CONFIG, IMAGE, OLD_IMAGE, PREFIX, S3, SHA, Ecs, Sts
+from test_release import (
+    CONFIG,
+    IMAGE,
+    OLD_IMAGE,
+    OLD_WORKER_IMAGE,
+    PREFIX,
+    S3,
+    SHA,
+    WORKER_IMAGE,
+    Ecs,
+    Sts,
+)
 
 
 def proof(ecs):
@@ -14,6 +25,7 @@ def proof(ecs):
         "rollback": copy.deepcopy(ecs.state),
         "rollback_image": OLD_IMAGE,
         "candidate_image": IMAGE,
+        "schema_image": IMAGE,
         "checks": dict.fromkeys(
             [
                 "readiness",
@@ -95,22 +107,52 @@ def test_explicit_rollback_requires_a_fresh_test_of_its_actual_target():
 
 
 @pytest.mark.parametrize(
-    "target,phase,worker",
+    "target,phase",
     [
-        ("production", "compatibility", ""),
-        ("staging", "unknown", ""),
-        ("staging", "feature", IMAGE),
+        ("production", "compatibility"),
+        ("staging", "unknown"),
     ],
 )
-def test_transition_gate_rejects_unsupported_operations(monkeypatch, target, phase, worker):
+def test_transition_gate_rejects_unsupported_operations(monkeypatch, target, phase):
     from test_release import release_gate
 
     monkeypatch.setenv("GITHUB_SHA", SHA)
     monkeypatch.setenv("RELEASE_TARGET", target)
     monkeypatch.setenv("ROLLOUT_PHASE", phase)
-    monkeypatch.setenv("WORKER_IMAGE", worker)
     with pytest.raises(ValueError):
         release_gate["main"]()
+
+
+def test_transition_gate_allows_staging_worker_after_current_revision_ci(monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    from test_release import approved_checks, release_gate
+
+    checks = [
+        {"name": name, "head_sha": SHA, "status": "completed", "conclusion": "success"}
+        for name in (
+            "CI",
+            "Terraform boundaries",
+            "API container and database bootstrap",
+            "Native package (windows-latest)",
+            "Native package (macos-latest)",
+        )
+    ]
+    monkeypatch.setenv("GITHUB_SHA", SHA)
+    monkeypatch.setenv("RELEASE_TARGET", "staging")
+    monkeypatch.setenv("ROLLOUT_PHASE", "feature")
+    monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "Buddy-presenter/Buddy")
+    monkeypatch.setenv("WORKER_IMAGE", WORKER_IMAGE)
+    monkeypatch.setattr(
+        release_gate["subprocess"],
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout=json.dumps({"check_runs": checks})),
+    )
+
+    assert approved_checks(checks, SHA)
+    assert release_gate["main"]() == 0
 
 
 def test_rollback_preflight_uses_retained_feature_schema_after_app_rollback(monkeypatch, tmp_path):
@@ -211,6 +253,57 @@ def test_bridge_preflight_uses_the_exact_current_service_image_as_its_schema_bas
     }
 
 
+def test_worker_preflight_binds_candidate_and_previous_worker_images_to_live_service(
+    monkeypatch, tmp_path
+):
+    import json
+    import sys
+
+    from backend.scripts.release import prepare_compatibility as preflight
+
+    ecs, s3 = Ecs(), S3()
+    ecs.state["worker"] = {
+        "taskDefinition": PREFIX + "worker:1",
+        "desiredCount": 0,
+    }
+    config = copy.deepcopy(CONFIG)
+    config["tasks"]["worker"] = PREFIX + "worker:1"
+    clients = {"ecs": ecs, "s3": s3, "sts": Sts()}
+    monkeypatch.setattr(preflight.boto3, "client", lambda service, **kw: clients[service])
+    observed = {}
+
+    def verify(previous, candidate, **kwargs):
+        observed.update(previous=previous, candidate=candidate, **kwargs)
+        return {"passed": True}
+
+    monkeypatch.setattr(preflight, "verify_images", verify)
+    monkeypatch.setenv("BUDDY_DEPLOYMENT_CONFIG", json.dumps(config))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "preflight",
+            "--revision",
+            "c" * 40,
+            "--candidate-image",
+            IMAGE,
+            "--worker-image",
+            WORKER_IMAGE,
+            "--output",
+            str(tmp_path / "proof.json"),
+        ],
+    )
+
+    preflight.main()
+
+    assert observed["worker_image"] == WORKER_IMAGE
+    assert observed["previous_worker_image"] == OLD_WORKER_IMAGE
+    assert observed["schema_image"] is None
+    assert (
+        json.loads((tmp_path / "proof.json").read_text())["rollback"]["worker"]["desiredCount"] == 0
+    )
+
+
 def test_bridge_preflight_stops_if_the_live_api_image_changed_after_build(monkeypatch, tmp_path):
     import json
     import sys
@@ -286,6 +379,46 @@ def test_bridge_compatibility_fixture_starts_from_the_live_image_schema(monkeypa
     assert probes == ["seed", "baseline", "baseline", "typed", "write", "read"]
     assert report["baseline_image"] == baseline
     assert report["rollback_image"] == baseline
+
+
+def test_worker_images_are_smoked_against_the_feature_schema(monkeypatch):
+    import json
+
+    from backend.scripts.release import image_compatibility as compatibility
+
+    observed = []
+
+    def docker(*args, **kwargs):
+        if "/checks/rollback_probe.py" in args:
+            return json.dumps(
+                {"ready": True, "analysis": True, "session": True, "owner_isolation": True}
+            )
+        return "ok"
+
+    monkeypatch.setattr(compatibility, "docker", docker)
+    monkeypatch.setattr(
+        compatibility,
+        "verify_worker_image",
+        lambda image, schema: observed.append((image, schema)),
+    )
+    monkeypatch.setattr(compatibility.subprocess, "run", lambda *args, **kwargs: None)
+
+    report = compatibility.verify_images(
+        OLD_IMAGE,
+        IMAGE,
+        future="feature-api",
+        worker_image=WORKER_IMAGE,
+        previous_worker_image=OLD_WORKER_IMAGE,
+        pull_images=False,
+    )
+
+    assert observed == [(WORKER_IMAGE, "feature-api"), (OLD_WORKER_IMAGE, "feature-api")]
+    assert report["worker_compatibility"] == {
+        "passed": True,
+        "target_image": WORKER_IMAGE,
+        "previous_image": OLD_WORKER_IMAGE,
+        "schema_image": "feature-api",
+    }
 
 
 @pytest.mark.parametrize("state", ["draining", "pending", "in_progress"])

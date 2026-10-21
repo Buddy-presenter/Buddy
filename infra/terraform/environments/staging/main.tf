@@ -38,6 +38,11 @@ variable "start_services" {
   type    = bool
   default = false
 }
+variable "worker_start_services" {
+  description = "Keep a newly provisioned staging worker paused until the release driver verifies and promotes its image."
+  type        = bool
+  default     = false
+}
 variable "alert_email_recipients" {
   description = "Approved operational alert destinations. Store this input in protected operator configuration, not source control."
   type        = set(string)
@@ -77,6 +82,7 @@ module "environment" {
   api_image                   = var.api_image
   worker_image                = var.worker_image
   start_services              = var.start_services
+  worker_start_services       = var.worker_start_services
   enable_terraform_monitoring = false
   alert_email_recipients      = var.alert_email_recipients
   github_oidc_provider_arn    = var.github_oidc_provider_arn

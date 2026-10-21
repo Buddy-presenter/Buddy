@@ -134,15 +134,23 @@ class Processor:
                     return
                 outbox = await session.get(JobOutbox, job.id)
                 assert outbox is not None
-                # Commit after send: lost acknowledgements cause a safe duplicate.
-                # Keep a periodic republish until claimed; a DLQ/lost message cannot strand a job.
+                # Commit after send: an ambiguous send can cause a safe duplicate.
                 outbox.publish_attempts += 1
                 envelope = Message(job_id=job.id, generation=job.generation)
                 try:
                     await blocking(partial(self.queue.publish, envelope))
                 except Exception:
                     logger.warning("Job publish deferred; outbox retained")
-                outbox.available_at = store.now() + timedelta(seconds=30)
+                    # Exponential retry avoids hammering SQS during a sustained outage.
+                    retry_seconds = min(900, 30 * (2 ** min(outbox.publish_attempts - 1, 5)))
+                    outbox.available_at = store.now() + timedelta(seconds=retry_seconds)
+                else:
+                    # Reconcile a valid job before its wake-up can expire or reach the DLQ.
+                    # This leaves one visibility interval for the dispatcher to republish
+                    # after repeated receives, without the old 30-second duplicate churn.
+                    outbox.available_at = store.now() + timedelta(
+                        seconds=self.settings.queue_reconciliation_seconds
+                    )
 
     async def run_message(self, raw: dict[str, Any]) -> None:
         try:
@@ -166,16 +174,19 @@ class Processor:
                     deck.owner_id,
                 )
         if job is None:
-            async with self.database.sessions() as session:
+            capacity_deferred = False
+            async with self.database.sessions() as session, session.begin():
                 current = await session.get(ProcessingJob, message.job_id)
                 discard = (
                     current is None
                     or current.generation != message.generation
                     or current.status not in {"queued", "retry_wait"}
                 )
-            if discard:
+                if not discard:
+                    capacity_deferred = await store.defer_for_capacity(session, message)
+            if discard or capacity_deferred:
                 await blocking(lambda: self.queue.acknowledge(raw["ReceiptHandle"]))
-            # Capacity misses retain the wakeup; periodic outbox also repairs it.
+            # A capacity miss gets one later outbox wake-up instead of exhausting SQS receives.
             return
         assert job.lease_id is not None
         token = job.lease_id
@@ -263,6 +274,11 @@ class Processor:
                     async with self.database.sessions() as session, session.begin():
                         alive = await store.heartbeat(session, job.id, token, self.settings)
                     if not alive:
+                        logger.warning(
+                            "Worker lost its lease during %s for job %s",
+                            active_stage,
+                            job.id,
+                        )
                         if not task.done():
                             task.cancel()
                         with suppress(Exception, asyncio.CancelledError):
@@ -285,15 +301,21 @@ class Processor:
             if not key or not version or not size or not source_digest:
                 raise ExtractionError("invalid_pdf_source")
             extraction_id: UUID | None = None
-            content = await blocking(
-                lambda: self.storage.read(
-                    key,
-                    version=version,
-                    size=size,
-                    sha256=source_digest,
-                    source_format="pdf",
+            logger.info("Worker reading pinned PDF source for job %s", job.id)
+            alive, content = await fenced(
+                blocking(
+                    lambda: self.storage.read(
+                        key,
+                        version=version,
+                        size=size,
+                        sha256=source_digest,
+                        source_format="pdf",
+                    )
                 )
             )
+            if not alive:
+                return
+            logger.info("Worker read pinned PDF source for job %s", job.id)
             if saved_extraction_id is not None:
                 active_stage = "pdf_render"
                 active_stage_started_at = time.perf_counter()

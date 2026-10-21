@@ -43,8 +43,16 @@ RDS, objects, queues and identity stay in the selected workload region.
 
 The [PDF worker](pdf-workers.md) has a real entry point and separate container image.
 Queue/IAM infrastructure is real, but `worker_image = null` deliberately leaves the
-worker service absent. Supply its reviewed image digest and complete live acceptance;
-source code or a successful local smoke alone does not establish a deployed worker.
+worker service absent. The reviewed staging release builds the worker from the exact
+main revision, smoke-tests the immutable digest against disposable PostgreSQL and retains
+the digest as a workflow artifact. On first setup, apply a reviewed Terraform plan with
+that digest and `worker_start_services = false`; this creates the ECS service paused.
+Then rerun the reviewed staging feature release: it checks both the candidate and current
+worker images against the candidate schema before promoting API and worker together.
+After the worker service exists, feature releases build and promote both images together.
+Compatibility-phase releases leave the worker image unchanged and validate it against the
+bridge schema. Never start a worker before the compatible schema and exact image have been
+verified. Source code or a successful local smoke alone does not establish a deployed worker.
 `api_image = null` similarly permits the initial ECR/network/data provisioning before
 the first image can be built and pushed. `start_services = false` keeps defined services
 stopped until database initialization and migration succeed. Missing images never imply
@@ -100,6 +108,15 @@ release controls; provisioning infrastructure alone does not satisfy those contr
    `<deployment.api_url>/api/v1/ready` and perform actual Cognito/signup/recovery/rotation/
    revocation acceptance. Inspect task logs for sanitized startup failures. A failed
    health check rolls back the ECS deployment; do not bypass readiness.
+   For the first staging worker only, use the `staging-release-images` artifact from a
+   reviewed `Backend promotion and rollback` run with `bootstrap_worker_image = true`.
+   After the deploy role has the reviewed worker-ECR permission, apply Terraform with the
+   artifact's `worker_image`, the currently deployed `api_image`, `start_services = true`
+   and `worker_start_services = false`. Review that plan creates the worker service at
+   desired count zero and includes only expected worker/IAM resources before applying.
+   Then run a separate staging feature promotion with `bootstrap_worker_image = false`;
+   the release driver verifies the images and starts the worker with the API. The bootstrap
+   run itself never starts a worker or consumes the processing queue.
 9. Repeat in the separate production root/state in the same account only after staging acceptance and review.
    Record actual provision/restore/provider evidence in the PR. This guide does not
    authorize bypassing PR approval or unreviewed production promotion.

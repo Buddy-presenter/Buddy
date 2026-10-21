@@ -34,8 +34,6 @@ def main() -> int:
         phase == "compatibility" and target != "staging"
     ):
         raise ValueError("The compatibility bridge is a staging-only transition.")
-    if target == "staging" and os.environ.get("WORKER_IMAGE"):
-        raise ValueError("Staging worker promotion needs its own image compatibility contract.")
     if (
         not re.fullmatch(r"[a-f0-9]{40}", revision)
         or os.environ["GITHUB_REF"] != "refs/heads/main"

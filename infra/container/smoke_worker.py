@@ -20,18 +20,20 @@ def docker(*args, timeout=180):
     return result.stdout.strip()
 
 
-def verify(image):
+def verify(image, schema_image=None):
     prefix = "buddy-worker-smoke-" + uuid4().hex[:10]
     pg, worker = prefix + "-pg", prefix + "-worker"
     source = (ROOT / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf").read_bytes()
     owner, deck, job, lease = [str(uuid4()) for _ in range(4)]
-    messages = [
-        {
-            "MessageId": str(uuid4()),
-            "ReceiptHandle": "synthetic-receipt",
-            "Body": json.dumps({"schema_version": "buddy.job.v1", "job_id": job, "generation": 1}),
-        }
-    ]
+    # The expired seeded lease starts at generation 1. Startup reconciliation fences it
+    # and advances it to generation 2 with a short retry delay. The test driver delivers
+    # this synthetic SQS wake-up only when the durable retry becomes due.
+    wake_up = {
+        "MessageId": str(uuid4()),
+        "ReceiptHandle": "synthetic-receipt",
+        "Body": json.dumps({"schema_version": "buddy.job.v1", "job_id": job, "generation": 2}),
+    }
+    messages = []
     accesses, acknowledged = [], []
     queue_url = "https://sqs.eu-central-1.amazonaws.com/123456789012/smoke"
 
@@ -118,7 +120,7 @@ def verify(image):
             *environment,
             "--entrypoint",
             "python",
-            image,
+            schema_image or image,
             "-m",
             "buddy_api.persistence.migrate",
             "upgrade",
@@ -148,8 +150,8 @@ def verify(image):
             VALUES ('{deck}','{owner}','smoke','pdf','sources/smoke/original.pdf',
               'smoke-v1','pinned',{len(source)},'{hashlib.sha256(source).hexdigest()}');
             INSERT INTO processing_jobs(id,owner_id,deck_id,status,source_revision,attempts,
-              lease_id,lease_until,deadline_at,stage_state)
-            VALUES ('{job}','{owner}','{deck}','running','smoke-v1',1,'{lease}',
+              generation,lease_id,lease_until,deadline_at,stage_state)
+            VALUES ('{job}','{owner}','{deck}','running','smoke-v1',1,1,'{lease}',
               now()-interval '1 second',now()+interval '120 seconds','running');
             INSERT INTO job_outbox(job_id,available_at) VALUES ('{job}',now());
             CREATE ROLE worker_smoke LOGIN PASSWORD 'synthetic-worker-only';
@@ -203,6 +205,12 @@ def verify(image):
         )
         containers.append(worker)
         for _ in range(90):
+            due = sql(
+                f"""SELECT status = 'retry_wait' AND generation = 2 AND not_before <= now()
+                    FROM processing_jobs WHERE id='{job}'"""
+            )
+            if not messages and due == "t":
+                messages.append(wake_up)
             state = sql(f"SELECT status FROM processing_jobs WHERE id='{job}'")
             if state == "analysis_ready":
                 break
@@ -216,7 +224,18 @@ def verify(image):
                 raise RuntimeError("Worker smoke exited: " + docker("logs", worker))
             time.sleep(1)
         else:
-            raise RuntimeError("Worker smoke did not complete PDF inspection: " + state)
+            details = sql(
+                f"""SELECT status || '|' || stage || ':' || stage_state || '|error=' ||
+                    COALESCE(error_code, '<none>') || '|generation=' || generation ||
+                    '|attempts=' || attempts || '|lease_until=' ||
+                    COALESCE(lease_until::text, '<none>') || '|deadline_at=' ||
+                    COALESCE(deadline_at::text, '<none>')
+                    FROM processing_jobs WHERE id='{job}'"""
+            )
+            raise RuntimeError(
+                f"Worker smoke did not complete PDF inspection: {details}, "
+                f"source_requests={accesses}; " + docker("logs", worker)
+            )
         assert sql(f"SELECT attempts FROM processing_jobs WHERE id='{job}'") == "2"
         assert sql("SELECT jsonb_array_length(document->'slides') FROM deck_extractions") == "3"
         assert sql("SELECT count(*) FROM analysis_versions") == "1"
@@ -275,8 +294,12 @@ def verify(image):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True)
+    parser.add_argument(
+        "--schema-image",
+        help="API image whose migrations define the schema used to test worker compatibility.",
+    )
     args = parser.parse_args()
-    verify(args.image)
+    verify(args.image, args.schema_image)
 
 
 if __name__ == "__main__":
