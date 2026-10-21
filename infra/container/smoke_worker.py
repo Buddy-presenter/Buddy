@@ -29,8 +29,8 @@ def verify(image, schema_image=None):
         {
             "MessageId": str(uuid4()),
             "ReceiptHandle": "synthetic-receipt",
-            # Startup reconciliation fences the expired seeded lease by advancing its
-            # generation from 1 to 2 before the worker consumes this wake-up.
+            # The expired seeded lease starts at generation 1. Startup reconciliation
+            # fences it and advances the generation to 2 before consuming this wake-up.
             "Body": json.dumps({"schema_version": "buddy.job.v1", "job_id": job, "generation": 2}),
         }
     ]
@@ -150,8 +150,8 @@ def verify(image, schema_image=None):
             VALUES ('{deck}','{owner}','smoke','pdf','sources/smoke/original.pdf',
               'smoke-v1','pinned',{len(source)},'{hashlib.sha256(source).hexdigest()}');
             INSERT INTO processing_jobs(id,owner_id,deck_id,status,source_revision,attempts,
-              lease_id,lease_until,deadline_at,stage_state)
-            VALUES ('{job}','{owner}','{deck}','running','smoke-v1',1,'{lease}',
+              generation,lease_id,lease_until,deadline_at,stage_state)
+            VALUES ('{job}','{owner}','{deck}','running','smoke-v1',1,1,'{lease}',
               now()-interval '1 second',now()+interval '120 seconds','running');
             INSERT INTO job_outbox(job_id,available_at) VALUES ('{job}',now());
             CREATE ROLE worker_smoke LOGIN PASSWORD 'synthetic-worker-only';
