@@ -218,13 +218,17 @@ def verify(image, schema_image=None):
                 raise RuntimeError("Worker smoke exited: " + docker("logs", worker))
             time.sleep(1)
         else:
-            error = sql(
-                f"SELECT COALESCE(error_code, '<none>') FROM processing_jobs WHERE id='{job}'"
+            details = sql(
+                f"""SELECT status || '|' || stage || ':' || stage_state || '|error=' ||
+                    COALESCE(error_code, '<none>') || '|generation=' || generation ||
+                    '|attempts=' || attempts || '|lease_until=' ||
+                    COALESCE(lease_until::text, '<none>') || '|deadline_at=' ||
+                    COALESCE(deadline_at::text, '<none>')
+                    FROM processing_jobs WHERE id='{job}'"""
             )
-            stage = sql(f"SELECT stage || ':' || stage_state FROM processing_jobs WHERE id='{job}'")
             raise RuntimeError(
-                f"Worker smoke did not complete PDF inspection: status={state}, "
-                f"stage={stage}, error={error}, source_requests={accesses}; "
+                f"Worker smoke did not complete PDF inspection: {details}, "
+                f"source_requests={accesses}; "
                 + docker("logs", worker)
             )
         assert sql(f"SELECT attempts FROM processing_jobs WHERE id='{job}'") == "2"

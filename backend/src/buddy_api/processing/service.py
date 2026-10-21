@@ -273,6 +273,11 @@ class Processor:
                     async with self.database.sessions() as session, session.begin():
                         alive = await store.heartbeat(session, job.id, token, self.settings)
                     if not alive:
+                        logger.warning(
+                            "Worker lost its lease during %s for job %s",
+                            active_stage,
+                            job.id,
+                        )
                         if not task.done():
                             task.cancel()
                         with suppress(Exception, asyncio.CancelledError):
@@ -295,6 +300,7 @@ class Processor:
             if not key or not version or not size or not source_digest:
                 raise ExtractionError("invalid_pdf_source")
             extraction_id: UUID | None = None
+            logger.info("Worker reading pinned PDF source for job %s", job.id)
             alive, content = await fenced(
                 blocking(
                     lambda: self.storage.read(
@@ -308,6 +314,7 @@ class Processor:
             )
             if not alive:
                 return
+            logger.info("Worker read pinned PDF source for job %s", job.id)
             if saved_extraction_id is not None:
                 active_stage = "pdf_render"
                 active_stage_started_at = time.perf_counter()
