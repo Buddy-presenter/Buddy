@@ -134,15 +134,22 @@ class Processor:
                     return
                 outbox = await session.get(JobOutbox, job.id)
                 assert outbox is not None
-                # Commit after send: lost acknowledgements cause a safe duplicate.
-                # Keep a periodic republish until claimed; a DLQ/lost message cannot strand a job.
+                # Commit after send: an ambiguous send can cause a safe duplicate.
                 outbox.publish_attempts += 1
                 envelope = Message(job_id=job.id, generation=job.generation)
                 try:
                     await blocking(partial(self.queue.publish, envelope))
                 except Exception:
                     logger.warning("Job publish deferred; outbox retained")
-                outbox.available_at = store.now() + timedelta(seconds=30)
+                    # Exponential retry avoids hammering SQS during a sustained outage.
+                    retry_seconds = min(900, 30 * (2 ** min(outbox.publish_attempts - 1, 5)))
+                    outbox.available_at = store.now() + timedelta(seconds=retry_seconds)
+                else:
+                    # SQS retains this wake-up for the configured retention window. Reconcile
+                    # only after it can expire, rather than publishing a duplicate every 30s.
+                    outbox.available_at = store.now() + timedelta(
+                        seconds=self.settings.queue_message_retention_seconds
+                    )
 
     async def run_message(self, raw: dict[str, Any]) -> None:
         try:
@@ -166,16 +173,19 @@ class Processor:
                     deck.owner_id,
                 )
         if job is None:
-            async with self.database.sessions() as session:
+            capacity_deferred = False
+            async with self.database.sessions() as session, session.begin():
                 current = await session.get(ProcessingJob, message.job_id)
                 discard = (
                     current is None
                     or current.generation != message.generation
                     or current.status not in {"queued", "retry_wait"}
                 )
-            if discard:
+                if not discard:
+                    capacity_deferred = await store.defer_for_capacity(session, message)
+            if discard or capacity_deferred:
                 await blocking(lambda: self.queue.acknowledge(raw["ReceiptHandle"]))
-            # Capacity misses retain the wakeup; periodic outbox also repairs it.
+            # A capacity miss gets one later outbox wake-up instead of exhausting SQS receives.
             return
         assert job.lease_id is not None
         token = job.lease_id

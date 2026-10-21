@@ -346,7 +346,7 @@ def test_failed_evidence_cleanup_does_not_block_worker_start_or_other_jobs(migra
     asyncio.run(scenario())
 
 
-def test_publish_failure_and_send_commit_loss_are_reconciled(migrated_database):
+def test_successful_publish_waits_for_sqs_retention_before_reconciliation(migrated_database):
     async def scenario():
         db = Database(migrated_database)
         try:
@@ -355,16 +355,19 @@ def test_publish_failure_and_send_commit_loss_are_reconciled(migrated_database):
             processor = make_processor(
                 db, SourceStorage(UPLOADS, S3(PDF.read_bytes())), WORKER, queue
             )
-            queue.fail = True
+            started = store.now()
             await processor.maintain()
+            assert len(queue.messages) == 1
             assert (await row(db, job.id)).status == "queued"
             async with db.sessions() as session, session.begin():
                 outbox = await session.get(JobOutbox, job.id)
                 assert outbox.publish_attempts == 1
-                outbox.available_at = store.now() - timedelta(seconds=1)
-            queue.fail = False
+                assert outbox.available_at >= started + timedelta(
+                    seconds=WORKER.queue_message_retention_seconds
+                )
             await processor.maintain()
-            # Successful send followed by a failed commit must leave a republishable intent.
+            assert len(queue.messages) == 1
+            # Once SQS's copy expires, reconciliation can safely publish a fresh wake-up.
             async with db.sessions() as session, session.begin():
                 outbox = await session.get(JobOutbox, job.id)
                 outbox.available_at = store.now() - timedelta(seconds=1)
@@ -372,6 +375,56 @@ def test_publish_failure_and_send_commit_loss_are_reconciled(migrated_database):
             assert len(queue.messages) == 2
             await asyncio.gather(*(processor.run_message(m) for m in queue.messages))
             assert (await row(db, job.id)).attempts == 1
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_publish_failures_back_off_and_capacity_miss_reschedules_one_wakeup(migrated_database):
+    async def scenario():
+        db = Database(migrated_database)
+        try:
+            _, _, first = await seed(db, subject="first-worker-owner")
+            _, _, waiting = await seed(db, subject="second-worker-owner")
+            queue = SQS()
+            settings = WORKER.model_copy(update={"concurrency": 1})
+            processor = make_processor(
+                db, SourceStorage(UPLOADS, S3(PDF.read_bytes())), settings, queue
+            )
+            queue.fail = True
+            await processor.maintain()
+            assert len(queue.messages) == 0
+            async with db.sessions() as session, session.begin():
+                first_outbox = await session.get(JobOutbox, first.id)
+                waiting_outbox = await session.get(JobOutbox, waiting.id)
+                assert first_outbox.publish_attempts == waiting_outbox.publish_attempts == 1
+                assert first_outbox.available_at > store.now()
+                first_outbox.available_at = store.now() - timedelta(seconds=1)
+            await processor.maintain()
+            async with db.sessions() as session, session.begin():
+                first_outbox = await session.get(JobOutbox, first.id)
+                waiting_outbox = await session.get(JobOutbox, waiting.id)
+                assert first_outbox.publish_attempts == 2
+                assert first_outbox.available_at >= store.now() + timedelta(seconds=59)
+                first_outbox.available_at = store.now() - timedelta(seconds=1)
+                waiting_outbox.available_at = store.now() - timedelta(seconds=1)
+            queue.fail = False
+            await processor.maintain()
+            assert len(queue.messages) == 2
+            async with db.sessions() as session, session.begin():
+                claimed = await store.claim(
+                    session, Message(job_id=first.id, generation=0), settings
+                )
+                assert claimed is not None
+            await processor.run_message(queue.messages[1])
+            assert queue.messages[1]["ReceiptHandle"] in queue.acked
+            assert (await row(db, waiting.id)).status == "queued"
+            async with db.sessions() as session, session.begin():
+                outbox = await session.get(JobOutbox, waiting.id)
+                assert outbox.available_at > store.now()
+            await processor.maintain()
+            assert len(queue.messages) == 2
         finally:
             await db.close()
 

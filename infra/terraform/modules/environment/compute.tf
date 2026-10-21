@@ -34,6 +34,7 @@ locals {
     { name = "BUDDY_UPLOADS_ENABLED", value = "true" },
     { name = "BUDDY_VALIDATOR_PYTHON", value = "/opt/buddy-validator/bin/python" },
     { name = "BUDDY_PROCESSING_QUEUE_URL", value = aws_sqs_queue.processing.url },
+    { name = "BUDDY_WORKER_QUEUE_MESSAGE_RETENTION_SECONDS", value = tostring(aws_sqs_queue.processing.message_retention_seconds) },
     { name = "SSL_CERT_FILE", value = "/etc/ssl/certs/ca-certificates.crt" },
     { name = "PGSSLROOTCERT", value = "/etc/ssl/certs/ca-certificates.crt" },
   ]

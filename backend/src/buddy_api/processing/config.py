@@ -16,6 +16,7 @@ class WorkerSettings(BaseModel):
     max_attempts: int = Field(default=3, ge=1, le=5)
     lease_seconds: int = Field(default=45, ge=30, le=120)
     runtime_seconds: int = Field(default=900, ge=300, le=900)
+    queue_message_retention_seconds: int = Field(default=86400, ge=60, le=1209600)
 
     @classmethod
     def from_environment(cls, values: Mapping[str, str]) -> "WorkerSettings | None":
@@ -33,6 +34,7 @@ class WorkerSettings(BaseModel):
                         "max_attempts",
                         "lease_seconds",
                         "runtime_seconds",
+                        "queue_message_retention_seconds",
                     )
                     if "BUDDY_WORKER_" + name.upper() in values
                 },

@@ -409,6 +409,16 @@ run "private_upload_runtime_and_version_cleanup" {
     )
     error_message = "Upload workload configuration must use this environment's private KMS key."
   }
+  assert {
+    condition = alltrue([
+      for service_name in ["api", "worker"] :
+      [
+        for item in jsondecode(aws_ecs_task_definition.service[service_name].container_definitions)[0].environment :
+        item.value if item.name == "BUDDY_WORKER_QUEUE_MESSAGE_RETENTION_SECONDS"
+      ] == [tostring(aws_sqs_queue.processing.message_retention_seconds)]
+    ])
+    error_message = "The API and worker must reconcile using the processing queue's actual retention window."
+  }
 }
 
 run "immutable_staging_repository_identity" {
