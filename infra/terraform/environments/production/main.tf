@@ -36,7 +36,7 @@ variable "start_services" {
 }
 variable "worker_start_services" {
   type    = bool
-  default = true
+  default = false
 }
 variable "github_oidc_provider_arn" { type = string }
 provider "aws" {

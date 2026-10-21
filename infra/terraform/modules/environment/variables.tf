@@ -66,7 +66,7 @@ variable "start_services" {
 variable "worker_start_services" {
   description = "Whether Terraform should start a newly provisioned worker; staging keeps it paused until the reviewed release driver promotes it."
   type        = bool
-  default     = true
+  default     = false
   validation {
     condition     = !var.worker_start_services || (var.start_services && var.worker_image != null)
     error_message = "Starting a worker requires start_services and a real worker image."
