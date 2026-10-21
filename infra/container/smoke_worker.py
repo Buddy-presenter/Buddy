@@ -228,8 +228,7 @@ def verify(image, schema_image=None):
             )
             raise RuntimeError(
                 f"Worker smoke did not complete PDF inspection: {details}, "
-                f"source_requests={accesses}; "
-                + docker("logs", worker)
+                f"source_requests={accesses}; " + docker("logs", worker)
             )
         assert sql(f"SELECT attempts FROM processing_jobs WHERE id='{job}'") == "2"
         assert sql("SELECT jsonb_array_length(document->'slides') FROM deck_extractions") == "3"
