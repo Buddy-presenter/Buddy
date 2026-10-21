@@ -110,7 +110,12 @@ async def cancel(session: AsyncSession, job: ProcessingJob) -> None:
 
 
 async def retry(session: AsyncSession, job: ProcessingJob, settings: WorkerSettings) -> None:
-    if job.source_revision is None or job.status not in {"dead_letter", "failed", "cancelled"}:
+    if job.source_revision is None or job.status not in {
+        "metadata_ready",
+        "dead_letter",
+        "failed",
+        "cancelled",
+    }:
         raise UploadError(409, "job_not_retryable", "This job cannot be retried.")
     # Lifetime attempts remain bounded, even across explicit retries.
     if job.attempts >= settings.max_attempts:
@@ -138,7 +143,8 @@ async def claim(
         or job.generation != message.generation
         or job.status not in {"queued", "retry_wait"}
         or job.source_revision is None
-        or job.stage not in {"pdf_metadata.v1", "pdf_analysis.v1"}
+        or job.stage
+        not in {"pdf_metadata.v1", "pdf_analysis.v1", "pdf_render", "provider", "validation"}
         or job.not_before > now()
     ):
         return None
@@ -160,7 +166,7 @@ async def claim(
     if job.attempts > settings.max_attempts:
         job.status, job.stage_state, job.error_code = "dead_letter", "failed", "attempts_exhausted"
         return None
-    job.status, job.stage_state, job.progress = "running", "running", 10
+    job.status, job.stage_state, job.progress = "running", "running", max(job.progress, 10)
     job.lease_id = uuid4()
     job.lease_until = now() + timedelta(seconds=settings.lease_seconds)
     job.deadline_at = now() + timedelta(seconds=settings.runtime_seconds)
@@ -188,7 +194,26 @@ async def heartbeat(
     if job is None or not valid_lease(job, token):
         return False
     job.lease_until = min(now() + timedelta(seconds=settings.lease_seconds), job.deadline_at)  # type: ignore[type-var]
-    job.progress = 50
+    return True
+
+
+async def advance_stage(
+    session: AsyncSession,
+    identifier: UUID,
+    token: UUID,
+    stage: str,
+    progress: int,
+) -> bool:
+    """Persist a truthful, lease-fenced worker stage for library polling."""
+    if stage not in {"pdf_render", "provider", "validation"} or not 0 <= progress <= 95:
+        raise ValueError("Invalid processing stage")
+    job = await session.scalar(
+        select(ProcessingJob).where(ProcessingJob.id == identifier).with_for_update()
+    )
+    if job is None or not valid_lease(job, token):
+        return False
+    job.stage, job.stage_state = stage, "running"
+    job.progress = max(job.progress, progress)
     return True
 
 

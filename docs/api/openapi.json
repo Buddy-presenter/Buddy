@@ -712,6 +712,16 @@
             "title": "Id",
             "type": "string"
           },
+          "processing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LibraryProcessing"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "source_format": {
             "default": "pptx",
             "enum": [
@@ -739,6 +749,76 @@
           "attempts"
         ],
         "title": "LibraryDeck",
+        "type": "object"
+      },
+      "LibraryProcessing": {
+        "properties": {
+          "attempts": {
+            "minimum": 0.0,
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "can_cancel": {
+            "default": false,
+            "title": "Can Cancel",
+            "type": "boolean"
+          },
+          "can_retry": {
+            "default": false,
+            "title": "Can Retry",
+            "type": "boolean"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "progress": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Progress",
+            "type": "integer"
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ProcessingState"
+          }
+        },
+        "required": [
+          "state",
+          "progress",
+          "attempts"
+        ],
+        "title": "LibraryProcessing",
         "type": "object"
       },
       "LibraryResponse": {
@@ -923,6 +1003,21 @@
         ],
         "title": "ProcessResult",
         "type": "object"
+      },
+      "ProcessingState": {
+        "enum": [
+          "uploaded",
+          "queued",
+          "inspecting_pdf_metadata",
+          "analyzing",
+          "validating",
+          "review_ready",
+          "partial",
+          "failed",
+          "cancelled"
+        ],
+        "title": "ProcessingState",
+        "type": "string"
       },
       "Profile": {
         "enum": [

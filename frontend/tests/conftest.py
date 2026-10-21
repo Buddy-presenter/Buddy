@@ -94,15 +94,26 @@ def signal_recorder(qtbot):
 @pytest.fixture
 def backend() -> Iterator[ThreadingHTTPServer]:
     class Handler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:
+        def _respond(self) -> None:
             self.server.entered.set()
             self.server.release.wait(3)
             self.send_response(self.server.response_code)
             self.send_header("Content-Type", self.server.content_type)
             self.end_headers()
-            # Timeout tests deliberately close the client before a response.
             with suppress(BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 self.wfile.write(self.server.body)
+
+        def do_GET(self) -> None:
+            self.server.method = "GET"
+            self.server.path = self.path
+            self._respond()
+
+        def do_POST(self) -> None:
+            self.server.method = "POST"
+            self.server.path = self.path
+            self.server.request_body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            self.server.authorization = self.headers.get("Authorization")
+            self._respond()
 
         def log_message(self, *_args: object) -> None:
             pass

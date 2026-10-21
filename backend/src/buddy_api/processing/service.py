@@ -276,6 +276,10 @@ class Processor:
                     await task
                 raise
 
+        async def persist_stage(name: str, progress: int) -> bool:
+            async with self.database.sessions() as session, session.begin():
+                return await store.advance_stage(session, job.id, token, name, progress)
+
         try:
             key, version, size, source_digest, revision, _format, deck_id, owner_id = source
             if not key or not version or not size or not source_digest:
@@ -290,11 +294,9 @@ class Processor:
                     source_format="pdf",
                 )
             )
-            if stage == "pdf_analysis.v1":
+            if saved_extraction_id is not None:
                 active_stage = "pdf_render"
                 active_stage_started_at = time.perf_counter()
-                if saved_extraction_id is None:
-                    raise ExtractionError("saved_extraction_unavailable")
                 async with self.database.sessions() as session:
                     saved = await session.get(DeckExtraction, saved_extraction_id)
                 if (
@@ -326,6 +328,8 @@ class Processor:
                 if not alive:
                     return
                 stage_metric("pdf_render", "success", render_started_at)
+                if not await persist_stage("provider", 60):
+                    return
                 active_stage = "pdf_analysis.v1"
                 active_stage_started_at = time.perf_counter()
                 extraction_id = saved_extraction_id
@@ -366,6 +370,8 @@ class Processor:
                 )
                 active_stage = "provider"
                 active_stage_started_at = time.perf_counter()
+                if not await persist_stage("provider", 60):
+                    return
                 alive, generated = await fenced(provider_call)
                 if not alive:
                     return
@@ -421,6 +427,8 @@ class Processor:
             )
             if has_candidates and self.validation is None:
                 raise ProviderFailure("validator_unavailable")
+            if has_candidates and not await persist_stage("validation", 80):
+                return
             for slide in analysis_result.slides:
                 for action_result in slide.actions:
                     if action_result.state != "candidate":

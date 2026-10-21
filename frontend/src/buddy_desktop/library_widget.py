@@ -29,7 +29,13 @@ from PySide6.QtWidgets import (
 
 from buddy_desktop.account_widget import AccountWidget
 from buddy_desktop.config import AppConfig
-from buddy_desktop.library_service import LibraryAccessExpired, LibraryPage, LibraryService
+from buddy_desktop.library_service import (
+    DeckSummary,
+    LibraryAccessExpired,
+    LibraryPage,
+    LibraryService,
+    ProcessingResult,
+)
 from buddy_desktop.presentation_service import (
     DownloadedPDF,
     PresentationService,
@@ -50,6 +56,17 @@ STATUS_TEXT = {
         "Assets unavailable",
         "The job completed, but analysis or rendered assets are missing. Contact support.",
     ),
+}
+PROCESSING_TEXT = {
+    "uploaded": ("Uploaded", "The PDF is saved and waiting for a processing job."),
+    "queued": ("Queued", "Waiting for a processing worker."),
+    "inspecting_pdf_metadata": ("Inspecting PDF", "Checking page order and dimensions."),
+    "analyzing": ("Analyzing", "Preparing slide summaries and suggested actions."),
+    "validating": ("Validating", "Checking suggested actions against the source PDF."),
+    "review_ready": ("Review ready", "Summaries and action evidence are available to review."),
+    "partial": ("Partial results", "Some results are available; unavailable items show why."),
+    "failed": ("Failed", "Processing failed. Contact support if retry is unavailable."),
+    "cancelled": ("Cancelled", "Processing was cancelled. You can retry if allowed."),
 }
 
 
@@ -146,6 +163,16 @@ class LibraryWidget(QWidget):
         self.review_button.setToolTip("Review saved summaries and validation evidence")
         self.review_button.setEnabled(False)
         self.review_button.clicked.connect(self.review_selected)
+        self.cancel_job_button: QPushButton = QPushButton("Cancel processing")
+        self.cancel_job_button.setAccessibleName("Cancel processing job")
+        command(self.cancel_job_button, "x")
+        self.cancel_job_button.clicked.connect(lambda: self.operate_selected_job("cancel"))
+        self.retry_job_button: QPushButton = QPushButton("Retry processing")
+        self.retry_job_button.setAccessibleName("Retry processing job")
+        command(self.retry_job_button, "refresh-cw")
+        self.retry_job_button.clicked.connect(lambda: self.operate_selected_job("retry"))
+        self.cancel_job_button.hide()
+        self.retry_job_button.hide()
         # Presentation action follows the selected deck details.
         self.upload_panel = QWidget()
         upload_layout = QVBoxLayout(self.upload_panel)
@@ -226,6 +253,8 @@ class LibraryWidget(QWidget):
         self.detail.setAccessibleName("Selected deck processing status")
         # Selected-deck details sit beside the action that uses them.
         actions.addWidget(self.detail, 1)
+        actions.addWidget(self.cancel_job_button, alignment=Qt.AlignmentFlag.AlignTop)
+        actions.addWidget(self.retry_job_button, alignment=Qt.AlignmentFlag.AlignTop)
         actions.addWidget(self.review_button, alignment=Qt.AlignmentFlag.AlignTop)
         actions.addWidget(self.open_button, alignment=Qt.AlignmentFlag.AlignTop)
         layout.addWidget(self.selection_actions)
@@ -292,6 +321,8 @@ class LibraryWidget(QWidget):
         self.next.setEnabled(False)
         self.open_button.setEnabled(False)
         self.review_button.setEnabled(False)
+        self.cancel_job_button.hide()
+        self.retry_job_button.hide()
 
     def invalidate(self) -> None:
         self.generation += 1
@@ -443,6 +474,10 @@ class LibraryWidget(QWidget):
             self.state.hide()
             self.present_requested.emit(result)
             return
+        if isinstance(result, ProcessingResult):
+            self.pending = True
+            self.state.show_state("Processing updated", "Refreshing the saved job status…")
+            return
         if not isinstance(result, LibraryPage):
             self.failed(_identifier, "The backend returned an invalid library response.")
             return
@@ -464,7 +499,7 @@ class LibraryWidget(QWidget):
             self.state.hide()
             self.table.setRowCount(len(result.items))
             for row, deck in enumerate(result.items):
-                status, guidance = STATUS_TEXT[deck.status]
+                status, guidance = self.deck_status_text(deck)
                 for column, text in enumerate(
                     [
                         deck.title,
@@ -497,7 +532,13 @@ class LibraryWidget(QWidget):
             self.empty_space.hide()
             self.table.selectRow(0)
             self.selection_changed()
-            if any(item.status in {"queued", "processing"} for item in result.items):
+            if any(
+                item.processing.state
+                in {"queued", "inspecting_pdf_metadata", "analyzing", "validating"}
+                if item.processing is not None
+                else item.status in {"queued", "processing"}
+                for item in result.items
+            ):
                 self.poll.start()
         self.count.setText(
             f"Page {self.page} of {max(1, ceil(result.total / 20))} · {result.total} decks"
@@ -509,7 +550,12 @@ class LibraryWidget(QWidget):
         row = self.table.currentRow()
         if self.last_page and 0 <= row < len(self.last_page.items):
             deck = self.last_page.items[row]
-            guidance = STATUS_TEXT[deck.status][1]
+            _label, guidance = self.deck_status_text(deck)
+            processing = deck.processing
+            self.cancel_job_button.setVisible(bool(processing and processing.can_cancel))
+            self.cancel_job_button.setEnabled(not self.runner.busy)
+            self.retry_job_button.setVisible(bool(processing and processing.can_retry))
+            self.retry_job_button.setEnabled(not self.runner.busy)
             if deck.source_format == "pptx":
                 guidance = (
                     (
@@ -527,7 +573,55 @@ class LibraryWidget(QWidget):
                 deck.source_format == "pdf" and self.token() is not None and not self.runner.busy
             )
             attempts = f" Processing attempts: {deck.attempts}." if deck.attempts else ""
+            if processing is not None and processing.stage:
+                guidance += f" Current stage: {processing.stage.replace('_', ' ')}."
+            if processing is not None and processing.progress:
+                guidance += f" Progress: {processing.progress}%."
             self.detail.setPlainText(deck.title + "\n" + guidance + attempts)
+
+    @staticmethod
+    def deck_status_text(deck: DeckSummary) -> tuple[str, str]:
+        processing = deck.processing
+        if processing is not None:
+            if processing.state == "failed" and processing.error_code == "analysis_unavailable":
+                return (
+                    "Results unavailable",
+                    "Saved analysis does not match this PDF. Refresh or upload the current source.",
+                )
+            return PROCESSING_TEXT.get(processing.state, STATUS_TEXT[deck.status])
+        return STATUS_TEXT[deck.status]
+
+    def operate_selected_job(self, operation: str) -> None:
+        row = self.table.currentRow()
+        if not self.last_page or not 0 <= row < len(self.last_page.items):
+            return
+        deck = self.last_page.items[row]
+        processing = deck.processing
+        access = self.token()
+        if (
+            processing is None
+            or processing.job_id is None
+            or access is None
+            or self.runner.busy
+            or (operation == "cancel" and not processing.can_cancel)
+            or (operation == "retry" and not processing.can_retry)
+        ):
+            return
+        job_id = processing.job_id
+        assert job_id is not None
+        self.poll.stop()
+        self.request_generation = self.generation
+        self.pending = True
+        self.activity_changed.emit(True)
+        service = LibraryService(self.config)
+
+        def work() -> object:
+            try:
+                return service.operate_job(access, job_id, operation)
+            except LibraryAccessExpired as exc:
+                return exc
+
+        self.runner.submit(work)
 
     def review_selected(self) -> None:
         row = self.table.currentRow()
