@@ -156,11 +156,12 @@ run "staging_worker_is_provisioned_paused_for_release_promotion" {
 run "production_redundancy" {
   command = plan
   variables {
-    environment    = "production"
-    api_domain     = "api.example.com"
-    api_image      = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-production/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    worker_image   = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-production/worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-    start_services = true
+    environment           = "production"
+    api_domain            = "api.example.com"
+    api_image             = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-production/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    worker_image          = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-production/worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    start_services        = true
+    worker_start_services = true
   }
   assert {
     condition     = aws_cognito_user_pool_client.desktop.callback_urls == toset(["org.buddy.desktop://oauth/callback", "https://api.example.com/auth/desktop/callback"]) && aws_cognito_user_pool_client.desktop.logout_urls == toset(["org.buddy.desktop://oauth/signed-out", "https://api.example.com/auth/desktop/signed-out"])
@@ -427,6 +428,11 @@ run "immutable_staging_repository_identity" {
     override_during = plan
   }
   override_resource {
+    target          = aws_ecr_repository.service["worker"]
+    values          = { arn = "arn:aws:ecr:eu-central-1:123456789012:repository/buddy-staging/worker" }
+    override_during = plan
+  }
+  override_resource {
     target          = aws_s3_bucket.private["releases"]
     values          = { arn = "arn:aws:s3:::buddy-staging-123456789012-releases" }
     override_during = plan
@@ -475,8 +481,8 @@ run "immutable_staging_repository_identity" {
     error_message = "Immutable repository IDs must retain exact, separate protected-environment and audience boundaries."
   }
   assert {
-    condition     = alltrue([for statement in jsondecode(aws_iam_role_policy.deploy.policy).Statement : statement.Resource == aws_ecr_repository.service["api"].arn if contains(statement.Action, "ecr:BatchGetImage") || contains(statement.Action, "ecr:GetDownloadUrlForLayer")]) && anytrue([for statement in jsondecode(aws_iam_role_policy.deploy.policy).Statement : contains(statement.Action, "ecr:BatchGetImage") && contains(statement.Action, "ecr:GetDownloadUrlForLayer")])
-    error_message = "Deployment image-pull permissions must exist and stay scoped to this environment's API repository."
+    condition     = anytrue([for statement in jsondecode(aws_iam_role_policy.deploy.policy).Statement : contains(statement.Action, "ecr:PutImage") && contains(statement.Action, "ecr:BatchGetImage") && toset(statement.Resource) == toset([aws_ecr_repository.service["api"].arn, aws_ecr_repository.service["worker"].arn])])
+    error_message = "Deployment image permissions must cover only this environment's API and worker repositories."
   }
 }
 
