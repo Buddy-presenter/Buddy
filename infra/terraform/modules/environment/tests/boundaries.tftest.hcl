@@ -26,13 +26,13 @@ run "private_staging_before_images_exist" {
   }
   assert {
     condition = (
-      aws_cloudwatch_dashboard.operations.dashboard_name == "buddy-staging-operations" &&
-      aws_cloudwatch_metric_alarm.queue_age.threshold == 300 &&
-      aws_cloudwatch_metric_alarm.queue_backlog.threshold == 10 &&
-      aws_cloudwatch_metric_alarm.dead_letters.threshold == 0 &&
-      aws_cloudwatch_metric_alarm.worker_dead_letter.dimensions.Outcome == "dead_letter" &&
-      aws_cloudwatch_metric_alarm.worker_retry.dimensions.Outcome == "retry" &&
-      contains(aws_cloudwatch_metric_alarm.queue_age.alarm_actions, "arn:aws:sns:eu-central-1:123456789012:buddy-staging-operations-alerts")
+      aws_cloudwatch_dashboard.operations[0].dashboard_name == "buddy-staging-operations" &&
+      aws_cloudwatch_metric_alarm.queue_age[0].threshold == 300 &&
+      aws_cloudwatch_metric_alarm.queue_backlog[0].threshold == 10 &&
+      aws_cloudwatch_metric_alarm.dead_letters[0].threshold == 0 &&
+      aws_cloudwatch_metric_alarm.worker_dead_letter[0].dimensions.Outcome == "dead_letter" &&
+      aws_cloudwatch_metric_alarm.worker_retry[0].dimensions.Outcome == "retry" &&
+      contains(aws_cloudwatch_metric_alarm.queue_age[0].alarm_actions, "arn:aws:sns:eu-central-1:123456789012:buddy-staging-operations-alerts")
     )
     error_message = "Staging must provision actionable queue/job alarms connected to the operations topic and a real dashboard."
   }
