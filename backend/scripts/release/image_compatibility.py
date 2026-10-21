@@ -184,7 +184,7 @@ for attempt in range(30):
             # own schema before proving the bridge on both sides of the expansion.
             baseline = baseline_image or initial
             migrate(baseline)
-            probe(baseline, "seed")
+            probe(baseline, "baseline")
             probe(candidate, "baseline")
             migrate(future)
             probe(future, "typed")

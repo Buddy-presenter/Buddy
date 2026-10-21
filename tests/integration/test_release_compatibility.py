@@ -283,7 +283,7 @@ def test_bridge_compatibility_fixture_starts_from_the_live_image_schema(monkeypa
     migrations = [call[-4] for call in calls if call[:3] == ("run", "--rm", "--entrypoint")]
     assert migrations == [initial, baseline, future]
     probes = [call[-1] for call in calls if "/checks/rollback_probe.py" in call]
-    assert probes == ["seed", "seed", "baseline", "typed", "write", "read"]
+    assert probes == ["seed", "baseline", "baseline", "typed", "write", "read"]
     assert report["baseline_image"] == baseline
     assert report["rollback_image"] == baseline
 
