@@ -25,15 +25,15 @@ def verify(image, schema_image=None):
     pg, worker = prefix + "-pg", prefix + "-worker"
     source = (ROOT / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf").read_bytes()
     owner, deck, job, lease = [str(uuid4()) for _ in range(4)]
-    messages = [
-        {
-            "MessageId": str(uuid4()),
-            "ReceiptHandle": "synthetic-receipt",
-            # The expired seeded lease starts at generation 1. Startup reconciliation
-            # fences it and advances the generation to 2 before consuming this wake-up.
-            "Body": json.dumps({"schema_version": "buddy.job.v1", "job_id": job, "generation": 2}),
-        }
-    ]
+    # The expired seeded lease starts at generation 1. Startup reconciliation fences it
+    # and advances it to generation 2 with a short retry delay. The test driver delivers
+    # this synthetic SQS wake-up only when the durable retry becomes due.
+    wake_up = {
+        "MessageId": str(uuid4()),
+        "ReceiptHandle": "synthetic-receipt",
+        "Body": json.dumps({"schema_version": "buddy.job.v1", "job_id": job, "generation": 2}),
+    }
+    messages = []
     accesses, acknowledged = [], []
     queue_url = "https://sqs.eu-central-1.amazonaws.com/123456789012/smoke"
 
@@ -205,6 +205,12 @@ def verify(image, schema_image=None):
         )
         containers.append(worker)
         for _ in range(90):
+            due = sql(
+                f"""SELECT status = 'retry_wait' AND generation = 2 AND not_before <= now()
+                    FROM processing_jobs WHERE id='{job}'"""
+            )
+            if not messages and due == "t":
+                messages.append(wake_up)
             state = sql(f"SELECT status FROM processing_jobs WHERE id='{job}'")
             if state == "analysis_ready":
                 break
