@@ -1,11 +1,11 @@
 # Staging compatibility transition (#96)
 
-The original staging API image is pinned in `infra/container/Dockerfile.compatibility`.
-It expects migration `0003_extractions`, including `analysis_versions.graph`. Main's
-new analysis storage removed that column in `0005_analysis`. Simply restoring the
-column does not fix rollback: the original application's readiness rejects newer
-migration heads. Do not approve the former one-step deployment or restore that original
-image after the feature migration.
+The staging API may have advanced since the first compatibility transition. The bridge
+must therefore be based on the exact immutable image currently running in the stable
+staging ECS service. The release workflow resolves that digest, builds the bridge from
+it, and the preflight verifies it still matches the live rollback image before migration.
+Do not reuse the historical first-deployment image or approve a one-step feature rollout
+when a schema change makes the current API reject the new migration head.
 
 ## Two separately approved deployments
 
@@ -13,11 +13,10 @@ After this PR merges and current-main CI succeeds, use **Backend promotion and r
 on reviewed `main`, target `staging`:
 
 1. Select `rollout_phase=compatibility`. This builds the temporary bridge directly on
-   the pinned original image. It changes only readiness to accept exactly `0003_extractions`
-   and `0008_rollback_compatibility`, plus the explicitly tested `0009_pdf_workers`
-   expansion, checking every legacy mapped column. Rebuild and verify the bridge digest
-   when adopting 0009; previously deployed bridge images remain unchanged. Its packaged
-   migrations remain at 0003, so this deployment does not expand the live schema.
+   the current API image. It changes only readiness to accept the currently deployed
+   schema and the explicitly tested next schema, checking every mapped column from the
+   current application. Its packaged migrations remain unchanged, so this deployment
+   does not expand the live schema.
    GitHub's staging environment approval is still required.
 2. Verify the bridge is healthy, retain the successful deployment audit and inspect the
    compatibility report. Then dispatch a **separate** run with `rollout_phase=feature`.
@@ -33,7 +32,9 @@ policy; this staging transition does not certify production readiness.
 
 Each staging deployment and explicit rollback pulls immutable private ECR images and
 runs their real entrypoints against disposable PostgreSQL 17 in an internal Docker
-network with no published ports. Only synthetic records and separate migration/runtime
+network with no published ports. A bridge preflight seeds the exact current API image's
+schema, verifies the bridge before migration, expands using the future image, then proves
+both bridge writes and feature reads. Only synthetic records and separate migration/runtime
 roles are used. No staging database, user data, Cognito session or AWS credentials enter
 these test containers.
 

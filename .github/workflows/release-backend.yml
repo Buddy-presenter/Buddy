@@ -103,6 +103,7 @@ jobs:
         env:
           AWS_ACCOUNT: ${{ vars.BUDDY_AWS_ACCOUNT_ID }}
           AWS_REGION: ${{ vars.BUDDY_AWS_REGION }}
+          BUDDY_DEPLOYMENT_CONFIG: ${{ vars.BUDDY_DEPLOYMENT_CONFIG }}
           RELEASE_TARGET: ${{ inputs.target || 'staging' }}
           ROLLOUT_PHASE: ${{ inputs.rollout_phase || 'feature' }}
         run: |
@@ -116,7 +117,12 @@ jobs:
           feature_image="$registry/$repository@$digest"
           api_image="$feature_image"
           if [ "$ROLLOUT_PHASE" = compatibility ]; then
-            docker build -f infra/container/Dockerfile.compatibility --label "org.opencontainers.image.revision=$RELEASE_REVISION" -t "$registry/$repository:$tag-compatibility" .
+            cluster=$(python -c 'import json,os; print(json.loads(os.environ["BUDDY_DEPLOYMENT_CONFIG"])["cluster"])')
+            task_definition=$(aws ecs describe-services --cluster "$cluster" --services api --query 'services[0].taskDefinition' --output text)
+            previous_image=$(aws ecs describe-task-definition --task-definition "$task_definition" --query 'taskDefinition.containerDefinitions[?name==`api`].image | [0]' --output text)
+            case "$previous_image" in "$registry/$repository@sha256:"*) ;; *) echo "Live staging API is not a pinned image in the expected ECR repository" >&2; exit 1 ;; esac
+            echo "previous_image=$previous_image" >> "$GITHUB_OUTPUT"
+            docker build -f infra/container/Dockerfile.compatibility --build-arg "PREVIOUS_IMAGE=$previous_image" --label "org.opencontainers.image.revision=$RELEASE_REVISION" -t "$registry/$repository:$tag-compatibility" .
             docker push "$registry/$repository:$tag-compatibility"
             bridge_digest=$(aws ecr describe-images --repository-name "$repository" --image-ids "imageTag=$tag-compatibility" --query 'imageDetails[0].imageDigest' --output text)
             api_image="$registry/$repository@$bridge_digest"
@@ -130,6 +136,7 @@ jobs:
           BUDDY_DEPLOYMENT_CONFIG: ${{ vars.BUDDY_DEPLOYMENT_CONFIG }}
           API_IMAGE: ${{ steps.image.outputs.api_image }}
           FUTURE_IMAGE: ${{ steps.image.outputs.future_image }}
+          BASE_IMAGE: ${{ steps.image.outputs.previous_image }}
           ROLLBACK_REVISION: ${{ inputs.rollback_revision }}
           AWS_ACCOUNT: ${{ vars.BUDDY_AWS_ACCOUNT_ID }}
           AWS_REGION: ${{ vars.BUDDY_AWS_REGION }}
@@ -140,7 +147,7 @@ jobs:
           trap 'docker logout "$registry"' EXIT
           args=(--revision "$RELEASE_REVISION" --output compatibility-report.json)
           if [ -n "$ROLLBACK_REVISION" ]; then args+=(--rollback-revision "$ROLLBACK_REVISION"); else args+=(--candidate-image "$API_IMAGE"); fi
-          if [ -n "$FUTURE_IMAGE" ]; then args+=(--future-image "$FUTURE_IMAGE"); fi
+          if [ -n "$FUTURE_IMAGE" ]; then args+=(--future-image "$FUTURE_IMAGE" --base-image "$BASE_IMAGE"); fi
           python -m backend.scripts.release.prepare_compatibility "${args[@]}"
       - name: Retain credential-free compatibility evidence
         if: (inputs.target || 'staging') == 'staging' && hashFiles('compatibility-report.json') != ''

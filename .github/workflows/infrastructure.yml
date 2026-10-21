@@ -82,7 +82,7 @@ jobs:
           docker build -f infra/container/Dockerfile.compatibility --build-arg PREVIOUS_IMAGE=buddy-previous:ci -t buddy-bridge:ci .
       - name: Exercise both rollout phases against disposable PostgreSQL
         run: |
-          python -m backend.scripts.release.image_compatibility --local-images --initial-image buddy-previous:ci --previous-image buddy-previous:ci --candidate-image buddy-bridge:ci --future-image buddy-api:ci --output bridge-compatibility.json
+          python -m backend.scripts.release.image_compatibility --local-images --initial-image buddy-previous:ci --baseline-image buddy-previous:ci --previous-image buddy-previous:ci --candidate-image buddy-bridge:ci --future-image buddy-api:ci --output bridge-compatibility.json
           python -m backend.scripts.release.image_compatibility --local-images --initial-image buddy-previous:ci --previous-image buddy-bridge:ci --candidate-image buddy-api:ci --output feature-compatibility.json
       - name: Execute the packaged PDF validator without networking
         run: python infra/container/smoke_validator.py --image buddy-api:ci

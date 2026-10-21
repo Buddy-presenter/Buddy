@@ -8,7 +8,7 @@ from pathlib import Path
 
 import boto3
 from backend.scripts.release.deploy import Deployment, DeploymentError, image_digest, validate
-from backend.scripts.release.image_compatibility import INITIAL_IMAGE, verify_images
+from backend.scripts.release.image_compatibility import verify_images
 
 
 def image(ecs, state):
@@ -26,6 +26,7 @@ def main() -> None:
     parser.add_argument("--revision", required=True)
     parser.add_argument("--candidate-image")
     parser.add_argument("--future-image")
+    parser.add_argument("--base-image")
     parser.add_argument("--rollback-revision")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -81,13 +82,20 @@ def main() -> None:
     previous_image = image_digest(config, image(ecs, rollback["api"]), "api")
     candidate = image_digest(config, candidate, "api")
     if args.future_image:
-        if previous_image != INITIAL_IMAGE:
+        if not args.base_image:
             raise DeploymentError(
-                "Bridge preparation must start from the pinned initial staging image."
+                "Bridge preparation must name the immutable currently deployed base image."
             )
+        base_image = image_digest(config, args.base_image, "api")
+        if previous_image != base_image:
+            raise DeploymentError("Bridge base image drifted from the stable staging service.")
         image_digest(config, args.future_image, "api")
     report = verify_images(
-        previous_image, candidate, future=args.future_image, schema_image=schema_image
+        previous_image,
+        candidate,
+        future=args.future_image,
+        baseline_image=previous_image if args.future_image else None,
+        schema_image=schema_image,
     )
     report.update(
         revision=args.revision,
