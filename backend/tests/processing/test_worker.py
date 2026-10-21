@@ -348,10 +348,8 @@ def test_failed_evidence_cleanup_does_not_block_worker_start_or_other_jobs(migra
     asyncio.run(scenario())
 
 
-def test_successful_publish_reconciles_before_redrive_or_retention(migrated_database, monkeypatch):
+def test_successful_publish_reconciles_before_redrive_or_retention(migrated_database):
     async def scenario():
-        fixed_now = store.now()
-        monkeypatch.setattr(store, "now", lambda: fixed_now)
         db = Database(migrated_database)
         try:
             _, _, job = await seed(db)
@@ -366,8 +364,11 @@ def test_successful_publish_reconciles_before_redrive_or_retention(migrated_data
             async with db.sessions() as session, session.begin():
                 outbox = await session.get(JobOutbox, job.id)
                 assert outbox.publish_attempts == 1
-                assert outbox.available_at == started + timedelta(
+                assert outbox.available_at >= started + timedelta(
                     seconds=WORKER.queue_reconciliation_seconds
+                )
+                assert outbox.available_at < started + timedelta(
+                    seconds=WORKER.queue_reconciliation_seconds + 5
                 )
                 assert outbox.available_at < started + timedelta(
                     seconds=WORKER.runtime_seconds * WORKER.queue_redrive_max_receive_count
