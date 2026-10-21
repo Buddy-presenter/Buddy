@@ -29,7 +29,11 @@ def verify(image, schema_image=None):
         {
             "MessageId": str(uuid4()),
             "ReceiptHandle": "synthetic-receipt",
-            "Body": json.dumps({"schema_version": "buddy.job.v1", "job_id": job, "generation": 1}),
+            # Startup reconciliation fences the expired seeded lease by advancing its
+            # generation from 1 to 2 before the worker consumes this wake-up.
+            "Body": json.dumps(
+                {"schema_version": "buddy.job.v1", "job_id": job, "generation": 2}
+            ),
         }
     ]
     accesses, acknowledged = [], []
