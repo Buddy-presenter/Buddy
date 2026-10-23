@@ -7,7 +7,13 @@ import runpy
 from pathlib import Path
 
 import pytest
-from backend.scripts.release.deploy import Deployment, DeploymentError, image_digest, validate
+from backend.scripts.release.deploy import (
+    Deployment,
+    DeploymentError,
+    failure_details,
+    image_digest,
+    validate,
+)
 from frontend.scripts.release.build_desktop import manifest
 from frontend.scripts.release.smoke_package import verify
 
@@ -327,13 +333,40 @@ def test_readiness_failure_restores_previous_task_and_records_outcome():
     def readiness(_):
         probes.append(1)
         if len(probes) == 1:
-            raise RuntimeError("unhealthy")
+            raise DeploymentError("Readiness response is not healthy.")
 
     with pytest.raises(DeploymentError):
         PreparedDeployment(CONFIG, ecs, s3, Sts(), readiness).deploy(SHA, IMAGE)
     assert ecs.state["api"]["taskDefinition"] == PREFIX + "api:1"
-    assert next(iter(operation_records(s3).values()))["status"] == "rolled_back"
+    audit = next(iter(operation_records(s3).values()))
+    assert audit["status"] == "rolled_back"
+    assert audit["failure"] == {
+        "stage": "promotion",
+        "type": "DeploymentError",
+        "message": "Readiness response is not healthy.",
+    }
     assert len(ecs.updates) == 2
+
+
+def test_failure_diagnostics_redact_credentials_and_preserve_safe_error_context():
+    aws_access_key = "ASIA" + "1234567890123456"
+    bearer_token = "opaque" + "-test-token"
+    error = DeploymentError(
+        "Readiness failed for https://example.test/ready?token=private "
+        f"with password=private and AWS key {aws_access_key} "
+        f"and Authorization: Bearer {bearer_token}"
+    )
+
+    details = failure_details(error, "promotion")
+
+    assert details["stage"] == "promotion"
+    assert details["type"] == "DeploymentError"
+    assert "https://example.test/ready?[REDACTED]" in details["message"]
+    assert "password=[REDACTED]" in details["message"]
+    assert "AWS key [REDACTED_AWS_KEY]" in details["message"]
+    assert "Authorization=[REDACTED]" in details["message"]
+    assert bearer_token not in json.dumps(details)
+    assert "private" not in json.dumps(details)
 
 
 def test_healthy_deployment_is_auditable_and_explicit_rollback_works():
@@ -542,11 +575,15 @@ def test_failed_rollback_is_not_reported_as_success():
     ecs, s3 = Ecs(), S3()
 
     def readiness(_):
-        raise RuntimeError("unhealthy")
+        raise DeploymentError("Readiness response is not healthy.")
 
     with pytest.raises(DeploymentError):
         PreparedDeployment(CONFIG, ecs, s3, Sts(), readiness).deploy(SHA, IMAGE)
-    assert next(iter(operation_records(s3).values()))["status"] == "rollback_failed"
+    audit = next(iter(operation_records(s3).values()))
+    assert audit["status"] == "rollback_failed"
+    assert audit["failure"]["message"] == "Readiness response is not healthy."
+    assert audit["rollback_failure"]["type"] == "DeploymentError"
+    assert audit["rollback_failure"]["message"] == "Readiness response is not healthy."
 
 
 @pytest.mark.parametrize(
