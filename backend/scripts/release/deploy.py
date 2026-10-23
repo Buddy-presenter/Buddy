@@ -46,6 +46,11 @@ def failure_details(error: Exception, stage: str) -> dict[str, Any]:
     # Keep useful provider/AWS diagnostics while preventing common credential forms
     # and URL query values from entering workflow output or durable audit objects.
     message = re.sub(
+        r"(?i)\b(authorization)\s*[:=]\s*(?:bearer|basic)\s+[^\s,;]+",
+        r"\1=[REDACTED]",
+        message,
+    )
+    message = re.sub(
         (
             r"(?i)\b(authorization|bearer|access[_ -]?key|secret[_ -]?key|"
             r"session[_ -]?token|password|passwd|credential|cookie)\b"

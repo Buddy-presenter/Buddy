@@ -350,9 +350,11 @@ def test_readiness_failure_restores_previous_task_and_records_outcome():
 
 def test_failure_diagnostics_redact_credentials_and_preserve_safe_error_context():
     aws_access_key = "ASIA" + "1234567890123456"
+    bearer_token = "opaque" + "-test-token"
     error = DeploymentError(
         "Readiness failed for https://example.test/ready?token=private "
-        f"with password=private and AWS key {aws_access_key}"
+        f"with password=private and AWS key {aws_access_key} "
+        f"and Authorization: Bearer {bearer_token}"
     )
 
     details = failure_details(error, "promotion")
@@ -362,6 +364,8 @@ def test_failure_diagnostics_redact_credentials_and_preserve_safe_error_context(
     assert "https://example.test/ready?[REDACTED]" in details["message"]
     assert "password=[REDACTED]" in details["message"]
     assert "AWS key [REDACTED_AWS_KEY]" in details["message"]
+    assert "Authorization=[REDACTED]" in details["message"]
+    assert bearer_token not in json.dumps(details)
     assert "private" not in json.dumps(details)
 
 
