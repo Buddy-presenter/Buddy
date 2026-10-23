@@ -11,12 +11,85 @@ from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 from uuid import uuid4
 
 
 class DeploymentError(Exception):
     pass
+
+
+def failure_details(error: Exception, stage: str) -> dict[str, Any]:
+    """Return concise, credential-safe diagnostics for release logs and audit records."""
+    details: dict[str, Any] = {"stage": stage, "type": type(error).__name__[:100]}
+    response = getattr(error, "response", None)
+    error_info = response.get("Error") if isinstance(response, dict) else None
+    if isinstance(error_info, dict):
+        code = error_info.get("Code")
+        if isinstance(code, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", code):
+            details["code"] = code
+        message = error_info.get("Message")
+    elif isinstance(error, HTTPError):
+        details["code"] = str(error.code)
+        message = f"HTTP request returned status {error.code}"
+    elif isinstance(error, URLError):
+        message = f"Network request failed ({type(error.reason).__name__})."
+    elif isinstance(error, DeploymentError):
+        message = str(error)
+    else:
+        message = "Unexpected exception details were omitted to protect credentials."
+
+    if not isinstance(message, str) or not message.strip():
+        message = "No safe error detail was provided."
+    message = " ".join(message.split())
+    # Keep useful provider/AWS diagnostics while preventing common credential forms
+    # and URL query values from entering workflow output or durable audit objects.
+    message = re.sub(
+        (
+            r"(?i)\b(authorization|bearer|access[_ -]?key|secret[_ -]?key|"
+            r"session[_ -]?token|password|passwd|credential|cookie)\b"
+            r"(\s*[:=]\s*|\s+)([^\s,;]+)"
+        ),
+        r"\1\2[REDACTED]",
+        message,
+    )
+    message = re.sub(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b", "[REDACTED_AWS_KEY]", message)
+    message = re.sub(
+        r"(https?://[^\s?\"']+)\?[^\s\"']+",
+        r"\1?[REDACTED]",
+        message,
+    )
+    details["message"] = message[:1000]
+    last_response = getattr(error, "last_response", None)
+    if isinstance(last_response, dict):
+        services = last_response.get("services")
+        if isinstance(services, list):
+            details["observed_services"] = [
+                {
+                    "name": service.get("serviceName"),
+                    "task_definition": service.get("taskDefinition"),
+                    "desired": service.get("desiredCount"),
+                    "running": service.get("runningCount"),
+                    "pending": service.get("pendingCount"),
+                    "deployments": [
+                        {
+                            "status": deployment.get("status"),
+                            "rollout_state": deployment.get("rolloutState"),
+                            "reason": (
+                                re.sub(r"\s+", " ", deployment["rolloutStateReason"])[:500]
+                                if isinstance(deployment.get("rolloutStateReason"), str)
+                                else None
+                            ),
+                            "task_definition": deployment.get("taskDefinition"),
+                        }
+                        for deployment in service.get("deployments", [])
+                    ],
+                }
+                for service in services
+                if isinstance(service, dict)
+            ]
+    return details
 
 
 def require_current_main(environment: str, revision: str) -> None:
@@ -417,12 +490,15 @@ class Deployment:
             # stale traffic if main advanced while that migration was running.
             audit["stage"] = "promotion_freshness"
             require_current_main(self.config["environment"], revision)
-        except Exception:
+        except Exception as error:
             migration_failed = audit["stage"] in {"migration_setup", "migration"}
+            failure = failure_details(error, audit["stage"])
+            audit["failure"] = failure
             audit["status"] = "migration_failed" if migration_failed else "setup_failed"
             self.record(revision, audit)
             raise DeploymentError(
-                "Migration failed or deployment setup was rejected; no traffic promoted. "
+                f"Migration failed or deployment setup was rejected during {failure['stage']} "
+                f"({failure['type']}): {failure['message']}; no traffic promoted. "
                 "Inspect the retained private audit record."
             ) from None
         try:
@@ -432,16 +508,23 @@ class Deployment:
             self.settle(target)
             audit["status"] = "healthy"
             audit["stage"] = "complete"
-        except Exception:
+        except Exception as error:
+            failed_stage = audit["stage"]
+            failure = failure_details(error, failed_stage)
+            audit["failure"] = failure
             try:
                 self.restore(previous)
                 audit["status"] = "rolled_back"
-            except Exception:
+            except Exception as rollback_error:
                 audit["status"] = "rollback_failed"
+                audit["rollback_failure"] = failure_details(rollback_error, "rollback")
+                with suppress(Exception):
+                    audit["observed"] = self.states(list(previous))
             self.record(revision, audit)
             raise DeploymentError(
-                "Deployment failed. Inspect the private audit record; "
-                "no database downgrade was attempted."
+                f"Deployment failed during {failed_stage} ({failure['type']}): "
+                f"{failure['message']} Rollback status: {audit['status']}. "
+                "Inspect the retained private audit record; no database downgrade was attempted."
             ) from None
         self.record(revision, audit)
         return audit
@@ -527,8 +610,9 @@ class Deployment:
             audit["restored"] = previous
             audit["status"] = "rolled_back"
             audit["stage"] = "complete"
-        except Exception:
+        except Exception as error:
             audit["status"] = "rollback_failed"
+            audit["failure"] = failure_details(error, audit["stage"])
             if audit["target"] is not None:
                 # An unavailable service must not be reported as restored.
                 with suppress(Exception):
@@ -584,9 +668,10 @@ def main() -> int:
         else:
             raise DeploymentError("Specify an image or an audited rollback revision.")
         print(json.dumps(result))
-    except Exception:
+    except Exception as error:
+        details = failure_details(error, "command")
         print(
-            "Deployment did not complete. Check private deployment logs and configuration.",
+            f"Deployment did not complete ({details['type']}): {details['message']}",
             file=sys.stderr,
         )
         return 1

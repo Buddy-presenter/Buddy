@@ -96,8 +96,13 @@ ID, current workflow revision, account/environment and start/completion timestam
 Each promotion first saves a separate immutable <operation ID>.started.json intent
 before registering task definitions or starting migrations. If that write fails, no
 migration starts. Definition setup and migration rejection, failure or waiter timeout
-retain sanitized terminal records with the failing stage and `setup_failed` or
-`migration_failed`; they never promote traffic or replace a healthy revision lookup.
+retain sanitized terminal records with the failing stage, exception type and a safe
+diagnostic; they never promote traffic or replace a healthy revision lookup. Promotion
+failures retain the failing stage and safe diagnostic before attempting restoration, and
+print that diagnostic to the workflow log. Rollback failures retain a separate rollback
+diagnostic and the observed service/task deployment state when AWS provides it. Expected
+deployment errors and AWS service error codes/messages are included after credential
+redaction; arbitrary exception text is withheld to keep secrets out of logs and records.
 The terminal record links its initial intent through `started_audit_key`. An intent
 without a terminal outcome identifies an interrupted run requiring state inspection.
 Logs include the exact saved object key on success and failure, so operators can fetch
