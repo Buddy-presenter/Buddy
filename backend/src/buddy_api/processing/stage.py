@@ -110,7 +110,13 @@ def execute_grounding(
     try:
         response = json.loads(stdout)
         if "error" in response:
-            raise ExtractionError("pdf_action_grounding_failed")
+            diagnostic = (
+                response.get("diagnostic")
+                if os.environ.get("PYTEST_CURRENT_TEST")
+                else None
+            )
+            suffix = f" ({diagnostic})" if isinstance(diagnostic, str) else ""
+            raise ExtractionError(f"pdf_action_grounding_failed{suffix}")
         return parse_model_output(response)
     except (json.JSONDecodeError, TypeError, ValueError):
         raise ExtractionError("pdf_action_grounding_failed") from None
@@ -162,6 +168,11 @@ def _run_child(request: bytes, seconds: float, directory: str, *, storage_access
             "TMPDIR": directory,
             "TMP": directory,
             "TEMP": directory,
+            **(
+                {"BUDDY_CHILD_DIAGNOSTICS": "1"}
+                if os.environ.get("PYTEST_CURRENT_TEST")
+                else {}
+            ),
         },
         start_new_session=os.name != "nt",
     )
@@ -213,8 +224,14 @@ def main() -> int:
             result = inspect_source(source, storage).model_dump_json()
     except UploadError:
         result = '{"error":"storage_unavailable"}'
-    except Exception:
-        result = '{"error":"pdf_inspection_failed"}'
+    except Exception as exc:
+        # Keep parser diagnostics inside the private child protocol. The parent still
+        # maps production failures to stable public codes. Pytest opts in to the class
+        # name so CI can identify platform-specific failures without exposing source text.
+        payload = {"error": "pdf_inspection_failed"}
+        if os.environ.get("BUDDY_CHILD_DIAGNOSTICS"):
+            payload["diagnostic"] = type(exc).__name__
+        result = json.dumps(payload)
     finally:
         if storage:
             storage.close()

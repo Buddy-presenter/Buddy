@@ -1,4 +1,5 @@
 import io
+import json
 import subprocess
 import sys
 import time
@@ -120,7 +121,7 @@ def test_stage_rejects_bad_internal_request_without_echoing_input():
         timeout=15,
     )
     assert result.returncode == 0
-    assert result.stdout == b'{"error":"pdf_inspection_failed"}'
+    assert json.loads(result.stdout)["error"] == "pdf_inspection_failed"
     assert b"private" not in result.stderr
 
 
