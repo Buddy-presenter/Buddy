@@ -8,7 +8,6 @@ import signal
 import subprocess
 import sys
 import tempfile
-import traceback
 from contextlib import suppress
 
 from buddy_api.analysis.contracts import Manifest
@@ -111,11 +110,7 @@ def execute_grounding(
     try:
         response = json.loads(stdout)
         if "error" in response:
-            diagnostic = (
-                response.get("diagnostic") if os.environ.get("PYTEST_CURRENT_TEST") else None
-            )
-            suffix = f" ({diagnostic})" if isinstance(diagnostic, str) else ""
-            raise ExtractionError(f"pdf_action_grounding_failed{suffix}")
+            raise ExtractionError("pdf_action_grounding_failed")
         return parse_model_output(response)
     except (json.JSONDecodeError, TypeError, ValueError):
         raise ExtractionError("pdf_action_grounding_failed") from None
@@ -156,21 +151,18 @@ def _run_child(request: bytes, seconds: float, directory: str, *, storage_access
     env = {key: value for key, value in os.environ.items() if key.upper() in allowed}
     if storage_access and os.environ.get("BUDDY_ENVIRONMENT") == "test":
         env.update({key: os.environ[key] for key in ("AWS_ENDPOINT_URL_S3",) if key in os.environ})
-    child_env = {
-        **env,
-        "PYTHONDONTWRITEBYTECODE": "1",
-        "TMPDIR": directory,
-        "TMP": directory,
-        "TEMP": directory,
-    }
-    if os.environ.get("PYTEST_CURRENT_TEST"):
-        child_env["BUDDY_CHILD_DIAGNOSTICS"] = "1"
     process = subprocess.Popen(
         [sys.executable, "-m", "buddy_api.processing.stage"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
-        env=child_env,
+        env={
+            **env,
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "TMPDIR": directory,
+            "TMP": directory,
+            "TEMP": directory,
+        },
         start_new_session=os.name != "nt",
     )
     try:
@@ -221,19 +213,8 @@ def main() -> int:
             result = inspect_source(source, storage).model_dump_json()
     except UploadError:
         result = '{"error":"storage_unavailable"}'
-    except Exception as exc:
+    except Exception:
         result = '{"error":"pdf_inspection_failed"}'
-        if os.environ.get("BUDDY_CHILD_DIAGNOSTICS"):
-            frame = traceback.extract_tb(exc.__traceback__)[-1]
-            diagnostic = (
-                f"{type(exc).__name__}: {str(exc)[:120]} at {frame.filename}:{frame.lineno}"
-            )
-            result = json.dumps(
-                {
-                    "error": "pdf_inspection_failed",
-                    "diagnostic": diagnostic,
-                }
-            )
     finally:
         if storage:
             storage.close()
@@ -243,6 +224,8 @@ def main() -> int:
 
 def _configure_child_resource_limits(resource: object) -> None:
     """Apply address-space and CPU limits; macOS memory is monitored by the parent."""
+    if sys.platform == "darwin":
+        return
     infinity = resource.RLIM_INFINITY  # type: ignore[attr-defined]
     memory_limit = getattr(resource, "RLIMIT_AS", None)
     if memory_limit is not None:

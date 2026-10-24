@@ -390,3 +390,10 @@ def test_unix_child_does_not_use_data_limit_when_address_space_limit_is_unavaila
     _configure_child_resource_limits(resource)
 
     assert calls == [(1, (120, -1))]
+
+
+def test_darwin_child_leaves_resource_limits_to_parent_memory_and_deadline_guards(monkeypatch):
+    from buddy_api.processing import stage
+
+    monkeypatch.setattr(stage.sys, "platform", "darwin")
+    _configure_child_resource_limits(SimpleNamespace())
