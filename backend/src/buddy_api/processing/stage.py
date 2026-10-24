@@ -111,9 +111,7 @@ def execute_grounding(
         response = json.loads(stdout)
         if "error" in response:
             diagnostic = (
-                response.get("diagnostic")
-                if os.environ.get("PYTEST_CURRENT_TEST")
-                else None
+                response.get("diagnostic") if os.environ.get("PYTEST_CURRENT_TEST") else None
             )
             suffix = f" ({diagnostic})" if isinstance(diagnostic, str) else ""
             raise ExtractionError(f"pdf_action_grounding_failed{suffix}")
