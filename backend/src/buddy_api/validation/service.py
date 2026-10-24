@@ -21,6 +21,7 @@ from buddy_api.uploads.service import UploadService, blocking
 from buddy_api.validation.config import ValidatorSettings
 from buddy_api.validation.contracts import (
     ArtifactReference,
+    Precision,
     ProcessRequest,
     ProcessResult,
     StoredResult,
@@ -106,6 +107,8 @@ class ValidationService:
         inputs: ValidationRequest,
         *,
         source_content: bytes | None = None,
+        precision: Precision = "standard",
+        duplicate_candidate: bool = False,
     ) -> StoredResult:
         if self.uploads.parser_slot.locked():
             raise UploadError(
@@ -127,6 +130,8 @@ class ValidationService:
                     deck_id=deck_id,
                     source_revision=revision,
                     source_sha256=digest,
+                    precision=precision,
+                    duplicate_candidate=duplicate_candidate,
                     **inputs.model_dump(),
                 )
                 fingerprint = hashlib.sha256(

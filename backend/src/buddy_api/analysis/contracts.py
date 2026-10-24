@@ -14,6 +14,7 @@ type Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 type Text = Annotated[str, Field(min_length=1, max_length=16000, pattern=r"\S")]
 type ValidationState = Literal["candidate", "validated", "rejected", "needs-review"]
 type Publication = Literal["legacy", "partial", "awaiting_validation", "published"]
+MAX_GENERATED_ACTIONS_PER_DECK = 40
 
 
 class Model(BaseModel):
@@ -223,6 +224,7 @@ class AnalysisResult(Model):
     deck_id: UUID
     version: int
     publication: Publication
+    action_limit_reached: bool = False
     analysis_sha256: Digest | None
     inputs: AnalysisInput | None
     slides: tuple[SlideResult, ...]

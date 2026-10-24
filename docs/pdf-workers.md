@@ -54,8 +54,12 @@ Provider calls time out after 90 seconds. The provider boundary accepts at most 
 100-page PDF, returns at most 12,000 tokens, and is attempted at most three times for a job.
 The 18 MiB source limit leaves room for base64 expansion and request metadata under Bedrock's
 25 MiB InvokeModel body quota.
-The model context window and request/output limits bound token spend; validation is capped
-at 40 actions per deck and 15 seconds per isolated action run. Fargate independently bounds
+The model context window and request/output limits bound token spend; generation can produce
+multiple distinct actions per slide, with validation capped at 40 actions per deck and 15 seconds
+per isolated action run. Review warns when all 40 slots are used because additional useful
+actions may have been left out. Generated highlights must quote a visible target phrase and are
+rejected if their rectangle exceeds 6% of page height; this catches paragraph-sized regions but
+does not establish semantic correctness. Fargate independently bounds
 worker CPU/memory to 1 vCPU/2 GiB. SIGTERM drains bounded work, releases the lease and exits;
 abrupt termination recovers through lease expiry.
 

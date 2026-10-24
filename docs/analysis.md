@@ -36,7 +36,12 @@ change on the parent. Deletion is also blocked until a separately reviewed reten
 workflow explicitly handles these immutable records. Sessions keep their original analysis foreign key.
 
 Limits: 500 slides, 100 actions per slide, 1,000 actions total, 8 MiB serialized analysis,
-16,000 characters per summary. Empty action lists are valid.
+16,000 characters per summary. Empty action lists are valid. Provider generation and isolated
+execution use a stricter 40-action deck budget so one analysis attempt stays bounded by the
+worker's runtime. A slide may receive multiple distinct actions, including both zoom and
+highlight suggestions. Using all 40 generated-action slots is surfaced in Review as a capacity
+notice. It reports the slot count only and does not imply that actions were omitted or that the
+analysis is semantically complete.
 
 ## Summaries, publication and readiness
 
@@ -75,7 +80,13 @@ Historical analyses remain readable by ID.
 Backend-packaged standalone schemas are byte-identical to the executor's schemas;
 integration tests compare them and parse saved instances through the real contract parser.
 Backend runtime never imports frontend Python or Qt. Catalog changes must update both
-standalone copies deliberately and pass the parity test.
+standalone copies deliberately and pass the parity test. Generation can return several
+distinct actions for a slide within the deck budget. A generated highlight should identify
+the exact visible line or short phrase in its purpose and tightly frame that target. The
+isolated validator applies a 6%-of-page-height maximum only to model-generated line highlights;
+broader regions are stored as rejected suggestions with evidence. This geometric guard catches
+paragraph-sized rectangles, but it cannot prove the quoted words or rectangle identify the
+intended visible text; validation remains explicitly non-semantic and requires human review.
 
 `general_controls(ordered_slide_ids, current_slide_id)` enables next except on the last
 slide, previous except on the first, supplies ordered valid jump targets, and always

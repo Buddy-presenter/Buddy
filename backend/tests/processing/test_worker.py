@@ -210,7 +210,17 @@ def test_pending_validation_defers_without_spending_attempt_and_resumes_analysis
         async def reconcile(self):
             return None
 
-        async def validate(self, owner, deck_id, key, request, *, source_content=None):
+        async def validate(
+            self,
+            owner,
+            deck_id,
+            key,
+            request,
+            *,
+            source_content=None,
+            precision="standard",
+            duplicate_candidate=False,
+        ):
             self.calls += 1
             if self.calls == 1:
                 raise UploadError(
