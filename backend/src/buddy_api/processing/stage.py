@@ -226,7 +226,7 @@ def main() -> int:
         # name so CI can identify platform-specific failures without exposing source text.
         payload = {"error": "pdf_inspection_failed"}
         if os.environ.get("BUDDY_CHILD_DIAGNOSTICS"):
-            payload["diagnostic"] = type(exc).__name__
+            payload["diagnostic"] = f"{type(exc).__name__}: {str(exc)[:200]}"
         result = json.dumps(payload)
     finally:
         if storage:
