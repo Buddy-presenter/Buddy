@@ -189,6 +189,11 @@
       "AnalysisResult": {
         "additionalProperties": false,
         "properties": {
+          "action_limit_reached": {
+            "default": false,
+            "title": "Action Limit Reached",
+            "type": "boolean"
+          },
           "analysis_sha256": {
             "anyOf": [
               {

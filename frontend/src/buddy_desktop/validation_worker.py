@@ -17,6 +17,7 @@ PROFILES = {
     "portrait-1x": (720, 960, 1),
     "wide-2x": (1280, 720, 2),
 }
+MAX_LINE_HIGHLIGHT_HEIGHT_RATIO = 0.06
 
 
 def validate(folder: Path) -> dict[str, Any]:
@@ -132,6 +133,19 @@ def validate(folder: Path) -> dict[str, Any]:
             current = manifest.index(action["slide_id"])
         except ContractError:
             result.update(state="rejected", reasons=["unknown_slide"])
+            return result
+        if request.get("duplicate_candidate", False):
+            result.update(state="rejected", reasons=["duplicate_action"])
+            return result
+        if (
+            request.get("precision", "standard") == "line"
+            and action["type"] == "highlight_region"
+            and action["params"]["region"]["height"]
+            > manifest.slides[current].height * MAX_LINE_HIGHLIGHT_HEIGHT_RATIO
+        ):
+            # Model-generated highlights are line-level cues. Reject broad candidates
+            # deterministically while leaving the general-purpose catalog unchanged.
+            result.update(state="rejected", reasons=["highlight_region_too_broad"])
             return result
         if current:
             executor.dispatch(

@@ -85,6 +85,29 @@ class Processor:
             ValidationService(self.uploads, validator_settings) if validator_settings else None
         )
 
+    @staticmethod
+    def _duplicate_candidate_ids(slides: Any) -> set[str]:
+        """Keep duplicates visible, but never treat repeated same-region actions as usable."""
+        seen: set[tuple[str, str, float, float, float, float]] = set()
+        duplicates: set[str] = set()
+        for slide in slides:
+            for result in slide.actions:
+                action = getattr(result, "action", result)
+                region = action.params.region
+                key = (
+                    action.slide_id,
+                    action.type,
+                    region.x,
+                    region.y,
+                    region.width,
+                    region.height,
+                )
+                if key in seen:
+                    duplicates.add(action.instance_id)
+                else:
+                    seen.add(key)
+        return duplicates
+
     async def maintain(self, *, publish: bool = True) -> None:
         async with self.database.sessions() as session, session.begin():
             await store.reconcile(session, self.settings)
@@ -451,6 +474,7 @@ class Processor:
                 raise ProviderFailure("validator_unavailable")
             if has_candidates and not await persist_stage("validation", 80):
                 return
+            duplicate_candidate_ids = self._duplicate_candidate_ids(analysis_result.slides)
             for slide in analysis_result.slides:
                 for action_result in slide.actions:
                     if action_result.state != "candidate":
@@ -470,6 +494,8 @@ class Processor:
                                 action=action.model_dump(mode="json"), profile="wide-1x"
                             ),
                             source_content=content,
+                            precision=("line" if action.type == "highlight_region" else "standard"),
+                            duplicate_candidate=action.instance_id in duplicate_candidate_ids,
                         )
                     )
                     if not alive:

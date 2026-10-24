@@ -20,6 +20,7 @@ from backend.tests.api.test_uploads import (
     upload_app as upload_app,
 )
 from backend.tests.support.database import database_settings as database_settings
+from pydantic import ValidationError
 
 from buddy_api.persistence.models import ActionCheck, Deck
 from buddy_api.validation.config import ValidatorSettings
@@ -51,6 +52,16 @@ def action(deck, revision="v1", index=0, kind="zoom_region"):
         "type": kind,
         "params": params,
     }
+
+
+def test_model_only_validation_hints_are_not_accepted_from_public_requests():
+    deck = uuid4()
+    with pytest.raises(ValidationError):
+        ValidationRequest(
+            action=action(deck, kind="highlight_region"),
+            precision="line",
+            duplicate_candidate=True,
+        )
 
 
 @pytest.mark.parametrize(
@@ -139,6 +150,68 @@ def test_invalid_actions_are_rejected_without_semantic_approval(change):
     )
     assert result.result.state == "rejected", result.result.model_dump_json()
     assert result.result.reasons and not result.result.semantic_verified
+
+
+def test_generated_line_precision_rejects_paragraph_sized_highlight_but_standard_remains_valid():
+    deck = uuid4()
+    command = action(deck, kind="highlight_region")
+    strict = ProcessRequest(
+        deck_id=deck,
+        source_revision="v1",
+        source_sha256=DIGEST,
+        action=command,
+        precision="line",
+    )
+    rejected = run_validation(CONTENT, strict, ValidatorSettings(python=sys.executable))
+    assert rejected.result.state == "rejected"
+    assert rejected.result.reasons == ["highlight_region_too_broad"]
+    assert rejected.result.before is None and rejected.result.after is None
+    assert set(rejected.artifacts) == {"report"}
+    assert not rejected.result.semantic_verified
+
+    ordinary = run_validation(
+        CONTENT,
+        ProcessRequest(
+            deck_id=deck,
+            source_revision="v1",
+            source_sha256=DIGEST,
+            action=command,
+        ),
+        ValidatorSettings(python=sys.executable),
+    )
+    assert ordinary.result.state == "validated", ordinary.result.model_dump_json()
+
+    narrow = {**command, "params": {"region": {"x": 96, "y": 410, "width": 240, "height": 20}}}
+    accepted = run_validation(
+        CONTENT,
+        ProcessRequest(
+            deck_id=deck,
+            source_revision="v1",
+            source_sha256=DIGEST,
+            action=narrow,
+            precision="line",
+        ),
+        ValidatorSettings(python=sys.executable),
+    )
+    assert accepted.result.state == "validated", accepted.result.model_dump_json()
+
+
+def test_duplicate_candidate_is_retained_but_rejected_as_unusable():
+    deck = uuid4()
+    result = run_validation(
+        CONTENT,
+        ProcessRequest(
+            deck_id=deck,
+            source_revision="v1",
+            source_sha256=DIGEST,
+            action=action(deck, kind="highlight_region"),
+            duplicate_candidate=True,
+        ),
+        ValidatorSettings(python=sys.executable),
+    )
+    assert result.result.state == "rejected"
+    assert result.result.reasons == ["duplicate_action"]
+    assert set(result.artifacts) == {"report"}
 
 
 def test_cancellation_is_not_a_success_and_transport_schemas_match():
