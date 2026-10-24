@@ -10,6 +10,7 @@ import sys
 import tempfile
 import traceback
 from contextlib import suppress
+from typing import Any
 
 from buddy_api.analysis.contracts import Manifest
 from buddy_api.analysis.grounding import ground_actions
@@ -241,18 +242,18 @@ def main() -> int:
     return 0
 
 
-def _configure_child_resource_limits(resource: object) -> None:
+def _configure_child_resource_limits(resource: Any) -> None:
     """Apply address-space and CPU limits; macOS memory is monitored by the parent."""
     if sys.platform == "darwin":
         return
-    infinity = getattr(resource, "RLIM_INFINITY")
+    infinity = resource.RLIM_INFINITY
     memory_limit = getattr(resource, "RLIMIT_AS", None)
     if memory_limit is not None:
         _set_child_limit(resource, memory_limit, 1024**3, infinity)
-    _set_child_limit(resource, getattr(resource, "RLIMIT_CPU"), 120, infinity)
+    _set_child_limit(resource, resource.RLIMIT_CPU, 120, infinity)
 
 
-def _set_child_limit(resource: object, kind: int, ceiling: int, infinity: int) -> None:
+def _set_child_limit(resource: Any, kind: int, ceiling: int, infinity: int) -> None:
     _, hard = resource.getrlimit(kind)  # type: ignore[attr-defined]
     bound = ceiling if hard == infinity else min(ceiling, hard)
     resource.setrlimit(kind, (bound, hard))  # type: ignore[attr-defined]
