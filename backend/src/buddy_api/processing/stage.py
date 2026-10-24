@@ -192,8 +192,7 @@ def main() -> int:
         if sys.platform != "win32":
             import resource
 
-            resource.setrlimit(resource.RLIMIT_AS, (1024**3, 1024**3))
-            resource.setrlimit(resource.RLIMIT_CPU, (120, 120))
+            _configure_child_resource_limits(resource)
         raw = sys.stdin.buffer.read(40 * 1024 * 1024 + 1)
         if len(raw) > 40 * 1024 * 1024:
             raise ValueError
@@ -221,6 +220,18 @@ def main() -> int:
             storage.close()
     sys.stdout.write(result)
     return 0
+
+
+def _configure_child_resource_limits(resource: object) -> None:
+    """Apply memory and CPU limits using the strongest limit this Unix exposes.
+
+    Python exposes RLIMIT_AS on Linux, but macOS omits it. RLIMIT_DATA is the
+    portable fallback for the bounded parser's heap allocations on those systems.
+    """
+    memory_limit = getattr(resource, "RLIMIT_AS", getattr(resource, "RLIMIT_DATA", None))
+    if memory_limit is not None:
+        resource.setrlimit(memory_limit, (1024**3, 1024**3))  # type: ignore[attr-defined]
+    resource.setrlimit(resource.RLIMIT_CPU, (120, 120))  # type: ignore[attr-defined]
 
 
 if __name__ == "__main__":

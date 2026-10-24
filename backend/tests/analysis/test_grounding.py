@@ -2,6 +2,7 @@
 
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -20,7 +21,7 @@ from buddy_api.analysis.grounding import (
 from buddy_api.analysis.provider import ModelAction, ModelOutput, ModelSlide, ModelSummary
 from buddy_api.analysis.rendering import render_manifest
 from buddy_api.extraction.runner import extract_pdf
-from buddy_api.processing.stage import execute_grounding
+from buddy_api.processing.stage import _configure_child_resource_limits, execute_grounding
 
 ROOT = Path(__file__).resolve().parents[3]
 GEOMETRY_PDF = ROOT / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf"
@@ -374,3 +375,16 @@ def test_grounding_runs_inside_the_bounded_child_process():
 
     assert len(result.slides[0].actions) == 1
     assert result.slides[0].actions[0].height < manifest.slides[0].source.height / 8
+
+
+def test_unix_child_uses_data_limit_when_address_space_limit_is_unavailable():
+    calls = []
+    resource = SimpleNamespace(
+        RLIMIT_DATA=2,
+        RLIMIT_CPU=1,
+        setrlimit=lambda limit, values: calls.append((limit, values)),
+    )
+
+    _configure_child_resource_limits(resource)
+
+    assert calls == [(2, (1024**3, 1024**3)), (1, (120, 120))]
