@@ -377,7 +377,10 @@ def test_grounding_runs_inside_the_bounded_child_process():
     assert result.slides[0].actions[0].height < manifest.slides[0].source.height / 8
 
 
-def test_unix_child_does_not_use_data_limit_when_address_space_limit_is_unavailable():
+def test_unix_child_does_not_use_data_limit_when_address_space_limit_is_unavailable(monkeypatch):
+    from buddy_api.processing import stage
+
+    monkeypatch.setattr(stage.sys, "platform", "linux")
     calls = []
     resource = SimpleNamespace(
         RLIMIT_DATA=2,
