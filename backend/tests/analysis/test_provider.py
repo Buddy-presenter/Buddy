@@ -147,6 +147,11 @@ def test_bedrock_request_submits_exact_pdf_with_native_claude_api(monkeypatch):
     schema = body["output_config"]["format"]["schema"]
     assert schema["properties"]["slides"]["items"]["properties"]["number"]["enum"] == [1]
     action_schema = schema["properties"]["slides"]["items"]["properties"]["actions"]
+    prompt = next(part["text"] for part in content if part["type"] == "text")
+    assert "multiple actions on a page" in prompt
+    assert "one visible line or a short phrase only" in prompt
+    assert "quote its exact visible words" in prompt
+    assert "paragraph or section selection" in prompt
     assert action_schema["items"]["properties"]["type"]["enum"] == [
         "zoom_region",
         "highlight_region",
@@ -173,6 +178,86 @@ def test_bedrock_request_submits_exact_pdf_with_native_claude_api(monkeypatch):
 
     assert_supported_subset(schema)
     assert "secret" not in json.dumps(body).lower()
+
+
+def test_provider_accepts_multiple_distinct_actions_on_one_slide(monkeypatch):
+    extraction, manifest = inputs()
+    monkeypatch.setattr(provider, "Session", Session)
+    generated = {
+        "presentation": {"text": "Quarterly results overview.", "reason": None},
+        "slides": [
+            {
+                "number": 1,
+                "text": "Revenue rose and the outlook remains positive.",
+                "reason": None,
+                "actions": [
+                    {
+                        "type": "highlight_region",
+                        "purpose": "Highlight the exact visible phrase “Revenue rose”.",
+                        "x": 40,
+                        "y": 120,
+                        "width": 190,
+                        "height": 24,
+                    },
+                    {
+                        "type": "zoom_region",
+                        "purpose": "Zoom out to show the adjacent outlook chart.",
+                        "x": 620,
+                        "y": 100,
+                        "width": 500,
+                        "height": 400,
+                    },
+                ],
+            }
+        ],
+    }
+    result = BedrockProvider(
+        "eu-central-1", transport=Opener(response_for(output_text=json.dumps(generated))).transport
+    ).analyze(PDF, extraction, str(DECK_ID), manifest)
+    assert [action.type for action in result.slides[0].actions] == [
+        "highlight_region",
+        "zoom_region",
+    ]
+
+
+def test_provider_never_exceeds_the_bounded_deck_action_budget(monkeypatch):
+    extraction, manifest = inputs()
+    monkeypatch.setattr(provider, "Session", Session)
+    monkeypatch.setattr(provider, "MAX_ACTIONS_PER_DECK", 1)
+    generated = {
+        "presentation": {"text": "Quarterly results overview.", "reason": None},
+        "slides": [
+            {
+                "number": 1,
+                "text": "Revenue rose and the outlook remains positive.",
+                "reason": None,
+                "actions": [
+                    {
+                        "type": "highlight_region",
+                        "purpose": "Highlight the exact visible phrase “Revenue rose”.",
+                        "x": 40,
+                        "y": 120,
+                        "width": 190,
+                        "height": 24,
+                    },
+                    {
+                        "type": "zoom_region",
+                        "purpose": "Zoom out to show the adjacent outlook chart.",
+                        "x": 620,
+                        "y": 100,
+                        "width": 500,
+                        "height": 400,
+                    },
+                ],
+            }
+        ],
+    }
+    with pytest.raises(ProviderFailure, match="provider_action_limit") as failure:
+        BedrockProvider(
+            "eu-central-1",
+            transport=Opener(response_for(output_text=json.dumps(generated))).transport,
+        ).analyze(PDF, extraction, str(DECK_ID), manifest)
+    assert failure.value.permanent
 
 
 def test_provider_rejects_invalid_page_order_and_duplicate_output_fields(monkeypatch):

@@ -10,6 +10,7 @@ from pydantic import Field, model_validator
 from buddy_api.analysis.contracts import Digest, Identifier, Model, Region
 
 type Profile = Literal["wide-1x", "standard-1x", "portrait-1x", "wide-2x"]
+type Precision = Literal["standard", "line"]
 
 
 class ValidationRequest(Model):
@@ -44,6 +45,8 @@ class ProcessRequest(ValidationRequest):
     deck_id: UUID
     source_revision: Identifier
     source_sha256: Digest
+    precision: Precision = "standard"
+    duplicate_candidate: bool = False
 
 
 class Snapshot(Model):

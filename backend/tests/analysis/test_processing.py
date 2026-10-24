@@ -34,7 +34,23 @@ def test_model_output_is_bound_to_verified_manifest_and_stable_action_ids():
                 actions=(
                     ModelAction(
                         type="highlight_region",
-                        purpose="Focus attention on the diagram.",
+                        purpose="Highlight the visible phrase “Diagram A”.",
+                        x=1,
+                        y=1,
+                        width=20,
+                        height=20,
+                    ),
+                    ModelAction(
+                        type="zoom_region",
+                        purpose="Show the full diagram and its caption.",
+                        x=1,
+                        y=1,
+                        width=40,
+                        height=30,
+                    ),
+                    ModelAction(
+                        type="highlight_region",
+                        purpose="Highlight the visible phrase “Diagram A”.",
                         x=1,
                         y=1,
                         width=20,
@@ -62,6 +78,11 @@ def test_model_output_is_bound_to_verified_manifest_and_stable_action_ids():
     assert action.render_id == manifest.render_id
     assert action.slide_id == extraction.slides[0].id
     assert action.instance_id == second.slides[0].actions[0].instance_id
+    assert len(first.slides[0].actions) == 3
+    assert first.slides[0].actions[1].type == "zoom_region"
+    assert first.slides[0].actions[0].instance_id != first.slides[0].actions[1].instance_id
+    duplicate_ids = Processor._duplicate_candidate_ids(first.slides)
+    assert duplicate_ids == {first.slides[0].actions[2].instance_id}
 
 
 @pytest.mark.parametrize(

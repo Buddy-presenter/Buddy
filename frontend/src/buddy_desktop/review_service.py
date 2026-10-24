@@ -65,6 +65,7 @@ class ReviewAnalysis:
     deck_id: UUID
     version: int
     publication: str
+    action_limit_reached: bool
     source_revision: str | None
     source_sha256: str | None
     presentation_summary: ReviewSummary
@@ -111,6 +112,9 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
     data = _dict(_dict(payload).get("data"))
     identifier, deck_id = UUID(str(data["id"])), UUID(str(data["deck_id"]))
     if deck_id != expected_deck:
+        raise ValueError
+    action_limit_reached = data.get("action_limit_reached", False)
+    if type(action_limit_reached) is not bool:
         raise ValueError
     inputs = data.get("inputs")
     summary = ReviewSummary("unavailable", None, "This analysis predates the review format.")
@@ -286,6 +290,7 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
         deck_id,
         data["version"],
         data["publication"],
+        action_limit_reached,
         source_revision,
         source_sha256,
         summary,

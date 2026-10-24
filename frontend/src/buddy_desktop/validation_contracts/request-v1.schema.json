@@ -18,6 +18,13 @@
         "wide-2x"
       ],
       "type": "string"
+    },
+    "Precision": {
+      "enum": [
+        "standard",
+        "line"
+      ],
+      "type": "string"
     }
   },
   "additionalProperties": false,
@@ -32,9 +39,18 @@
       "title": "Deck Id",
       "type": "string"
     },
+    "duplicate_candidate": {
+      "default": false,
+      "title": "Duplicate Candidate",
+      "type": "boolean"
+    },
     "profile": {
       "$ref": "#/$defs/Profile",
       "default": "wide-1x"
+    },
+    "precision": {
+      "$ref": "#/$defs/Precision",
+      "default": "standard"
     },
     "schema_version": {
       "const": "buddy.action-validation-request.v1",

@@ -30,6 +30,14 @@ unknown slides, unsupported actions or an unexpected execution/image result.
 Every non-passing result has machine-readable reasons. `semantic_verified` is always
 false: a correctly executed highlight may still refer to the wrong content.
 
+The trusted analysis worker can pass internal line-precision and duplicate-candidate hints to
+the isolated process; public clients cannot set these hints. A generated highlight uses line
+precision: a rectangle taller than 6% of the source page is rejected as
+`highlight_region_too_broad` with a report. Exact same-type, same-region repeats are rejected
+as `duplicate_action`. Standard public validation preserves the general-purpose highlight
+catalog. These checks catch oversized generated marks and exact repeated regions across portrait
+and landscape pages, but cannot identify text lines or establish semantic correctness.
+
 Malformed top-level requests reject with 422, oversized requests with 413, occupied local
 capacity with 429, unavailable runtime configuration with 503 and retry/source conflicts
 with 409. Well-formed requests containing invalid action instances return a stored

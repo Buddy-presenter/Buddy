@@ -82,11 +82,23 @@ def test_review_parser_reads_versioned_summary_and_actions():
     result = parse_analysis(payload, deck_id)
     assert result.version == 2
     assert result.publication == "awaiting_validation"
+    assert result.action_limit_reached is False
     assert result.presentation_summary.text == "Overall summary"
     assert result.slides[0].summary.text == "Slide summary"
     action = result.slides[0].actions[0]
     assert action.region == (10, 20, 30, 40)
     assert action.state == "candidate" and not action.usable
+
+
+def test_review_parser_reports_action_capacity_without_changing_analysis_hash_inputs():
+    deck_id, payload = analysis_payload()
+    payload["data"]["action_limit_reached"] = True
+    result = parse_analysis(payload, deck_id)
+    assert result.action_limit_reached
+
+    payload["data"]["action_limit_reached"] = "true"
+    with pytest.raises((ValueError, KeyError, TypeError)):
+        parse_analysis(payload, deck_id)
 
 
 @pytest.mark.parametrize("mutation", ["foreign_deck", "outside_region", "invalid_summary"])
