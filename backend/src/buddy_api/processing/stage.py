@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import traceback
 from contextlib import suppress
 
 from buddy_api.analysis.contracts import Manifest
@@ -223,10 +224,12 @@ def main() -> int:
     except Exception as exc:
         result = '{"error":"pdf_inspection_failed"}'
         if os.environ.get("BUDDY_CHILD_DIAGNOSTICS"):
+            frame = traceback.extract_tb(exc.__traceback__)[-1]
+            diagnostic = f"{type(exc).__name__}: {frame.filename}:{frame.lineno} {frame.name}"
             result = json.dumps(
                 {
                     "error": "pdf_inspection_failed",
-                    "diagnostic": f"{type(exc).__name__}: {str(exc)[:200]}",
+                    "diagnostic": diagnostic,
                 }
             )
     finally:
