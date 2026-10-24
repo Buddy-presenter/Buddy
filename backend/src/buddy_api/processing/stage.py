@@ -225,10 +225,13 @@ def main() -> int:
         result = '{"error":"pdf_inspection_failed"}'
         if os.environ.get("BUDDY_CHILD_DIAGNOSTICS"):
             frame = traceback.extract_tb(exc.__traceback__)[-1]
+            diagnostic = (
+                f"{type(exc).__name__}: {str(exc)[:120]} at {frame.filename}:{frame.lineno}"
+            )
             result = json.dumps(
                 {
                     "error": "pdf_inspection_failed",
-                    "diagnostic": f"{type(exc).__name__}: {str(exc)[:120]} at {frame.filename}:{frame.lineno}",
+                    "diagnostic": diagnostic,
                 }
             )
     finally:
