@@ -135,6 +135,11 @@ class AnalysisInput(Model):
     display_profile: Identifier
     validator_version: Identifier
     manifest: Manifest
+    # Generated image/graphic subregions have no finer PDF object geometry. They remain
+    # candidates until the independent visual QA workflow reviews their framing.
+    visual_qa_pending_instance_ids: Annotated[
+        tuple[Identifier, ...], Field(max_length=40, exclude=True)
+    ] = ()
     presentation_summary: Summary
     slides: Annotated[tuple[SlideOutput, ...], Field(min_length=1, max_length=500)]
 
@@ -157,6 +162,13 @@ class AnalysisInput(Model):
                 # Keep bounded model suggestions even when their geometry is unsafe.
                 # The isolated executor must see and reject them so the published
                 # analysis preserves the suggestion together with its reason/evidence.
+        action_ids = {action.instance_id for slide in self.slides for action in slide.actions}
+        if (
+            len(set(self.visual_qa_pending_instance_ids))
+            != len(self.visual_qa_pending_instance_ids)
+            or not set(self.visual_qa_pending_instance_ids) <= action_ids
+        ):
+            raise ValueError("Visual QA pending references must name unique analysis actions.")
         if len(ids) > 1000 or len(self.model_dump_json().encode()) > 8 * 1024 * 1024:
             raise ValueError("Analysis exceeds the bounded record limit.")
         return self
@@ -228,6 +240,10 @@ class AnalysisResult(Model):
     analysis_sha256: Digest | None
     inputs: AnalysisInput | None
     slides: tuple[SlideResult, ...]
+    # Worker-only handoff for the separate visual QA/correction workflow.
+    visual_qa_pending_instance_ids: Annotated[
+        tuple[Identifier, ...], Field(max_length=40, exclude=True)
+    ] = ()
 
 
 def publication(summary: Summary, slides: tuple[SlideResult, ...]) -> Publication:

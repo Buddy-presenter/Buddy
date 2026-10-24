@@ -11,6 +11,8 @@ import tempfile
 from contextlib import suppress
 
 from buddy_api.analysis.contracts import Manifest
+from buddy_api.analysis.grounding import ground_actions
+from buddy_api.analysis.provider import ModelOutput, parse_model_output
 from buddy_api.analysis.rendering import render_manifest
 from buddy_api.extraction.contracts import Extraction, ExtractionError
 from buddy_api.extraction.runner import extract_pdf, windows_memory_limit
@@ -83,6 +85,35 @@ def execute_manifest(
         return Manifest.model_validate(response)
     except (json.JSONDecodeError, TypeError, ValueError):
         raise ExtractionError("pdf_render_manifest_failed") from None
+
+
+def execute_grounding(
+    content: bytes,
+    extraction: Extraction,
+    manifest: Manifest,
+    generated: ModelOutput,
+    seconds: float = 120,
+) -> ModelOutput:
+    """Resolve model targets inside the bounded PDFium/Tesseract child process."""
+    with tempfile.TemporaryDirectory(prefix="stage-ground-") as directory:
+        request = json.dumps(
+            {
+                "operation": "ground_actions",
+                "content": base64.b64encode(content).decode("ascii"),
+                "extraction": extraction.model_dump(mode="json"),
+                "manifest": manifest.model_dump(mode="json"),
+                "output": generated.model_dump(mode="json"),
+            },
+            separators=(",", ":"),
+        ).encode()
+        stdout = _run_child(request, seconds, directory, storage_access=False)
+    try:
+        response = json.loads(stdout)
+        if "error" in response:
+            raise ExtractionError("pdf_action_grounding_failed")
+        return parse_model_output(response)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        raise ExtractionError("pdf_action_grounding_failed") from None
 
 
 def _run_child(request: bytes, seconds: float, directory: str, *, storage_access: bool) -> bytes:
@@ -171,6 +202,12 @@ def main() -> int:
             content = base64.b64decode(request["content"], validate=True)
             extraction = Extraction.model_validate(request["extraction"])
             result = render_manifest(content, extraction, request["deck_id"]).model_dump_json()
+        elif request.get("operation") == "ground_actions":
+            content = base64.b64decode(request["content"], validate=True)
+            extraction = Extraction.model_validate(request["extraction"])
+            manifest = Manifest.model_validate(request["manifest"])
+            output = parse_model_output(request["output"])
+            result = ground_actions(content, extraction, manifest, output).model_dump_json()
         else:
             source = PDFSource.model_validate(request["source"])
             storage = SourceStorage(UploadSettings.model_validate(request["storage"]))

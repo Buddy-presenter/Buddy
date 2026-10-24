@@ -1,11 +1,13 @@
 # Durable PDF analysis workers (#8, #12)
 
 The durable PDF worker performs page metadata inspection, submits the accepted original
-PDF unchanged to Amazon Bedrock Claude Sonnet 4.6, persists ordered summaries and content-action
+PDF unchanged to Amazon Bedrock Claude Sonnet 4.6, then resolves generated targets in a
+bounded child process using PDFium text/object geometry and on-demand Tesseract OCR for
+unmatched text anchors. It persists ordered summaries and only source-grounded content-action
 candidates, then validates every action through the isolated #49 executor before completing
-the job. It does not extract PDF text/positions/shapes, perform OCR, convert PPTX, or save
-preview rasters. Existing PPTX upload/storage remains compatible; PPTX analysis and playback
-are deferred.
+the job. Rendered OCR pages and extracted content are transient, are not sent to another
+provider or saved as evidence, and are removed with the child scratch directory. Existing
+PPTX upload/storage remains compatible; PPTX analysis and playback are deferred.
 
 ## Scheduling and publication
 
@@ -67,7 +69,9 @@ Each claim has a random lease token. Cancel/retry/reconciliation invalidates tha
 and increments the message generation. Metadata persistence locks and rechecks the job,
 lease/deadline, source revision/format/SHA and owner in the transaction that saves the
 immutable extraction. Analysis persistence is idempotent per job; restarts reuse saved
-provider output and resume only missing validations. Each action report is bound to its
+provider output and resume only missing validations. Image-subregion zoom candidates marked
+for visual QA remain non-usable, and executor validation intentionally skips them until the
+independent #50/#51 workflow is available. Each action report is bound to its
 analysis/action hashes and renderer/profile before final completion. Late results cannot
 resurrect cancelled or superseded work. S3 reads use the accepted VersionId and verify size,
 media type and SHA before inspection or provider submission. Originals are never deleted.

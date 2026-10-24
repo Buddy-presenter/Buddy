@@ -81,12 +81,18 @@ Backend-packaged standalone schemas are byte-identical to the executor's schemas
 integration tests compare them and parse saved instances through the real contract parser.
 Backend runtime never imports frontend Python or Qt. Catalog changes must update both
 standalone copies deliberately and pass the parity test. Generation can return several
-distinct actions for a slide within the deck budget. A generated highlight should identify
-the exact visible line or short phrase in its purpose and tightly frame that target. The
-isolated validator applies a 6%-of-page-height maximum only to model-generated line highlights;
-broader regions are stored as rejected suggestions with evidence. This geometric guard catches
-paragraph-sized rectangles, but it cannot prove the quoted words or rectangle identify the
-intended visible text; validation remains explicitly non-semantic and requires human review.
+distinct actions for a slide within the deck budget. Before an action is stored, issue #133
+resolves exact text targets to PDFium glyph boxes (or confidence-bounded OCR word boxes for
+scanned pages) and snaps visual zoom targets to PDF object geometry. When a proposed zoom is
+inside a flattened image, Buddy preserves the crop as a non-usable candidate for the independent
+visual QA/correction path; the execution validator is skipped and cannot promote it. This
+server-owned handoff is persisted with the immutable action record, without changing the public
+action catalog. The original PDF remains the provider input. Coordinates returned by the model
+are only hints; ambiguous or unresolved targets are omitted. The isolated validator applies a 6%-of-page-long-side maximum to the
+short axis of model-generated line highlights, so narrow vertical text is handled like a
+horizontal line. Broader regions are stored as rejected suggestions with evidence. Source
+matching improves geometric grounding, but it still does not prove that the model chose the
+right semantic point; validation remains explicitly non-semantic and requires human review.
 
 `general_controls(ordered_slide_ids, current_slide_id)` enables next except on the last
 slide, previous except on the first, supplies ordered valid jump targets, and always

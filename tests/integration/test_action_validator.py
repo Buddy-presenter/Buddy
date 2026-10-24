@@ -6,6 +6,7 @@ import json
 import sys
 from datetime import UTC, datetime, timedelta
 from importlib.resources import files
+from io import BytesIO
 from pathlib import Path
 from threading import Event
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
@@ -194,6 +195,66 @@ def test_generated_line_precision_rejects_paragraph_sized_highlight_but_standard
         ValidatorSettings(python=sys.executable),
     )
     assert accepted.result.state == "validated", accepted.result.model_dump_json()
+
+
+def test_source_grounded_rotated_text_line_passes_line_precision_without_widening():
+    from buddy_api.analysis.grounding import ground_actions
+    from buddy_api.analysis.provider import ModelAction, ModelOutput, ModelSlide, ModelSummary
+    from buddy_api.analysis.rendering import render_manifest
+    from buddy_api.extraction.runner import extract_pdf
+
+    deck = uuid4()
+    extraction = extract_pdf(BytesIO(CONTENT), source_revision="v1")
+    manifest = render_manifest(CONTENT, extraction, str(deck))
+    generated = ModelOutput(
+        presentation=ModelSummary(text="Rotated text fixture.", reason=None),
+        slides=(
+            ModelSlide(number=1, text="Slide one.", reason=None, actions=()),
+            ModelSlide(
+                number=2,
+                text="A vertical title.",
+                reason=None,
+                actions=(
+                    ModelAction(
+                        type="highlight_region",
+                        purpose="Highlight the exact vertical title.",
+                        target_text="Rotated and cropped page",
+                        x=0,
+                        y=0,
+                        width=1000,
+                        height=600,
+                    ),
+                ),
+            ),
+            ModelSlide(number=3, text="Slide three.", reason=None, actions=()),
+        ),
+    )
+    grounded = ground_actions(CONTENT, extraction, manifest, generated).slides[1].actions[0]
+    command = action(deck, index=1, kind="highlight_region")
+    command["params"] = {
+        "region": {
+            "x": grounded.x,
+            "y": grounded.y,
+            "width": grounded.width,
+            "height": grounded.height,
+        }
+    }
+
+    result = run_validation(
+        CONTENT,
+        ProcessRequest(
+            deck_id=deck,
+            source_revision="v1",
+            source_sha256=DIGEST,
+            action=command,
+            precision="line",
+        ),
+        ValidatorSettings(python=sys.executable),
+    )
+
+    assert grounded.width < 100 and grounded.height > 400
+    assert result.result.state == "validated", result.result.model_dump_json()
+    assert not result.result.semantic_verified
 
 
 def test_duplicate_candidate_is_retained_but_rejected_as_unusable():

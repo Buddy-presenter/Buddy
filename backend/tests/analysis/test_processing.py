@@ -35,6 +35,7 @@ def test_model_output_is_bound_to_verified_manifest_and_stable_action_ids():
                     ModelAction(
                         type="highlight_region",
                         purpose="Highlight the visible phrase “Diagram A”.",
+                        target_text="Diagram A",
                         x=1,
                         y=1,
                         width=20,
@@ -43,6 +44,8 @@ def test_model_output_is_bound_to_verified_manifest_and_stable_action_ids():
                     ModelAction(
                         type="zoom_region",
                         purpose="Show the full diagram and its caption.",
+                        target_text=None,
+                        visual_qa_pending=True,
                         x=1,
                         y=1,
                         width=40,
@@ -51,6 +54,7 @@ def test_model_output_is_bound_to_verified_manifest_and_stable_action_ids():
                     ModelAction(
                         type="highlight_region",
                         purpose="Highlight the visible phrase “Diagram A”.",
+                        target_text="Diagram A",
                         x=1,
                         y=1,
                         width=20,
@@ -80,6 +84,8 @@ def test_model_output_is_bound_to_verified_manifest_and_stable_action_ids():
     assert action.instance_id == second.slides[0].actions[0].instance_id
     assert len(first.slides[0].actions) == 3
     assert first.slides[0].actions[1].type == "zoom_region"
+    assert first.visual_qa_pending_instance_ids == (first.slides[0].actions[1].instance_id,)
+    assert "visual_qa_pending_instance_ids" not in first.model_dump(mode="json")
     assert first.slides[0].actions[0].instance_id != first.slides[0].actions[1].instance_id
     duplicate_ids = Processor._duplicate_candidate_ids(first.slides)
     assert duplicate_ids == {first.slides[0].actions[2].instance_id}
@@ -105,6 +111,7 @@ def test_unsafe_model_action_is_preserved_for_isolated_validation(action_type, x
                     ModelAction(
                         type=action_type,
                         purpose="Focus on a region.",
+                        target_text="Diagram A" if action_type == "highlight_region" else None,
                         x=x,
                         y=y,
                         width=(

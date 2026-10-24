@@ -32,11 +32,14 @@ false: a correctly executed highlight may still refer to the wrong content.
 
 The trusted analysis worker can pass internal line-precision and duplicate-candidate hints to
 the isolated process; public clients cannot set these hints. A generated highlight uses line
-precision: a rectangle taller than 6% of the source page is rejected as
-`highlight_region_too_broad` with a report. Exact same-type, same-region repeats are rejected
-as `duplicate_action`. Standard public validation preserves the general-purpose highlight
-catalog. These checks catch oversized generated marks and exact repeated regions across portrait
-and landscape pages, but cannot identify text lines or establish semantic correctness.
+precision: a rectangle whose short axis exceeds 6% of the longer source-page axis is rejected
+as `highlight_region_too_broad` with a report. This supports narrow vertical text as well as
+horizontal text. Exact same-type, same-region repeats are rejected as `duplicate_action`.
+Standard public validation preserves the general-purpose highlight catalog. These checks catch
+oversized generated marks and exact repeated regions across portrait and landscape pages, but
+do not establish that the model selected the right semantic content. Issue #133 grounds exact
+text targets against PDFium/OCR source geometry before validation; `semantic_verified` remains
+false because validation does not judge the model's intent.
 
 Malformed top-level requests reject with 422, oversized requests with 413, occupied local
 capacity with 429, unavailable runtime configuration with 503 and retry/source conflicts
@@ -76,9 +79,14 @@ Python executable with `-m buddy_desktop.validation_worker` and fixed private jo
 Migration `0007_action_checks` adds owner/deck-scoped `action_checks` with a unique
 owner/retry key, request digest, bounded storage reservation, durable phase, result and
 private artifact metadata. The issue #12 analysis worker invokes this same validator for
-each candidate action, then records the versioned evidence and validation state against the
+each executable candidate action, then records the versioned evidence and validation state against the
 matching stored action using issue #11's contract. Only a validated action is marked usable;
 rejected and needs-review outcomes remain visible with their reasons.
+
+Issue #133 marks zoom crops inside flattened PDF objects as visual-QA-pending candidates.
+The analysis worker deliberately does not send these actions to this executor: a successful
+execution would prove only that the crop runs, not that its target is framed correctly. The
+server-owned flag is stored on the immutable action record for the later #50/#51 workflow.
 
 Before/after PNGs and a JSON report use KMS-encrypted, versioned private S3 objects under
 `sources/<owner>/<deck>/validation/<run>/<kind>.<extension>`. No storage paths or S3 versions

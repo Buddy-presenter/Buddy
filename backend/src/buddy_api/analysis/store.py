@@ -84,7 +84,12 @@ class Analyses:
         self, *, owner_id: UUID, deck_id: UUID, version: int, document: AnalysisInput
     ) -> AnalysisVersion:
         # Revalidate even model_construct/model_copy caller values; they bypass Pydantic validation.
-        document = AnalysisInput.model_validate(document.model_dump(mode="json"))
+        document_values = document.model_dump(mode="json")
+        document_values["visual_qa_pending_instance_ids"] = list(
+            document.visual_qa_pending_instance_ids
+        )
+        document = AnalysisInput.model_validate(document_values)
+        visual_qa_pending = set(document.visual_qa_pending_instance_ids)
         if type(version) is not int or version < 1:
             raise ValueError("Analysis version must be positive.")
         deck = await self.session.scalar(
@@ -178,6 +183,7 @@ class Analyses:
                     purpose=action.purpose,
                     parameters=action.params.model_dump(mode="json"),
                     content_sha256=digest(action),
+                    visual_qa_pending=action.instance_id in visual_qa_pending,
                 )
                 self.session.add(record)
                 await self.session.flush()
@@ -242,6 +248,9 @@ class Analyses:
         )
         latest = {v.action_id: v for v in validations}
         manifest = (value.provenance or {})["manifest"]
+        visual_qa_pending = tuple(
+            action.instance_id for action in actions if action.visual_qa_pending
+        )
         results = []
         for slide in slides:
             output = []
@@ -312,6 +321,7 @@ class Analyses:
             analysis_sha256=value.content_sha256,
             inputs=inputs,
             slides=tuple(results),
+            visual_qa_pending_instance_ids=visual_qa_pending,
         )
 
     @staticmethod

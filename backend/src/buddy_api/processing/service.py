@@ -46,7 +46,7 @@ from buddy_api.processing import store
 from buddy_api.processing.config import WorkerSettings
 from buddy_api.processing.contracts import Message, MetadataOutput, PDFSource
 from buddy_api.processing.queue import Queue
-from buddy_api.processing.stage import execute, execute_manifest
+from buddy_api.processing.stage import execute, execute_grounding, execute_manifest
 from buddy_api.uploads.contracts import UploadError
 from buddy_api.uploads.service import UploadService, blocking
 from buddy_api.uploads.storage import SourceStorage
@@ -420,6 +420,20 @@ class Processor:
                 alive, generated = await fenced(provider_call)
                 if not alive:
                     return
+                alive, generated = await fenced(
+                    blocking(
+                        partial(
+                            execute_grounding,
+                            content,
+                            extraction,
+                            manifest,
+                            generated,
+                            min(120, self.settings.runtime_seconds - 15),
+                        )
+                    )
+                )
+                if not alive:
+                    return
                 active_stage = "pdf_analysis.v1"
                 active_stage_started_at = time.perf_counter()
                 document = self._analysis_document(
@@ -465,8 +479,9 @@ class Processor:
             analysis_version = analysis_result.version
             if analysis_hash is None:
                 raise ProviderFailure("stored_analysis_unavailable")
+            visual_qa_pending = set(analysis_result.visual_qa_pending_instance_ids)
             has_candidates = any(
-                action.state == "candidate"
+                action.state == "candidate" and action.action.instance_id not in visual_qa_pending
                 for slide in analysis_result.slides
                 for action in slide.actions
             )
@@ -478,6 +493,10 @@ class Processor:
             for slide in analysis_result.slides:
                 for action_result in slide.actions:
                     if action_result.state != "candidate":
+                        continue
+                    if action_result.action.instance_id in visual_qa_pending:
+                        # Geometry inside a flattened image is deliberately kept as a
+                        # candidate for #50/#51. Executor success cannot promote it.
                         continue
                     assert self.validation is not None
                     action = action_result.action
@@ -684,6 +703,7 @@ class Processor:
         ):
             raise ProviderFailure("provider_slide_order")
         rendered: list[SlideOutput] = []
+        visual_qa_pending_instance_ids: list[str] = []
         for index, (model_slide, source_slide) in enumerate(
             zip(generated.slides, extraction.slides, strict=True)
         ):
@@ -695,16 +715,17 @@ class Processor:
             actions = []
             for action_index, candidate in enumerate(model_slide.actions):
                 try:
+                    instance_id = str(
+                        uuid5(
+                            NAMESPACE_URL,
+                            f"buddy:{job_id}:{extraction.source_revision}:{index}:{action_index}",
+                        )
+                    )
                     actions.append(
                         ContentAction.model_validate(
                             {
                                 "version": "1.1",
-                                "instance_id": str(
-                                    uuid5(
-                                        NAMESPACE_URL,
-                                        f"buddy:{job_id}:{extraction.source_revision}:{index}:{action_index}",
-                                    )
-                                ),
+                                "instance_id": instance_id,
                                 "purpose": candidate.purpose.strip(),
                                 "deck_id": str(deck_id),
                                 "render_id": manifest.render_id,
@@ -721,6 +742,8 @@ class Processor:
                             }
                         )
                     )
+                    if candidate.visual_qa_pending:
+                        visual_qa_pending_instance_ids.append(instance_id)
                 except ValueError:
                     raise ProviderFailure("provider_invalid_action") from None
             rendered.append(
@@ -740,6 +763,7 @@ class Processor:
                 display_profile="wide-1x",
                 validator_version="qt-executor-1",
                 manifest=manifest,
+                visual_qa_pending_instance_ids=tuple(visual_qa_pending_instance_ids),
                 presentation_summary=cls._summary(
                     generated.presentation.text, generated.presentation.reason
                 ),

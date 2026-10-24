@@ -37,6 +37,7 @@ from buddy_api.validation.contracts import ProcessResult, StoredResult, action_d
 from buddy_api.validation.service import ValidationService
 
 PDF = Path(__file__).resolve().parents[3] / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf"
+SCANNED_PDF = Path(__file__).resolve().parents[1] / "fixtures/pdf/scanned-source-anchor.pdf"
 WORKER = WorkerSettings(
     queue_url="https://sqs.eu-central-1.amazonaws.com/123456789012/test", region="eu-central-1"
 )
@@ -169,6 +170,74 @@ def test_real_pdf_worker_pinned_source_duplicate_and_restart(migrated_database):
     asyncio.run(scenario())
 
 
+def test_flattened_image_subregion_stays_candidate_and_skips_executor_validation(migrated_database):
+    class ImageSubregionProvider:
+        def analyze(self, content, extraction, deck_id, manifest):
+            return ModelOutput(
+                presentation=ModelSummary(text="Scanned slide.", reason=None),
+                slides=tuple(
+                    ModelSlide(
+                        number=index + 1,
+                        text=f"Page {index + 1}.",
+                        reason=None,
+                        actions=(
+                            ModelAction(
+                                type="zoom_region",
+                                purpose="Focus on one section of the scanned page image.",
+                                target_text=None,
+                                x=200,
+                                y=400,
+                                width=400,
+                                height=200,
+                            ),
+                        )
+                        if index == 0
+                        else (),
+                    )
+                    for index, _page in enumerate(extraction.slides)
+                ),
+            )
+
+    class MustNotExecute:
+        async def reconcile(self):
+            return None
+
+        async def validate(self, *args, **kwargs):
+            raise AssertionError("Image crop must wait for independent visual QA.")
+
+    async def scenario():
+        db = Database(migrated_database)
+        try:
+            content = SCANNED_PDF.read_bytes()
+            owner, deck, job = await seed(db, content=content)
+            queue = SQS()
+            processor = make_processor(
+                db,
+                SourceStorage(UPLOADS, S3(content)),
+                WORKER,
+                queue,
+                provider=ImageSubregionProvider(),
+                validation=MustNotExecute(),
+            )
+            await processor.maintain()
+            await processor.run_message(queue.messages[0])
+            completed = await row(db, job.id)
+            assert completed.status == "analysis_partial", completed.error_code
+            async with db.sessions() as session:
+                record = (await Analyses(session).list(owner_id=owner.id))[0]
+                result = await Analyses(session).read(record.id, owner_id=owner.id)
+            action = result.slides[0].actions[0]
+            assert result.publication == "awaiting_validation"
+            assert action.state == "candidate" and not action.usable
+            assert action.validation is None
+            assert result.visual_qa_pending_instance_ids == (action.action.instance_id,)
+            assert "visual_qa_pending_instance_ids" not in result.model_dump(mode="json")
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())
+
+
 def test_pending_validation_defers_without_spending_attempt_and_resumes_analysis(
     migrated_database, monkeypatch
 ):
@@ -188,10 +257,11 @@ def test_pending_validation_defers_without_spending_attempt_and_resumes_analysis
                             ModelAction(
                                 type="zoom_region",
                                 purpose="Focus on the key detail.",
+                                target_text="Buddy PDF presentation",
                                 x=1,
                                 y=1,
-                                width=1,
-                                height=1,
+                                width=1280,
+                                height=720,
                             ),
                         )
                         if index == 0

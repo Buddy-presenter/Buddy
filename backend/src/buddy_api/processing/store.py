@@ -296,10 +296,14 @@ async def complete(session: AsyncSession, identifier: UUID, token: UUID, analysi
         or deck.source_revision != job.source_revision
         or analysis is None
         or analysis.extraction_id != job.extraction_id
-        or analysis.publication not in {"published", "partial"}
+        or analysis.publication not in {"published", "partial", "awaiting_validation"}
     ):
         raise UploadError(409, "analysis_incomplete", "The analysis is not ready for completion.")
-    job.status = "analysis_partial" if analysis.publication == "partial" else "analysis_ready"
+    job.status = (
+        "analysis_partial"
+        if analysis.publication in {"partial", "awaiting_validation"}
+        else "analysis_ready"
+    )
     job.stage_state, job.progress, job.error_code = "succeeded", 100, None
     job.lease_id = job.lease_until = job.deadline_at = None
     return True

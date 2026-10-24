@@ -136,10 +136,9 @@ def test_published_schemas_and_evidence_fixture_match_versioned_contracts():
     from buddy_api.analysis.contracts import ValidationInput
 
     for name, contract in [("analysis-v1", AnalysisInput), ("validation-v1", ValidationInput)]:
-        assert (
-            json.loads((FIXTURE.parent.parent / (name + ".schema.json")).read_text())
-            == contract.model_json_schema()
-        )
+        assert json.loads(
+            (FIXTURE.parent.parent / (name + ".schema.json")).read_text()
+        ) == contract.model_json_schema(mode="serialization")
     assert (
         json.loads(
             (FIXTURE.parent.parent / "generated-content-action-v1.1.schema.json").read_text()
