@@ -377,16 +377,16 @@ def test_grounding_runs_inside_the_bounded_child_process():
     assert result.slides[0].actions[0].height < manifest.slides[0].source.height / 8
 
 
-def test_unix_child_caps_memory_at_available_hard_limit_when_address_space_limit_is_unavailable():
+def test_unix_child_does_not_use_data_limit_when_address_space_limit_is_unavailable():
     calls = []
     resource = SimpleNamespace(
         RLIMIT_DATA=2,
         RLIMIT_CPU=1,
         RLIM_INFINITY=-1,
-        getrlimit=lambda limit: (2 * 1024**3, 512 * 1024**2) if limit == 2 else (30, -1),
+        getrlimit=lambda _limit: (30, -1),
         setrlimit=lambda limit, values: calls.append((limit, values)),
     )
 
     _configure_child_resource_limits(resource)
 
-    assert calls == [(2, (512 * 1024**2, 512 * 1024**2)), (1, (120, 120))]
+    assert calls == [(1, (120, 120))]

@@ -15,7 +15,7 @@ from buddy_api.analysis.grounding import ground_actions
 from buddy_api.analysis.provider import ModelOutput, parse_model_output
 from buddy_api.analysis.rendering import render_manifest
 from buddy_api.extraction.contracts import Extraction, ExtractionError
-from buddy_api.extraction.runner import extract_pdf, windows_memory_limit
+from buddy_api.extraction.runner import extract_pdf, parser_memory_limit
 from buddy_api.processing.contracts import MetadataOutput, PDFSource
 from buddy_api.uploads.config import UploadSettings
 from buddy_api.uploads.storage import SourceStorage
@@ -167,7 +167,7 @@ def _run_child(request: bytes, seconds: float, directory: str, *, storage_access
     )
     try:
         # Windows job kills the complete parser tree; Linux uses a private process group.
-        with windows_memory_limit(process.pid, 1024 * 1024 * 1024):
+        with parser_memory_limit(process.pid, 1024 * 1024 * 1024):
             try:
                 stdout, _ = process.communicate(request, timeout=seconds)
             except subprocess.TimeoutExpired:
@@ -223,13 +223,9 @@ def main() -> int:
 
 
 def _configure_child_resource_limits(resource: object) -> None:
-    """Apply memory and CPU limits using the strongest limit this Unix exposes.
-
-    Python exposes RLIMIT_AS on Linux, but macOS omits it. RLIMIT_DATA is the
-    portable fallback for the bounded parser's heap allocations on those systems.
-    """
+    """Apply address-space and CPU limits; macOS memory is monitored by the parent."""
     infinity = resource.RLIM_INFINITY  # type: ignore[attr-defined]
-    memory_limit = getattr(resource, "RLIMIT_AS", getattr(resource, "RLIMIT_DATA", None))
+    memory_limit = getattr(resource, "RLIMIT_AS", None)
     if memory_limit is not None:
         _set_child_limit(resource, memory_limit, 1024**3, infinity)
     _set_child_limit(resource, resource.RLIMIT_CPU, 120, infinity)  # type: ignore[attr-defined]
