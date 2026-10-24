@@ -245,11 +245,11 @@ def _configure_child_resource_limits(resource: object) -> None:
     """Apply address-space and CPU limits; macOS memory is monitored by the parent."""
     if sys.platform == "darwin":
         return
-    infinity = resource.RLIM_INFINITY
+    infinity = getattr(resource, "RLIM_INFINITY")
     memory_limit = getattr(resource, "RLIMIT_AS", None)
     if memory_limit is not None:
         _set_child_limit(resource, memory_limit, 1024**3, infinity)
-    _set_child_limit(resource, resource.RLIMIT_CPU, 120, infinity)
+    _set_child_limit(resource, getattr(resource, "RLIMIT_CPU"), 120, infinity)
 
 
 def _set_child_limit(resource: object, kind: int, ceiling: int, infinity: int) -> None:
