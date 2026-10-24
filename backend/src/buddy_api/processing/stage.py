@@ -157,23 +157,21 @@ def _run_child(request: bytes, seconds: float, directory: str, *, storage_access
     env = {key: value for key, value in os.environ.items() if key.upper() in allowed}
     if storage_access and os.environ.get("BUDDY_ENVIRONMENT") == "test":
         env.update({key: os.environ[key] for key in ("AWS_ENDPOINT_URL_S3",) if key in os.environ})
+    child_env = {
+        **env,
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "TMPDIR": directory,
+        "TMP": directory,
+        "TEMP": directory,
+    }
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        child_env["BUDDY_CHILD_DIAGNOSTICS"] = "1"
     process = subprocess.Popen(
         [sys.executable, "-m", "buddy_api.processing.stage"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
-        env={
-            **env,
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "TMPDIR": directory,
-            "TMP": directory,
-            "TEMP": directory,
-            **(
-                {"BUDDY_CHILD_DIAGNOSTICS": "1"}
-                if os.environ.get("PYTEST_CURRENT_TEST")
-                else {}
-            ),
-        },
+        env=child_env,
         start_new_session=os.name != "nt",
     )
     try:
