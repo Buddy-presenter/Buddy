@@ -254,9 +254,9 @@ def _configure_child_resource_limits(resource: Any) -> None:
 
 
 def _set_child_limit(resource: Any, kind: int, ceiling: int, infinity: int) -> None:
-    _, hard = resource.getrlimit(kind)  # type: ignore[attr-defined]
+    _, hard = resource.getrlimit(kind)
     bound = ceiling if hard == infinity else min(ceiling, hard)
-    resource.setrlimit(kind, (bound, hard))  # type: ignore[attr-defined]
+    resource.setrlimit(kind, (bound, hard))
 
 
 if __name__ == "__main__":
