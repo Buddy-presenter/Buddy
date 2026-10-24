@@ -393,10 +393,7 @@ class ReviewWidget(Page):
             # This account-bound PDF is cleared when the account or backend changes.
             notices = [result.notice] if result.notice else []
             if result.analysis is not None and result.analysis.action_limit_reached:
-                notices.append(
-                    "The 40-action processing limit was reached. Some useful focus points "
-                    "may not have a suggested action; review the deck for gaps."
-                )
+                notices.append("All 40 available action slots were used in this analysis.")
             self.notice.setText("\n\n".join(notices))
             self.sizes = result.sizes
             self.image = result.first_image

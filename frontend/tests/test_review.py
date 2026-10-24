@@ -1,6 +1,7 @@
 import hashlib
 import json
 import time
+from copy import deepcopy
 from threading import Event
 from types import SimpleNamespace
 from uuid import uuid4
@@ -213,6 +214,53 @@ def test_review_widget_loads_read_only_saved_page_and_clears_on_signout(
     assert review.pdf_content is None
     assert review.analysis is None
     assert review.action_table.rowCount() == 0
+
+
+def test_review_exactly_40_actions_reports_capacity_without_claiming_truncation(
+    desktop_window, monkeypatch, qtbot
+):
+    content = b"%PDF-1.7 exact action capacity fixture"
+    digest = hashlib.sha256(content).hexdigest()
+    deck_id, payload = analysis_payload(source_sha256=digest)
+    data = payload["data"]
+    template = data["slides"][0]["actions"][0]
+    actions = []
+    for index in range(40):
+        action = deepcopy(template)
+        action["action"]["instance_id"] = f"action-{index + 1}"
+        actions.append(action)
+    data["slides"][0]["actions"] = actions
+    data["action_limit_reached"] = True
+    record = parse_analysis(payload, deck_id)
+    assert sum(len(slide.actions) for slide in record.slides) == 40
+
+    monkeypatch.setattr(ReviewService, "analysis", lambda _self, _deck: record)
+    monkeypatch.setattr(
+        ReviewService,
+        "source",
+        lambda _self, _deck: DownloadedPDF(content, str(deck_id), "revision-1"),
+    )
+    image = QImage(100, 100, QImage.Format.Format_ARGB32)
+    image.fill(QColor("white"))
+    monkeypatch.setattr(
+        review_widget,
+        "render",
+        lambda _content, _index: ({"sizes": [[100, 100]]}, image.copy()),
+    )
+    window = desktop_window()
+    window.account.session = SimpleNamespace(
+        tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
+    )
+    window.account.session_changed.emit()
+    review = window.review
+    review.set_deck(deck_id, "Capacity fixture")
+    review.activate(True)
+    qtbot.waitUntil(lambda: not review.content.isHidden())
+
+    assert review.notice.text() == "All 40 available action slots were used in this analysis."
+    assert "omitted" not in review.notice.text().lower()
+    assert "missing" not in review.notice.text().lower()
+    assert "gap" not in review.notice.text().lower()
 
 
 def test_review_queues_new_deck_while_stale_load_is_finishing(desktop_window, monkeypatch, qtbot):

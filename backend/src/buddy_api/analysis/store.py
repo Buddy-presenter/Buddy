@@ -308,7 +308,7 @@ class Analyses:
             version=value.version,
             publication=publication(inputs.presentation_summary, tuple(results)),
             action_limit_reached=sum(len(slide.actions) for slide in results)
-            >= MAX_GENERATED_ACTIONS_PER_DECK,
+            == MAX_GENERATED_ACTIONS_PER_DECK,
             analysis_sha256=value.content_sha256,
             inputs=inputs,
             slides=tuple(results),

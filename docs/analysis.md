@@ -39,8 +39,9 @@ Limits: 500 slides, 100 actions per slide, 1,000 actions total, 8 MiB serialized
 16,000 characters per summary. Empty action lists are valid. Provider generation and isolated
 execution use a stricter 40-action deck budget so one analysis attempt stays bounded by the
 worker's runtime. A slide may receive multiple distinct actions, including both zoom and
-highlight suggestions. Reaching the deck budget is surfaced in Review as a coverage warning;
-the count is an operational signal and does not claim semantic completeness.
+highlight suggestions. Using all 40 generated-action slots is surfaced in Review as a capacity
+notice. It reports the slot count only and does not imply that actions were omitted or that the
+analysis is semantically complete.
 
 ## Summaries, publication and readiness
 
