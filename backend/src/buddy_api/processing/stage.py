@@ -110,11 +110,7 @@ def execute_grounding(
     try:
         response = json.loads(stdout)
         if "error" in response:
-            diagnostic = (
-                response.get("diagnostic") if os.environ.get("PYTEST_CURRENT_TEST") else None
-            )
-            suffix = f" ({diagnostic})" if isinstance(diagnostic, str) else ""
-            raise ExtractionError(f"pdf_action_grounding_failed{suffix}")
+            raise ExtractionError("pdf_action_grounding_failed")
         return parse_model_output(response)
     except (json.JSONDecodeError, TypeError, ValueError):
         raise ExtractionError("pdf_action_grounding_failed") from None
@@ -155,21 +151,18 @@ def _run_child(request: bytes, seconds: float, directory: str, *, storage_access
     env = {key: value for key, value in os.environ.items() if key.upper() in allowed}
     if storage_access and os.environ.get("BUDDY_ENVIRONMENT") == "test":
         env.update({key: os.environ[key] for key in ("AWS_ENDPOINT_URL_S3",) if key in os.environ})
-    child_env = {
-        **env,
-        "PYTHONDONTWRITEBYTECODE": "1",
-        "TMPDIR": directory,
-        "TMP": directory,
-        "TEMP": directory,
-    }
-    if os.environ.get("PYTEST_CURRENT_TEST"):
-        child_env["BUDDY_CHILD_DIAGNOSTICS"] = "1"
     process = subprocess.Popen(
         [sys.executable, "-m", "buddy_api.processing.stage"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
-        env=child_env,
+        env={
+            **env,
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "TMPDIR": directory,
+            "TMP": directory,
+            "TEMP": directory,
+        },
         start_new_session=os.name != "nt",
     )
     try:
@@ -220,14 +213,8 @@ def main() -> int:
             result = inspect_source(source, storage).model_dump_json()
     except UploadError:
         result = '{"error":"storage_unavailable"}'
-    except Exception as exc:
-        # Keep parser diagnostics inside the private child protocol. The parent still
-        # maps production failures to stable public codes. Pytest opts in to the class
-        # name so CI can identify platform-specific failures without exposing source text.
-        payload = {"error": "pdf_inspection_failed"}
-        if os.environ.get("BUDDY_CHILD_DIAGNOSTICS"):
-            payload["diagnostic"] = f"{type(exc).__name__}: {str(exc)[:200]}"
-        result = json.dumps(payload)
+    except Exception:
+        result = '{"error":"pdf_inspection_failed"}'
     finally:
         if storage:
             storage.close()
@@ -241,10 +228,17 @@ def _configure_child_resource_limits(resource: object) -> None:
     Python exposes RLIMIT_AS on Linux, but macOS omits it. RLIMIT_DATA is the
     portable fallback for the bounded parser's heap allocations on those systems.
     """
+    infinity = resource.RLIM_INFINITY  # type: ignore[attr-defined]
     memory_limit = getattr(resource, "RLIMIT_AS", getattr(resource, "RLIMIT_DATA", None))
     if memory_limit is not None:
-        resource.setrlimit(memory_limit, (1024**3, 1024**3))  # type: ignore[attr-defined]
-    resource.setrlimit(resource.RLIMIT_CPU, (120, 120))  # type: ignore[attr-defined]
+        _set_child_limit(resource, memory_limit, 1024**3, infinity)
+    _set_child_limit(resource, resource.RLIMIT_CPU, 120, infinity)  # type: ignore[attr-defined]
+
+
+def _set_child_limit(resource: object, kind: int, ceiling: int, infinity: int) -> None:
+    _, hard = resource.getrlimit(kind)  # type: ignore[attr-defined]
+    bound = ceiling if hard == infinity else min(ceiling, hard)
+    resource.setrlimit(kind, (bound, bound))  # type: ignore[attr-defined]
 
 
 if __name__ == "__main__":
