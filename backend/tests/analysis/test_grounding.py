@@ -389,4 +389,4 @@ def test_unix_child_does_not_use_data_limit_when_address_space_limit_is_unavaila
 
     _configure_child_resource_limits(resource)
 
-    assert calls == [(1, (120, 120))]
+    assert calls == [(1, (120, -1))]
