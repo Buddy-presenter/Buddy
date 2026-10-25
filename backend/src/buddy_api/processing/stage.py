@@ -8,12 +8,16 @@ import signal
 import subprocess
 import sys
 import tempfile
+import traceback
 from contextlib import suppress
+from typing import Any
 
 from buddy_api.analysis.contracts import Manifest
+from buddy_api.analysis.grounding import ground_actions
+from buddy_api.analysis.provider import ModelOutput, parse_model_output
 from buddy_api.analysis.rendering import render_manifest
 from buddy_api.extraction.contracts import Extraction, ExtractionError
-from buddy_api.extraction.runner import extract_pdf, windows_memory_limit
+from buddy_api.extraction.runner import extract_pdf, parser_memory_limit
 from buddy_api.processing.contracts import MetadataOutput, PDFSource
 from buddy_api.uploads.config import UploadSettings
 from buddy_api.uploads.storage import SourceStorage
@@ -85,6 +89,39 @@ def execute_manifest(
         raise ExtractionError("pdf_render_manifest_failed") from None
 
 
+def execute_grounding(
+    content: bytes,
+    extraction: Extraction,
+    manifest: Manifest,
+    generated: ModelOutput,
+    seconds: float = 120,
+) -> ModelOutput:
+    """Resolve model targets inside the bounded PDFium/Tesseract child process."""
+    with tempfile.TemporaryDirectory(prefix="stage-ground-") as directory:
+        request = json.dumps(
+            {
+                "operation": "ground_actions",
+                "content": base64.b64encode(content).decode("ascii"),
+                "extraction": extraction.model_dump(mode="json"),
+                "manifest": manifest.model_dump(mode="json"),
+                "output": generated.model_dump(mode="json"),
+            },
+            separators=(",", ":"),
+        ).encode()
+        stdout = _run_child(request, seconds, directory, storage_access=False)
+    try:
+        response = json.loads(stdout)
+        if "error" in response:
+            diagnostic = (
+                response.get("diagnostic") if os.environ.get("PYTEST_CURRENT_TEST") else None
+            )
+            suffix = f" ({diagnostic})" if isinstance(diagnostic, str) else ""
+            raise ExtractionError(f"pdf_action_grounding_failed{suffix}")
+        return parse_model_output(response)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        raise ExtractionError("pdf_action_grounding_failed") from None
+
+
 def _run_child(request: bytes, seconds: float, directory: str, *, storage_access: bool) -> bytes:
     # Neither mode inherits the database URL or unrelated identity tokens. Only the
     # source-inspection mode receives the scoped storage credentials it needs to read S3.
@@ -120,23 +157,26 @@ def _run_child(request: bytes, seconds: float, directory: str, *, storage_access
     env = {key: value for key, value in os.environ.items() if key.upper() in allowed}
     if storage_access and os.environ.get("BUDDY_ENVIRONMENT") == "test":
         env.update({key: os.environ[key] for key in ("AWS_ENDPOINT_URL_S3",) if key in os.environ})
+    child_env = {
+        **env,
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "TMPDIR": directory,
+        "TMP": directory,
+        "TEMP": directory,
+    }
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        child_env["BUDDY_CHILD_DIAGNOSTICS"] = "1"
     process = subprocess.Popen(
         [sys.executable, "-m", "buddy_api.processing.stage"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
-        env={
-            **env,
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "TMPDIR": directory,
-            "TMP": directory,
-            "TEMP": directory,
-        },
+        env=child_env,
         start_new_session=os.name != "nt",
     )
     try:
         # Windows job kills the complete parser tree; Linux uses a private process group.
-        with windows_memory_limit(process.pid, 1024 * 1024 * 1024):
+        with parser_memory_limit(process.pid, 1024 * 1024 * 1024):
             try:
                 stdout, _ = process.communicate(request, timeout=seconds)
             except subprocess.TimeoutExpired:
@@ -161,8 +201,7 @@ def main() -> int:
         if sys.platform != "win32":
             import resource
 
-            resource.setrlimit(resource.RLIMIT_AS, (1024**3, 1024**3))
-            resource.setrlimit(resource.RLIMIT_CPU, (120, 120))
+            _configure_child_resource_limits(resource)
         raw = sys.stdin.buffer.read(40 * 1024 * 1024 + 1)
         if len(raw) > 40 * 1024 * 1024:
             raise ValueError
@@ -171,19 +210,53 @@ def main() -> int:
             content = base64.b64decode(request["content"], validate=True)
             extraction = Extraction.model_validate(request["extraction"])
             result = render_manifest(content, extraction, request["deck_id"]).model_dump_json()
+        elif request.get("operation") == "ground_actions":
+            content = base64.b64decode(request["content"], validate=True)
+            extraction = Extraction.model_validate(request["extraction"])
+            manifest = Manifest.model_validate(request["manifest"])
+            output = parse_model_output(request["output"])
+            result = ground_actions(content, extraction, manifest, output).model_dump_json()
         else:
             source = PDFSource.model_validate(request["source"])
             storage = SourceStorage(UploadSettings.model_validate(request["storage"]))
             result = inspect_source(source, storage).model_dump_json()
     except UploadError:
         result = '{"error":"storage_unavailable"}'
-    except Exception:
+    except Exception as exc:
         result = '{"error":"pdf_inspection_failed"}'
+        if os.environ.get("BUDDY_CHILD_DIAGNOSTICS"):
+            frame = traceback.extract_tb(exc.__traceback__)[-1]
+            diagnostic = (
+                f"{type(exc).__name__}: {str(exc)[:120]} at {frame.filename}:{frame.lineno}"
+            )
+            result = json.dumps(
+                {
+                    "error": "pdf_inspection_failed",
+                    "diagnostic": diagnostic,
+                }
+            )
     finally:
         if storage:
             storage.close()
     sys.stdout.write(result)
     return 0
+
+
+def _configure_child_resource_limits(resource: Any) -> None:
+    """Apply address-space and CPU limits; macOS memory is monitored by the parent."""
+    if sys.platform == "darwin":
+        return
+    infinity = resource.RLIM_INFINITY
+    memory_limit = getattr(resource, "RLIMIT_AS", None)
+    if memory_limit is not None:
+        _set_child_limit(resource, memory_limit, 1024**3, infinity)
+    _set_child_limit(resource, resource.RLIMIT_CPU, 120, infinity)
+
+
+def _set_child_limit(resource: Any, kind: int, ceiling: int, infinity: int) -> None:
+    _, hard = resource.getrlimit(kind)
+    bound = ceiling if hard == infinity else min(ceiling, hard)
+    resource.setrlimit(kind, (bound, hard))
 
 
 if __name__ == "__main__":

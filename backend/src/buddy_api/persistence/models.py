@@ -305,6 +305,7 @@ class SlideAction(OwnedRecord):
     purpose: Mapped[str] = mapped_column(String(512))
     parameters: Mapped[dict[str, Any]] = mapped_column(JSONB)
     content_sha256: Mapped[str] = mapped_column(String(64))
+    visual_qa_pending: Mapped[bool] = mapped_column(server_default="false")
 
 
 class ActionValidation(OwnedRecord):

@@ -150,7 +150,7 @@ def test_bedrock_request_submits_exact_pdf_with_native_claude_api(monkeypatch):
     prompt = next(part["text"] for part in content if part["type"] == "text")
     assert "multiple actions on a page" in prompt
     assert "one visible line or a short phrase only" in prompt
-    assert "quote its exact visible words" in prompt
+    assert "exact visible words in target_text" in prompt
     assert "paragraph or section selection" in prompt
     assert action_schema["items"]["properties"]["type"]["enum"] == [
         "zoom_region",
@@ -194,6 +194,7 @@ def test_provider_accepts_multiple_distinct_actions_on_one_slide(monkeypatch):
                     {
                         "type": "highlight_region",
                         "purpose": "Highlight the exact visible phrase “Revenue rose”.",
+                        "target_text": "Revenue rose",
                         "x": 40,
                         "y": 120,
                         "width": 190,
@@ -202,6 +203,7 @@ def test_provider_accepts_multiple_distinct_actions_on_one_slide(monkeypatch):
                     {
                         "type": "zoom_region",
                         "purpose": "Zoom out to show the adjacent outlook chart.",
+                        "target_text": None,
                         "x": 620,
                         "y": 100,
                         "width": 500,
@@ -220,6 +222,38 @@ def test_provider_accepts_multiple_distinct_actions_on_one_slide(monkeypatch):
     ]
 
 
+def test_provider_cannot_assign_server_owned_visual_qa_state(monkeypatch):
+    extraction, manifest = inputs()
+    monkeypatch.setattr(provider, "Session", Session)
+    generated = {
+        "presentation": {"text": "Quarterly results overview.", "reason": None},
+        "slides": [
+            {
+                "number": 1,
+                "text": "Revenue rose.",
+                "reason": None,
+                "actions": [
+                    {
+                        "type": "zoom_region",
+                        "purpose": "Focus on this crop.",
+                        "target_text": None,
+                        "visual_qa_pending": True,
+                        "x": 20,
+                        "y": 30,
+                        "width": 100,
+                        "height": 100,
+                    }
+                ],
+            }
+        ],
+    }
+    transport = Opener(response_for(output_text=json.dumps(generated))).transport
+    with pytest.raises(ProviderFailure, match="provider_malformed_output"):
+        BedrockProvider("eu-central-1", transport=transport).analyze(
+            PDF, extraction, str(DECK_ID), manifest
+        )
+
+
 def test_provider_never_exceeds_the_bounded_deck_action_budget(monkeypatch):
     extraction, manifest = inputs()
     monkeypatch.setattr(provider, "Session", Session)
@@ -235,6 +269,7 @@ def test_provider_never_exceeds_the_bounded_deck_action_budget(monkeypatch):
                     {
                         "type": "highlight_region",
                         "purpose": "Highlight the exact visible phrase “Revenue rose”.",
+                        "target_text": "Revenue rose",
                         "x": 40,
                         "y": 120,
                         "width": 190,
@@ -243,6 +278,7 @@ def test_provider_never_exceeds_the_bounded_deck_action_budget(monkeypatch):
                     {
                         "type": "zoom_region",
                         "purpose": "Zoom out to show the adjacent outlook chart.",
+                        "target_text": None,
                         "x": 620,
                         "y": 100,
                         "width": 500,

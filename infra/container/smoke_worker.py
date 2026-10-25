@@ -195,6 +195,9 @@ def verify(image, schema_image=None):
             "-v",
             str(ROOT / "infra/container/smoke_worker_entrypoint.py")
             + ":/smoke_worker_entrypoint.py:ro",
+            "-v",
+            str(ROOT / "backend/tests/fixtures/pdf/scanned-source-anchor.pdf")
+            + ":/scanned-source-anchor.pdf:ro",
             "-e",
             "BUDDY_SMOKE_PDF_SHA256=" + hashlib.sha256(source).hexdigest(),
             *args,

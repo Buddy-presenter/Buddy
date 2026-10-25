@@ -13,6 +13,7 @@ OLD_HEAD = "0003_extractions"
 FEATURE_HEAD = "0008_rollback_compatibility"
 WORKER_HEAD = "0009_pdf_workers"
 ANALYSIS_WORKER_HEAD = "0010_analysis_worker"
+VISUAL_QA_HEAD = "0011_visual_qa_pending"
 
 
 async def check_ready(self):
@@ -29,6 +30,7 @@ async def check_ready(self):
                 {FEATURE_HEAD},
                 {WORKER_HEAD},
                 {ANALYSIS_WORKER_HEAD},
+                {VISUAL_QA_HEAD},
             ):
                 raise PersistenceUnavailable("Database is outside the tested compatibility window.")
             for table in Base.metadata.sorted_tables:

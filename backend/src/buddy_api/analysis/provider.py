@@ -57,10 +57,22 @@ class ModelAction(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True, allow_inf_nan=False)
     type: Literal["zoom_region", "highlight_region"]
     purpose: str = Field(min_length=1, max_length=512)
+    # Exact text anchor for highlights/text zooms. Coordinates below are only a coarse
+    # disambiguation hint and are never stored without source-geometry resolution.
+    target_text: str | None = Field(max_length=256)
+    # Server-only handoff to the independent visual QA path. The provider schema does
+    # not expose this field, so model output cannot mark its own action as reviewed.
+    visual_qa_pending: bool = False
     x: float = Field(ge=0)
     y: float = Field(ge=0)
     width: float = Field(gt=0)
     height: float = Field(gt=0)
+
+    @model_validator(mode="after")
+    def validate_target(self) -> "ModelAction":
+        if self.type == "highlight_region" and not (self.target_text and self.target_text.strip()):
+            raise ValueError("A highlight needs an exact visible text target")
+        return self
 
 
 class ModelSlide(BaseModel):
@@ -112,12 +124,13 @@ def _json_schema(page_count: int) -> dict[str, object]:
                     "properties": {
                         "type": {"type": "string", "enum": ["zoom_region", "highlight_region"]},
                         "purpose": {"type": "string"},
+                        "target_text": {"type": ["string", "null"]},
                         "x": {"type": "number"},
                         "y": {"type": "number"},
                         "width": {"type": "number"},
                         "height": {"type": "number"},
                     },
-                    "required": ["type", "purpose", "x", "y", "width", "height"],
+                    "required": ["type", "purpose", "target_text", "x", "y", "width", "height"],
                     "additionalProperties": False,
                 },
             },
@@ -160,9 +173,13 @@ def _prompt(extraction: Extraction, deck_id: str, manifest: Manifest) -> str:
         "useful slide-specific actions per page, only zoom_region or highlight_region. Use "
         "multiple actions on a page when separate visible points deserve separate focus; do "
         "not combine unrelated points into one broad rectangle, and do not duplicate actions. "
-        "For highlight_region, target one visible line or a short phrase only: quote its exact "
-        "visible words in the purpose, keep the rectangle tightly around that text, and exclude "
-        "neighboring lines, paragraphs, headings, and decorative areas. A highlight is a "
+        "For highlight_region, target one visible line or a short phrase only: return its exact "
+        "visible words in target_text and describe the reason in purpose. For text zooms, also "
+        "return the exact visible target in target_text; for image/graphic zooms use null. "
+        "Coordinates are approximate visual hints only; Buddy resolves the final region against "
+        "source text or PDF object geometry, and an unresolved/ambiguous target is omitted. "
+        "Keep highlight targets limited to that text; exclude neighboring lines, paragraphs, "
+        "headings, and decorative areas. A highlight is a "
         "line-level "
         "cue, not a paragraph or section selection. Use zoom_region for broader visual context. "
         "Coordinates are top-left-origin "
@@ -204,6 +221,22 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
             raise ValueError("Duplicate JSON field")
         result[key] = value
     return result
+
+
+def parse_model_output(payload: object) -> ModelOutput:
+    """Normalize JSON arrays to the strict immutable tuples required by the model."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("slides"), list):
+        raise ValueError("Invalid analysis structure")
+    normalized = {
+        **payload,
+        "slides": tuple(
+            {**slide, "actions": tuple(slide["actions"])}
+            if isinstance(slide, dict) and isinstance(slide.get("actions"), list)
+            else slide
+            for slide in payload["slides"]
+        ),
+    }
+    return ModelOutput.model_validate(normalized, strict=True)
 
 
 class BedrockProvider:
@@ -282,6 +315,14 @@ class BedrockProvider:
             payload = json.loads(_response_text(decoded), object_pairs_hook=_unique_object)
             if not isinstance(payload, dict) or not isinstance(payload.get("slides"), list):
                 raise ValueError("Invalid analysis structure")
+            if any(
+                "visual_qa_pending" in action
+                for slide in payload["slides"]
+                if isinstance(slide, dict) and isinstance(slide.get("actions"), list)
+                for action in slide["actions"]
+                if isinstance(action, dict)
+            ):
+                raise ValueError("Provider cannot set Buddy-owned QA state")
             action_counts = [
                 len(slide["actions"])
                 for slide in payload["slides"]
@@ -292,13 +333,7 @@ class BedrockProvider:
                 or sum(action_counts) > MAX_ACTIONS_PER_DECK
             ):
                 raise ProviderFailure("provider_action_limit", permanent=True)
-            payload["slides"] = tuple(
-                {**slide, "actions": tuple(slide["actions"])}
-                if isinstance(slide, dict) and isinstance(slide.get("actions"), list)
-                else slide
-                for slide in payload["slides"]
-            )
-            result = ModelOutput.model_validate(payload, strict=True)
+            result = parse_model_output(payload)
         except ProviderFailure:
             raise
         except (AttributeError, ValidationError, ValueError, TypeError):

@@ -163,4 +163,4 @@ Implementation references: [SQLAlchemy async I/O](https://docs.sqlalchemy.org/en
 
 ## Initial staging rollback compatibility
 
-Forward migration 0008 restores the legacy graph compatibility column and preserves legacy writes after rollback. The normal API still requires its packaged migration head. Only the pinned temporary staging bridge accepts the two explicitly tested heads; see the [two-step rollout](staging-compatibility-rollout.md).
+Forward migration 0008 restores the legacy graph compatibility column and preserves legacy writes after rollback. Later additive migrations must extend the pinned bridge's compatibility test before a release can claim the immediate previous image remains usable. The normal API still requires its packaged migration head. The temporary staging bridge accepts only its explicitly tested schema heads; see the [two-step rollout](staging-compatibility-rollout.md).

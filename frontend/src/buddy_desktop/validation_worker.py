@@ -17,7 +17,15 @@ PROFILES = {
     "portrait-1x": (720, 960, 1),
     "wide-2x": (1280, 720, 2),
 }
-MAX_LINE_HIGHLIGHT_HEIGHT_RATIO = 0.06
+MAX_LINE_HIGHLIGHT_MINOR_AXIS_RATIO = 0.06
+
+
+def _line_highlight_too_broad(region: dict[str, float], page_width: int, page_height: int) -> bool:
+    """Reject paragraph-like regions while allowing narrow rotated text lines."""
+    return (
+        min(region["width"], region["height"])
+        > max(page_width, page_height) * MAX_LINE_HIGHLIGHT_MINOR_AXIS_RATIO
+    )
 
 
 def validate(folder: Path) -> dict[str, Any]:
@@ -140,11 +148,15 @@ def validate(folder: Path) -> dict[str, Any]:
         if (
             request.get("precision", "standard") == "line"
             and action["type"] == "highlight_region"
-            and action["params"]["region"]["height"]
-            > manifest.slides[current].height * MAX_LINE_HIGHLIGHT_HEIGHT_RATIO
+            and _line_highlight_too_broad(
+                action["params"]["region"],
+                manifest.slides[current].width,
+                manifest.slides[current].height,
+            )
         ):
-            # Model-generated highlights are line-level cues. Reject broad candidates
-            # deterministically while leaving the general-purpose catalog unchanged.
+            # Grounded highlights are single lines/phrases; use the short axis so
+            # vertical text is not mistaken for a paragraph. Keep the public catalog
+            # general-purpose and reject broad two-dimensional regions.
             result.update(state="rejected", reasons=["highlight_region_too_broad"])
             return result
         if current:
