@@ -374,6 +374,10 @@ def _match_ocr(words: list[OcrWord], quote: str) -> list[Rect]:
                 selected
                 and all(word.confidence >= MIN_OCR_CONFIDENCE for word in selected)
                 and _same_visual_line(selected_rects)
+                and all(
+                    _adjacent_on_visual_line(previous.rect, current.rect)
+                    for previous, current in zip(selected, selected[1:], strict=False)
+                )
                 and (rect := _union(selected_rects)) is not None
             ):
                 matches.append(rect)

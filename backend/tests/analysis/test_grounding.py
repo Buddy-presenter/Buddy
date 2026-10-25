@@ -250,6 +250,16 @@ def test_ocr_requires_exact_token_sequence_and_confident_words():
     assert _match_ocr(words, "Revenue rose 15 percent") == []
 
 
+def test_ocr_declines_same_baseline_words_separated_by_a_column_gap():
+    words = [
+        OcrWord("Revenue", 97, Rect(100, 200, 60, 20)),
+        # Same baseline and correct token order, but this is a separate column.
+        OcrWord("increased", 96, Rect(420, 200, 90, 20)),
+    ]
+
+    assert _match_ocr(words, "Revenue increased") == []
+
+
 def test_split_pdf_text_blocks_join_only_words_on_the_same_visual_line(monkeypatch):
     word_boxes = {
         "revenue": [Rect(100, 200, 90, 24)],
