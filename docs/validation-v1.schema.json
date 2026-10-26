@@ -40,6 +40,13 @@
       "pattern": "\\S",
       "type": "string"
     },
+    "ValidationKind": {
+      "enum": [
+        "execution",
+        "visual"
+      ],
+      "type": "string"
+    },
     "ValidationState": {
       "enum": [
         "candidate",
@@ -52,16 +59,8 @@
   },
   "additionalProperties": false,
   "properties": {
-    "schema_version": {
-      "const": "buddy.validation.v1",
-      "default": "buddy.validation.v1",
-      "title": "Schema Version",
-      "type": "string"
-    },
-    "validation_id": {
-      "format": "uuid",
-      "title": "Validation Id",
-      "type": "string"
+    "action_sha256": {
+      "$ref": "#/$defs/Digest"
     },
     "analysis_id": {
       "format": "uuid",
@@ -71,23 +70,20 @@
     "analysis_sha256": {
       "$ref": "#/$defs/Digest"
     },
-    "instance_id": {
-      "$ref": "#/$defs/Identifier"
-    },
-    "action_sha256": {
-      "$ref": "#/$defs/Digest"
-    },
-    "validator_version": {
-      "$ref": "#/$defs/Identifier"
-    },
-    "renderer_version": {
-      "$ref": "#/$defs/Identifier"
-    },
     "display_profile": {
       "$ref": "#/$defs/Identifier"
     },
-    "state": {
-      "$ref": "#/$defs/ValidationState"
+    "evidence": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EvidenceReference"
+      },
+      "maxItems": 20,
+      "title": "Evidence",
+      "type": "array"
+    },
+    "instance_id": {
+      "$ref": "#/$defs/Identifier"
     },
     "reasons": {
       "default": [],
@@ -101,14 +97,34 @@
       "title": "Reasons",
       "type": "array"
     },
-    "evidence": {
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/EvidenceReference"
-      },
-      "maxItems": 20,
-      "title": "Evidence",
-      "type": "array"
+    "renderer_version": {
+      "$ref": "#/$defs/Identifier"
+    },
+    "schema_version": {
+      "const": "buddy.validation.v1",
+      "default": "buddy.validation.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "semantic_verified": {
+      "default": false,
+      "title": "Semantic Verified",
+      "type": "boolean"
+    },
+    "state": {
+      "$ref": "#/$defs/ValidationState"
+    },
+    "validation_id": {
+      "format": "uuid",
+      "title": "Validation Id",
+      "type": "string"
+    },
+    "validation_kind": {
+      "$ref": "#/$defs/ValidationKind",
+      "default": "execution"
+    },
+    "validator_version": {
+      "$ref": "#/$defs/Identifier"
     }
   },
   "required": [

@@ -528,14 +528,22 @@ class ReviewWidget(Page):
             f"{action.validation_id or 'not yet validated'}"
         )
         slide_id = self.analysis.slides[self.page_index].slide_id if self.analysis else "unknown"
+        status = (
+            "visually verified"
+            if action.semantic_verified
+            else "execution validated; visual verification pending"
+            if action.state == "validated"
+            else action.state.replace("-", " ")
+        )
         lines = [
             f"Purpose: {action.purpose}",
             f"Type: {action.action_type}",
             f"Version: {action.version}",
             f"Target: slide {self.page_index + 1} ({slide_id})",
             f"Region (PDF source pixels): x={x:g}, y={y:g}, width={width:g}, height={height:g}",
-            f"Status: {action.state.replace('-', ' ')} · "
+            f"Status: {status} · "
             f"{'usable' if action.usable else 'not usable'}",
+            f"Validation kind: {action.validation_kind}",
         ]
         if action.reasons:
             lines.append("Validation notes: " + "; ".join(action.reasons))

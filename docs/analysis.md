@@ -113,7 +113,11 @@ opaque artifact UUIDs, kind and SHA-256, never storage keys. The worker calls th
 isolated #49 validation service, which stores owner-scoped report/screenshots and returns
 the references bound to the exact source, action and profile. A reference alone is not
 proof of semantic correctness; the validator explicitly records that semantic grounding
-is not verified.
+is not verified. Execution validation therefore remains non-usable until an independent
+visual review is recorded. A visual review may set `validation_kind=visual` and
+`semantic_verified=true` only after inspecting the real audience viewport; only that
+validated combination is usable. Existing execution-only records default safely to
+non-semantic verification.
 
 The PDF [action validator](action-validation.md) produces owner-scoped standalone
 execution reports and private evidence. A standalone API request does not automatically

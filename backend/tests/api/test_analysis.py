@@ -220,6 +220,8 @@ def validation(result, action, *, state="validated", **changes):
         "validator_version": result.inputs.validator_version,
         "renderer_version": result.inputs.renderer_version,
         "display_profile": result.inputs.display_profile,
+        "validation_kind": "visual" if state == "validated" else "execution",
+        "semantic_verified": state == "validated",
         "state": state,
         "evidence": [{"id": uuid4(), "kind": "executor_result", "sha256": "d" * 64}],
         "reasons": () if state == "validated" else ("Synthetic rejected fixture",),

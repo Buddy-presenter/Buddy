@@ -54,6 +54,11 @@
           "action": {
             "$ref": "#/components/schemas/ContentAction"
           },
+          "semantic_verified": {
+            "default": false,
+            "title": "Semantic Verified",
+            "type": "boolean"
+          },
           "state": {
             "$ref": "#/components/schemas/ValidationState"
           },
@@ -1738,6 +1743,11 @@
             "title": "Schema Version",
             "type": "string"
           },
+          "semantic_verified": {
+            "default": false,
+            "title": "Semantic Verified",
+            "type": "boolean"
+          },
           "state": {
             "$ref": "#/components/schemas/ValidationState"
           },
@@ -1745,6 +1755,10 @@
             "format": "uuid",
             "title": "Validation Id",
             "type": "string"
+          },
+          "validation_kind": {
+            "$ref": "#/components/schemas/ValidationKind",
+            "default": "execution"
           },
           "validator_version": {
             "$ref": "#/components/schemas/Identifier"
@@ -1763,6 +1777,13 @@
         ],
         "title": "ValidationInput",
         "type": "object"
+      },
+      "ValidationKind": {
+        "enum": [
+          "execution",
+          "visual"
+        ],
+        "type": "string"
       },
       "ValidationRequest": {
         "additionalProperties": false,

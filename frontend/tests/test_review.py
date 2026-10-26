@@ -127,6 +127,7 @@ def test_review_parser_binds_validation_evidence_to_action_and_profile():
     action_result.update(
         state="validated",
         usable=True,
+        semantic_verified=True,
         validation={
             "schema_version": "buddy.validation.v1",
             "validation_id": str(validation_id),
@@ -137,6 +138,8 @@ def test_review_parser_binds_validation_evidence_to_action_and_profile():
             "validator_version": "validator-1",
             "renderer_version": "renderer-1",
             "display_profile": "wide-1x",
+                "validation_kind": "visual",
+                "semantic_verified": True,
             "state": "validated",
             "reasons": [],
             "evidence": [{"id": str(artifact_id), "kind": "before_image", "sha256": "c" * 64}],

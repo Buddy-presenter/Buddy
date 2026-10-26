@@ -282,11 +282,13 @@ class Analyses:
                     if stored is None or stored.state != evidence.state:
                         raise ValueError("Validation state mismatch.")
                 state = evidence.state if evidence else "candidate"
+                semantic_verified = bool(evidence and evidence.semantic_verified)
                 output.append(
                     ActionResult(
                         action=instance,
                         state=state,
-                        usable=state == "validated",
+                        usable=state == "validated" and semantic_verified,
+                        semantic_verified=semantic_verified,
                         validation=evidence,
                     )
                 )

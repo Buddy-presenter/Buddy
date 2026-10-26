@@ -13,6 +13,7 @@ type Identifier = Annotated[str, Field(min_length=1, max_length=128, pattern=r"\
 type Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 type Text = Annotated[str, Field(min_length=1, max_length=16000, pattern=r"\S")]
 type ValidationState = Literal["candidate", "validated", "rejected", "needs-review"]
+type ValidationKind = Literal["execution", "visual"]
 type Publication = Literal["legacy", "partial", "awaiting_validation", "published"]
 MAX_GENERATED_ACTIONS_PER_DECK = 40
 
@@ -198,6 +199,8 @@ class ValidationInput(Model):
     validator_version: Identifier
     renderer_version: Identifier
     display_profile: Identifier
+    validation_kind: ValidationKind = "execution"
+    semantic_verified: bool = False
     state: ValidationState
     reasons: Annotated[
         tuple[Annotated[str, Field(min_length=1, max_length=512, pattern=r"\S")], ...],
@@ -213,6 +216,16 @@ class ValidationInput(Model):
             raise ValueError("Unusable results need reasons.")
         if self.state == "candidate" and (self.evidence or self.reasons):
             raise ValueError("Candidates do not claim validation evidence.")
+        if self.semantic_verified and not (
+            self.validation_kind == "visual" and self.state == "validated"
+        ):
+            raise ValueError("Semantic verification requires a validated visual review.")
+        if (
+            self.validation_kind == "visual"
+            and self.state == "validated"
+            and not self.semantic_verified
+        ):
+            raise ValueError("Validated visual review must verify the intended target.")
         if len({e.id for e in self.evidence}) != len(self.evidence):
             raise ValueError("Duplicate evidence references.")
         return self
@@ -222,6 +235,7 @@ class ActionResult(Model):
     action: ContentAction
     state: ValidationState
     usable: bool
+    semantic_verified: bool = False
     validation: ValidationInput | None
 
 

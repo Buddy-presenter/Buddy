@@ -5,7 +5,9 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
+from buddy_api.analysis.contracts import ValidationInput
 from buddy_api.analysis.provider import (
     ModelAction,
     ModelOutput,
@@ -17,6 +19,40 @@ from buddy_api.extraction.runner import extract_pdf
 from buddy_api.processing.service import Processor
 
 PDF = Path(__file__).resolve().parents[3] / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf"
+
+
+def _validation(**changes):
+    values = {
+        "validation_id": uuid4(),
+        "analysis_id": uuid4(),
+        "analysis_sha256": "a" * 64,
+        "instance_id": "action-1",
+        "action_sha256": "b" * 64,
+        "validator_version": "validator-1",
+        "renderer_version": "renderer-1",
+        "display_profile": "wide-1x",
+        "validation_kind": "execution",
+        "semantic_verified": False,
+        "state": "validated",
+        "evidence": [{"id": uuid4(), "kind": "executor_result", "sha256": "c" * 64}],
+    }
+    values.update(changes)
+    return ValidationInput.model_validate(values)
+
+
+def test_execution_validation_cannot_claim_semantic_verification():
+    execution = _validation()
+    assert not execution.semantic_verified
+    visual = _validation(
+        validation_kind="visual",
+        semantic_verified=True,
+        evidence=[{"id": uuid4(), "kind": "report", "sha256": "d" * 64}],
+    )
+    assert visual.semantic_verified
+    with pytest.raises(ValidationError):
+        _validation(semantic_verified=True)
+    with pytest.raises(ValidationError):
+        _validation(validation_kind="visual")
 
 
 def test_model_output_is_bound_to_verified_manifest_and_stable_action_ids():

@@ -42,6 +42,8 @@ class ReviewAction:
     region: tuple[float, float, float, float]
     state: str
     usable: bool
+    validation_kind: str
+    semantic_verified: bool
     evidence: tuple[ReviewEvidence, ...]
     reasons: tuple[str, ...]
     profile: str
@@ -188,6 +190,8 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
             evidence: list[ReviewEvidence] = []
             reasons: tuple[str, ...] = ()
             validation_id = None
+            validation_kind = "execution"
+            semantic_verified = False
             profile = _required_text(_dict(inputs).get("display_profile")) if inputs else "unknown"
             validator = (
                 _required_text(_dict(inputs).get("validator_version")) if inputs else "unknown"
@@ -197,6 +201,23 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
             )
             if validation is not None:
                 validation = _dict(validation)
+                validation_kind = validation.get("validation_kind", "execution")
+                semantic_verified = validation.get("semantic_verified", False)
+                if (
+                    validation_kind not in {"execution", "visual"}
+                    or type(semantic_verified) is not bool
+                ):
+                    raise ValueError
+                if semantic_verified and not (
+                    validation_kind == "visual" and validation.get("state") == "validated"
+                ):
+                    raise ValueError
+                if (
+                    validation_kind == "visual"
+                    and validation.get("state") == "validated"
+                    and not semantic_verified
+                ):
+                    raise ValueError
                 validation_id = UUID(str(validation["validation_id"]))
                 if (
                     validation.get("analysis_id") != str(identifier)
@@ -255,7 +276,15 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                 raise ValueError
             if type(result.get("usable")) is not bool:
                 raise ValueError
-            if result["usable"] != (result["state"] == "validated"):
+            result_semantic_verified = result.get("semantic_verified", semantic_verified)
+            if (
+                type(result_semantic_verified) is not bool
+                or result_semantic_verified != semantic_verified
+            ):
+                raise ValueError
+            if result["usable"] != (
+                result["state"] == "validated" and result_semantic_verified
+            ):
                 raise ValueError
             actions.append(
                 ReviewAction(
@@ -266,6 +295,8 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                     (x, y, width, height),
                     result["state"],
                     result["usable"],
+                    validation_kind,
+                    result_semantic_verified,
                     tuple(evidence),
                     tuple(r for r in reasons if r is not None),
                     profile,
