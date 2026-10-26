@@ -313,3 +313,45 @@ def test_real_office_indexed_png_is_decoded_and_invalid_previews_are_rejected(qa
     assert not image.isNull() and (image.width(), image.height()) == (1280, 720)
     with pytest.raises(ServiceError):
         powerpoint_image(b"not a PNG")
+
+
+def test_private_review_reopens_an_ended_show_and_rechecks_source(monkeypatch):
+    import buddy_desktop.powerpoint_review as sessions
+    from buddy_desktop.powerpoint_contract import PowerPointError, PowerPointFrame
+
+    content = b"PK-synthetic-source"
+    deck, payload = powerpoint_payload(content)
+    analysis = parse_analysis(payload, deck)
+    info = PresentationInfo("test.pptx", "test.pptx", 1, 1, 123, 256, 960, 540)
+
+    class Automation:
+        launches = 0
+        current = None
+
+        def launch(self, path):
+            self.launches += 1
+            self.current = info
+
+        def status(self, path):
+            return self.current
+
+        def preview(self, target):
+            return PowerPointFrame(target, b"preview")
+
+        def _process_probe(self):
+            return False
+
+    automation = Automation()
+    monkeypatch.setattr(sessions, "PowerPointAutomation", lambda: automation)
+    session = sessions.PowerPointReviewSession()
+    try:
+        session.open(content, analysis, 0)
+        automation.current = None  # Presenter ended the external slideshow.
+        session.open(content, analysis, 0)
+        assert automation.launches == 2
+        session.path.write_bytes(b"modified-source")
+        with pytest.raises(PowerPointError, match="source has changed"):
+            session.open(content, analysis, 0)
+        assert automation.launches == 2
+    finally:
+        session.close()

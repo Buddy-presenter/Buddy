@@ -132,6 +132,8 @@ The summaries correctly reported the source's 12% revenue growth, proposed pilot
 and speaker notes, and explicitly identified unavailable background artwork. Sign-out
 closed the private review source. All 13 test S3 objects/versions and the isolated database
 schema were removed afterward. No personal presentation or shared queue message was used.
+An additional real Office recovery check ended the external slideshow, reopened the same
+verified private source through Review, and executed a saved validated action successfully.
 
 Reproduce that acceptance with a current approved AWS profile and an isolated local
 database using `python -m tests.integration.smoke_powerpoint_workflow --live-aws

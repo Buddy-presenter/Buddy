@@ -31,19 +31,35 @@ class PowerPointReviewSession:
                 or hashlib.sha256(content).hexdigest() != analysis.source_sha256
             ):
                 raise PowerPointError("A matching safe PowerPoint source is required.")
-            if self.path is None:
+            first_open = self.path is None
+            if first_open:
                 self.folder = tempfile.TemporaryDirectory(prefix="buddy-private-pptx-")
                 self.path = Path(self.folder.name) / f"buddy-review-{analysis.deck_id}.pptx"
                 self.path.write_bytes(content)
                 self.source_hash = analysis.source_sha256
-                try:
-                    self.automation.launch(self.path)
-                except Exception:
-                    self.close()
-                    raise
             if self.source_hash != analysis.source_sha256:
                 raise PowerPointError("The saved PowerPoint source changed. Reopen Review.")
-            return self.show(index, analysis.slides[index])
+            self._verify_source(analysis.source_sha256)
+            try:
+                assert self.path is not None
+                if first_open or self.automation.status(self.path) is None:
+                    self.automation.launch(self.path)
+                return self.show(index, analysis.slides[index])
+            except Exception:
+                if first_open:
+                    self.close()
+                raise
+
+    def _verify_source(self, expected_hash: str | None) -> None:
+        if self.path is None:
+            raise PowerPointError("Open the saved PowerPoint source first.")
+        with self.path.open("rb") as stream:
+            source_content = stream.read(64 * 1024 * 1024 + 1)
+        if (
+            len(source_content) > 64 * 1024 * 1024
+            or hashlib.sha256(source_content).hexdigest() != expected_hash
+        ):
+            raise PowerPointError("The opened source has changed. Reopen Review.")
 
     def show(self, index: int, slide: ReviewSlide) -> PowerPointFrame:
         with self.lock:
@@ -88,13 +104,7 @@ class PowerPointReviewSession:
                 raise PowerPointError(
                     "This action changed after validation. Reload its saved analysis."
                 )
-            with self.path.open("rb") as stream:
-                source_content = stream.read(64 * 1024 * 1024 + 1)
-            if (
-                len(source_content) > 64 * 1024 * 1024
-                or hashlib.sha256(source_content).hexdigest() != analysis.source_sha256
-            ):
-                raise PowerPointError("The opened source has changed. Reopen Review.")
+            self._verify_source(analysis.source_sha256)
             frame = self.show(index, analysis.slides[index])
             pythoncom, client = self.automation._start_com()
             try:
