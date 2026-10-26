@@ -22,6 +22,16 @@ SESSION = UUID("40000000-0000-0000-0000-000000000001")
 GRAPH = {"nodes": [{"id": "synthetic-slide"}], "edges": [], "marker": "rollback"}
 
 
+async def typed_probe(repos):
+    fixture = runpy.run_path("/test-support/backend/tests/support/analysis.py")
+    # The legacy source is PPTX. Never relabel it as PDF: the expanded schema
+    # deliberately binds immutable analyses to their original deck's format.
+    deck = await repos.decks.create(
+        owner_id=OWNER, title="Synthetic PDF compatibility source", source_format="pdf"
+    )
+    return await fixture["create"](repos, owner_id=OWNER, deck_id=deck.id, version=4)
+
+
 async def run() -> None:
     bridge = Path("/opt/buddy/compatibility_bridge.py")
     if bridge.is_file():
@@ -69,9 +79,8 @@ async def run() -> None:
         if mode == "typed":
             # Only synthetic fixture data is loaded; create/read still execute
             # the packaged image's real extraction and analysis repositories.
-            fixture = runpy.run_path("/test-support/backend/tests/support/analysis.py")
             async with db.transaction() as repos:
-                created = await fixture["create"](repos, owner_id=OWNER, deck_id=DECK, version=4)
+                created = await typed_probe(repos)
                 assert created.graph == {}
                 result = await repos.analyses.read(created.id, owner_id=OWNER)
                 assert result.inputs is not None and result.publication != "legacy"
