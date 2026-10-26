@@ -21,11 +21,17 @@ from buddy_api.uploads.service import UploadService, blocking
 from buddy_api.validation.config import ValidatorSettings
 from buddy_api.validation.contracts import (
     ArtifactReference,
+    PowerPointStoredResult,
     Precision,
     ProcessRequest,
     ProcessResult,
     StoredResult,
     ValidationRequest,
+)
+from buddy_api.validation.powerpoint import (
+    PowerPointProcessRequest,
+    PowerPointProcessResult,
+    PowerPointValidationRequest,
 )
 from buddy_api.validation.runner import run_validation
 
@@ -46,15 +52,22 @@ class ValidationService:
         return f"sources/{row.owner_id}/{row.deck_id}/validation/{row.id}/{kind}.{KINDS[kind][0]}"
 
     @staticmethod
-    def public(row: ActionCheck) -> StoredResult:
+    def public(row: ActionCheck) -> StoredResult | PowerPointStoredResult:
         if row.status != "complete" or row.result is None:
             raise UploadError(
                 409, "validation_pending", "Validation has not completed; retry later."
             )
-        return StoredResult(
+        result_type: Any = (
+            PowerPointStoredResult if row.result.get("source_format") == "pptx" else StoredResult
+        )
+        public_result = result_type(
             id=row.id,
             deck_id=row.deck_id,
-            result=ProcessResult.model_validate(row.result),
+            result=(
+                PowerPointProcessResult.model_validate(row.result)
+                if row.result.get("source_format") == "pptx"
+                else ProcessResult.model_validate(row.result)
+            ),
             evidence=[
                 ArtifactReference.model_validate(
                     {k: value[k] for k in ("id", "kind", "sha256", "size_bytes")}
@@ -62,6 +75,8 @@ class ValidationService:
                 for value in row.artifacts
             ],
         )
+        assert isinstance(public_result, (StoredResult, PowerPointStoredResult))
+        return public_result
 
     async def owned(self, owner: UUID, identifier: UUID) -> ActionCheck:
         async with self.uploads.transaction() as session:
@@ -74,7 +89,7 @@ class ValidationService:
                 raise UploadError(404, "not_found", "Validation not found.")
             return row
 
-    async def read(self, owner: UUID, identifier: UUID) -> StoredResult:
+    async def read(self, owner: UUID, identifier: UUID) -> StoredResult | PowerPointStoredResult:
         return self.public(await self.owned(owner, identifier))
 
     async def evidence(self, owner: UUID, identifier: UUID, artifact: UUID) -> tuple[bytes, str]:
@@ -104,12 +119,12 @@ class ValidationService:
         owner: UUID,
         deck_id: UUID,
         key: UUID,
-        inputs: ValidationRequest,
+        inputs: ValidationRequest | PowerPointValidationRequest,
         *,
         source_content: bytes | None = None,
         precision: Precision = "standard",
         duplicate_candidate: bool = False,
-    ) -> StoredResult:
+    ) -> StoredResult | PowerPointStoredResult:
         if self.uploads.parser_slot.locked():
             raise UploadError(
                 429, "validation_capacity", "Validation capacity is full; retry later.", 30
@@ -122,17 +137,29 @@ class ValidationService:
                 if deck is None:
                     raise UploadError(404, "not_found", "Presentation not found.")
                 revision, digest = deck.source_revision, deck.source_sha256
-                if deck.source_format != "pdf" or not revision or not digest:
+                expected_format = (
+                    "pptx" if isinstance(inputs, PowerPointValidationRequest) else "pdf"
+                )
+                if deck.source_format != expected_format or not revision or not digest:
                     raise UploadError(
                         409, "unsupported_source", "Action validation requires a saved PDF."
                     )
-                request = ProcessRequest(
-                    deck_id=deck_id,
-                    source_revision=revision,
-                    source_sha256=digest,
-                    precision=precision,
-                    duplicate_candidate=duplicate_candidate,
-                    **inputs.model_dump(),
+                request = (
+                    PowerPointProcessRequest(
+                        deck_id=deck_id,
+                        source_revision=revision,
+                        source_sha256=digest,
+                        **inputs.model_dump(),
+                    )
+                    if isinstance(inputs, PowerPointValidationRequest)
+                    else ProcessRequest(
+                        deck_id=deck_id,
+                        source_revision=revision,
+                        source_sha256=digest,
+                        precision=precision,
+                        duplicate_candidate=duplicate_candidate,
+                        **inputs.model_dump(),
+                    )
                 )
                 fingerprint = hashlib.sha256(
                     json.dumps(
@@ -212,14 +239,14 @@ class ValidationService:
                             version=version,
                             size=size,
                             sha256=digest,
-                            source_format="pdf",
+                            source_format=expected_format,
                         )
                     )
                 )
                 if (
                     len(content) != size
                     or hashlib.sha256(content).hexdigest() != digest
-                    or not content.startswith(b"%PDF-")
+                    or not content.startswith(b"PK" if expected_format == "pptx" else b"%PDF-")
                 ):
                     raise UploadError(
                         409, "source_mismatch", "Saved source does not match its accepted revision."

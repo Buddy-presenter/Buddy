@@ -205,7 +205,7 @@ def test_pdf_upload_storage_database_private_download_and_pptx_preservation(uplo
                 stored = await session.get(Deck, UUID(identifier))
                 assert stored.source_format == "pdf"
                 assert stored.source_sha256 == hashlib.sha256(content).hexdigest()
-                assert await session.scalar(select(func.count()).select_from(ProcessingJob)) == 1
+                assert await session.scalar(select(func.count()).select_from(ProcessingJob)) == 2
                 job = await session.scalar(select(ProcessingJob))
                 assert job.deck_id == stored.id and job.source_revision == stored.source_revision
 
@@ -257,7 +257,7 @@ def test_original_bytes_private_identity_and_complete_retry_survive_restart(uplo
         assert list(cloud.objects.values())[0][1] == SOURCE
         assert "sources/" not in completed.text
         assert "storage_key" not in completed.text
-        assert client.get("/api/v1/decks").json()["data"]["items"][0]["status"] == "uploaded"
+        assert client.get("/api/v1/decks").json()["data"]["items"][0]["status"] == "queued"
         assert initialize(client, key).json()["data"]["deck"]["id"] == deck["id"]
         assert transfer(client, identifier).json()["data"]["deck"]["id"] == deck["id"]
         assert cloud.puts == 1
@@ -268,7 +268,7 @@ def test_original_bytes_private_identity_and_complete_retry_survive_restart(uplo
                 assert stored.source_revision == deck["source_revision"]
                 assert stored.source_size_bytes == len(SOURCE)
                 assert stored.source_version_id
-                assert await session.scalar(select(func.count()).select_from(ProcessingJob)) == 0
+                assert await session.scalar(select(func.count()).select_from(ProcessingJob)) == 1
 
         client.portal.call(persisted)
         client.headers["Authorization"] = "Bearer account-b"

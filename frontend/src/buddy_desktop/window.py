@@ -259,10 +259,12 @@ class MainWindow(QMainWindow):
         self.navigation.setCurrentRow(3)
         self.present.load_pdf(result.content, deck_id=result.deck_id, revision=result.revision)
 
-    def _open_review(self, deck_id: object, title: str, status: str) -> None:
+    def _open_review(
+        self, deck_id: object, title: str, status: str, source_format: str = "pdf"
+    ) -> None:
         if not isinstance(deck_id, UUID):
             return
-        self.review.set_deck(deck_id, title, status)
+        self.review.set_deck(deck_id, title, status, source_format)
         self.navigation.setCurrentRow(2)
 
     def _clear_private_pdf(self) -> None:
@@ -534,6 +536,7 @@ class MainWindow(QMainWindow):
             or self.account.runner.busy
             or self.library.runner.busy
             or self.review.runner.busy
+            or self.review.cleanup_runner.busy
             or self._closing
             or self.environment_override
         ):
@@ -584,6 +587,7 @@ class MainWindow(QMainWindow):
             or self.library.runner.busy
             or self.review.runner.busy
             or self.present.executor.busy
+            or self.review.cleanup_runner.busy
             or self.present.powerpoint_runner.busy
         ):
             self._closing = True

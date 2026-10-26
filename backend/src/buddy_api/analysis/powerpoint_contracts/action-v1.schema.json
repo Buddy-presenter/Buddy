@@ -1,0 +1,126 @@
+{
+  "$defs": {
+    "Identifier": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "\\S",
+      "type": "string"
+    },
+    "PowerPointParameters": {
+      "additionalProperties": false,
+      "properties": {
+        "region": {
+          "$ref": "#/$defs/Region"
+        },
+        "text": {
+          "default": "",
+          "maxLength": 300,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "region"
+      ],
+      "title": "PowerPointParameters",
+      "type": "object"
+    },
+    "Region": {
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "minimum": 0,
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "minimum": 0,
+          "title": "Y",
+          "type": "number"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "number"
+        },
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "title": "Region",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "source_format": {
+      "const": "pptx",
+      "default": "pptx",
+      "title": "Source Format",
+      "type": "string"
+    },
+    "version": {
+      "const": "powerpoint-1",
+      "default": "powerpoint-1",
+      "title": "Version",
+      "type": "string"
+    },
+    "instance_id": {
+      "$ref": "#/$defs/Identifier"
+    },
+    "purpose": {
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "\\S",
+      "title": "Purpose",
+      "type": "string"
+    },
+    "deck_id": {
+      "$ref": "#/$defs/Identifier"
+    },
+    "render_id": {
+      "$ref": "#/$defs/Identifier"
+    },
+    "slide_id": {
+      "$ref": "#/$defs/Identifier"
+    },
+    "type": {
+      "enum": [
+        "highlight_region",
+        "draw_rectangle",
+        "draw_oval",
+        "draw_underline",
+        "draw_arrow",
+        "callout"
+      ],
+      "title": "Type",
+      "type": "string"
+    },
+    "params": {
+      "$ref": "#/$defs/PowerPointParameters"
+    }
+  },
+  "required": [
+    "deck_id",
+    "instance_id",
+    "params",
+    "purpose",
+    "render_id",
+    "slide_id",
+    "source_format",
+    "type",
+    "version"
+  ],
+  "title": "PowerPointContentAction",
+  "type": "object",
+  "$id": "urn:buddy:powerpoint:action:1",
+  "x-source-format": "pptx"
+}

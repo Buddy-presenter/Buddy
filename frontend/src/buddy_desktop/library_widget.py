@@ -73,7 +73,7 @@ PROCESSING_TEXT = {
 class LibraryWidget(QWidget):
     activity_changed = Signal(bool)
     present_requested = Signal(object)
-    review_requested = Signal(object, str, str)
+    review_requested = Signal(object, str, str, str)
     private_invalidated = Signal()
     upload_progress = Signal(object, str, int, int)
     signin_requested = Signal()
@@ -158,7 +158,7 @@ class LibraryWidget(QWidget):
         self.open_button.setEnabled(False)
         self.open_button.clicked.connect(self.open_selected)
         self.review_button = QPushButton("Review")
-        self.review_button.setAccessibleName("Review saved PDF")
+        self.review_button.setAccessibleName("Review saved presentation")
         command(self.review_button, "search", primary=True)
         self.review_button.setToolTip("Review saved summaries and validation evidence")
         self.review_button.setEnabled(False)
@@ -569,9 +569,7 @@ class LibraryWidget(QWidget):
             elif deck.can_present:
                 guidance = "PDF is available to present. " + guidance
             self.open_button.setEnabled(deck.can_present and not self.runner.busy)
-            self.review_button.setEnabled(
-                deck.source_format == "pdf" and self.token() is not None and not self.runner.busy
-            )
+            self.review_button.setEnabled(self.token() is not None and not self.runner.busy)
             attempts = f" Processing attempts: {deck.attempts}." if deck.attempts else ""
             if processing is not None and processing.stage:
                 guidance += f" Current stage: {processing.stage.replace('_', ' ')}."
@@ -627,8 +625,8 @@ class LibraryWidget(QWidget):
         row = self.table.currentRow()
         if self.last_page and 0 <= row < len(self.last_page.items):
             deck = self.last_page.items[row]
-            if deck.source_format == "pdf" and self.token():
-                self.review_requested.emit(deck.id, deck.title, deck.status)
+            if self.token():
+                self.review_requested.emit(deck.id, deck.title, deck.status, deck.source_format)
 
     def failed(self, _identifier: int, message: str) -> None:
         if self.upload_request and self.retry_path is not None and not self.closing:

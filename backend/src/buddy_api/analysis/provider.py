@@ -251,6 +251,8 @@ class BedrockProvider:
     def _signed_request(
         self, content: bytes, extraction: Extraction, deck_id: str, manifest: Manifest
     ) -> tuple[str, bytes, list[tuple[int, int]], dict[str, str]]:
+        if extraction.source_format != "pdf":
+            raise ProviderFailure("pdf_source_mismatch", permanent=True)
         if not content.startswith(b"%PDF-") or len(content) > MAX_FILE_BYTES:
             raise ProviderFailure("provider_file_limit", permanent=True)
         if not 1 <= len(extraction.slides) <= MAX_PAGES:

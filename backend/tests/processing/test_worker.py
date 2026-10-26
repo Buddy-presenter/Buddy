@@ -739,12 +739,12 @@ def test_invalid_pdf_dead_letter_safe_error_and_bounded_retry(migrated_database)
     asyncio.run(scenario())
 
 
-def test_pdf_only_quota_and_global_concurrency(migrated_database):
+def test_pdf_and_pptx_share_quota_and_global_concurrency(migrated_database):
     async def scenario():
         db = Database(migrated_database)
         try:
-            _, _, legacy = await seed(db, source_format="pptx", subject="pptx")
-            assert legacy is None
+            _, _, powerpoint = await seed(db, source_format="pptx", subject="pptx")
+            assert powerpoint is not None and powerpoint.stage == "pptx_metadata.v1"
             owner, deck, first = await seed(db)
             _, _, second = await seed(db, subject="second")
             async with db.sessions() as session, session.begin():

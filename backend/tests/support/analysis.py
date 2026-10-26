@@ -23,9 +23,14 @@ def document(deck_id: UUID, extraction_id: UUID, job_id: UUID, *, actions=True) 
 
 
 async def prepare(repos, *, owner_id, deck_id, job_id=None, actions=True):
+    # This fixture is the PDF catalog and canonical PDF pixel plane. The generic
+    # deck repository defaults to PPTX for historical upload compatibility.
+    deck = await repos.decks.get(deck_id, owner_id=owner_id)
+    deck.source_format = "pdf"
     job_id = job_id or (await repos.jobs.create(owner_id=owner_id, deck_id=deck_id)).id
     output = document(deck_id, uuid4(), job_id, actions=actions)
     extracted = Extraction(
+        source_format="pdf",
         source_revision=output.source_revision,
         source_sha256=output.source_sha256,
         slides=tuple(

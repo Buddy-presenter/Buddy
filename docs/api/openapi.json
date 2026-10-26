@@ -234,6 +234,12 @@
             "title": "Slides",
             "type": "array"
           },
+          "source_format": {
+            "const": "pdf",
+            "default": "pdf",
+            "title": "Source Format",
+            "type": "string"
+          },
           "version": {
             "title": "Version",
             "type": "integer"
@@ -905,6 +911,467 @@
           "raster"
         ],
         "title": "ManifestSlide",
+        "type": "object"
+      },
+      "PowerPointActionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/PowerPointContentAction"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ValidationState"
+          },
+          "usable": {
+            "title": "Usable",
+            "type": "boolean"
+          },
+          "validation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ValidationInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "action",
+          "state",
+          "usable",
+          "validation"
+        ],
+        "title": "PowerPointActionResult",
+        "type": "object"
+      },
+      "PowerPointAnalysisInput": {
+        "additionalProperties": false,
+        "properties": {
+          "catalog_version": {
+            "const": "powerpoint-1",
+            "default": "powerpoint-1",
+            "title": "Catalog Version",
+            "type": "string"
+          },
+          "display_profile": {
+            "const": "windows-powerpoint-1",
+            "default": "windows-powerpoint-1",
+            "title": "Display Profile",
+            "type": "string"
+          },
+          "extraction_id": {
+            "format": "uuid",
+            "title": "Extraction Id",
+            "type": "string"
+          },
+          "extraction_schema_version": {
+            "const": "buddy.extraction.v1",
+            "default": "buddy.extraction.v1",
+            "title": "Extraction Schema Version",
+            "type": "string"
+          },
+          "extractor_version": {
+            "const": "1",
+            "default": "1",
+            "title": "Extractor Version",
+            "type": "string"
+          },
+          "job_id": {
+            "format": "uuid",
+            "title": "Job Id",
+            "type": "string"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/PowerPointManifest"
+          },
+          "office_safe": {
+            "default": false,
+            "title": "Office Safe",
+            "type": "boolean"
+          },
+          "presentation_summary": {
+            "$ref": "#/components/schemas/Summary"
+          },
+          "renderer_version": {
+            "const": "desktop-powerpoint-1",
+            "default": "desktop-powerpoint-1",
+            "title": "Renderer Version",
+            "type": "string"
+          },
+          "representation": {
+            "const": "bounded_ooxml_extraction",
+            "default": "bounded_ooxml_extraction",
+            "title": "Representation",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "buddy.powerpoint.analysis.v1",
+            "default": "buddy.powerpoint.analysis.v1",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "slides": {
+            "items": {
+              "$ref": "#/components/schemas/PowerPointSlideOutput"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Slides",
+            "type": "array"
+          },
+          "source_format": {
+            "const": "pptx",
+            "default": "pptx",
+            "title": "Source Format",
+            "type": "string"
+          },
+          "source_revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "title": "Source Revision",
+            "type": "string"
+          },
+          "source_sha256": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "validator_version": {
+            "const": "powerpoint-executor-1",
+            "default": "powerpoint-executor-1",
+            "title": "Validator Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "extraction_id",
+          "source_revision",
+          "source_sha256",
+          "job_id",
+          "manifest",
+          "presentation_summary",
+          "slides"
+        ],
+        "title": "PowerPointAnalysisInput",
+        "type": "object"
+      },
+      "PowerPointAnalysisResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/PowerPointAnalysisResult"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "request_id"
+        ],
+        "title": "PowerPointAnalysisResponse",
+        "type": "object"
+      },
+      "PowerPointAnalysisResult": {
+        "additionalProperties": false,
+        "properties": {
+          "action_limit_reached": {
+            "default": false,
+            "title": "Action Limit Reached",
+            "type": "boolean"
+          },
+          "analysis_sha256": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Digest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "deck_id": {
+            "format": "uuid",
+            "title": "Deck Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "inputs": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PowerPointAnalysisInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "publication": {
+            "$ref": "#/components/schemas/Publication"
+          },
+          "slides": {
+            "items": {
+              "$ref": "#/components/schemas/PowerPointSlideResult"
+            },
+            "title": "Slides",
+            "type": "array"
+          },
+          "source_format": {
+            "const": "pptx",
+            "default": "pptx",
+            "title": "Source Format",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "deck_id",
+          "version",
+          "publication",
+          "analysis_sha256",
+          "inputs",
+          "slides"
+        ],
+        "title": "PowerPointAnalysisResult",
+        "type": "object"
+      },
+      "PowerPointContentAction": {
+        "additionalProperties": false,
+        "properties": {
+          "deck_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "instance_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "params": {
+            "$ref": "#/components/schemas/PowerPointParameters"
+          },
+          "purpose": {
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Purpose",
+            "type": "string"
+          },
+          "render_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "slide_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "source_format": {
+            "const": "pptx",
+            "default": "pptx",
+            "title": "Source Format",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "highlight_region",
+              "draw_rectangle",
+              "draw_oval",
+              "draw_underline",
+              "draw_arrow",
+              "callout"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "version": {
+            "const": "powerpoint-1",
+            "default": "powerpoint-1",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "instance_id",
+          "purpose",
+          "deck_id",
+          "render_id",
+          "slide_id",
+          "type",
+          "params"
+        ],
+        "title": "PowerPointContentAction",
+        "type": "object"
+      },
+      "PowerPointManifest": {
+        "additionalProperties": false,
+        "properties": {
+          "deck_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "render_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "slides": {
+            "items": {
+              "$ref": "#/components/schemas/PowerPointManifestSlide"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Slides",
+            "type": "array"
+          },
+          "source_format": {
+            "const": "pptx",
+            "default": "pptx",
+            "title": "Source Format",
+            "type": "string"
+          },
+          "version": {
+            "const": "powerpoint-1",
+            "default": "powerpoint-1",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deck_id",
+          "render_id",
+          "slides"
+        ],
+        "title": "PowerPointManifest",
+        "type": "object"
+      },
+      "PowerPointManifestSlide": {
+        "additionalProperties": false,
+        "properties": {
+          "native_slide_id": {
+            "exclusiveMinimum": 0.0,
+            "title": "Native Slide Id",
+            "type": "integer"
+          },
+          "slide_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "source": {
+            "$ref": "#/components/schemas/PowerPointPlane"
+          }
+        },
+        "required": [
+          "slide_id",
+          "native_slide_id",
+          "source"
+        ],
+        "title": "PowerPointManifestSlide",
+        "type": "object"
+      },
+      "PowerPointParameters": {
+        "additionalProperties": false,
+        "properties": {
+          "region": {
+            "$ref": "#/components/schemas/Region"
+          },
+          "text": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "region"
+        ],
+        "title": "PowerPointParameters",
+        "type": "object"
+      },
+      "PowerPointPlane": {
+        "additionalProperties": false,
+        "properties": {
+          "height": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 100000.0,
+            "title": "Height",
+            "type": "number"
+          },
+          "origin": {
+            "const": "top_left",
+            "default": "top_left",
+            "title": "Origin",
+            "type": "string"
+          },
+          "units": {
+            "const": "slide_points",
+            "default": "slide_points",
+            "title": "Units",
+            "type": "string"
+          },
+          "width": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 100000.0,
+            "title": "Width",
+            "type": "number"
+          }
+        },
+        "required": [
+          "width",
+          "height"
+        ],
+        "title": "PowerPointPlane",
+        "type": "object"
+      },
+      "PowerPointSlideOutput": {
+        "additionalProperties": false,
+        "properties": {
+          "actions": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PowerPointContentAction"
+            },
+            "maxItems": 40,
+            "title": "Actions",
+            "type": "array"
+          },
+          "slide_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          }
+        },
+        "required": [
+          "slide_id",
+          "summary"
+        ],
+        "title": "PowerPointSlideOutput",
+        "type": "object"
+      },
+      "PowerPointSlideResult": {
+        "additionalProperties": false,
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/PowerPointActionResult"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "slide_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          }
+        },
+        "required": [
+          "slide_id",
+          "summary",
+          "actions"
+        ],
+        "title": "PowerPointSlideResult",
         "type": "object"
       },
       "ProcessResult": {
@@ -1732,10 +2199,29 @@
           "renderer_version": {
             "$ref": "#/components/schemas/Identifier"
           },
+          "runtime_version": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Identifier"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "schema_version": {
             "const": "buddy.validation.v1",
             "default": "buddy.validation.v1",
             "title": "Schema Version",
+            "type": "string"
+          },
+          "source_format": {
+            "default": "pdf",
+            "enum": [
+              "pdf",
+              "pptx"
+            ],
+            "title": "Source Format",
             "type": "string"
           },
           "state": {
@@ -2199,6 +2685,105 @@
           }
         },
         "summary": "Latest For Deck",
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/api/v1/analyses/powerpoint/by-deck/{deck_id}": {
+      "get": {
+        "operationId": "powerpoint_for_deck_api_v1_analyses_powerpoint_by_deck__deck_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deck_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Deck Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PowerPointAnalysisResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Powerpoint For Deck",
         "tags": [
           "analysis"
         ]
@@ -2750,6 +3335,91 @@
         "summary": "Latest",
         "tags": [
           "processing"
+        ]
+      }
+    },
+    "/api/v1/decks/{identifier}/powerpoint-source": {
+      "get": {
+        "operationId": "powerpoint_source_api_v1_decks__identifier__powerpoint_source_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/vnd.openxmlformats-officedocument.presentationml.presentation": {}
+            },
+            "description": "Owner-only immutable original PowerPoint source."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Powerpoint Source",
+        "tags": [
+          "library"
         ]
       }
     },

@@ -52,6 +52,26 @@
   },
   "additionalProperties": false,
   "properties": {
+    "source_format": {
+      "default": "pdf",
+      "enum": [
+        "pdf",
+        "pptx"
+      ],
+      "title": "Source Format",
+      "type": "string"
+    },
+    "runtime_version": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Identifier"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "schema_version": {
       "const": "buddy.validation.v1",
       "default": "buddy.validation.v1",

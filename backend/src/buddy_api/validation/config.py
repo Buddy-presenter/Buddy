@@ -9,6 +9,7 @@ class ValidatorSettings(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     python: str
     seconds: int = Field(default=60, ge=5, le=90)
+    powerpoint_seconds: int = Field(default=60, ge=5, le=90)
     memory_mb: int = Field(default=768, ge=256, le=768)
 
     @field_validator("python")

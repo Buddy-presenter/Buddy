@@ -39,6 +39,10 @@ account or backend. See [PowerPoint presentations](powerpoint-presentations.md) 
 navigation/annotation steps, coordinate and Office limitations, and the opt-in real-Office
 smoke command (`python frontend/scripts/smoke_powerpoint.py`).
 
+Uploaded PPTX analysis and saved action review are documented in
+[PowerPoint analysis](powerpoint-analysis.md), including the separate Office validator
+runtime, migration, catalog boundaries and real six-action acceptance command.
+
 ## API and database
 
 Install the API separately in the same environment:

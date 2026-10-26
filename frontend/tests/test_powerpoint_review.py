@@ -1,0 +1,315 @@
+import hashlib
+import json
+import time
+from threading import Event
+from types import SimpleNamespace
+from uuid import uuid4
+
+import pytest
+from frontend.tests.test_review import analysis_payload
+from PySide6.QtGui import QColor, QImage
+
+import buddy_desktop.review_widget as widgets
+from buddy_desktop.auth import Tokens
+from buddy_desktop.powerpoint_contract import PresentationInfo
+from buddy_desktop.powerpoint_generated import generated_action
+from buddy_desktop.review_service import DownloadedPowerPoint, ReviewService, parse_analysis
+from buddy_desktop.services import ServiceError
+
+KINDS = (
+    "highlight_region",
+    "draw_rectangle",
+    "draw_oval",
+    "draw_underline",
+    "draw_arrow",
+    "callout",
+)
+
+
+def powerpoint_payload(content=b"PK-synthetic-source", *, usable=True, kind="highlight_region"):
+    deck, payload = analysis_payload(source_sha256=hashlib.sha256(content).hexdigest())
+    data, inputs = payload["data"], payload["data"]["inputs"]
+    data["source_format"] = "pptx"
+    data["publication"] = "published"
+    inputs.update(
+        source_format="pptx",
+        schema_version="buddy.powerpoint.analysis.v1",
+        catalog_version="powerpoint-1",
+        office_safe=True,
+        display_profile="windows-powerpoint-1",
+        validator_version="powerpoint-executor-1",
+        renderer_version="desktop-powerpoint-1",
+    )
+    manifest = inputs["manifest"]
+    manifest.update(source_format="pptx", version="powerpoint-1")
+    manifest["slides"][0].update(
+        native_slide_id=256,
+        source={"width": 960, "height": 540, "units": "slide_points", "origin": "top_left"},
+    )
+    manifest["slides"][0].pop("raster")
+    result = data["slides"][0]["actions"][0]
+    action = result["action"]
+    action.update(source_format="pptx", version="powerpoint-1", type=kind)
+    action["params"]["text"] = "Measured results" if kind == "callout" else ""
+    state = "validated" if usable else "needs-review"
+    result.update(
+        state=state,
+        usable=usable,
+        validation={
+            "source_format": "pptx",
+            "schema_version": "buddy.validation.v1",
+            "validation_id": str(uuid4()),
+            "analysis_id": data["id"],
+            "analysis_sha256": data["analysis_sha256"],
+            "instance_id": action["instance_id"],
+            "action_sha256": hashlib.sha256(
+                json.dumps(action, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+            "state": state,
+            "reasons": [] if usable else ["powerpoint_runtime_requires_windows_office"],
+            "evidence": [{"id": str(uuid4()), "kind": "report", "sha256": "b" * 64}],
+            "runtime_version": "16.0.12345",
+            "validator_version": "powerpoint-executor-1",
+            "renderer_version": "desktop-powerpoint-1",
+            "display_profile": "windows-powerpoint-1",
+        },
+    )
+    return deck, payload
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_powerpoint_review_all_actions_map_to_the_typed_real_executor(kind):
+    deck, payload = powerpoint_payload(kind=kind)
+    analysis = parse_analysis(payload, deck)
+    slide, action = analysis.slides[0], analysis.slides[0].actions[0]
+    assert analysis.source_format == "pptx" and slide.native_slide_id == 256
+    assert action.usable and action.runtime_version == "16.0.12345"
+    target = PresentationInfo("test.pptx", "test.pptx", 1, 1, 123, 256, 960, 540)
+    command = generated_action(
+        action.raw,
+        target,
+        deck_id=str(deck),
+        render_id=analysis.render_id,
+        slide_id=slide.slide_id,
+        native_slide_id=256,
+        width=960,
+        height=540,
+    )
+    assert command.kind == kind
+    command.validate()
+    if kind == "draw_arrow":
+        assert command.points == ((10, 20), (40, 60)) and command.region is None
+    else:
+        assert command.region.width == 30
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "pdf_input",
+        "pdf_action",
+        "missing_runtime",
+        "missing_validation",
+        "wrong_profile",
+        "unvalidated_usable",
+        "pixel_plane",
+        "missing_native_id",
+        "hash_changed",
+    ],
+)
+def test_powerpoint_review_rejects_mixed_formats_and_false_validation_claims(change):
+    deck, payload = powerpoint_payload()
+    data = payload["data"]
+    item = data["slides"][0]["actions"][0]
+    if change == "pdf_input":
+        data["inputs"]["source_format"] = "pdf"
+    elif change == "pdf_action":
+        item["action"]["source_format"], item["action"]["version"] = "pdf", "1.1"
+    elif change == "missing_runtime":
+        item["validation"]["runtime_version"] = None
+    elif change == "missing_validation":
+        item["validation"] = None
+    elif change == "wrong_profile":
+        data["inputs"]["display_profile"] = item["validation"]["display_profile"] = "wide-1x"
+    elif change == "unvalidated_usable":
+        item["state"] = item["validation"]["state"] = "needs-review"
+    elif change == "pixel_plane":
+        data["inputs"]["manifest"]["slides"][0]["source"]["units"] = "source_pixels"
+    elif change == "missing_native_id":
+        data["inputs"]["manifest"]["slides"][0].pop("native_slide_id")
+    else:
+        item["action"]["params"]["region"]["x"] += 1
+    with pytest.raises((ValueError, KeyError, TypeError)):
+        parse_analysis(payload, deck)
+
+
+def test_pdf_review_rejects_powerpoint_coordinates():
+    deck, payload = analysis_payload()
+    payload["data"]["inputs"]["manifest"]["slides"][0]["source"]["units"] = "slide_points"
+    with pytest.raises(ValueError):
+        parse_analysis(payload, deck)
+
+
+def test_pptx_review_is_explicit_and_clears_private_session(desktop_window, monkeypatch, qtbot):
+    content = b"PK-synthetic-source"
+    deck, payload = powerpoint_payload(content)
+    analysis = parse_analysis(payload, deck)
+    monkeypatch.setattr(
+        ReviewService,
+        "analysis",
+        lambda _self, _id, source_format: analysis if source_format == "pptx" else None,
+    )
+    monkeypatch.setattr(
+        ReviewService,
+        "source",
+        lambda _self, _id, source_format: DownloadedPowerPoint(content, str(deck), "revision-1"),
+    )
+    calls = []
+
+    # External Office boundary; the actual Office executor has a separate opt-in matrix.
+    class Session:
+        def __init__(self):
+            self.cancelled = Event()
+
+        def open(self, raw, saved, index):
+            assert raw == content and saved.source_format == "pptx"
+            calls.append("open")
+            image = QImage(1280, 720, QImage.Format.Format_RGB32)
+            image.fill(QColor("white"))
+            from PySide6.QtCore import QBuffer, QByteArray, QIODevice
+
+            data = QByteArray()
+            buffer = QBuffer(data)
+            buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+            image.save(buffer, "PNG")
+            return SimpleNamespace(png=bytes(data))
+
+        def apply(self, action, saved, index):
+            assert action.usable
+            calls.append("apply")
+            return self.open(content, saved, index)
+
+        def close(self):
+            calls.append("close")
+
+    monkeypatch.setattr(widgets, "PowerPointReviewSession", Session)
+    monkeypatch.setattr(widgets, "sys", SimpleNamespace(platform="win32"))
+    window = desktop_window()
+    window.account.session = SimpleNamespace(
+        tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
+    )
+    window.account.session_changed.emit()
+    review = window.review
+    review.set_deck(deck, "Quarterly results.pptx", "review_ready", "pptx")
+    review.activate(True)
+    qtbot.waitUntil(lambda: not review.runner.busy)
+    assert calls == [] and review.open_powerpoint.isEnabled()
+    assert not review.run_powerpoint.isEnabled()
+    assert "PowerPoint slide points" in review.action_detail.toPlainText()
+    review.open_powerpoint.click()
+    qtbot.waitUntil(lambda: not review.runner.busy)
+    assert review.run_powerpoint.isEnabled() and calls == ["open"]
+    assert not review.image.isNull()
+    review.run_powerpoint.click()
+    qtbot.waitUntil(lambda: not review.runner.busy)
+    assert calls[:2] == ["open", "apply"]
+    assert "action completed" in review.notice.text()
+    window.account.session.tokens = None
+    window.account.session_changed.emit()
+    assert review.pdf_content is None and review.analysis is None and review._pptx_session is None
+    qtbot.waitUntil(lambda: not review.cleanup_runner.busy)
+    assert calls[-1] == "close"
+
+
+def test_powerpoint_runtime_failure_remains_inspectable(desktop_window, monkeypatch, qtbot):
+    content = b"PK-synthetic-source"
+    deck, payload = powerpoint_payload(content, usable=False)
+    analysis = parse_analysis(payload, deck)
+    monkeypatch.setattr(ReviewService, "analysis", lambda *_args: analysis)
+    monkeypatch.setattr(
+        ReviewService,
+        "source",
+        lambda *_args: DownloadedPowerPoint(content, str(deck), "revision-1"),
+    )
+    window = desktop_window()
+    window.account.session = SimpleNamespace(
+        tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
+    )
+    window.account.session_changed.emit()
+    review = window.review
+    review.set_deck(deck, "Review source.pptx", "review_ready", "pptx")
+    review.activate(True)
+    qtbot.waitUntil(lambda: not review.runner.busy)
+    assert "runtime_requires_windows_office" in review.action_detail.toPlainText()
+    assert not review.run_powerpoint.isEnabled()
+    assert review.analysis.presentation_summary.text == "Overall summary"
+
+
+@pytest.mark.parametrize("width,height", [(800, 600), (1360, 1000)])
+def test_powerpoint_review_visual_layout(
+    desktop_window, monkeypatch, qtbot, qapp, request, width, height
+):
+    import os
+    from pathlib import Path
+
+    from buddy_desktop.visuals import apply_theme
+
+    original_style, original_palette, original_font = qapp.styleSheet(), qapp.palette(), qapp.font()
+
+    def restore_theme():
+        qapp.setStyleSheet(original_style)
+        qapp.setPalette(original_palette)
+        qapp.setFont(original_font)
+
+    request.addfinalizer(restore_theme)
+    apply_theme(qapp)
+
+    content = b"PK-synthetic-source"
+    deck, payload = powerpoint_payload(content, usable=False)
+    analysis = parse_analysis(payload, deck)
+    monkeypatch.setattr(ReviewService, "analysis", lambda *_args: analysis)
+    monkeypatch.setattr(
+        ReviewService,
+        "source",
+        lambda *_args: DownloadedPowerPoint(content, str(deck), "revision-1"),
+    )
+    window = desktop_window()
+    window.resize(width, height)
+    window.account.session = SimpleNamespace(
+        tokens=Tokens("synthetic-token", "synthetic-refresh", time.monotonic() + 3600),
+        cancelled=Event(),
+    )
+    window.account.session_changed.emit()
+    window.navigation.setCurrentRow(2)
+    window.review.set_deck(deck, "Quarterly results.pptx", "review_ready", "pptx")
+    qtbot.waitUntil(lambda: not window.review.runner.busy)
+    assert not window.review.content.isHidden()
+    assert window.review.open_powerpoint.geometry().right() < window.review.content.width()
+    assert (
+        window.review.run_powerpoint.geometry().left()
+        > window.review.open_powerpoint.geometry().right()
+    )
+    window.review.open_powerpoint.setFocus()
+    qtbot.wait(20)
+    evidence = os.environ.get("BUDDY_VISUAL_EVIDENCE_DIR")
+    if evidence:
+        folder = Path(evidence)
+        folder.mkdir(parents=True, exist_ok=True)
+        image = folder.parent / "office/960-highlight_region/before_image.png"
+        if image.is_file():
+            window.review.image = QImage(str(image))
+            window.review._display_page()
+            qtbot.wait(50)
+        assert window.grab().save(str(folder / f"powerpoint-review-{width}x{height}.png"))
+
+
+def test_real_office_indexed_png_is_decoded_and_invalid_previews_are_rejected(qapp):
+    from pathlib import Path
+
+    from buddy_desktop.review_widget import powerpoint_image
+
+    png = (Path(__file__).parent / "fixtures/powerpoint/indexed-preview.png").read_bytes()
+    image = powerpoint_image(png)
+    assert not image.isNull() and (image.width(), image.height()) == (1280, 720)
+    with pytest.raises(ServiceError):
+        powerpoint_image(b"not a PNG")

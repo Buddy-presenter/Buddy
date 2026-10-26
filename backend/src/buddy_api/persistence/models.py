@@ -50,6 +50,7 @@ class Deck(OwnedRecord):
     __tablename__ = "decks"
     __table_args__ = (
         UniqueConstraint("id", "owner_id"),
+        UniqueConstraint("id", "owner_id", "source_format", name="uq_decks_format_identity"),
         CheckConstraint("length(title) > 0", name="title_nonempty"),
         CheckConstraint("source_format IN ('pptx','pdf')", name="source_format"),
     )
@@ -199,7 +200,18 @@ class JobOutbox(Base):
 
 class AnalysisVersion(OwnedRecord):
     __tablename__ = "analysis_versions"
+    source_format: Mapped[str] = mapped_column(String(8), server_default="pdf")
     __table_args__ = (
+        CheckConstraint("source_format IN ('pdf','pptx')", name="source_format"),
+        UniqueConstraint(
+            "id", "owner_id", "source_format", name="uq_analysis_versions_format_identity"
+        ),
+        ForeignKeyConstraint(
+            ["deck_id", "owner_id", "source_format"],
+            ["decks.id", "decks.owner_id", "decks.source_format"],
+            name="fk_analysis_versions_source_format",
+            ondelete="RESTRICT",
+        ),
         ForeignKeyConstraint(
             ["deck_id", "owner_id"], ["decks.id", "decks.owner_id"], ondelete="RESTRICT"
         ),
@@ -278,7 +290,22 @@ class AnalysisSlide(OwnedRecord):
 
 class SlideAction(OwnedRecord):
     __tablename__ = "slide_actions"
+    source_format: Mapped[str] = mapped_column(String(8), server_default="pdf")
     __table_args__ = (
+        CheckConstraint("source_format IN ('pdf','pptx')", name="source_format"),
+        UniqueConstraint(
+            "id", "owner_id", "source_format", name="uq_slide_actions_format_identity"
+        ),
+        ForeignKeyConstraint(
+            ["analysis_id", "owner_id", "source_format"],
+            [
+                "analysis_versions.id",
+                "analysis_versions.owner_id",
+                "analysis_versions.source_format",
+            ],
+            name="fk_slide_actions_source_format",
+            ondelete="RESTRICT",
+        ),
         ForeignKeyConstraint(
             ["slide_record_id", "analysis_id", "deck_id", "owner_id"],
             [
@@ -292,7 +319,12 @@ class SlideAction(OwnedRecord):
         UniqueConstraint("analysis_id", "instance_id"),
         UniqueConstraint("slide_record_id", "position"),
         UniqueConstraint("id", "analysis_id", "deck_id", "owner_id"),
-        CheckConstraint("action_type IN ('zoom_region','highlight_region')", name="content_type"),
+        CheckConstraint(
+            "(source_format = 'pdf' AND action_type IN ('zoom_region','highlight_region')) OR "
+            "(source_format = 'pptx' AND action_type IN ('highlight_region','draw_rectangle',"
+            "'draw_oval','draw_underline','draw_arrow','callout'))",
+            name="content_type",
+        ),
         CheckConstraint("position >= 0 AND position < 100", name="position"),
     )
     slide_record_id: Mapped[UUID] = mapped_column()
@@ -310,7 +342,15 @@ class SlideAction(OwnedRecord):
 
 class ActionValidation(OwnedRecord):
     __tablename__ = "action_validations"
+    source_format: Mapped[str] = mapped_column(String(8), server_default="pdf")
     __table_args__ = (
+        CheckConstraint("source_format IN ('pdf','pptx')", name="source_format"),
+        ForeignKeyConstraint(
+            ["action_id", "owner_id", "source_format"],
+            ["slide_actions.id", "slide_actions.owner_id", "slide_actions.source_format"],
+            name="fk_action_validations_source_format",
+            ondelete="RESTRICT",
+        ),
         ForeignKeyConstraint(
             ["action_id", "analysis_id", "deck_id", "owner_id"],
             [

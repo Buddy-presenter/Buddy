@@ -16,7 +16,13 @@ from buddy_api.persistence.models import (
 )
 from buddy_api.persistence.repositories import Extractions
 from buddy_api.processing.config import WorkerSettings
-from buddy_api.processing.contracts import ACTIVE, JobData, Message, MetadataOutput
+from buddy_api.processing.contracts import (
+    ACTIVE,
+    JobData,
+    Message,
+    MetadataOutput,
+    PowerPointMetadataOutput,
+)
 from buddy_api.uploads.contracts import UploadError
 
 
@@ -43,7 +49,7 @@ async def quota(session: AsyncSession, owner: UUID, limit: int) -> None:
 
 
 async def schedule(session: AsyncSession, deck: Deck, owner_quota: int = 4) -> ProcessingJob | None:
-    if deck.source_format != "pdf":
+    if deck.source_format not in {"pdf", "pptx"}:
         return None
     if not all(
         (
@@ -70,6 +76,7 @@ async def schedule(session: AsyncSession, deck: Deck, owner_quota: int = 4) -> P
         owner_id=deck.owner_id,
         deck_id=deck.id,
         source_revision=deck.source_revision,
+        stage="pptx_metadata.v1" if deck.source_format == "pptx" else "pdf_metadata.v1",
         status="queued",
     )
     session.add(job)
@@ -123,7 +130,9 @@ async def retry(session: AsyncSession, job: ProcessingJob, settings: WorkerSetti
     await quota(session, job.owner_id, settings.owner_quota)
     job.generation += 1
     job.status, job.stage_state, job.progress = "queued", "pending", 0
-    job.stage = "pdf_analysis.v1" if job.extraction_id else "pdf_metadata.v1"
+    deck = await session.get(Deck, job.deck_id)
+    prefix = "pptx" if deck is not None and deck.source_format == "pptx" else "pdf"
+    job.stage = prefix + ("_analysis.v1" if job.extraction_id else "_metadata.v1")
     job.error_code = None
     job.not_before = now()
     outbox = await session.get(JobOutbox, job.id)
@@ -144,7 +153,15 @@ async def claim(
         or job.status not in {"queued", "retry_wait"}
         or job.source_revision is None
         or job.stage
-        not in {"pdf_metadata.v1", "pdf_analysis.v1", "pdf_render", "provider", "validation"}
+        not in {
+            "pdf_metadata.v1",
+            "pdf_analysis.v1",
+            "pdf_render",
+            "provider",
+            "validation",
+            "pptx_metadata.v1",
+            "pptx_analysis.v1",
+        }
         or job.not_before > now()
     ):
         return None
@@ -185,7 +202,15 @@ async def defer_for_capacity(session: AsyncSession, message: Message) -> bool:
         or job.status not in {"queued", "retry_wait"}
         or job.source_revision is None
         or job.stage
-        not in {"pdf_metadata.v1", "pdf_analysis.v1", "pdf_render", "provider", "validation"}
+        not in {
+            "pdf_metadata.v1",
+            "pdf_analysis.v1",
+            "pdf_render",
+            "provider",
+            "validation",
+            "pptx_metadata.v1",
+            "pptx_analysis.v1",
+        }
         or job.not_before > now()
     ):
         return False
@@ -242,7 +267,10 @@ async def advance_stage(
 
 
 async def save_metadata(
-    session: AsyncSession, identifier: UUID, token: UUID, output: MetadataOutput
+    session: AsyncSession,
+    identifier: UUID,
+    token: UUID,
+    output: MetadataOutput | PowerPointMetadataOutput,
 ) -> UUID | None:
     job = await session.scalar(
         select(ProcessingJob).where(ProcessingJob.id == identifier).with_for_update()
@@ -254,11 +282,12 @@ async def save_metadata(
     if (
         deck is None
         or deck.owner_id != job.owner_id
-        or deck.source_format != "pdf"
+        or deck.source_format != metadata.source_format
         or deck.source_revision != job.source_revision
         or metadata.source_revision != job.source_revision
         or metadata.source_sha256 != deck.source_sha256
-        or metadata.source_format != "pdf"
+        or metadata.source_format not in {"pdf", "pptx"}
+        or (isinstance(output, PowerPointMetadataOutput)) != (metadata.source_format == "pptx")
     ):
         raise UploadError(409, "source_changed", "The job source is no longer current.")
     extraction = await Extractions(session, DeckExtraction).save(
@@ -266,7 +295,7 @@ async def save_metadata(
     )
     job.extraction_id = extraction.id
     job.stage, job.stage_state, job.progress, job.error_code = (
-        "pdf_analysis.v1",
+        "pptx_analysis.v1" if metadata.source_format == "pptx" else "pdf_analysis.v1",
         "running",
         35,
         None,
@@ -292,9 +321,10 @@ async def complete(session: AsyncSession, identifier: UUID, token: UUID, analysi
     if (
         deck is None
         or deck.owner_id != job.owner_id
-        or deck.source_format != "pdf"
+        or deck.source_format not in {"pdf", "pptx"}
         or deck.source_revision != job.source_revision
         or analysis is None
+        or analysis.source_format != deck.source_format
         or analysis.extraction_id != job.extraction_id
         or analysis.publication not in {"published", "partial", "awaiting_validation"}
     ):

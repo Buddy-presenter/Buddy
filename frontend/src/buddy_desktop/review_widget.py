@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import sys
 import time
 from dataclasses import dataclass
 from uuid import UUID
@@ -25,6 +26,7 @@ from buddy_desktop.account_widget import AccountWidget
 from buddy_desktop.config import AppConfig
 from buddy_desktop.library_service import LibraryAccessExpired
 from buddy_desktop.pdf_document import render
+from buddy_desktop.powerpoint_review import PowerPointReviewSession
 from buddy_desktop.review_service import (
     ReviewAction,
     ReviewAnalysis,
@@ -40,7 +42,7 @@ from buddy_desktop.visuals import command
 class LoadedReview:
     analysis: ReviewAnalysis | None
     pdf_content: bytes
-    sizes: tuple[tuple[int, int], ...]
+    sizes: tuple[tuple[float, float], ...]
     first_image: QImage
     notice: str | None
 
@@ -58,6 +60,29 @@ class EvidenceResult:
     mime: str
 
 
+def powerpoint_image(png: bytes) -> QImage:
+    """Decode real Office indexed/RGB PNG exports with bounded image allocation."""
+    if len(png) > 16 * 1024 * 1024 or not png.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ServiceError("PowerPoint returned an invalid slide preview.")
+    buffer = QBuffer()
+    buffer.setData(QByteArray(png))
+    buffer.open(QIODevice.OpenModeFlag.ReadOnly)
+    reader = QImageReader(buffer)
+    size = reader.size()
+    if (
+        not size.isValid()
+        or max(size.width(), size.height()) > 2560
+        or size.width() * size.height() > 4_194_304
+    ):
+        buffer.close()
+        raise ServiceError("PowerPoint preview exceeds its image limit.")
+    image = reader.read()
+    buffer.close()
+    if image.isNull() or image.size() != size:
+        raise ServiceError("PowerPoint could not decode this slide preview.")
+    return image
+
+
 class PagePreview(QWidget):
     """Aspect-preserving read-only page image with a selected action region overlay."""
 
@@ -65,18 +90,33 @@ class PagePreview(QWidget):
         super().__init__()
         self._image = QImage()
         self._region: tuple[float, float, float, float] | None = None
+        self._source_size: tuple[float, float] | None = None
         self.setMinimumSize(260, 200)
         self.setAccessibleName("Rendered PDF page")
 
-    def set_page(self, image: QImage, region: tuple[float, float, float, float] | None) -> None:
+    def set_page(
+        self,
+        image: QImage,
+        region: tuple[float, float, float, float] | None,
+        source_size: tuple[float, float] | None = None,
+    ) -> None:
         self._image = image
         self._region = region
+        self._source_size = source_size
         self.update()
 
     def paintEvent(self, _event: object) -> None:
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor("#06090D"))
         if self._image.isNull():
+            if self._source_size is None:
+                return
+            painter.setPen(QColor("#B5B8BA"))
+            painter.drawText(
+                self.rect(),
+                Qt.AlignmentFlag.AlignCenter,
+                "Open the saved PowerPoint to see this slide.",
+            )
             return
         target = self.rect().adjusted(8, 8, -8, -8)
         scale = min(target.width() / self._image.width(), target.height() / self._image.height())
@@ -89,6 +129,12 @@ class PagePreview(QWidget):
         painter.drawImage(QRectF(left, top, width, height), self._image)
         if self._region is not None:
             x, y, rw, rh = self._region
+            if self._source_size is not None:
+                sx, sy = (
+                    self._image.width() / self._source_size[0],
+                    self._image.height() / self._source_size[1],
+                )
+                x, y, rw, rh = x * sx, y * sy, rw * sx, rh * sy
             pen = QPen(QColor("#F5843D"), 2)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -96,7 +142,7 @@ class PagePreview(QWidget):
 
 
 class ReviewWidget(Page):
-    """A review workspace that never edits or executes generated analysis actions."""
+    """Saved review; PowerPoint actions run only after an explicit presenter command."""
 
     activity_changed = Signal(bool)
     signin_requested = Signal()
@@ -104,13 +150,22 @@ class ReviewWidget(Page):
 
     def __init__(self, config: AppConfig, account: AccountWidget) -> None:
         super().__init__(
-            "Review", "Inspect saved analysis, PDF pages and action validation evidence."
+            "Review", "Inspect saved summaries, slide content and action validation evidence."
         )
         self.config, self.account = config, account
+        self.notice: QLabel
         self.runner = TaskRunner(self)
         self.runner.succeeded.connect(self.completed)
         self.runner.failed.connect(self.failed)
         self.runner.idle.connect(self.idle)
+        self.cleanup_runner = TaskRunner(self)
+        self.cleanup_runner.idle.connect(self._cleanup_idle)
+        self.cleanup_runner.failed.connect(
+            lambda _id, message: self.notice.setText("Private PowerPoint cleanup: " + message)
+        )
+        self._cleanup_queue: list[PowerPointReviewSession] = []
+        self._pptx_session: PowerPointReviewSession | None = None
+        self.source_format = "pdf"
         self.generation = 0
         self.request_generation = -1
         self.account_key: tuple[int, str | None, str] | None = None
@@ -119,7 +174,7 @@ class ReviewWidget(Page):
         self.deck_status = "uploaded"
         self.analysis: ReviewAnalysis | None = None
         self.pdf_content: bytes | None = None
-        self.sizes: tuple[tuple[int, int], ...] = ()
+        self.sizes: tuple[tuple[float, float], ...] = ()
         self.page_index = 0
         self.image = QImage()
         self.action_rows: tuple[ReviewAction, ...] = ()
@@ -135,7 +190,8 @@ class ReviewWidget(Page):
         self.back.setAccessibleName("Return to presentation library")
         self.back.clicked.connect(self.back_requested.emit)
         toolbar.addWidget(self.back)
-        self.heading = QLabel("Choose a PDF from your library to review.")
+        self.heading = QLabel("Choose a presentation from your library to review.")
+        self.heading.setTextFormat(Qt.TextFormat.PlainText)
         self.heading.setObjectName("sectionTitle")
         self.heading.setWordWrap(True)
         toolbar.addWidget(self.heading, 1)
@@ -182,6 +238,17 @@ class ReviewWidget(Page):
         navigation.addWidget(self.slide_counter, 1)
         navigation.addWidget(self.next)
         content_layout.addLayout(navigation)
+        powerpoint_row = QHBoxLayout()
+        self.open_powerpoint = QPushButton("Open saved PowerPoint")
+        command(self.open_powerpoint, "external-link")
+        self.open_powerpoint.clicked.connect(self.open_saved_powerpoint)
+        self.run_powerpoint = QPushButton("Run selected action in PowerPoint")
+        command(self.run_powerpoint, "arrow-right", primary=True)
+        self.run_powerpoint.clicked.connect(self.run_selected_powerpoint_action)
+        for button in (self.open_powerpoint, self.run_powerpoint):
+            button.hide()
+            powerpoint_row.addWidget(button)
+        content_layout.addLayout(powerpoint_row)
 
         self.preview = PagePreview()
         self.preview.setMinimumHeight(280)
@@ -240,7 +307,12 @@ class ReviewWidget(Page):
         self.clear_private()
         self.account_changed()
 
-    def set_deck(self, deck_id: UUID, title: str, status: str = "uploaded") -> None:
+    def set_deck(
+        self, deck_id: UUID, title: str, status: str = "uploaded", source_format: str = "pdf"
+    ) -> None:
+        if source_format not in {"pdf", "pptx"}:
+            raise ServiceError("Unsupported presentation source format.")
+        self.source_format = source_format
         self.deck_id, self.deck_title, self.deck_status = deck_id, title, status
         self.clear_private(keep_deck=True)
         self.pending_load = True
@@ -286,6 +358,11 @@ class ReviewWidget(Page):
             self.signin.hide()
 
     def clear_private(self, *, keep_deck: bool = False) -> None:
+        if self._pptx_session is not None:
+            self._pptx_session.cancelled.set()
+            self._cleanup_queue.append(self._pptx_session)
+            self._pptx_session = None
+            self._cleanup_idle()
         self.generation += 1
         self.analysis = None
         self.pdf_content = None
@@ -301,6 +378,8 @@ class ReviewWidget(Page):
         self.summary.clear()
         self.slide_summary.clear()
         self.content.hide()
+        self.run_powerpoint.setEnabled(False)
+        self.open_powerpoint.setEnabled(False)
         self.pending_load = False
         if not keep_deck:
             self.deck_id = None
@@ -308,6 +387,7 @@ class ReviewWidget(Page):
 
     def load(self) -> None:
         deck_id, deck_status, access = self.deck_id, self.deck_status, self.token()
+        source_format = self.source_format
         if deck_id is None or not access or self.closing:
             return
         if self.runner.busy:
@@ -327,7 +407,11 @@ class ReviewWidget(Page):
             analysis: ReviewAnalysis | None = None
             notice = None
             try:
-                analysis = service.analysis(deck_id)
+                analysis = (
+                    service.analysis(deck_id, "pptx")
+                    if source_format == "pptx"
+                    else service.analysis(deck_id)
+                )
             except LibraryAccessExpired as exc:
                 return exc
             except ServiceError as exc:
@@ -344,18 +428,37 @@ class ReviewWidget(Page):
                         "ready": "Library status: processing is complete.",
                     }.get(deck_status, "")
             try:
-                source = service.source(deck_id)
+                source = (
+                    service.source(deck_id, "pptx")
+                    if source_format == "pptx"
+                    else service.source(deck_id)
+                )
             except LibraryAccessExpired as exc:
                 return exc
             content_hash = hashlib.sha256(source.content).hexdigest()
             if analysis is not None and (
                 analysis.source_revision != source.revision
                 or analysis.source_sha256 != content_hash
+                or analysis.source_format != source_format
             ):
                 analysis = None
                 notice = (
-                    "The saved analysis belongs to a different PDF revision. The PDF is "
-                    "available to browse; action details are hidden."
+                    "The saved analysis belongs to a different source revision. "
+                    "Action details are hidden; reload after processing the current source."
+                )
+            if source_format == "pptx":
+                return LoadedReview(
+                    analysis,
+                    source.content,
+                    tuple((slide.width, slide.height) for slide in analysis.slides)
+                    if analysis
+                    else (),
+                    QImage(),
+                    notice
+                    or (
+                        "PowerPoint summaries use extracted text and notes; unreadable visuals "
+                        "are identified explicitly. Open the saved source to inspect its slides."
+                    ),
                 )
             metadata, first = render(source.content, 0)
             sizes = tuple(tuple(size) for size in metadata["sizes"])
@@ -384,7 +487,7 @@ class ReviewWidget(Page):
             return
         if identifier < 1:
             return
-        self.pending_operation = ""
+        operation, self.pending_operation = self.pending_operation, ""
         if isinstance(result, LibraryAccessExpired):
             self.account.expire_session(str(result))
         elif isinstance(result, LoadedReview):
@@ -414,6 +517,22 @@ class ReviewWidget(Page):
                     )
                 )
             self.content.show()
+            powerpoint = self.source_format == "pptx"
+            self.open_powerpoint.setVisible(powerpoint)
+            self.run_powerpoint.setVisible(powerpoint)
+            self.open_powerpoint.setEnabled(
+                powerpoint
+                and sys.platform == "win32"
+                and self.analysis is not None
+                and self.analysis.office_safe
+            )
+            self.open_powerpoint.setToolTip(
+                "Desktop PowerPoint on Windows is required."
+                if sys.platform != "win32"
+                else "Sources with external links or embedded active material cannot be opened."
+                if self.analysis is not None and not self.analysis.office_safe
+                else "Open the verified source read-only in desktop PowerPoint."
+            )
             self.state.hide()
             self._display_page()
         elif isinstance(result, EvidenceResult):
@@ -421,6 +540,11 @@ class ReviewWidget(Page):
         elif isinstance(result, RenderedPage):
             self.page_index, self.image = result.index, result.image
             self._display_page()
+            if operation == "powerpoint_action":
+                self.notice.setText(
+                    "PowerPoint action completed on the saved source. Execution validation "
+                    "does not establish semantic correctness."
+                )
 
     @staticmethod
     def _summary_text(summary: object, publication: str) -> str:
@@ -449,6 +573,9 @@ class ReviewWidget(Page):
         if operation == "page":
             self.notice.setText("Page could not be rendered: " + message)
             return
+        if operation in {"powerpoint_open", "powerpoint_action"}:
+            self.notice.setText("PowerPoint: " + message)
+            return
         self.state.show_state("Review unavailable", message, retry=True)
         self.content.hide()
 
@@ -462,12 +589,85 @@ class ReviewWidget(Page):
         ):
             self.load()
             return
-        self.activity_changed.emit(False)
+        if self.source_format == "pptx" and self.action_rows:
+            self.action_selected()
+        self.activity_changed.emit(self.cleanup_runner.busy)
+
+    def _cleanup_idle(self) -> None:
+        if self.cleanup_runner.busy:
+            return
+        if self._cleanup_queue:
+            session = self._cleanup_queue.pop(0)
+            self.activity_changed.emit(True)
+            self.cleanup_runner.submit(session.close)
+        else:
+            self.activity_changed.emit(self.runner.busy)
+
+    def open_saved_powerpoint(self) -> None:
+        analysis, content = self.analysis, self.pdf_content
+        if (
+            self.runner.busy
+            or self.closing
+            or self.source_format != "pptx"
+            or analysis is None
+            or not analysis.office_safe
+            or content is None
+            or not self.token()
+        ):
+            return
+        if self._pptx_session is None or self._pptx_session.cancelled.is_set():
+            self._pptx_session = PowerPointReviewSession()
+        session, index = self._pptx_session, self.page_index
+        self.request_generation, self.pending_operation = self.generation, "powerpoint_open"
+        self.activity_changed.emit(True)
+        self.runner.submit(
+            lambda: RenderedPage(
+                index, powerpoint_image(session.open(content, analysis, index).png)
+            )
+        )
+
+    def run_selected_powerpoint_action(self) -> None:
+        row = self.action_table.currentRow()
+        analysis, session = self.analysis, self._pptx_session
+        if (
+            self.runner.busy
+            or self.closing
+            or not self.token()
+            or session is None
+            or analysis is None
+            or self.source_format != "pptx"
+            or not 0 <= row < len(self.action_rows)
+        ):
+            return
+        action, index = self.action_rows[row], self.page_index
+        if not action.usable:
+            return
+        self.request_generation, self.pending_operation = self.generation, "powerpoint_action"
+        self.activity_changed.emit(True)
+        self.runner.submit(
+            lambda: RenderedPage(
+                index, powerpoint_image(session.apply(action, analysis, index).png)
+            )
+        )
 
     def show_page(self, index: int) -> None:
         if self.runner.busy or self.pdf_content is None or not 0 <= index < len(self.sizes):
             return
         if index == self.page_index:
+            return
+        if self.source_format == "pptx":
+            session, analysis = self._pptx_session, self.analysis
+            if session is None or analysis is None:
+                self.page_index, self.image = index, QImage()
+                self._display_page()
+            else:
+                self.request_generation, self.pending_operation = self.generation, "page"
+                self.runner.submit(
+                    lambda: RenderedPage(
+                        index,
+                        powerpoint_image(session.show(index, analysis.slides[index]).png),
+                    )
+                )
             return
         self.request_generation = self.generation
         self.pending_operation = "page"
@@ -515,25 +715,38 @@ class ReviewWidget(Page):
         )
 
     def action_selected(self) -> None:
+        self.run_powerpoint.setEnabled(False)
         row = self.action_table.currentRow()
         if not 0 <= row < len(self.action_rows):
             self.preview.set_page(self.image, None)
             return
         action = self.action_rows[row]
         x, y, width, height = action.region
-        self.preview.set_page(self.image, action.region)
+        slide = self.analysis.slides[self.page_index] if self.analysis else None
+        self.preview.set_page(
+            self.image,
+            action.region,
+            (slide.width, slide.height) if slide and self.source_format == "pptx" else None,
+        )
+        self.run_powerpoint.setEnabled(
+            self.source_format == "pptx"
+            and self._pptx_session is not None
+            and action.usable
+            and not self.runner.busy
+        )
         validation = (
             f"\nValidation profile: {action.profile}\nValidator: {action.validator_version}\n"
             f"Renderer: {action.renderer_version}\nValidation record: "
             f"{action.validation_id or 'not yet validated'}"
         )
         slide_id = self.analysis.slides[self.page_index].slide_id if self.analysis else "unknown"
+        units = "PowerPoint slide points" if self.source_format == "pptx" else "PDF source pixels"
         lines = [
             f"Purpose: {action.purpose}",
             f"Type: {action.action_type}",
             f"Version: {action.version}",
             f"Target: slide {self.page_index + 1} ({slide_id})",
-            f"Region (PDF source pixels): x={x:g}, y={y:g}, width={width:g}, height={height:g}",
+            f"Region ({units}): x={x:g}, y={y:g}, width={width:g}, height={height:g}",
             f"Status: {action.state.replace('-', ' ')} · "
             f"{'usable' if action.usable else 'not usable'}",
         ]
