@@ -398,7 +398,7 @@ class ReviewWidget(Page):
         self.request_generation = self.generation
         self.pending_operation = "load"
         self.state.show_state(
-            "Loading saved review", "Checking saved analysis and downloading its private PDF."
+            "Loading saved review", "Checking saved analysis and its private presentation source."
         )
         self.signin.hide()
         service = ReviewService(self.config, access)
@@ -427,6 +427,10 @@ class ReviewWidget(Page):
                         ),
                         "ready": "Library status: processing is complete.",
                     }.get(deck_status, "")
+            if source_format == "pptx" and analysis is None:
+                # A PowerPoint preview needs its saved native slide manifest. Do
+                # not download a large source while analysis is still pending.
+                return LoadedReview(None, b"", (), QImage(), notice)
             try:
                 source = (
                     service.source(deck_id, "pptx")

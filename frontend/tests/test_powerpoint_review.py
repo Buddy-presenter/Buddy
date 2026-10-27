@@ -355,3 +355,46 @@ def test_private_review_reopens_an_ended_show_and_rechecks_source(monkeypatch):
         assert automation.launches == 2
     finally:
         session.close()
+
+
+def test_pending_powerpoint_review_does_not_download_the_source(desktop_window, monkeypatch, qtbot):
+    def pending(*_args):
+        raise ServiceError("No saved analysis is available for this presentation yet.")
+
+    def unexpected_download(*_args):
+        pytest.fail("A pending PowerPoint analysis must not trigger a source download")
+
+    monkeypatch.setattr(ReviewService, "analysis", pending)
+    monkeypatch.setattr(ReviewService, "source", unexpected_download)
+    window = desktop_window()
+    window.account.session = SimpleNamespace(
+        tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
+    )
+    window.account.session_changed.emit()
+    review = window.review
+    review.set_deck(uuid4(), "Still processing.pptx", "processing", "pptx")
+    review.activate(True)
+    qtbot.waitUntil(lambda: not review.runner.busy)
+    assert "processing is still running" in review.notice.text()
+    assert not review.content.isHidden()
+    assert not review.open_powerpoint.isEnabled()
+
+
+def test_powerpoint_source_download_uses_a_transfer_timeout(monkeypatch):
+    import buddy_desktop.review_service as transport
+    from buddy_desktop.config import AppConfig
+
+    timeouts = []
+
+    class Opener:
+        def open(self, request, *, timeout):
+            timeouts.append(timeout)
+            raise OSError("synthetic network failure")
+
+    monkeypatch.setattr(transport, "build_opener", lambda *_args: Opener())
+    service = ReviewService(AppConfig("http://127.0.0.1:8000", 5), "token")
+    with pytest.raises(ServiceError):
+        service.source(uuid4(), "pptx")
+    with pytest.raises(ServiceError):
+        service.analysis(uuid4(), "pptx")
+    assert timeouts == [120, 5]

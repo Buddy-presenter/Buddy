@@ -410,10 +410,13 @@ class ReviewService:
             self.config.api_url + path,
             headers={"Authorization": "Bearer " + self.access, "Accept": accept},
         )
+        timeout = (
+            max(120.0, self.config.request_timeout)
+            if path.endswith("/powerpoint-source")
+            else self.config.request_timeout
+        )
         try:
-            with build_opener(NoRedirects()).open(
-                request, timeout=self.config.request_timeout
-            ) as response:
+            with build_opener(NoRedirects()).open(request, timeout=timeout) as response:
                 content = response.read(limit + 1)
                 if len(content) > limit or response.headers.get_content_type() not in (
                     allowed_types or {accept}

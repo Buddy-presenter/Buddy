@@ -44,6 +44,10 @@ use `GET /api/v1/decks/{deck_id}/powerpoint-source`. Existing PDF analysis/sourc
 retain their PDF contracts and reject PowerPoint access. Authentication, ownership,
 private evidence, bounded reads and `Cache-Control: no-store` apply to both formats.
 There is no HTTP endpoint through which a desktop client can assert successful validation.
+Review does not download a PPTX while its analysis is unavailable. Original-PPTX transfers
+use a 120-second client socket timeout, separately from short metadata requests. Source
+authorization captures immutable pointers before releasing the database connection, so
+slow storage reads do not occupy the API connection pool.
 
 ## Real Office validation boundary
 

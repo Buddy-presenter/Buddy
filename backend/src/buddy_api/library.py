@@ -339,16 +339,19 @@ def library_router() -> APIRouter:
             )
             if not key or not version or not size or not digest or not revision:
                 raise HTTPException(404)
-            async with uploads.parser_slot:
-                content = await blocking(
-                    lambda: uploads.storage.read(
-                        key,
-                        version=version,
-                        size=size,
-                        sha256=digest,
-                        source_format=deck.source_format,
-                    )
+        # Authorization and immutable source pointers are captured above. Release
+        # the connection before waiting on storage or the bounded parser slot;
+        # concurrent slow downloads must not exhaust the API database pool.
+        async with uploads.parser_slot:
+            content = await blocking(
+                lambda: uploads.storage.read(
+                    key,
+                    version=version,
+                    size=size,
+                    sha256=digest,
+                    source_format=source_format,
                 )
+            )
         return Response(
             content,
             media_type="application/pdf"

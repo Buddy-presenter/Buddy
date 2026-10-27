@@ -162,6 +162,29 @@ def transfer(client, identifier, content=SOURCE):
     )
 
 
+def test_source_download_releases_its_database_connection_before_storage(upload_app, monkeypatch):
+    from contextlib import AsyncExitStack
+
+    with upload_app() as (client, _cloud, service):
+        identifier = initialize(client).json()["data"]["id"]
+        assert transfer(client, identifier).status_code == 200
+        original_read = service.storage.read
+
+        async def use_the_entire_pool():
+            async with AsyncExitStack() as stack:
+                for _ in range(5):
+                    connection = await stack.enter_async_context(service.database.engine.connect())
+                    await connection.execute(select(1))
+
+        def checked_read(*args, **kwargs):
+            client.portal.call(use_the_entire_pool)
+            return original_read(*args, **kwargs)
+
+        monkeypatch.setattr(service.storage, "read", checked_read)
+        response = client.get(f"/api/v1/decks/{identifier}/powerpoint-source")
+        assert response.status_code == 200 and response.content == SOURCE
+
+
 def test_pdf_upload_storage_database_private_download_and_pptx_preservation(upload_app):
     fixture = Path(__file__).resolve().parents[3] / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf"
     content = fixture.read_bytes()
