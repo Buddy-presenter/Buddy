@@ -53,7 +53,7 @@ def test_verified_profile_navigation_keyboard_and_layout(profile, qtbot, qapp):
         qtbot.mouseClick(window.profile_action, Qt.MouseButton.LeftButton)
         qtbot.waitUntil(lambda: not window.account.runner.busy)
         page = window.profile
-        assert window.pages.currentIndex() == 5 and window.navigation.count() == 5
+        assert window.pages.currentIndex() == 5 and window.navigation.count() == 6
         assert page.email.text() == response["data"]["email"]
         assert page.verification.text() == "Email verified"
         assert page.email.textFormat() == Qt.TextFormat.PlainText
