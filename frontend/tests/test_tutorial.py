@@ -1,6 +1,7 @@
 """The guide remains usable offline and preserves existing workspace routes."""
 
 import pytest
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QLabel, QPushButton
 
 
@@ -25,7 +26,7 @@ def test_tutorial_navigation_scroll_and_actions(desktop_window, qapp, size):
         button = next(b for b in window.tutorial.findChildren(QPushButton) if b.text() == title)
         button.click()
         assert window.pages.currentIndex() == destination
-    tutorial_shortcut = next(a for a in window.actions() if a.text() == "&How to use")
+    tutorial_shortcut = next(a for a in window.findChildren(QAction) if a.text() == "&How to use")
     tutorial_shortcut.trigger()
     assert window.pages.currentIndex() == 6
     window._show_account()
