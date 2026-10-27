@@ -497,7 +497,11 @@ class ReviewWidget(Page):
                 (
                     action.purpose,
                     action.action_type.replace("_", " "),
-                    action.state.replace("-", " "),
+                    "visually verified"
+                    if action.semantic_verified
+                    else "execution validated; visual verification pending"
+                    if action.state == "validated"
+                    else action.state.replace("-", " "),
                 )
             ):
                 item = QTableWidgetItem(text)
@@ -541,8 +545,7 @@ class ReviewWidget(Page):
             f"Version: {action.version}",
             f"Target: slide {self.page_index + 1} ({slide_id})",
             f"Region (PDF source pixels): x={x:g}, y={y:g}, width={width:g}, height={height:g}",
-            f"Status: {status} · "
-            f"{'usable' if action.usable else 'not usable'}",
+            f"Status: {status} · {'usable' if action.usable else 'not usable'}",
             f"Validation kind: {action.validation_kind}",
         ]
         if action.reasons:

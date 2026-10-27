@@ -138,8 +138,8 @@ def test_review_parser_binds_validation_evidence_to_action_and_profile():
             "validator_version": "validator-1",
             "renderer_version": "renderer-1",
             "display_profile": "wide-1x",
-                "validation_kind": "visual",
-                "semantic_verified": True,
+            "validation_kind": "visual",
+            "semantic_verified": True,
             "state": "validated",
             "reasons": [],
             "evidence": [{"id": str(artifact_id), "kind": "before_image", "sha256": "c" * 64}],
@@ -150,6 +150,19 @@ def test_review_parser_binds_validation_evidence_to_action_and_profile():
     assert item.validation_id == validation_id
     assert item.usable and item.state == "validated"
     assert item.evidence[0].id == artifact_id
+    legacy = deepcopy(payload)
+    legacy_result = legacy["data"]["slides"][0]["actions"][0]
+    del legacy_result["semantic_verified"]
+    del legacy_result["validation"]["semantic_verified"]
+    del legacy_result["validation"]["validation_kind"]
+    legacy_action = parse_analysis(legacy, deck_id).slides[0].actions[0]
+    assert legacy_action.state == "validated"
+    assert not legacy_action.usable and not legacy_action.semantic_verified
+    assert legacy_action.validation_kind == "execution"
+    # An explicit new-format execution verdict must not claim usability.
+    legacy_result["semantic_verified"] = False
+    with pytest.raises(ValueError):
+        parse_analysis(legacy, deck_id)
     payload["data"]["slides"][0]["actions"][0]["validation"]["action_sha256"] = "0" * 64
     with pytest.raises(ValueError):
         parse_analysis(payload, deck_id)

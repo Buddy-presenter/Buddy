@@ -282,8 +282,15 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                 or result_semantic_verified != semantic_verified
             ):
                 raise ValueError
-            if result["usable"] != (
-                result["state"] == "validated" and result_semantic_verified
+            usable = result["state"] == "validated" and result_semantic_verified
+            legacy_execution = (
+                "semantic_verified" not in result
+                and isinstance(validation, dict)
+                and "semantic_verified" not in validation
+                and "validation_kind" not in validation
+            )
+            if result["usable"] != usable and not (
+                legacy_execution and result["state"] == "validated" and result["usable"]
             ):
                 raise ValueError
             actions.append(
@@ -294,7 +301,7 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                     _required_text(action.get("version")),
                     (x, y, width, height),
                     result["state"],
-                    result["usable"],
+                    usable,
                     validation_kind,
                     result_semantic_verified,
                     tuple(evidence),
