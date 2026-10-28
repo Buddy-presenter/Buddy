@@ -64,8 +64,20 @@ class PowerPointAction:
     text: str = ""
     pointer_tool: str | None = None
     auto_place: bool = False
+    source_shape_id: int | None = None
+    target_text: str = ""
 
     def validate(self) -> None:
+        if self.source_shape_id is not None and (
+            type(self.source_shape_id) is not int or self.source_shape_id <= 0
+        ):
+            raise PowerPointError("The source shape identity is invalid.")
+        if (
+            not isinstance(self.target_text, str)
+            or len(self.target_text) > 300
+            or (self.target_text and self.source_shape_id is None)
+        ):
+            raise PowerPointError("The source text target is invalid.")
         allowed = {
             "next_slide",
             "previous_slide",

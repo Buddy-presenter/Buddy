@@ -8,6 +8,7 @@ its canonical source path and is revalidated before Buddy reports it as connecte
 from __future__ import annotations
 
 import importlib
+import math
 import re
 import sys
 import tempfile
@@ -175,6 +176,23 @@ class PowerPointAutomation:
         return name
 
     @classmethod
+    def _source_shape(cls, shapes: Any, identifier: int) -> Any:
+        pending = [shapes]
+        visited = 0
+        while pending:
+            collection = pending.pop()
+            for index in range(1, collection.Count + 1):
+                visited += 1
+                if visited > 25000:
+                    raise PowerPointError("The slide exceeds the source object limit.")
+                item = collection.Item(index)
+                if int(getattr(item, "Id", -1)) == identifier:
+                    return item
+                if getattr(item, "Type", None) == 6:  # msoGroup
+                    pending.append(item.GroupItems)
+        raise PowerPointError("The source object is no longer available on this slide.")
+
+    @classmethod
     def _create_annotation_shapes(
         cls,
         slide: Any,
@@ -184,17 +202,45 @@ class PowerPointAutomation:
         """Create editable slide objects so Buddy can remove each annotation precisely."""
         shapes = slide.Shapes
         r = action.region
+        points = action.points
+        if action.source_shape_id is not None:
+            source = cls._source_shape(shapes, action.source_shape_id)
+            if source.HasTextFrame and source.TextFrame.HasText:
+                if action.kind in {"draw_diamond", "draw_triangle", "draw_hexagon", "draw_star"}:
+                    raise PowerPointError("This geometric outline cannot safely frame text.")
+                tr = source.TextFrame.TextRange
+                if action.target_text:
+                    text = str(tr.Text).replace("\r", "\n").replace("\v", "\n")
+                    if text.count(action.target_text) != 1:
+                        raise PowerPointError("The selected source phrase is missing or ambiguous.")
+                    text_start = text.index(action.target_text)
+                    offset = len(text[:text_start].encode("utf-16-le")) // 2
+                    length = len(action.target_text.encode("utf-16-le")) // 2
+                    tr = tr.Characters(offset + 1, length)
+                x, y, width, height = map(
+                    float, (tr.BoundLeft, tr.BoundTop, tr.BoundWidth, tr.BoundHeight)
+                )
+                if not all(math.isfinite(v) for v in (x, y, width, height)):
+                    raise PowerPointError("PowerPoint could not measure the selected text.")
+                right = min(action.target.slide_width, x + width + 3)
+                bottom = min(action.target.slide_height, y + height + 2)
+                x, y = max(0.0, x - 3), max(0.0, y - 2)
+                if right <= x or bottom <= y:
+                    raise PowerPointError("The selected text is outside the visible slide.")
+                r = Region(x, y, right - x, bottom - y)
+                if action.kind in {"draw_arrow", "draw_line"}:
+                    points = ((r.x, r.y), (r.x + r.width, r.y + r.height))
+            elif action.target_text:
+                raise PowerPointError("The source object no longer contains the selected text.")
         created: list[Any] = []
         names: list[str] = []
         try:
             if action.kind in {"draw_line", "draw_arrow", "draw_freehand", "draw_underline"}:
                 if action.kind == "draw_underline" and r is not None:
-                    points: tuple[tuple[float, float], ...] = (
+                    points = (
                         (r.x, r.y + r.height),
                         (r.x + r.width, r.y + r.height),
                     )
-                else:
-                    points = action.points
                 for index, (start, end) in enumerate(zip(points, points[1:], strict=False)):
                     validate_target()
                     line = shapes.AddLine(*start, *end)

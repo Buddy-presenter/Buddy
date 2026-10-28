@@ -5,8 +5,47 @@ from types import SimpleNamespace
 import pytest
 
 from buddy_desktop.powerpoint import PowerPointAutomation, PowerPointError
-from buddy_desktop.powerpoint_contract import PowerPointAction
+from buddy_desktop.powerpoint_contract import PowerPointAction, PresentationInfo
 from buddy_desktop.slide_contract import Region
+
+
+def test_generated_highlight_uses_exact_text_bounds_and_unicode_offsets():
+    shapes = FakeShapes()
+    calls = []
+    text = "🚀 Revenue grew 12%."
+
+    def characters(start, length):
+        calls.append((start, length))
+        return SimpleNamespace(BoundLeft=120, BoundTop=220, BoundWidth=35, BoundHeight=18)
+
+    shapes.items.append(
+        SimpleNamespace(
+            Id=99,
+            HasTextFrame=True,
+            TextFrame=SimpleNamespace(
+                HasText=True, TextRange=SimpleNamespace(Text=text, Characters=characters)
+            ),
+        )
+    )
+    action = PowerPointAction(
+        "highlight_region",
+        PresentationInfo("test.pptx", "test.pptx", 1, 1, 1, 256, 960, 540),
+        region=Region(50, 55, 850, 300),
+        source_shape_id=99,
+        target_text="12%",
+    )
+    PowerPointAutomation._create_annotation_shapes(
+        SimpleNamespace(Shapes=shapes), action, lambda: None
+    )
+    assert calls == [(len(text[: text.index("12%")].encode("utf-16-le")) // 2 + 1, 3)]
+    assert shapes.items[-1].args == (1, 117.0, 218.0, 41.0, 22.0)
+    assert shapes.items[0].TextFrame.TextRange.Text == text
+    from dataclasses import replace
+
+    with pytest.raises(PowerPointError, match="cannot safely frame text"):
+        PowerPointAutomation._create_annotation_shapes(
+            SimpleNamespace(Shapes=shapes), replace(action, kind="draw_star"), lambda: None
+        )
 
 
 class FakePythonCom:

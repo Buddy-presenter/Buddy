@@ -45,8 +45,9 @@ def test_real_extraction_object_bounds_all_powerpoint_actions(width):
     assert document.manifest.slides[0].source.width == width
     assert set(a.type for a in document.slides[0].actions) == set(ACTION_TYPES)
     for action in document.slides[0].actions:
-        assert action.params.region.x == 50
-        assert action.params.region.width == 300
+        geometric = action.type in {"draw_diamond", "draw_triangle", "draw_hexagon", "draw_star"}
+        assert action.params.region.x == (500 if geometric else 50)
+        assert action.params.region.width == (64 if geometric else 300)
         with pytest.raises(ValueError):
             ContentAction.model_validate(action.model_dump(mode="json"))
     with pytest.raises(ValueError):
@@ -77,6 +78,58 @@ def test_pdf_actions_and_pdf_sources_are_rejected_in_powerpoint_path():
     pdf = extraction.model_copy(update={"source_format": "pdf"})
     with pytest.raises(ProviderFailure, match="pptx_source_mismatch"):
         PowerPointProvider("eu-central-1").request_body(b"%PDF-1.7", pdf, manifest(extraction))
+
+
+def test_text_targets_are_grounded_and_decorative_text_frames_are_omitted():
+    _, extraction = source()
+    raw = output(extraction, ("highlight_region", "draw_star", "draw_diamond")).model_dump(
+        mode="json"
+    )
+    for slide, generated in zip(extraction.slides, raw["slides"], strict=True):
+        generated["actions"][0]["target_text"] = slide.objects[0].text
+        for action in generated["actions"][1:]:
+            action["object_id"] = slide.objects[0].id
+    generated = PowerPointOutput.model_validate(raw)
+    document = analysis_document(
+        generated,
+        extraction,
+        manifest(extraction),
+        UUID(manifest(extraction).deck_id),
+        uuid4(),
+        uuid4(),
+    )
+    for result, slide in zip(document.slides, extraction.slides, strict=True):
+        assert [a.type for a in result.actions] == ["highlight_region"]
+        assert result.actions[0].params.target_text == slide.objects[0].text
+        assert result.actions[0].params.source_shape_id == slide.objects[0].source_id
+    raw["slides"][0]["actions"][0]["target_text"] = "a claim absent from the source"
+    with pytest.raises(ProviderFailure, match="pptx_unknown_text_target"):
+        analysis_document(
+            PowerPointOutput.model_validate(raw),
+            extraction,
+            manifest(extraction),
+            UUID(manifest(extraction).deck_id),
+            uuid4(),
+            uuid4(),
+        )
+
+
+def test_two_different_phrases_can_be_highlighted_in_one_text_box():
+    _, extraction = source()
+    raw = output(extraction).model_dump(mode="json")
+    for slide, generated in zip(extraction.slides, raw["slides"], strict=True):
+        action = generated["actions"][0]
+        action.update(object_id=slide.objects[1].id, target_text="Revenue")
+        generated["actions"].append(dict(action, target_text="12%"))
+    document = analysis_document(
+        PowerPointOutput.model_validate(raw),
+        extraction,
+        manifest(extraction),
+        UUID(manifest(extraction).deck_id),
+        uuid4(),
+        uuid4(),
+    )
+    assert [a.params.target_text for a in document.slides[0].actions] == ["Revenue", "12%"]
 
 
 @pytest.mark.parametrize(

@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from uuid import UUID
 
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, Qt, Signal
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QImage, QImageReader, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
@@ -59,6 +59,28 @@ class EvidenceResult:
     kind: str
     content: bytes
     mime: str
+
+
+class ActionTable(QTableWidget):
+    """Let the page scroll once; action rows never form a nested scroll area."""
+
+    def fit_rows(self) -> None:
+        self.resizeRowsToContents()
+        for row in range(self.rowCount()):
+            button = self.cellWidget(row, 3)
+            minimum = button.sizeHint().height() + 16 if button else 64
+            self.setRowHeight(row, max(minimum, self.rowHeight(row)))
+        self.setFixedHeight(
+            self.horizontalHeader().height()
+            + sum(self.rowHeight(row) for row in range(self.rowCount()))
+            + 2 * self.frameWidth()
+            + 4
+        )
+
+    def resizeEvent(self, event: object) -> None:
+        super().resizeEvent(event)  # type: ignore[arg-type]
+        self.setColumnHidden(1, self.viewport().width() < 640)
+        QTimer.singleShot(0, self.fit_rows)
 
 
 def powerpoint_image(png: bytes) -> QImage:
@@ -280,7 +302,7 @@ class ReviewWidget(Page):
         action_header.addWidget(self.actions_title, 1)
         action_header.addWidget(self.run_powerpoint)
         content_layout.addLayout(action_header)
-        self.action_table = QTableWidget(0, 4)
+        self.action_table = ActionTable(0, 4)
         self.action_table.setObjectName("reviewActions")
         self.action_table.setHorizontalHeaderLabels(["What it does", "Tool", "Availability", ""])
         self.action_table.setAccessibleName("Generated slide actions")
@@ -289,10 +311,14 @@ class ReviewWidget(Page):
         self.action_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.action_table.horizontalHeader().setStretchLastSection(False)
         self.action_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for column in (1, 2, 3):
+        for column in (1, 2):
             self.action_table.horizontalHeader().setSectionResizeMode(
                 column, QHeaderView.ResizeMode.ResizeToContents
             )
+        self.action_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self.action_table.setColumnWidth(3, 120)
+        self.action_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.action_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.action_table.verticalHeader().hide()
         self.action_table.setWordWrap(True)
         self.action_table.setShowGrid(False)
@@ -782,6 +808,9 @@ class ReviewWidget(Page):
                     item.setData(Qt.ItemDataRole.UserRole, index)
                 self.action_table.setItem(index, column, item)
             detail_button = QPushButton("Details")
+            detail_button.setObjectName("actionDetailsButton")
+            detail_button.setMinimumWidth(100)
+            self.action_table.setColumnWidth(3, max(120, detail_button.sizeHint().width() + 12))
             detail_button.setAccessibleName(f"Details for action {index + 1}")
             detail_button.clicked.connect(
                 lambda _checked=False, row=index: self.show_action_details(row)
@@ -805,6 +834,7 @@ class ReviewWidget(Page):
             f"Suggested actions · {sum(a.usable for a in self.action_rows)} ready "
             f"/ {len(self.action_rows)} total"
         )
+        self.action_table.fit_rows()
         self.preview.set_page(self.image, None)
         self.action_table.setAccessibleDescription(
             f"{len(self.action_rows)} actions on slide {self.page_index + 1}"

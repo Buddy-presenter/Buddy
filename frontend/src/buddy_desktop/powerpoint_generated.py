@@ -48,6 +48,8 @@ def generated_action(
         text=params.get("text", ""),
         color=0x3D84F5,
         auto_place=raw["type"] in {"callout", "text_box"},
+        source_shape_id=params.get("source_shape_id"),
+        target_text=params.get("target_text", ""),
     )
     action.validate()
     return action

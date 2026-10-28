@@ -259,6 +259,7 @@ def test_powerpoint_review_visual_layout(
     desktop_window, monkeypatch, qtbot, qapp, request, width, height
 ):
     import os
+    from dataclasses import replace
     from pathlib import Path
 
     from buddy_desktop.visuals import apply_theme
@@ -276,6 +277,18 @@ def test_powerpoint_review_visual_layout(
     content = b"PK-synthetic-source"
     deck, payload = powerpoint_payload(content, usable=False)
     analysis = parse_analysis(payload, deck)
+    slide = analysis.slides[0]
+    analysis = replace(
+        analysis,
+        slides=(
+            replace(
+                slide,
+                actions=tuple(
+                    replace(slide.actions[0], instance_id=f"layout-{i}") for i in range(8)
+                ),
+            ),
+        ),
+    )
     monkeypatch.setattr(ReviewService, "analysis", lambda *_args: analysis)
     monkeypatch.setattr(
         ReviewService,
@@ -292,6 +305,14 @@ def test_powerpoint_review_visual_layout(
     window.navigation.setCurrentRow(2)
     window.review.set_deck(deck, "Quarterly results.pptx", "review_ready", "pptx")
     qtbot.waitUntil(lambda: not window.review.runner.busy)
+    qtbot.wait(80)
+    table = window.review.action_table
+    assert table.verticalScrollBar().maximum() == 0
+    assert table.height() >= sum(table.rowHeight(i) for i in range(table.rowCount()))
+    for row in range(table.rowCount()):
+        button = table.cellWidget(row, 3)
+        assert table.columnWidth(3) >= button.sizeHint().width()
+        assert table.rowHeight(row) >= button.sizeHint().height()
     assert not window.review.content.isHidden()
     assert window.review.open_powerpoint.geometry().right() < window.review.content.width()
     assert window.review.run_powerpoint.geometry().right() < window.review.content.width()
@@ -311,6 +332,9 @@ def test_powerpoint_review_visual_layout(
             window.review._display_page()
             qtbot.wait(50)
         assert window.grab().save(str(folder / f"powerpoint-review-{width}x{height}.png"))
+        window.pages.currentWidget().ensureWidgetVisible(table.cellWidget(4, 3))
+        qtbot.wait(50)
+        assert window.grab().save(str(folder / f"powerpoint-actions-{width}x{height}.png"))
 
 
 def test_real_office_indexed_png_is_decoded_and_invalid_previews_are_rejected(qapp):

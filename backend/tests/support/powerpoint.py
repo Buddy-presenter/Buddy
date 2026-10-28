@@ -4,9 +4,11 @@ import io
 from functools import lru_cache
 
 from pptx import Presentation
+from pptx.enum.shapes import MSO_AUTO_SHAPE_TYPE
 from pptx.util import Pt
 
 from buddy_api.analysis.powerpoint import (
+    GEOMETRIC_TYPES,
     PowerPointOutput,
     SuggestedAction,
     SuggestedSlide,
@@ -26,6 +28,7 @@ def source(width=960):
         box.text_frame.text = heading
         body = slide.shapes.add_textbox(Pt(50), Pt(180), Pt(400), Pt(160))
         body.text_frame.text = "Revenue grew 12%. Expand the pilot after review."
+        slide.shapes.add_shape(MSO_AUTO_SHAPE_TYPE.OVAL, Pt(500), Pt(180), Pt(64), Pt(64))
         slide.notes_slide.notes_text_frame.text = "Discuss the measured pilot results."
     output = io.BytesIO()
     deck.save(output)
@@ -48,7 +51,7 @@ def output(extraction, kinds=("highlight_region",)):
                     SuggestedAction(
                         type=kind,
                         purpose="Emphasize the quarterly result.",
-                        object_id=slide.objects[0].id,
+                        object_id=slide.objects[2 if kind in GEOMETRIC_TYPES else 0].id,
                         text="Quarterly result" if kind in {"callout", "text_box"} else "",
                     )
                     for kind in kinds

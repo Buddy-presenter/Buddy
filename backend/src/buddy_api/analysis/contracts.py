@@ -184,6 +184,8 @@ class AnalysisInput(Model):
 class PowerPointParameters(Model):
     region: Region
     text: Annotated[str, Field(max_length=300)] = ""
+    source_shape_id: Annotated[int, Field(strict=True, gt=0)] | None = None
+    target_text: Annotated[str, Field(max_length=300)] = ""
 
 
 class PowerPointContentAction(Model):

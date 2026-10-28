@@ -1284,6 +1284,24 @@
           "region": {
             "$ref": "#/components/schemas/Region"
           },
+          "source_shape_id": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Shape Id"
+          },
+          "target_text": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Target Text",
+            "type": "string"
+          },
           "text": {
             "default": "",
             "maxLength": 300,

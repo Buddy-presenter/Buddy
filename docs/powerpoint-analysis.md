@@ -141,6 +141,19 @@ rounded rectangles, diamonds, triangles, hexagons and stars produced real Office
 The catalog and executor/profile versions were advanced together; regenerate any older
 unreleased test analyses to use these actions. PDF catalogs are unchanged.
 
+Text suggestions now include an exact, unique `target_text` and a server-derived native
+`source_shape_id`. Office measures the selected character range, including UTF-16 offsets,
+instead of stretching annotations across empty text-container space. Separate phrases in
+the same object may have separate highlights. Missing or changed text fails closed.
+Geometric stars, diamonds, triangles and hexagons are omitted for text targets or distorted
+aspect ratios. The model chooses tools for content meaning, without variety quotas; useful
+highlights can repeat. System instructions are separate from untrusted extracted content,
+and the final generation check excludes template boilerplate and empty placeholders.
+
+The Review action list expands to its rows and uses the page's single scrollbar. Details
+buttons reserve their measured width, with the Tool column moved into details on narrow
+windows. Screenshots cover eight actions at both 800x600 and 1360x1000.
+
 The expanded workflow also passed with real staging S3/Bedrock and isolated local
 HTTP/PostgreSQL/Windows Office/Qt services. Six generated actions (oval, underline,
 callout, rounded rectangle, arrow and text box) executed through Review. The actual

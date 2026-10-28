@@ -154,6 +154,25 @@
           "maxLength": 300,
           "title": "Text",
           "type": "string"
+        },
+        "source_shape_id": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Shape Id"
+        },
+        "target_text": {
+          "default": "",
+          "maxLength": 300,
+          "title": "Target Text",
+          "type": "string"
         }
       },
       "required": [
