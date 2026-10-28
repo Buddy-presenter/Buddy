@@ -146,6 +146,36 @@ Published machine-readable schemas are `analysis-v1.schema.json`,
 
 ## Migration and checks
 
+### Diagnose a misplaced text rectangle
+
+Before changing generation or coordinates, compare the saved action with current source
+grounding. From the repository root, run the local diagnostic with the exact source PDF,
+one-based page number, quoted target, and optional saved source-pixel rectangle:
+
+```powershell
+.\.venv\Scripts\python.exe backend/scripts/diagnose_pdf_region.py deck.pdf `
+  --page 2 --target "Exact visible phrase" `
+  --saved-region 100 200 400 30 --source-sha256 <saved-source-sha256> `
+  --output build/private-region-check
+```
+
+The directory must be new. It contains a private JSON report and a full-resolution page
+overlay: orange is the saved region and green is current grounding. The report includes
+source identity, renderer version, canonical dimensions and intersection-over-union.
+A mismatched supplied source digest refuses comparison. Without a digest, source identity
+is explicitly unverified. Missing or ambiguous targets have no grounded rectangle.
+The command reuses the production bounded grounding subprocess, makes no provider calls,
+and changes no persisted analysis. Keep these artifacts out of Git and shared logs.
+
+Compare the saved rectangle, this overlay and the Review viewport. Correct source geometry
+with an incorrect stored box points toward old generation/grounding or different deployed
+worker code. Correct stored geometry with an incorrect overlay in Review points toward the
+client mapping/selection path. A supplied quote is an investigator's target: it does not
+prove that the original model used that quote, nor does a matching box prove semantic intent.
+
+The source-grounding version in code is not evidence that staging runs it. Confirm the
+worker image/commit and analysis timestamp before making a fresh provider request.
+
 Apply the analysis migration and the following worker-state migration explicitly with the
 migration identity. They archive each old
 `graph` payload, marks its parent legacy/unavailable, retains all IDs/version/session
