@@ -351,3 +351,33 @@ def test_provider_accepts_commentary_but_never_ambiguous_tool_calls(monkeypatch,
             asyncio.run(run())
     else:
         assert asyncio.run(run()) == output(extracted)
+
+
+@pytest.mark.parametrize("text", ["Grounded presentation summary.", "", "x" * 16001])
+def test_plain_summary_text_is_normalized_without_weakening_validation(monkeypatch, text):
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "synthetic-test-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "synthetic-test-secret")
+    content, extracted = source()
+    generated = output(extracted).model_dump(mode="json")
+    generated["presentation"] = text
+    generated["slides"][0]["summary"] = "Exact slide summary."
+    envelope = {
+        "stop_reason": "tool_use",
+        "content": [{"type": "tool_use", "name": "submit_powerpoint_analysis", "input": generated}],
+    }
+    provider = PowerPointProvider(
+        "eu-central-1", transport=httpx.MockTransport(lambda _: httpx.Response(200, json=envelope))
+    )
+
+    async def run():
+        return await provider.analyze_async(
+            content, extracted, manifest(extracted).deck_id, manifest(extracted)
+        )
+
+    if not text or len(text) > 16000:
+        with pytest.raises(ProviderFailure, match="provider_malformed_output"):
+            asyncio.run(run())
+    else:
+        parsed = asyncio.run(run())
+        assert parsed.presentation.text == text and parsed.presentation.reason is None
+        assert parsed.slides[0].summary.text == "Exact slide summary."

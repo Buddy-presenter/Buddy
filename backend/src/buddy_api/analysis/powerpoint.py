@@ -332,7 +332,22 @@ class PowerPointProvider:
                 )
             ):
                 raise ValueError("Ambiguous or unexpected provider blocks")
-            result = PowerPointOutput.model_validate(tools[0]["input"])
+            payload = tools[0]["input"]
+            # Some valid tool responses use plain summary text despite the requested
+            # object shape. Preserve that exact text; never synthesize a summary or
+            # bypass the normal length/availability/action checks.
+            if isinstance(payload, dict):
+                payload = dict(payload)
+                if isinstance(payload.get("presentation"), str):
+                    payload["presentation"] = {"text": payload["presentation"], "reason": None}
+                if isinstance(payload.get("slides"), list):
+                    payload["slides"] = [
+                        dict(slide, summary={"text": slide["summary"], "reason": None})
+                        if isinstance(slide, dict) and isinstance(slide.get("summary"), str)
+                        else slide
+                        for slide in payload["slides"]
+                    ]
+            result = PowerPointOutput.model_validate(payload)
             if len(result.slides) != len(extraction.slides):
                 raise ValueError("Source slide count mismatch")
             return result

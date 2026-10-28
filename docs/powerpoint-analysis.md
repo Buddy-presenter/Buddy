@@ -151,6 +151,9 @@ phrases within one text container are not treated as duplicate validation candid
 Malformed or incomplete model responses remain unpublished and use the durable worker's
 bounded retry budget. A harmless text preamble may accompany exactly one valid analysis
 tool call; ambiguous tools, unknown block types and invalid schemas remain rejected.
+The provider adapter also accepts unambiguous plain-string deck/slide summaries by
+wrapping the exact text in the typed available-summary form. Empty or oversized text
+still fails normal validation; persisted API contracts remain unchanged.
 Geometric stars, diamonds, triangles and hexagons are omitted for text targets or distorted
 aspect ratios. The model chooses tools for content meaning, without variety quotas; useful
 highlights can repeat. System instructions are separate from untrusted extracted content,
