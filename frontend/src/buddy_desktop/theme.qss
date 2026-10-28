@@ -99,6 +99,7 @@ QCheckBox::indicator:checked { background: #FF9F61; border-color: #FF9F61; image
 /* Library */
 QTableWidget { background: #0F1014; alternate-background-color: #121318; border: 1px solid #1F2027; border-radius: 10px; gridline-color: transparent; selection-background-color: #24201E; selection-color: #FFFFFF; outline: 0; }
 QTableWidget::item { padding: 10px 14px; border: 0; }
+QTableWidget#presentationLibrary::item:selected { background: #34251F; color: #FFFFFF; }
 QHeaderView::section { background: #0F1014; color: #8E8E99; border: 0; border-bottom: 1px solid #1F2027; padding: 10px 14px; font-size: 12px; }
 QPlainTextEdit { background: transparent; border: 0; padding: 0; color: #A4A4AF; }
 QProgressBar#uploadProgress { border: 0; border-radius: 3px; background: #1D1E25; color: transparent; max-height: 6px; min-height: 6px; }

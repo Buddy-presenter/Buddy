@@ -472,7 +472,77 @@ def test_upload_retry_reuses_key_until_confirmed_success(
         release.set()
     qtbot.waitUntil(lambda: not library.runner.busy)
     assert not library.upload_keys
+
     library.choose_upload()
     qtbot.waitUntil(lambda: not library.runner.busy)
     assert keys[0] == keys[1] and keys[2] != keys[1]
     assert not library.upload_keys
+
+
+@pytest.mark.parametrize(
+    "source_format,label", [("pptx", "Inspecting PowerPoint"), ("pdf", "Inspecting PDF")]
+)
+def test_inspection_label_matches_the_source_format(source_format, label):
+    from buddy_desktop.library_widget import LibraryWidget
+
+    deck = DeckSummary(
+        uuid4(),
+        "Slides",
+        datetime.now(UTC),
+        "processing",
+        1,
+        source_format=source_format,
+        processing=ProcessingDetail(
+            uuid4(),
+            "inspecting_pdf_metadata",
+            "pptx_metadata.v1" if source_format == "pptx" else "pdf_metadata.v1",
+            10,
+            1,
+            None,
+            False,
+            True,
+        ),
+    )
+    assert LibraryWidget.deck_status_text(deck)[0] == label
+
+
+def test_poll_keeps_rows_selectable_and_preserves_latest_selection(
+    desktop_window, monkeypatch, qtbot
+):
+    rows = tuple(
+        DeckSummary(uuid4(), name, datetime.now(UTC), "processing", 1)
+        for name in ("First PowerPoint", "Second PowerPoint")
+    )
+    entered, release = Event(), Event()
+    calls = []
+
+    def listing(*_args, **_kwargs):
+        calls.append(True)
+        if len(calls) > 1:
+            entered.set()
+            assert release.wait(5)
+            return LibraryPage(tuple(reversed(rows)), 2, 1, 20)
+        return LibraryPage(rows, 2, 1, 20)
+
+    monkeypatch.setattr(LibraryService, "list", listing)
+    window = desktop_window()
+    library = signed_in(window)
+    qtbot.waitUntil(lambda: not library.runner.busy)
+    library.table.selectRow(1)
+    try:
+        library.poll.timeout.emit()
+        qtbot.waitUntil(entered.is_set)
+        assert not library.table.isHidden() and library.table.rowCount() == 2
+        assert library.table.currentRow() == 1
+        qtbot.mouseClick(
+            library.table.viewport(),
+            Qt.MouseButton.LeftButton,
+            pos=library.table.visualItemRect(library.table.item(0, 0)).center(),
+        )
+        assert rows[0].title in library.detail.toPlainText()
+    finally:
+        release.set()
+    qtbot.waitUntil(lambda: not library.runner.busy)
+    assert library.table.currentRow() == 1  # First deck moved to row 1 in the refreshed data.
+    assert rows[0].title in library.detail.toPlainText()
+    assert "Open saved PowerPoint" in library.open_button.toolTip()

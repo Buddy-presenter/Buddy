@@ -216,6 +216,7 @@ class LibraryWidget(QWidget):
         state_layout.addWidget(self.signin_button, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         self.table = QTableWidget(0, 4)
+        self.table.setObjectName("presentationLibrary")
         self.table.setHorizontalHeaderLabels(["Name", "Status", "Added", "Type"])
         self.table.setAccessibleName("Saved presentations")
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -297,7 +298,7 @@ class LibraryWidget(QWidget):
         self.sort.currentIndexChanged.connect(self.filter_changed)
         self.poll = QTimer(self)
         self.poll.setInterval(15000)
-        self.poll.timeout.connect(self.reload)
+        self.poll.timeout.connect(lambda: self.reload(retain_rows=True))
         account.activity_changed.connect(self.account_activity)
         account.session_changed.connect(self.account_changed)
         self.account_changed()
@@ -399,11 +400,15 @@ class LibraryWidget(QWidget):
         self.page = max(1, min(ceil(self.total / 20), self.page + delta))
         self.reload()
 
-    def reload(self) -> None:
+    def reload(self, *, retain_rows: bool = False) -> None:
         self.debounce.stop()
         if self.closing or not self.active:
             return
-        self.invalidate()
+        if retain_rows and self.last_page is not None and self.token() and not self.runner.busy:
+            self.generation += 1
+            self.poll.stop()
+        else:
+            self.invalidate()
         access = self.token()
         self._access_layout()
         if access is None:
@@ -421,7 +426,8 @@ class LibraryWidget(QWidget):
         service = LibraryService(self.config)
         search, sort, page = self.search.text().strip(), str(self.sort.currentData()), self.page
         self.request_generation = self.generation
-        self.state.show_state("Loading library", "")
+        if not retain_rows or self.last_page is None:
+            self.state.show_state("Loading library", "")
         self.refresh.setEnabled(False)
         self.activity_changed.emit(True)
 
@@ -486,6 +492,10 @@ class LibraryWidget(QWidget):
             self.page = last_page
             self.pending = True
             return
+        selected_id = None
+        selected_row = self.table.currentRow()
+        if self.last_page and 0 <= selected_row < len(self.last_page.items):
+            selected_id = self.last_page.items[selected_row].id
         self.last_page = result
         self.total = result.total
         if not result.items:
@@ -530,7 +540,9 @@ class LibraryWidget(QWidget):
             self.detail.show()
             self.selection_actions.show()
             self.empty_space.hide()
-            self.table.selectRow(0)
+            self.table.selectRow(
+                next((i for i, deck in enumerate(result.items) if deck.id == selected_id), 0)
+            )
             self.selection_changed()
             if any(
                 item.processing.state
@@ -558,17 +570,17 @@ class LibraryWidget(QWidget):
             self.retry_job_button.setEnabled(not self.runner.busy)
             if deck.source_format == "pptx":
                 guidance = (
-                    (
-                        "PPTX is saved. To present it on Windows, open the local file from "
-                        "Present in desktop PowerPoint; saved-library launch is not connected yet. "
-                        "You can also export it to PDF and present the PDF in Buddy."
-                    )
-                    + " "
-                    + guidance
+                    "Open Review for PowerPoint summaries and actions. Once processing finishes, "
+                    "use Open saved PowerPoint there to display the slideshow. " + guidance
                 )
             elif deck.can_present:
                 guidance = "PDF is available to present. " + guidance
             self.open_button.setEnabled(deck.can_present and not self.runner.busy)
+            self.open_button.setToolTip(
+                "For PowerPoint, use Review then Open saved PowerPoint."
+                if deck.source_format == "pptx"
+                else "Present this PDF in Buddy."
+            )
             self.review_button.setEnabled(self.token() is not None and not self.runner.busy)
             attempts = f" Processing attempts: {deck.attempts}." if deck.attempts else ""
             if processing is not None and processing.stage:
@@ -581,10 +593,17 @@ class LibraryWidget(QWidget):
     def deck_status_text(deck: DeckSummary) -> tuple[str, str]:
         processing = deck.processing
         if processing is not None:
+            if deck.source_format == "pptx":
+                if processing.state == "inspecting_pdf_metadata":
+                    return "Inspecting PowerPoint", "Reading slide order, dimensions and notes."
+                if processing.state == "validating":
+                    return "Validating", "Checking suggested actions in desktop PowerPoint."
+                if processing.state == "uploaded":
+                    return "Uploaded", "The PowerPoint is saved and waiting for processing."
             if processing.state == "failed" and processing.error_code == "analysis_unavailable":
                 return (
                     "Results unavailable",
-                    "Saved analysis does not match this PDF. Refresh or upload the current source.",
+                    "Saved analysis does not match this presentation. Refresh or upload it again.",
                 )
             return PROCESSING_TEXT.get(processing.state, STATUS_TEXT[deck.status])
         return STATUS_TEXT[deck.status]

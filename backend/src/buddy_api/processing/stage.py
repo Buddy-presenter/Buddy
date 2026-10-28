@@ -259,7 +259,9 @@ def main() -> int:
     finally:
         if storage:
             storage.close()
-    sys.stdout.write(result)
+    # IPC is UTF-8 regardless of the Windows console code page. Real slide text
+    # may contain accented/non-Latin characters that a console cannot encode.
+    sys.stdout.buffer.write(result.encode("utf-8"))
     return 0
 
 

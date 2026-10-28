@@ -22,6 +22,11 @@ visual content explicitly, include supported text and notes, and give an unavail
 when insufficient content exists. The UI explains this limitation and can show actual
 PowerPoint-exported slides after the presenter explicitly opens the saved source.
 
+Inspector subprocess results are always UTF-8 bytes, including on Windows consoles with
+legacy code pages. Accented and non-Latin slide text must survive this boundary unchanged.
+Library inspection/validation labels use the deck's source format; routine status polling
+keeps rows selectable and preserves the selected deck when results reorder.
+
 ## Separate catalogs and read contracts
 
 `powerpoint-1` permits `highlight_region`, `draw_rectangle`, `draw_oval`, `draw_underline`,
