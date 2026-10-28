@@ -23,6 +23,15 @@ KINDS = (
     "draw_underline",
     "draw_arrow",
     "callout",
+    "draw_line",
+    "filled_rectangle",
+    "filled_oval",
+    "text_box",
+    "draw_rounded_rectangle",
+    "draw_diamond",
+    "draw_triangle",
+    "draw_hexagon",
+    "draw_star",
 )
 
 
@@ -33,15 +42,15 @@ def powerpoint_payload(content=b"PK-synthetic-source", *, usable=True, kind="hig
     data["publication"] = "published"
     inputs.update(
         source_format="pptx",
-        schema_version="buddy.powerpoint.analysis.v1",
-        catalog_version="powerpoint-1",
+        schema_version="buddy.powerpoint.analysis.v2",
+        catalog_version="powerpoint-2",
         office_safe=True,
-        display_profile="windows-powerpoint-1",
-        validator_version="powerpoint-executor-1",
-        renderer_version="desktop-powerpoint-1",
+        display_profile="windows-powerpoint-2",
+        validator_version="powerpoint-executor-2",
+        renderer_version="desktop-powerpoint-2",
     )
     manifest = inputs["manifest"]
-    manifest.update(source_format="pptx", version="powerpoint-1")
+    manifest.update(source_format="pptx", version="powerpoint-2")
     manifest["slides"][0].update(
         native_slide_id=256,
         source={"width": 960, "height": 540, "units": "slide_points", "origin": "top_left"},
@@ -49,8 +58,8 @@ def powerpoint_payload(content=b"PK-synthetic-source", *, usable=True, kind="hig
     manifest["slides"][0].pop("raster")
     result = data["slides"][0]["actions"][0]
     action = result["action"]
-    action.update(source_format="pptx", version="powerpoint-1", type=kind)
-    action["params"]["text"] = "Measured results" if kind == "callout" else ""
+    action.update(source_format="pptx", version="powerpoint-2", type=kind)
+    action["params"]["text"] = "Measured results" if kind in {"callout", "text_box"} else ""
     state = "validated" if usable else "needs-review"
     result.update(
         state=state,
@@ -69,9 +78,9 @@ def powerpoint_payload(content=b"PK-synthetic-source", *, usable=True, kind="hig
             "reasons": [] if usable else ["powerpoint_runtime_requires_windows_office"],
             "evidence": [{"id": str(uuid4()), "kind": "report", "sha256": "b" * 64}],
             "runtime_version": "16.0.12345",
-            "validator_version": "powerpoint-executor-1",
-            "renderer_version": "desktop-powerpoint-1",
-            "display_profile": "windows-powerpoint-1",
+            "validator_version": "powerpoint-executor-2",
+            "renderer_version": "desktop-powerpoint-2",
+            "display_profile": "windows-powerpoint-2",
         },
     )
     return deck, payload
@@ -97,7 +106,7 @@ def test_powerpoint_review_all_actions_map_to_the_typed_real_executor(kind):
     )
     assert command.kind == kind
     command.validate()
-    if kind == "draw_arrow":
+    if kind in {"draw_arrow", "draw_line"}:
         assert command.points == ((10, 20), (40, 60)) and command.region is None
     else:
         assert command.region.width == 30
@@ -285,9 +294,10 @@ def test_powerpoint_review_visual_layout(
     qtbot.waitUntil(lambda: not window.review.runner.busy)
     assert not window.review.content.isHidden()
     assert window.review.open_powerpoint.geometry().right() < window.review.content.width()
+    assert window.review.run_powerpoint.geometry().right() < window.review.content.width()
     assert (
-        window.review.run_powerpoint.geometry().left()
-        > window.review.open_powerpoint.geometry().right()
+        window.review.run_powerpoint.geometry().top()
+        > window.review.open_powerpoint.geometry().bottom()
     )
     window.review.open_powerpoint.setFocus()
     qtbot.wait(20)
@@ -398,3 +408,58 @@ def test_powerpoint_source_download_uses_a_transfer_timeout(monkeypatch):
     with pytest.raises(ServiceError):
         service.analysis(uuid4(), "pptx")
     assert timeouts == [120, 5]
+
+
+def test_action_details_are_opt_in_and_evidence_png_opens(desktop_window, monkeypatch, qtbot):
+    from pathlib import Path
+
+    content = b"PK-synthetic-source"
+    deck, payload = powerpoint_payload(content)
+    analysis = parse_analysis(payload, deck)
+    monkeypatch.setattr(ReviewService, "analysis", lambda *_args: analysis)
+    monkeypatch.setattr(
+        ReviewService,
+        "source",
+        lambda *_args: DownloadedPowerPoint(content, str(deck), "revision-1"),
+    )
+    window = desktop_window()
+    window.account.session = SimpleNamespace(
+        tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
+    )
+    window.account.session_changed.emit()
+    review = window.review
+    review.set_deck(deck, "Quarterly results.pptx", "review_ready", "pptx")
+    window.navigation.setCurrentRow(2)
+    qtbot.waitUntil(lambda: not review.runner.busy)
+    assert review.details_panel.isHidden()
+    button = review.action_table.cellWidget(0, 3)
+    qtbot.mouseClick(button, widgets.Qt.MouseButton.LeftButton)
+    assert not review.details_panel.isHidden()
+    assert "Validation record" in review.action_detail.toPlainText()
+    png = (Path(__file__).parent / "fixtures/powerpoint/indexed-preview.png").read_bytes()
+    monkeypatch.setattr(ReviewService, "evidence", lambda *_args: (png, "image/png"))
+    review.open_evidence.click()
+    qtbot.waitUntil(lambda: not review.runner.busy)
+    assert review._evidence_dialog is not None and review._evidence_dialog.isVisible()
+    review.clear_private()
+    assert review._evidence_dialog is None
+
+
+def test_annotation_layout_uses_clear_space_and_refuses_crowded_slides():
+    from buddy_desktop.powerpoint_contract import PowerPointError
+    from buddy_desktop.powerpoint_layout import annotation_box
+    from buddy_desktop.slide_contract import Region
+
+    target = Region(50, 50, 300, 80)
+    occupied = (target, Region(50, 180, 400, 160))
+    box = annotation_box(target, 720, 540, "Revenue grew 12%", occupied)
+    assert box.x >= 0 and box.y >= 0 and box.x + box.width <= 720 and box.y + box.height <= 540
+    for obj in occupied:
+        assert (
+            box.x + box.width <= obj.x
+            or obj.x + obj.width <= box.x
+            or box.y + box.height <= obj.y
+            or obj.y + obj.height <= box.y
+        )
+    with pytest.raises(PowerPointError, match="No clear space"):
+        annotation_box(target, 720, 540, "A takeaway", (Region(0, 0, 720, 540),))

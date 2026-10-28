@@ -189,9 +189,9 @@ def test_powerpoint_schema_packaging_and_stale_validator_source():
 
     root = Path(__file__).resolve().parents[3]
     assert (
-        root / "backend/src/buddy_api/analysis/powerpoint_contracts/action-v1.schema.json"
+        root / "backend/src/buddy_api/analysis/powerpoint_contracts/action-v2.schema.json"
     ).read_bytes() == (
-        root / "frontend/src/buddy_desktop/powerpoint_contracts/action-v1.schema.json"
+        root / "frontend/src/buddy_desktop/powerpoint_contracts/action-v2.schema.json"
     ).read_bytes()
     content, extracted = source()
     deck = uuid4()

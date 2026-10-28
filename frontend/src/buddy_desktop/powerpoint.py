@@ -28,6 +28,7 @@ from buddy_desktop.powerpoint_contract import (
 from buddy_desktop.powerpoint_contract import PowerPointError as PowerPointError
 from buddy_desktop.powerpoint_contract import PresentationInfo as PresentationInfo
 from buddy_desktop.powerpoint_contract import canonical_path as canonical_path
+from buddy_desktop.slide_contract import Region
 
 
 class PowerPointAutomation:
@@ -162,7 +163,9 @@ class PowerPointAutomation:
         transparency: float,
     ) -> str:
         name = cls._name_shape(shape)
+        shape.Fill.Solid()
         shape.Fill.ForeColor.RGB = color
+        shape.Shadow.Visible = 0
         shape.Fill.Transparency = transparency if filled else 1
         if filled:
             shape.Line.Visible = 0
@@ -202,9 +205,28 @@ class PowerPointAutomation:
                         arrow=action.kind == "draw_arrow" and index == len(points) - 2,
                     )
                     names.append(name)
-            elif action.kind == "draw_rectangle" and r is not None:
+            elif (
+                action.kind
+                in {
+                    "draw_rectangle",
+                    "draw_rounded_rectangle",
+                    "draw_diamond",
+                    "draw_triangle",
+                    "draw_hexagon",
+                    "draw_star",
+                }
+                and r is not None
+            ):
                 validate_target()
-                shape = shapes.AddShape(1, r.x, r.y, r.width, r.height)  # msoShapeRectangle
+                shape_type = {
+                    "draw_rectangle": 1,
+                    "draw_rounded_rectangle": 5,
+                    "draw_diamond": 4,
+                    "draw_triangle": 7,
+                    "draw_hexagon": 10,
+                    "draw_star": 92,
+                }[action.kind]
+                shape = shapes.AddShape(shape_type, r.x, r.y, r.width, r.height)
                 created.append(shape)
                 names.append(cls._configure_box(shape, action.color, filled=False, transparency=1))
             elif action.kind in {"draw_oval", "filled_oval"} and r is not None:
@@ -228,28 +250,91 @@ class PowerPointAutomation:
                         shape, action.color, filled=True, transparency=action.fill_transparency
                     )
                 )
-            elif action.kind == "text_box" and r is not None:
+            elif action.kind in {"text_box", "callout"} and r is not None:
+                target_region = r
+                if action.auto_place:
+                    from buddy_desktop.powerpoint_layout import annotation_box
+
+                    occupied = []
+                    for index in range(1, shapes.Count + 1):
+                        item = shapes.Item(index)
+                        left, top, width, height = map(
+                            float, (item.Left, item.Top, item.Width, item.Height)
+                        )
+                        is_target = (
+                            abs(left - target_region.x) < 0.1
+                            and abs(top - target_region.y) < 0.1
+                            and abs(width - target_region.width) < 0.1
+                            and abs(height - target_region.height) < 0.1
+                        )
+                        if (
+                            width * height
+                            >= action.target.slide_width * action.target.slide_height * 0.85
+                            and not (item.HasTextFrame and item.TextFrame.HasText)
+                        ):
+                            continue  # Full-slide background artwork is not foreground text.
+                        try:
+                            if item.HasTextFrame and item.TextFrame.HasText:
+                                tr = item.TextFrame.TextRange
+                                left, top, width, height = map(
+                                    float,
+                                    (tr.BoundLeft, tr.BoundTop, tr.BoundWidth, tr.BoundHeight),
+                                )
+                                if is_target and width > 0 and height > 0:
+                                    target_region = Region(left, top, width, height)
+                        except (AttributeError, TypeError):
+                            pass
+                        if width > 0 and height > 0:
+                            occupied.append(Region(left, top, width, height))
+                    r = annotation_box(
+                        target_region,
+                        action.target.slide_width,
+                        action.target.slide_height,
+                        action.text,
+                        tuple(occupied),
+                    )
                 validate_target()
-                shape = shapes.AddTextbox(1, r.x, r.y, r.width, r.height)  # horizontal
+                shape = (
+                    shapes.AddShape(5, r.x, r.y, r.width, r.height)
+                    if action.kind == "callout"
+                    else shapes.AddTextbox(1, r.x, r.y, r.width, r.height)
+                )
                 created.append(shape)
                 names.append(cls._name_shape(shape))
-                shape.Fill.Transparency = 1
-                shape.Line.Visible = 0
-                shape.TextFrame.WordWrap = -1
-                shape.TextFrame.TextRange.Text = action.text
-                shape.TextFrame.TextRange.Font.Color.RGB = action.color
-                shape.TextFrame.TextRange.Font.Size = 20
-            elif action.kind == "callout" and r is not None:
-                validate_target()
-                shape = shapes.AddCallout(2, r.x, r.y, r.width, r.height)  # msoCalloutTwo
-                created.append(shape)
-                names.append(cls._name_shape(shape))
-                shape.Fill.Transparency = 1
-                shape.Callout.Border = True
-                shape.TextFrame.TextRange.Text = action.text
-                shape.TextFrame.TextRange.Font.Color.RGB = action.color
-                shape.TextFrame.TextRange.Font.Size = 18
+                shape.Fill.Solid()
+                shape.Fill.ForeColor.RGB = 0x000000
+                shape.Shadow.Visible = 0
+                shape.Fill.Transparency = 0
+                shape.Line.Visible = -1 if action.kind == "callout" else 0
                 shape.Line.ForeColor.RGB = action.color
+                shape.Line.Weight = 1.5
+                shape.TextFrame.AutoSize = 0
+                shape.TextFrame.WordWrap = -1
+                shape.TextFrame.MarginLeft = shape.TextFrame.MarginRight = 8
+                shape.TextFrame.MarginTop = shape.TextFrame.MarginBottom = 6
+                shape.TextFrame.TextRange.Text = action.text
+                shape.TextFrame.TextRange.Font.Color.RGB = action.color
+                shape.TextFrame.TextRange.Font.Size = 16
+                shape.TextFrame2.WordWrap = -1
+                shape.TextFrame2.VerticalAnchor = 3  # msoAnchorMiddle
+                shape.TextFrame2.AutoSize = 2  # msoAutoSizeTextToFitShape
+                if float(shape.TextFrame2.TextRange.BoundHeight) > r.height - 10:
+                    raise PowerPointError("The annotation text does not fit safely inside its box.")
+                if action.auto_place and action.kind == "callout":
+                    end_x = min(
+                        max(r.x + r.width / 2, target_region.x),
+                        target_region.x + target_region.width,
+                    )
+                    end_y = min(
+                        max(r.y + r.height / 2, target_region.y),
+                        target_region.y + target_region.height,
+                    )
+                    start_x = min(max(end_x, r.x), r.x + r.width)
+                    start_y = min(max(end_y, r.y), r.y + r.height)
+                    validate_target()
+                    leader = shapes.AddLine(start_x, start_y, end_x, end_y)
+                    created.append(leader)
+                    names.append(cls._configure_line(leader, action.color, arrow=True))
             else:
                 raise PowerPointError("Unsupported PowerPoint annotation.")
             return names

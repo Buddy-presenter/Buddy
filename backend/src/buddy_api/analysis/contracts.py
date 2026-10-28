@@ -188,14 +188,28 @@ class PowerPointParameters(Model):
 
 class PowerPointContentAction(Model):
     source_format: Literal["pptx"] = "pptx"
-    version: Literal["powerpoint-1"] = "powerpoint-1"
+    version: Literal["powerpoint-2"] = "powerpoint-2"
     instance_id: Identifier
     purpose: Annotated[str, Field(min_length=1, max_length=512, pattern=r"\S")]
     deck_id: Identifier
     render_id: Identifier
     slide_id: Identifier
     type: Literal[
-        "highlight_region", "draw_rectangle", "draw_oval", "draw_underline", "draw_arrow", "callout"
+        "highlight_region",
+        "draw_rectangle",
+        "draw_oval",
+        "draw_underline",
+        "draw_arrow",
+        "callout",
+        "draw_line",
+        "filled_rectangle",
+        "filled_oval",
+        "text_box",
+        "draw_rounded_rectangle",
+        "draw_diamond",
+        "draw_triangle",
+        "draw_hexagon",
+        "draw_star",
     ]
     params: PowerPointParameters
 
@@ -203,13 +217,13 @@ class PowerPointContentAction(Model):
     def annotation(self) -> Self:
         if min(self.params.region.width, self.params.region.height) < 12:
             raise ValueError("PowerPoint annotations require a minimum 12-point region.")
-        if self.type == "callout":
+        if self.type in {"callout", "text_box"}:
             if not self.params.text.strip() or any(
                 ord(c) < 32 and c not in "\t\n" for c in self.params.text
             ):
                 raise ValueError("A callout requires bounded annotation text.")
         elif self.params.text:
-            raise ValueError("Only callouts accept annotation text.")
+            raise ValueError("Only callouts and text boxes accept annotation text.")
         return self
 
 
@@ -228,7 +242,7 @@ class PowerPointManifestSlide(Model):
 
 class PowerPointManifest(Model):
     source_format: Literal["pptx"] = "pptx"
-    version: Literal["powerpoint-1"] = "powerpoint-1"
+    version: Literal["powerpoint-2"] = "powerpoint-2"
     deck_id: Identifier
     # This identifies extracted source geometry, not a fabricated rendered image.
     render_id: Identifier
@@ -250,7 +264,7 @@ class PowerPointSlideOutput(Model):
 
 
 class PowerPointAnalysisInput(Model):
-    schema_version: Literal["buddy.powerpoint.analysis.v1"] = "buddy.powerpoint.analysis.v1"
+    schema_version: Literal["buddy.powerpoint.analysis.v2"] = "buddy.powerpoint.analysis.v2"
     source_format: Literal["pptx"] = "pptx"
     extraction_id: UUID
     extraction_schema_version: Literal["buddy.extraction.v1"] = "buddy.extraction.v1"
@@ -262,10 +276,10 @@ class PowerPointAnalysisInput(Model):
     office_safe: bool = False
     representation: Literal["bounded_ooxml_extraction"] = "bounded_ooxml_extraction"
     job_id: UUID
-    catalog_version: Literal["powerpoint-1"] = "powerpoint-1"
-    renderer_version: Literal["desktop-powerpoint-1"] = "desktop-powerpoint-1"
-    display_profile: Literal["windows-powerpoint-1"] = "windows-powerpoint-1"
-    validator_version: Literal["powerpoint-executor-1"] = "powerpoint-executor-1"
+    catalog_version: Literal["powerpoint-2"] = "powerpoint-2"
+    renderer_version: Literal["desktop-powerpoint-2"] = "desktop-powerpoint-2"
+    display_profile: Literal["windows-powerpoint-2"] = "windows-powerpoint-2"
+    validator_version: Literal["powerpoint-executor-2"] = "powerpoint-executor-2"
     manifest: PowerPointManifest
     presentation_summary: Summary
     slides: Annotated[tuple[PowerPointSlideOutput, ...], Field(min_length=1, max_length=100)]

@@ -17,7 +17,7 @@ from buddy_api.analysis.contracts import (
 class PowerPointValidationRequest(Model):
     source_format: Literal["pptx"] = "pptx"
     action: dict[str, Any]
-    profile: Literal["windows-powerpoint-1"] = "windows-powerpoint-1"
+    profile: Literal["windows-powerpoint-2"] = "windows-powerpoint-2"
     slide_number: int = Field(strict=True, ge=1, le=100)
     native_slide_id: int = Field(strict=True, gt=0)
     slide_width: float = Field(gt=0, le=100000)
@@ -63,9 +63,9 @@ class PowerPointProcessResult(Model):
     state: Literal["validated", "rejected", "needs-review"]
     reasons: list[Identifier] = Field(max_length=20)
     semantic_verified: Literal[False] = False
-    validator_version: Literal["powerpoint-executor-1"] = "powerpoint-executor-1"
-    renderer_version: Literal["desktop-powerpoint-1"] = "desktop-powerpoint-1"
-    profile: Literal["windows-powerpoint-1"] = "windows-powerpoint-1"
+    validator_version: Literal["powerpoint-executor-2"] = "powerpoint-executor-2"
+    renderer_version: Literal["desktop-powerpoint-2"] = "desktop-powerpoint-2"
+    profile: Literal["windows-powerpoint-2"] = "windows-powerpoint-2"
     runtime_platform: Literal["linux", "win32", "darwin"]
     office_version: Identifier | None = None
     source_revision: Identifier

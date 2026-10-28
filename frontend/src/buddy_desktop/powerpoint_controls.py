@@ -96,7 +96,7 @@ class PowerPointPreview(QWidget):
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#06090D"))
+        painter.fillRect(self.rect(), QColor("#000000"))
         info = self.info
         if info is None or self.image.isNull():
             painter.setPen(QColor("#B5B8BA"))
@@ -130,6 +130,11 @@ _TOOLS = (
     ("Draw line", "draw_line"),
     ("Draw arrow", "draw_arrow"),
     ("Outline box", "draw_rectangle"),
+    ("Rounded frame", "draw_rounded_rectangle"),
+    ("Diamond frame", "draw_diamond"),
+    ("Triangle frame", "draw_triangle"),
+    ("Hexagon frame", "draw_hexagon"),
+    ("Star emphasis", "draw_star"),
     ("Circle / oval", "draw_oval"),
     ("Underline area", "draw_underline"),
     ("Freehand", "draw_freehand"),
@@ -404,6 +409,11 @@ class PowerPointControls(QWidget):
             in {
                 "draw_rectangle",
                 "draw_oval",
+                "draw_rounded_rectangle",
+                "draw_diamond",
+                "draw_triangle",
+                "draw_hexagon",
+                "draw_star",
                 "draw_underline",
                 "erase_region",
                 "highlight_region",

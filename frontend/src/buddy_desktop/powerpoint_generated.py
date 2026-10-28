@@ -22,7 +22,7 @@ def generated_action(
     height: float,
 ) -> PowerPointAction:
     definition = json.loads(
-        files("buddy_desktop").joinpath("powerpoint_contracts", "action-v1.schema.json").read_text()
+        files("buddy_desktop").joinpath("powerpoint_contracts", "action-v2.schema.json").read_text()
     )
     try:
         Draft202012Validator(definition).validate(raw)
@@ -41,10 +41,13 @@ def generated_action(
     action = PowerPointAction(
         raw["type"],
         target,
-        points=((r.x, r.y), (r.x + r.width, r.y + r.height)) if raw["type"] == "draw_arrow" else (),
-        region=None if raw["type"] == "draw_arrow" else r,
+        points=((r.x, r.y), (r.x + r.width, r.y + r.height))
+        if raw["type"] in {"draw_arrow", "draw_line"}
+        else (),
+        region=None if raw["type"] in {"draw_arrow", "draw_line"} else r,
         text=params.get("text", ""),
         color=0x3D84F5,
+        auto_place=raw["type"] in {"callout", "text_box"},
     )
     action.validate()
     return action

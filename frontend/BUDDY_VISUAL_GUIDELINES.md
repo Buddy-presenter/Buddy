@@ -4,6 +4,11 @@ For every change to the desktop UI, read this guide and the [Apple Design skill]
 
 ## Color palette
 
+Current product direction: use a pure black (`#000000`) app canvas, neutral black/gray
+raised surfaces, readable white/gray text and Buddy orange as the sole chromatic UI
+accent. This supersedes blue-black/navy surfaces in the historical references below.
+Presentation slide contents retain their original colors.
+
 The values below are sampled from the six provided Buddy reference images. Several references use grain, glow, antialiasing, and gradients, so the gradient stops and glow colors are representative samples rather than claims about a single flat source color.
 
 | Token | Hex | Use |

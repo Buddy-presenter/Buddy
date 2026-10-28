@@ -528,10 +528,10 @@ class LibraryWidget(QWidget):
                         item.setForeground(
                             QColor(
                                 {
-                                    "ready": "#8ED5B6",
-                                    "failed": "#FF9B94",
+                                    "ready": "#FF9F61",
+                                    "failed": "#FF9F61",
                                     "processing": "#FFB477",
-                                    "queued": "#C4B9F3",
+                                    "queued": "#FF9F61",
                                 }.get(deck.status, "#B9B9C4")
                             )
                         )

@@ -9,8 +9,8 @@ from threading import Event, Thread
 
 import pytest
 from jsonschema import Draft202012Validator
-from PySide6.QtCore import QPointF, QSize, QTimer
-from PySide6.QtGui import QColor, QImage
+from PySide6.QtCore import QPointF, QRectF, QSize, QTimer
+from PySide6.QtGui import QColor, QImage, QPainter
 
 from buddy_desktop.slide_contract import (
     ContractError,
@@ -42,6 +42,26 @@ def capture(surface, dpr=1):
     )
     image.setDevicePixelRatio(dpr)
     surface.render(image)
+    return image
+
+
+def historical_reference(path, surface):
+    # Keep immutable slide/action pixels; only the surrounding app chrome changed.
+    original = QImage(str(path))
+    image = QImage(original.size(), QImage.Format.Format_RGB32)
+    image.fill(QColor("#000000"))
+    mapping = surface.mapping()
+    painter = QPainter(image)
+    painter.setClipRect(
+        QRectF(
+            mapping.offset_x,
+            mapping.offset_y,
+            surface.slide.width * mapping.scale,
+            surface.slide.height * mapping.scale,
+        )
+    )
+    painter.drawImage(0, 0, original)
+    painter.end()
     return image
 
 
@@ -110,7 +130,7 @@ def test_letterboxing_and_resize(player):
     for width, height in [(800, 600), (300, 600), (1200, 300)]:
         surface.resize(width, height)
         image = capture(surface)
-        assert image.pixelColor(0, 0) == QColor("#06090D")
+        assert image.pixelColor(0, 0) == QColor("#000000")
         assert image.pixelColor(width // 2, height // 2) == QColor("#101820")
         assert surface.region == surface.slide.full
     assert wait(executor.dispatch(action("next_slide"))).status == "completed"
@@ -477,7 +497,9 @@ def test_immutable_evidence_states_match_each_published_action(player):
             assert wait(executor.dispatch(case["action"])).status == "completed"
         assert surface.slide.slide_id == case["slide_id"]
         assert surface.region == Region(**case["region"])
-        assert pixels(capture(surface)) == pixels(QImage(str(root / case["capture"])))
+        assert pixels(capture(surface)) == pixels(
+            historical_reference(root / case["capture"], surface)
+        )
 
 
 def test_highlight_real_pixels_replace_repeat_and_reset(player):
@@ -605,4 +627,6 @@ def test_v11_word_phrase_expression_formula_evidence_and_clear(player):
         assert surface.region == Region(**case["region"])
         expected_highlight = Region(**case["highlight"]) if case["highlight"] else None
         assert surface.highlight == expected_highlight
-        assert pixels(capture(surface)) == pixels(QImage(str(root / case["capture"])))
+        assert pixels(capture(surface)) == pixels(
+            historical_reference(root / case["capture"], surface)
+        )

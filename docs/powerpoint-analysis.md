@@ -29,17 +29,19 @@ keeps rows selectable and preserves the selected deck when results reorder.
 
 ## Separate catalogs and read contracts
 
-`powerpoint-1` permits `highlight_region`, `draw_rectangle`, `draw_oval`, `draw_underline`,
-`draw_arrow` and `callout`. Every generated action selects an existing extracted object ID;
+`powerpoint-2` permits highlight, rectangle, oval, underline, arrow, callout, line,
+filled rectangle, filled oval, text box, rounded rectangle, diamond, triangle, hexagon
+and star actions. Generation considers the whole catalog and selects a useful, varied
+subset rather than forcing decoration. Every generated action selects an extracted object ID;
 the server derives the rectangle from that object's actual bounds in PowerPoint slide
 points (12,700 EMU per point). Unsupported, duplicate, clipped/degenerate or unknown targets
-fail explicitly. Calls cannot supply arbitrary tools or executable code. Callouts alone
+fail explicitly. Calls cannot supply arbitrary tools or executable code. Callouts and text boxes
 accept bounded text. Navigation/reset remain code-owned; manual pointer/freehand/erase/undo
 controls remain presenter-owned. PowerPoint region zoom remains #111.
 
 The separate schemas are packaged in `analysis/powerpoint_contracts/` on the server and
 `powerpoint_contracts/` in the desktop wheel, with a parity test. PowerPoint's analysis
-schema is `buddy.powerpoint.analysis.v1`; its source manifest contains slide points and
+schema is `buddy.powerpoint.analysis.v2`; its source manifest contains slide points and
 native slide IDs, without pretending that a PDF raster or render cache exists. Source
 format is explicit in the catalog, source, analysis, action and execution report. New
 database format columns and composite foreign keys prevent cross-format records.
@@ -49,6 +51,12 @@ use `GET /api/v1/decks/{deck_id}/powerpoint-source`. Existing PDF analysis/sourc
 retain their PDF contracts and reject PowerPoint access. Authentication, ownership,
 private evidence, bounded reads and `Cache-Control: no-store` apply to both formats.
 There is no HTTP endpoint through which a desktop client can assert successful validation.
+Generated text annotations find clear space beside the target using the actual Office
+object/text bounds. Text wraps and fits inside a bounded box; callouts have an orange
+frame and a leader pointing at their target. No clear space means an unavailable action,
+not permission to cover existing text. Manual text placement remains presenter-controlled.
+Technical details are collapsed per action. View proof opens the actual before/after
+images or execution report, bound to the execution record that produced those artifacts.
 Review does not download a PPTX while its analysis is unavailable. Original-PPTX transfers
 use a 120-second client socket timeout, separately from short metadata requests. Source
 authorization captures immutable pointers before releasing the database connection, so
@@ -112,8 +120,8 @@ outside that session. Local manual PowerPoint controls and the PDF player are pr
   tokens, 2 MiB response, 40 generated actions per deck. Existing lifetime attempts,
   per-owner concurrency/quota and whole-job deadlines also apply. These bound requests and
   token consumption; account budgets remain alerts rather than a hard monetary cap.
-- Apply forward migration `0012_powerpoint_analysis` with the migration identity before
-  deploying compatible binaries. Existing PDF action/input hashes are preserved. Historical
+- Apply forward migrations `0012_powerpoint_analysis` and `0013_powerpoint_tools` with the
+  migration identity before deploying compatible binaries. Existing PDF action/input hashes are preserved. Historical
   untyped analyses remain legacy; legacy writes get their deck's format through a narrow
   legacy-only trigger. Typed cross-format data is never silently reinterpreted.
 - Run `python scripts/quality.py all check`, the frontend/backend/database/integration tests,
@@ -125,7 +133,21 @@ outside that session. Local manual PowerPoint controls and the PDF player are pr
   responses only at the external model boundary; a live Bedrock run still needs a current
   AWS session and the approved model permission.
 
-## Acceptance evidence (2026-10-26)
+## Acceptance evidence
+
+2026-10-28: the expanded v2 catalog passed all **30 real Office cases**: 15 tools on
+16:9 and 4:3 slides. Callouts/text boxes used clear-space placement and fitted text;
+rounded rectangles, diamonds, triangles, hexagons and stars produced real Office shapes.
+The catalog and executor/profile versions were advanced together; regenerate any older
+unreleased test analyses to use these actions. PDF catalogs are unchanged.
+
+The expanded workflow also passed with real staging S3/Bedrock and isolated local
+HTTP/PostgreSQL/Windows Office/Qt services. Six generated actions (oval, underline,
+callout, rounded rectangle, arrow and text box) executed through Review. The actual
+evidence button opened a saved execution image. Sign-out closed the private source;
+all 19 synthetic test S3 objects/versions and the isolated schema were removed.
+
+Earlier baseline verification (2026-10-26):
 
 The opt-in Office matrix passed all 12 cases: the six catalog actions on 960x540
 (16:9) and 720x540 (4:3) slides, using desktop PowerPoint 16.0 build 20527. Every case

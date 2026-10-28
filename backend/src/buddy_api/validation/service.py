@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 
 class ValidationService:
-    def __init__(self, uploads: UploadService, settings: ValidatorSettings):
+    def __init__(self, uploads: UploadService, settings: ValidatorSettings | None = None):
         self.uploads, self.settings = uploads, settings
 
     @staticmethod
@@ -125,6 +125,9 @@ class ValidationService:
         precision: Precision = "standard",
         duplicate_candidate: bool = False,
     ) -> StoredResult | PowerPointStoredResult:
+        validator_settings = self.settings
+        if validator_settings is None:
+            raise UploadError(503, "validator_unavailable", "Action execution is not configured.")
         if self.uploads.parser_slot.locked():
             raise UploadError(
                 429, "validation_capacity", "Validation capacity is full; retry later.", 30
@@ -253,7 +256,9 @@ class ValidationService:
                     )
                 cancelled = Event()
                 task = asyncio.create_task(
-                    asyncio.to_thread(run_validation, content, request, self.settings, cancelled)
+                    asyncio.to_thread(
+                        run_validation, content, request, validator_settings, cancelled
+                    )
                 )
                 try:
                     bundle = await asyncio.shield(task)

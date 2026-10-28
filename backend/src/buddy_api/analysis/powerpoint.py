@@ -34,7 +34,7 @@ from buddy_api.analysis.provider import (
 )
 from buddy_api.extraction.contracts import Extraction
 
-CATALOG_VERSION = "powerpoint-1"
+CATALOG_VERSION = "powerpoint-2"
 ACTION_TYPES = (
     "highlight_region",
     "draw_rectangle",
@@ -42,6 +42,15 @@ ACTION_TYPES = (
     "draw_underline",
     "draw_arrow",
     "callout",
+    "draw_line",
+    "filled_rectangle",
+    "filled_oval",
+    "text_box",
+    "draw_rounded_rectangle",
+    "draw_diamond",
+    "draw_triangle",
+    "draw_hexagon",
+    "draw_star",
 )
 MAX_CONTEXT_BYTES = 120_000
 MAX_OUTPUT_TOKENS = 8000
@@ -50,7 +59,21 @@ MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 
 class SuggestedAction(Model):
     type: Literal[
-        "highlight_region", "draw_rectangle", "draw_oval", "draw_underline", "draw_arrow", "callout"
+        "highlight_region",
+        "draw_rectangle",
+        "draw_oval",
+        "draw_underline",
+        "draw_arrow",
+        "callout",
+        "draw_line",
+        "filled_rectangle",
+        "filled_oval",
+        "text_box",
+        "draw_rounded_rectangle",
+        "draw_diamond",
+        "draw_triangle",
+        "draw_hexagon",
+        "draw_star",
     ]
     purpose: str = Field(min_length=1, max_length=512, pattern=r"\S")
     object_id: str = Field(min_length=1, max_length=128)
@@ -192,11 +215,18 @@ class PowerPointProvider:
             "describe visual/image/chart contents as unavailable when the extraction cannot reveal "
             "them. Never invent visual details. Use unavailable summaries with a reason when "
             "insufficient content exists. Return at most 40 actions total, only from this "
-            "PowerPoint catalog: highlight_region, draw_rectangle, draw_oval, draw_underline, "
-            "draw_arrow, callout. Every action must select one exact existing object_id on "
+            "PowerPoint catalog: " + ", ".join(ACTION_TYPES) + ". "
+            "Consider the entire catalog and choose diverse tools when the content benefits: "
+            "underlines for short claims; ovals for compact metrics; arrows/lines for direction; "
+            "rounded rectangles or geometric outlines for distinct objects; translucent fills "
+            "for emphasis; stars only for exceptional focal points. Avoid repeating rectangular "
+            "frames around whole text blocks. Never add decorative noise or force every tool. "
+            "Every action must select one exact existing object_id on "
             "that slide; geometry is derived by server code from its bounds. Do not select "
-            "groups, unsupported or very small objects. Use text='' except for callout, whose "
-            "text must be factual and at most 300 characters. "
+            "groups, unsupported or very small objects. Use text='' except for callout/text_box. "
+            "Their text must be factual, concise (prefer <=100 characters), and add a useful "
+            "audience-facing takeaway instead of repeating the whole slide. Code will find "
+            "clear space and fit text; crowded slides may make those tools unavailable. "
             "Actions are audience-facing presentation aids, not authoring critique. Do not "
             "annotate duplication warnings, speculate about missing content, or tell the author "
             "to edit the deck. Emphasize only source-grounded presentation content. "

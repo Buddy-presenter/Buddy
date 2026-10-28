@@ -49,7 +49,7 @@ def output(extraction, kinds=("highlight_region",)):
                         type=kind,
                         purpose="Emphasize the quarterly result.",
                         object_id=slide.objects[0].id,
-                        text="Quarterly result" if kind == "callout" else "",
+                        text="Quarterly result" if kind in {"callout", "text_box"} else "",
                     )
                     for kind in kinds
                 ),

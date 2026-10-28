@@ -63,6 +63,7 @@ class PowerPointAction:
     fill_transparency: float = 0.62
     text: str = ""
     pointer_tool: str | None = None
+    auto_place: bool = False
 
     def validate(self) -> None:
         allowed = {
@@ -72,6 +73,11 @@ class PowerPointAction:
             "draw_line",
             "draw_arrow",
             "draw_rectangle",
+            "draw_rounded_rectangle",
+            "draw_diamond",
+            "draw_triangle",
+            "draw_hexagon",
+            "draw_star",
             "draw_oval",
             "draw_underline",
             "draw_freehand",
@@ -144,6 +150,11 @@ class PowerPointAction:
             raise PowerPointError("This action does not accept drawing points.")
 
         region_kinds = {
+            "draw_rounded_rectangle",
+            "draw_diamond",
+            "draw_triangle",
+            "draw_hexagon",
+            "draw_star",
             "draw_rectangle",
             "draw_oval",
             "draw_underline",
@@ -174,6 +185,10 @@ class PowerPointAction:
 
         if type(self.color) is not int or not 0 <= self.color <= 0xFFFFFF:
             raise PowerPointError("Choose a valid annotation color.")
+        if type(self.auto_place) is not bool or (
+            self.auto_place and self.kind not in {"callout", "text_box"}
+        ):
+            raise PowerPointError("Automatic placement is only available for text annotations.")
         if not self._number(self.fill_transparency) or not 0 <= self.fill_transparency <= 1:
             raise PowerPointError("Fill transparency must be between 0 and 1.")
         if self.kind in {"text_box", "callout"}:

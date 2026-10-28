@@ -65,6 +65,50 @@ def test_model_only_validation_hints_are_not_accepted_from_public_requests():
         )
 
 
+def test_saved_evidence_is_readable_without_an_api_execution_runtime(upload_app):
+    import sys
+
+    with upload_app() as (client, _cloud, uploads):
+        body = {**metadata(CONTENT), "filename": "source.pdf", "content_type": "application/pdf"}
+        identifier = initialize(client, body=body).json()["data"]["id"]
+        saved = client.put(
+            f"/api/v1/uploads/{identifier}/content",
+            content=CONTENT,
+            headers={"Content-Type": "application/pdf"},
+        )
+        assert saved.status_code == 200
+        deck = UUID(saved.json()["data"]["deck"]["id"])
+        owner = UUID(client.get("/api/v1/auth/me").json()["data"]["id"])
+        worker = ValidationService(uploads, ValidatorSettings(python=sys.executable))
+        # The worker executes; the API remains explicitly unconfigured for execution.
+        result = client.portal.call(
+            worker.validate,
+            owner,
+            deck,
+            uuid4(),
+            ValidationRequest(
+                action=action(deck, revision=saved.json()["data"]["deck"]["source_revision"])
+            ),
+        )
+        artifact = result.evidence[0]
+        response = client.get(f"/api/v1/action-validations/{result.id}/evidence/{artifact.id}")
+        assert response.status_code == 200
+        assert hashlib.sha256(response.content).hexdigest() == artifact.sha256
+        assert (
+            client.post(
+                f"/api/v1/decks/{deck}/action-validations",
+                headers={"Idempotency-Key": str(uuid4())},
+                json={"action": action(deck)},
+            ).status_code
+            == 503
+        )
+        client.headers["Authorization"] = "Bearer account-b"
+        assert (
+            client.get(f"/api/v1/action-validations/{result.id}/evidence/{artifact.id}").status_code
+            == 404
+        )
+
+
 @pytest.mark.parametrize(
     "kind",
     [

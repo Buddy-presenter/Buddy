@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QPlainTextEdit,
     QPushButton,
@@ -107,7 +108,7 @@ class PagePreview(QWidget):
 
     def paintEvent(self, _event: object) -> None:
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#06090D"))
+        painter.fillRect(self.rect(), QColor("#000000"))
         if self._image.isNull():
             if self._source_size is None:
                 return
@@ -165,6 +166,7 @@ class ReviewWidget(Page):
         )
         self._cleanup_queue: list[PowerPointReviewSession] = []
         self._pptx_session: PowerPointReviewSession | None = None
+        self._evidence_dialog: QDialog | None = None
         self.source_format = "pdf"
         self.generation = 0
         self.request_generation = -1
@@ -208,9 +210,10 @@ class ReviewWidget(Page):
         state_layout.addWidget(self.signin, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         self.content = QWidget()
+        self.content.setObjectName("reviewWorkspace")
         content_layout = QVBoxLayout(self.content)
         content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(14)
+        content_layout.setSpacing(20)
         self.notice = QLabel()
         self.notice.setObjectName("muted")
         self.notice.setWordWrap(True)
@@ -223,6 +226,13 @@ class ReviewWidget(Page):
         self.summary.setTextFormat(Qt.TextFormat.PlainText)
         self.summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.summary_layout.addWidget(self.summary)
+        self._full_summary = ""
+        self.summary_more = QPushButton("Read full summary")
+        self.summary_more.setCheckable(True)
+        self.summary_more.setObjectName("linkButton")
+        self.summary_more.toggled.connect(self._expand_summary)
+        self.summary_layout.addWidget(self.summary_more, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.summary_more.hide()
 
         navigation = QHBoxLayout()
         self.previous = QPushButton("Previous slide")
@@ -242,16 +252,18 @@ class ReviewWidget(Page):
         self.open_powerpoint = QPushButton("Open saved PowerPoint")
         command(self.open_powerpoint, "external-link")
         self.open_powerpoint.clicked.connect(self.open_saved_powerpoint)
-        self.run_powerpoint = QPushButton("Run selected action in PowerPoint")
+        self.run_powerpoint = QPushButton("Run action")
+        self.run_powerpoint.setAccessibleName("Run selected action in PowerPoint")
         command(self.run_powerpoint, "arrow-right", primary=True)
         self.run_powerpoint.clicked.connect(self.run_selected_powerpoint_action)
         for button in (self.open_powerpoint, self.run_powerpoint):
             button.hide()
-            powerpoint_row.addWidget(button)
+        powerpoint_row.addWidget(self.open_powerpoint)
+        powerpoint_row.addStretch(1)
         content_layout.addLayout(powerpoint_row)
 
         self.preview = PagePreview()
-        self.preview.setMinimumHeight(280)
+        self.preview.setMinimumHeight(480)
         content_layout.addWidget(self.preview, 2)
         self.slide_summary_title = QLabel("Slide summary")
         self.slide_summary_title.setObjectName("groupTitle")
@@ -262,31 +274,73 @@ class ReviewWidget(Page):
         self.slide_summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         content_layout.addWidget(self.slide_summary)
 
-        self.action_table = QTableWidget(0, 3)
-        self.action_table.setHorizontalHeaderLabels(["Purpose", "Type", "Review status"])
+        self.actions_title = QLabel("Suggested actions")
+        self.actions_title.setObjectName("sectionTitle")
+        action_header = QHBoxLayout()
+        action_header.addWidget(self.actions_title, 1)
+        action_header.addWidget(self.run_powerpoint)
+        content_layout.addLayout(action_header)
+        self.action_table = QTableWidget(0, 4)
+        self.action_table.setObjectName("reviewActions")
+        self.action_table.setHorizontalHeaderLabels(["What it does", "Tool", "Availability", ""])
         self.action_table.setAccessibleName("Generated slide actions")
         self.action_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.action_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.action_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-        self.action_table.horizontalHeader().setStretchLastSection(True)
+        self.action_table.horizontalHeader().setStretchLastSection(False)
+        self.action_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for column in (1, 2, 3):
+            self.action_table.horizontalHeader().setSectionResizeMode(
+                column, QHeaderView.ResizeMode.ResizeToContents
+            )
+        self.action_table.verticalHeader().hide()
+        self.action_table.setWordWrap(True)
+        self.action_table.setShowGrid(False)
         self.action_table.setMinimumHeight(130)
         self.action_table.itemSelectionChanged.connect(self.action_selected)
         content_layout.addWidget(self.action_table)
+        self.action_status = QLabel("Select an action to inspect or run it.")
+        self.action_status.setObjectName("muted")
+        self.action_status.setWordWrap(True)
+        self.action_status.setTextFormat(Qt.TextFormat.PlainText)
+        content_layout.addWidget(self.action_status)
+        self.details_toggle = QPushButton("Action details & evidence")
+        self.details_toggle.setCheckable(True)
+        command(self.details_toggle, "chevron-right")
+        content_layout.addWidget(self.details_toggle, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.details_toggle.hide()  # Each action row exposes its own Details control.
+        self.details_panel = QWidget()
+        self.details_panel.setObjectName("actionDetails")
+        details_layout = QVBoxLayout(self.details_panel)
+        details_layout.setContentsMargins(16, 16, 16, 16)
+        details_layout.setSpacing(12)
+        details_header = QHBoxLayout()
+        details_header.addWidget(QLabel("Action details & execution proof"), 1)
+        hide_details = QPushButton("Hide details")
+        hide_details.clicked.connect(lambda: self.details_toggle.setChecked(False))
+        details_header.addWidget(hide_details)
+        details_layout.addLayout(details_header)
+        self.details_panel.hide()
+        self.details_toggle.toggled.connect(self.details_panel.setVisible)
         self.action_detail = QPlainTextEdit()
         self.action_detail.setReadOnly(True)
         self.action_detail.setAccessibleName("Selected action details and validation")
         self.action_detail.setMaximumHeight(170)
-        content_layout.addWidget(self.action_detail)
+        details_layout.addWidget(self.action_detail)
         evidence_row = QHBoxLayout()
-        evidence_row.addWidget(QLabel("Validation evidence"))
+        evidence_row.addWidget(QLabel("Execution proof"))
         self.evidence_choice = QComboBox()
         self.evidence_choice.setAccessibleName("Available validation evidence")
         evidence_row.addWidget(self.evidence_choice, 1)
-        self.open_evidence = QPushButton("Open evidence")
+        self.open_evidence = QPushButton("View proof")
         command(self.open_evidence, "external-link")
+        self.open_evidence.setToolTip(
+            "View the real before/after slide images or execution report."
+        )
         self.open_evidence.clicked.connect(self.load_evidence)
         evidence_row.addWidget(self.open_evidence)
-        content_layout.addLayout(evidence_row)
+        details_layout.addLayout(evidence_row)
+        content_layout.addWidget(self.details_panel)
         self.body.addWidget(self.content, 1)
         self.content.hide()
 
@@ -358,6 +412,8 @@ class ReviewWidget(Page):
             self.signin.hide()
 
     def clear_private(self, *, keep_deck: bool = False) -> None:
+        self._close_evidence()
+        self.details_toggle.setChecked(False)
         if self._pptx_session is not None:
             self._pptx_session.cancelled.set()
             self._cleanup_queue.append(self._pptx_session)
@@ -376,6 +432,9 @@ class ReviewWidget(Page):
         self.preview.set_page(QImage(), None)
         self.notice.clear()
         self.summary.clear()
+        self._full_summary = ""
+        self.summary_more.setChecked(False)
+        self.summary_more.hide()
         self.slide_summary.clear()
         self.content.hide()
         self.run_powerpoint.setEnabled(False)
@@ -512,15 +571,11 @@ class ReviewWidget(Page):
                     result.analysis.publication if result.analysis else "unavailable",
                 )
             )
-            if result.analysis is not None:
-                self.summary.setText(
-                    f"Saved analysis version {result.analysis.version} · "
-                    f"{result.analysis.publication.replace('_', ' ')}\n\n"
-                    + self._summary_text(
-                        result.analysis.presentation_summary, result.analysis.publication
-                    )
-                )
             self.content.show()
+            self._full_summary = self.summary.text()
+            self.summary_more.setChecked(False)
+            self.summary_more.setVisible(len(self._full_summary) > 600)
+            self._expand_summary(False)
             powerpoint = self.source_format == "pptx"
             self.open_powerpoint.setVisible(powerpoint)
             self.run_powerpoint.setVisible(powerpoint)
@@ -565,6 +620,13 @@ class ReviewWidget(Page):
         return "Presentation summary unavailable: " + str(
             getattr(summary, "reason", None) or "No reason was saved."
         )
+
+    def _expand_summary(self, expanded: bool) -> None:
+        text = self._full_summary
+        if not expanded and len(text) > 600:
+            text = text[:600].rsplit(" ", 1)[0] + "…"
+        self.summary.setText(text)
+        self.summary_more.setText("Show less" if expanded else "Read full summary")
 
     def failed(self, identifier: int, message: str) -> None:
         if self.closing or identifier < 1 or self.request_generation != self.generation:
@@ -683,6 +745,12 @@ class ReviewWidget(Page):
         if not self.sizes or not 0 <= self.page_index < len(self.sizes):
             return
         slide = self.analysis.slides[self.page_index] if self.analysis else None
+        previous_row = self.action_table.currentRow()
+        selected_action = (
+            self.action_rows[previous_row].instance_id
+            if 0 <= previous_row < len(self.action_rows)
+            else None
+        )
         self.slide_counter.setText(f"Slide {self.page_index + 1} of {len(self.sizes)}")
         self.previous.setEnabled(self.page_index > 0)
         self.next.setEnabled(self.page_index + 1 < len(self.sizes))
@@ -700,8 +768,12 @@ class ReviewWidget(Page):
             for column, text in enumerate(
                 (
                     action.purpose,
-                    action.action_type.replace("_", " "),
-                    action.state.replace("-", " "),
+                    action.action_type.replace("draw_", "").replace("_", " ").title(),
+                    "Ready"
+                    if action.usable
+                    else "Checking"
+                    if action.state == "candidate"
+                    else "Needs review",
                 )
             ):
                 item = QTableWidgetItem(text)
@@ -709,10 +781,30 @@ class ReviewWidget(Page):
                 if column == 0:
                     item.setData(Qt.ItemDataRole.UserRole, index)
                 self.action_table.setItem(index, column, item)
+            detail_button = QPushButton("Details")
+            detail_button.setAccessibleName(f"Details for action {index + 1}")
+            detail_button.clicked.connect(
+                lambda _checked=False, row=index: self.show_action_details(row)
+            )
+            self.action_table.setCellWidget(index, 3, detail_button)
+            self.action_table.setRowHeight(index, 64)
         if self.action_rows:
-            self.action_table.selectRow(0)
+            self.action_table.selectRow(
+                next(
+                    (
+                        i
+                        for i, action in enumerate(self.action_rows)
+                        if action.instance_id == selected_action
+                    ),
+                    0,
+                )
+            )
         else:
             self.action_detail.setPlainText("No generated actions are available for this slide.")
+        self.actions_title.setText(
+            f"Suggested actions · {sum(a.usable for a in self.action_rows)} ready "
+            f"/ {len(self.action_rows)} total"
+        )
         self.preview.set_page(self.image, None)
         self.action_table.setAccessibleDescription(
             f"{len(self.action_rows)} actions on slide {self.page_index + 1}"
@@ -725,11 +817,19 @@ class ReviewWidget(Page):
             self.preview.set_page(self.image, None)
             return
         action = self.action_rows[row]
+        self.details_toggle.setChecked(False)
+        self.action_status.setText(
+            "Ready to run on this slide."
+            if action.usable
+            else "This action is still being checked."
+            if action.state == "candidate"
+            else "This action is unavailable. Open Details to see why."
+        )
         x, y, width, height = action.region
         slide = self.analysis.slides[self.page_index] if self.analysis else None
         self.preview.set_page(
             self.image,
-            action.region,
+            None if self.source_format == "pptx" else action.region,
             (slide.width, slide.height) if slide and self.source_format == "pptx" else None,
         )
         self.run_powerpoint.setEnabled(
@@ -764,6 +864,17 @@ class ReviewWidget(Page):
             )
         self.open_evidence.setEnabled(bool(action.evidence and action.validation_id))
 
+    def show_action_details(self, row: int) -> None:
+        show = self.action_table.currentRow() != row or not self.details_panel.isVisible()
+        self.action_table.selectRow(row)
+        self.details_toggle.setChecked(show)
+
+    def _close_evidence(self) -> None:
+        dialog, self._evidence_dialog = self._evidence_dialog, None
+        if dialog is not None:
+            dialog.close()
+            dialog.deleteLater()
+
     def load_evidence(self) -> None:
         row = self.action_table.currentRow()
         if self.runner.busy or not 0 <= row < len(self.action_rows):
@@ -778,6 +889,7 @@ class ReviewWidget(Page):
         generation = self.generation
         self.request_generation = generation
         self.pending_operation = "evidence"
+        self.notice.setText("Loading execution proof…")
         self.open_evidence.setEnabled(False)
         self.activity_changed.emit(True)
 
@@ -791,15 +903,23 @@ class ReviewWidget(Page):
         self.runner.submit(work)
 
     def _show_evidence(self, result: EvidenceResult) -> None:
+        self._close_evidence()
         dialog = QDialog(self)
-        dialog.setWindowTitle("Validation evidence · " + result.kind.replace("_", " "))
+        dialog.setWindowTitle("Execution proof · " + result.kind.replace("_", " ").title())
         dialog.resize(760, 560)
         layout = QVBoxLayout(dialog)
+        introduction = QLabel(
+            "Actual PowerPoint output before or after this action."
+            if result.mime == "image/png"
+            else "Execution report: checks performed and the reason for this action's availability."
+        )
+        introduction.setWordWrap(True)
+        layout.addWidget(introduction)
         if result.mime == "image/png":
             buffer = QBuffer()
             buffer.setData(QByteArray(result.content))
             buffer.open(QIODevice.OpenModeFlag.ReadOnly)
-            reader = QImageReader(buffer, b"PNG")
+            reader = QImageReader(buffer)
             dimensions = reader.size()
             if (
                 not dimensions.isValid()
@@ -808,9 +928,7 @@ class ReviewWidget(Page):
                 or dimensions.width() * dimensions.height() > 16_777_216
             ):
                 buffer.close()
-                self.state.show_state(
-                    "Evidence unavailable", "The evidence image exceeds the display limit."
-                )
+                self.notice.setText("Evidence unavailable: the image exceeds its display limit.")
                 return
             image = reader.read()
             buffer.close()
@@ -819,7 +937,7 @@ class ReviewWidget(Page):
                 or image.width() != dimensions.width()
                 or image.height() != dimensions.height()
             ):
-                self.state.show_state("Evidence unavailable", "The evidence image is invalid.")
+                self.notice.setText("Evidence unavailable: the image is invalid.")
                 return
             preview = QLabel()
             preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -844,7 +962,12 @@ class ReviewWidget(Page):
         close = QPushButton("Close")
         close.clicked.connect(dialog.accept)
         layout.addWidget(close, alignment=Qt.AlignmentFlag.AlignRight)
-        dialog.exec()
+        self._evidence_dialog = dialog
+        self.notice.setText("Execution proof loaded.")
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def shutdown(self) -> None:
         self.closing = True

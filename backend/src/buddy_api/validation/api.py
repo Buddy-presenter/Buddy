@@ -12,9 +12,11 @@ from buddy_api.validation.contracts import StoredResult, ValidationRequest, Vali
 from buddy_api.validation.service import ValidationService
 
 
-def service(request: Request) -> ValidationService:
+def service(request: Request, *, read_only: bool = False) -> ValidationService:
     result: ValidationService | None = request.app.state.validator
     if result is None:
+        if read_only and request.app.state.uploads is not None:
+            return ValidationService(request.app.state.uploads)
         raise UploadError(503, "validator_unavailable", "Action validation is not configured.")
     return result
 
@@ -86,7 +88,9 @@ def validation_router() -> APIRouter:
         request: Request,
         principal: Annotated[Principal, Depends(authenticated)],
     ) -> Response:
-        content, mime = await service(request).evidence(principal.id, identifier, artifact)
+        content, mime = await service(request, read_only=True).evidence(
+            principal.id, identifier, artifact
+        )
         return Response(
             content,
             media_type=mime,

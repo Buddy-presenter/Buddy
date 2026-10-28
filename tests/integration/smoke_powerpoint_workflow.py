@@ -274,6 +274,15 @@ def main() -> int:
                     {"slide": index + 1, "type": kind, "state": "executed_in_real_powerpoint"}
                 )
         report["ui_executions"] = executions
+        # Evidence must resolve the actual execution record, not an unrelated
+        # analysis-validation UUID, and open a visible viewer from the real UI.
+        review.show_action_details(review.action_table.currentRow())
+        review.open_evidence.click()
+        wait(lambda: not review.runner.busy)
+        if review._evidence_dialog is None or not review._evidence_dialog.isVisible():
+            raise AssertionError("Saved evidence did not open: " + review.notice.text())
+        review._close_evidence()
+        report["evidence_viewer"] = True
         window.account.session.tokens = None
         window.account.session_changed.emit()
         wait(lambda: not review.cleanup_runner.busy)

@@ -20,8 +20,8 @@
           "type": "string"
         },
         "version": {
-          "const": "powerpoint-1",
-          "default": "powerpoint-1",
+          "const": "powerpoint-2",
+          "default": "powerpoint-2",
           "title": "Version",
           "type": "string"
         },
@@ -51,7 +51,16 @@
             "draw_oval",
             "draw_underline",
             "draw_arrow",
-            "callout"
+            "callout",
+            "draw_line",
+            "filled_rectangle",
+            "filled_oval",
+            "text_box",
+            "draw_rounded_rectangle",
+            "draw_diamond",
+            "draw_triangle",
+            "draw_hexagon",
+            "draw_star"
           ],
           "title": "Type",
           "type": "string"
@@ -82,8 +91,8 @@
           "type": "string"
         },
         "version": {
-          "const": "powerpoint-1",
-          "default": "powerpoint-1",
+          "const": "powerpoint-2",
+          "default": "powerpoint-2",
           "title": "Version",
           "type": "string"
         },
@@ -302,8 +311,8 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "buddy.powerpoint.analysis.v1",
-      "default": "buddy.powerpoint.analysis.v1",
+      "const": "buddy.powerpoint.analysis.v2",
+      "default": "buddy.powerpoint.analysis.v2",
       "title": "Schema Version",
       "type": "string"
     },
@@ -357,26 +366,26 @@
       "type": "string"
     },
     "catalog_version": {
-      "const": "powerpoint-1",
-      "default": "powerpoint-1",
+      "const": "powerpoint-2",
+      "default": "powerpoint-2",
       "title": "Catalog Version",
       "type": "string"
     },
     "renderer_version": {
-      "const": "desktop-powerpoint-1",
-      "default": "desktop-powerpoint-1",
+      "const": "desktop-powerpoint-2",
+      "default": "desktop-powerpoint-2",
       "title": "Renderer Version",
       "type": "string"
     },
     "display_profile": {
-      "const": "windows-powerpoint-1",
-      "default": "windows-powerpoint-1",
+      "const": "windows-powerpoint-2",
+      "default": "windows-powerpoint-2",
       "title": "Display Profile",
       "type": "string"
     },
     "validator_version": {
-      "const": "powerpoint-executor-1",
-      "default": "powerpoint-executor-1",
+      "const": "powerpoint-executor-2",
+      "default": "powerpoint-executor-2",
       "title": "Validator Version",
       "type": "string"
     },

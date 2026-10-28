@@ -68,8 +68,8 @@
       "type": "string"
     },
     "version": {
-      "const": "powerpoint-1",
-      "default": "powerpoint-1",
+      "const": "powerpoint-2",
+      "default": "powerpoint-2",
       "title": "Version",
       "type": "string"
     },
@@ -99,7 +99,16 @@
         "draw_oval",
         "draw_underline",
         "draw_arrow",
-        "callout"
+        "callout",
+        "draw_line",
+        "filled_rectangle",
+        "filled_oval",
+        "text_box",
+        "draw_rounded_rectangle",
+        "draw_diamond",
+        "draw_triangle",
+        "draw_hexagon",
+        "draw_star"
       ],
       "title": "Type",
       "type": "string"
@@ -121,6 +130,7 @@
   ],
   "title": "PowerPointContentAction",
   "type": "object",
-  "$id": "urn:buddy:powerpoint:action:1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:buddy:powerpoint:action:2",
   "x-source-format": "pptx"
 }

@@ -51,7 +51,10 @@ class FakeShape:
             self.Width, self.Height = abs(x2 - x1), abs(y2 - y1)
         else:
             _, self.Left, self.Top, self.Width, self.Height = args
-        self.Fill = SimpleNamespace(ForeColor=SimpleNamespace(RGB=0), Transparency=0)
+        self.Fill = SimpleNamespace(
+            ForeColor=SimpleNamespace(RGB=0), Transparency=0, Solid=lambda: None
+        )
+        self.Shadow = SimpleNamespace(Visible=-1)
         self.Line = SimpleNamespace(
             ForeColor=SimpleNamespace(RGB=0),
             Weight=0,
@@ -65,6 +68,12 @@ class FakeShape:
             ),
         )
         self.Callout = SimpleNamespace(Border=False)
+        self.TextFrame2 = SimpleNamespace(
+            AutoSize=0,
+            WordWrap=0,
+            VerticalAnchor=0,
+            TextRange=SimpleNamespace(BoundHeight=0, BoundWidth=0),
+        )
 
     def Delete(self):
         self.collection.items.remove(self)
@@ -721,7 +730,7 @@ def test_managed_line_and_highlight_shapes_erase_without_stale_ink(control_autom
         (
             "callout",
             {"region": Region(20, 30, 120, 50), "text": "Key point"},
-            "callout",
+            "shape",
         ),
     ],
 )

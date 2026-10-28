@@ -150,8 +150,8 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
             raise ValueError
         if powerpoint:
             if (
-                input_data.get("schema_version") != "buddy.powerpoint.analysis.v1"
-                or input_data.get("catalog_version") != "powerpoint-1"
+                input_data.get("schema_version") != "buddy.powerpoint.analysis.v2"
+                or input_data.get("catalog_version") != "powerpoint-2"
             ):
                 raise ValueError
             office_safe = input_data.get("office_safe") is True
@@ -164,7 +164,7 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
         manifest = _dict(input_data["manifest"])
         render_id = _required_text(manifest.get("render_id"))
         if powerpoint and (
-            manifest.get("source_format") != "pptx" or manifest.get("version") != "powerpoint-1"
+            manifest.get("source_format") != "pptx" or manifest.get("version") != "powerpoint-2"
         ):
             raise ValueError
         if str(manifest["deck_id"]) != str(deck_id):
@@ -217,7 +217,7 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
             if powerpoint:
                 definition = json.loads(
                     files("buddy_desktop")
-                    .joinpath("powerpoint_contracts", "action-v1.schema.json")
+                    .joinpath("powerpoint_contracts", "action-v2.schema.json")
                     .read_text()
                 )
                 try:
@@ -334,9 +334,9 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                     or not evidence
                     or reasons
                     or not runtime_version
-                    or profile != "windows-powerpoint-1"
-                    or validator != "powerpoint-executor-1"
-                    or renderer != "desktop-powerpoint-1"
+                    or profile != "windows-powerpoint-2"
+                    or validator != "powerpoint-executor-2"
+                    or renderer != "desktop-powerpoint-2"
                 )
             ):
                 raise ValueError
@@ -412,7 +412,7 @@ class ReviewService:
         )
         timeout = (
             max(120.0, self.config.request_timeout)
-            if path.endswith("/powerpoint-source")
+            if path.endswith("/powerpoint-source") or "/evidence/" in path
             else self.config.request_timeout
         )
         try:

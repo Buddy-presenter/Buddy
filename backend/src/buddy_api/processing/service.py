@@ -556,7 +556,7 @@ class Processor:
                     validation_input = ValidationInput(
                         source_format="pptx" if _format == "pptx" else "pdf",
                         runtime_version=getattr(result, "office_version", None),
-                        validation_id=uuid5(analysis_id, "result:" + action.instance_id),
+                        validation_id=stored.id,
                         analysis_id=analysis_id,
                         analysis_sha256=analysis_hash,
                         instance_id=action.instance_id,
