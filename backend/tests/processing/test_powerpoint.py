@@ -4,6 +4,7 @@ import asyncio
 import io
 from uuid import uuid4
 
+import httpx
 import pytest
 from backend.tests.processing.test_worker import SQS, UPLOADS, WORKER, row, seed
 from backend.tests.support.powerpoint import output, source
@@ -11,6 +12,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from buddy_api.analysis.contracts import PowerPointAnalysisResult, ValidationInput, digest
+from buddy_api.analysis.powerpoint import PowerPointProvider
 from buddy_api.analysis.provider import ProviderFailure
 from buddy_api.analysis.store import Analyses
 from buddy_api.app import create_app
@@ -18,7 +20,7 @@ from buddy_api.auth import Principal, authenticated
 from buddy_api.config import Environment, Settings
 from buddy_api.persistence.database import Database
 from buddy_api.persistence.errors import PersistenceConflict
-from buddy_api.persistence.models import AnalysisVersion, ProcessingJob
+from buddy_api.persistence.models import AnalysisVersion, JobOutbox, ProcessingJob
 from buddy_api.processing import store
 from buddy_api.processing.contracts import Message, PowerPointSource
 from buddy_api.processing.service import Processor
@@ -181,6 +183,57 @@ def test_powerpoint_provider_failure_is_durable_without_fake_summaries(migrated_
                     )
                     is None
                 )
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_malformed_model_response_retries_then_publishes_without_manual_retry(
+    migrated_database, monkeypatch
+):
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "synthetic-test-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "synthetic-test-secret")
+    content, extracted = source()
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        blocks = (
+            []
+            if len(calls) == 1
+            else [
+                {"type": "text", "text": "Analysis ready."},
+                {
+                    "type": "tool_use",
+                    "name": "submit_powerpoint_analysis",
+                    "input": output(extracted, ()).model_dump(mode="json"),
+                },
+            ]
+        )
+        return httpx.Response(200, json={"stop_reason": "tool_use", "content": blocks})
+
+    async def scenario():
+        db = Database(migrated_database)
+        try:
+            _, _, job = await seed(db, content=content, source_format="pptx")
+            provider = PowerPointProvider("eu-central-1", transport=httpx.MockTransport(respond))
+            worker, queue, _ = processor(db, content, provider=provider)
+            await worker.maintain()
+            await worker.run_message(queue.messages[-1])
+            current = await row(db, job.id)
+            assert current.status == "retry_wait"
+            assert current.error_code == "provider_malformed_output"
+            async with db.sessions() as session, session.begin():
+                current = await session.get(ProcessingJob, job.id)
+                current.not_before = store.now()
+                outbox = await session.get(JobOutbox, job.id)
+                outbox.available_at = store.now()
+            await worker.maintain()
+            await worker.run_message(queue.messages[-1])
+            current = await row(db, job.id)
+            assert current.status == "analysis_ready" and current.attempts == 2
+            assert len(calls) == 2
         finally:
             await db.close()
 

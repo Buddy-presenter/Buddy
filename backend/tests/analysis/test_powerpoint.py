@@ -312,9 +312,42 @@ def test_malformed_provider_envelopes_are_recoverable_failures(monkeypatch, payl
     provider = PowerPointProvider(
         "eu-central-1", transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload))
     )
-    with pytest.raises(ProviderFailure, match="provider_malformed_output"):
+    with pytest.raises(ProviderFailure, match="provider_malformed_output") as failed:
         asyncio.run(
             provider.analyze_async(
                 content, extracted, manifest(extracted).deck_id, manifest(extracted)
             )
         )
+    assert not failed.value.permanent
+
+
+@pytest.mark.parametrize("ambiguous", [False, True])
+def test_provider_accepts_commentary_but_never_ambiguous_tool_calls(monkeypatch, ambiguous):
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "synthetic-test-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "synthetic-test-secret")
+    content, extracted = source()
+    tool = {
+        "type": "tool_use",
+        "name": "submit_powerpoint_analysis",
+        "input": output(extracted).model_dump(mode="json"),
+    }
+    blocks = [{"type": "text", "text": "Here is the analysis."}, tool]
+    if ambiguous:
+        blocks.append(dict(tool))
+    provider = PowerPointProvider(
+        "eu-central-1",
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, json={"stop_reason": "tool_use", "content": blocks})
+        ),
+    )
+
+    async def run():
+        return await provider.analyze_async(
+            content, extracted, manifest(extracted).deck_id, manifest(extracted)
+        )
+
+    if ambiguous:
+        with pytest.raises(ProviderFailure, match="provider_malformed_output"):
+            asyncio.run(run())
+    else:
+        assert asyncio.run(run()) == output(extracted)

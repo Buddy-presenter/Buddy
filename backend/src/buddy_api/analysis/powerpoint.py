@@ -318,17 +318,27 @@ class PowerPointProvider:
             if (
                 decoded.get("stop_reason") != "tool_use"
                 or not isinstance(blocks, list)
-                or len(blocks) != 1
-                or not isinstance(blocks[0], dict)
-                or blocks[0].get("name") != "submit_powerpoint_analysis"
-                or blocks[0].get("type") != "tool_use"
+                or not all(isinstance(block, dict) for block in blocks)
             ):
                 raise ValueError("Incomplete or unexpected provider result")
-            result = PowerPointOutput.model_validate(blocks[0]["input"])
+            tools = [block for block in blocks if block.get("type") == "tool_use"]
+            if (
+                len(tools) != 1
+                or tools[0].get("name") != "submit_powerpoint_analysis"
+                or any(
+                    block.get("type") != "tool_use"
+                    and (block.get("type") != "text" or not isinstance(block.get("text"), str))
+                    for block in blocks
+                )
+            ):
+                raise ValueError("Ambiguous or unexpected provider blocks")
+            result = PowerPointOutput.model_validate(tools[0]["input"])
             if len(result.slides) != len(extraction.slides):
                 raise ValueError("Source slide count mismatch")
             return result
         except (httpx.HTTPError, TimeoutError):
             raise ProviderFailure("provider_unavailable") from None
         except (ValueError, KeyError, TypeError, RecursionError):
-            raise ProviderFailure("provider_malformed_output", permanent=True) from None
+            # The next bounded worker attempt can receive a valid model response.
+            # Nothing is published or executed until the entire result validates.
+            raise ProviderFailure("provider_malformed_output") from None

@@ -148,6 +148,9 @@ the same object may have separate highlights. Missing or changed text fails clos
 Duplicate suggestions and targets whose clipped source region is smaller than 12 points
 are omitted without discarding the deck's summaries or its valid suggestions. Distinct
 phrases within one text container are not treated as duplicate validation candidates.
+Malformed or incomplete model responses remain unpublished and use the durable worker's
+bounded retry budget. A harmless text preamble may accompany exactly one valid analysis
+tool call; ambiguous tools, unknown block types and invalid schemas remain rejected.
 Geometric stars, diamonds, triangles and hexagons are omitted for text targets or distorted
 aspect ratios. The model chooses tools for content meaning, without variety quotas; useful
 highlights can repeat. System instructions are separate from untrusted extracted content,
