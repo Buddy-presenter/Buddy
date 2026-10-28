@@ -116,10 +116,18 @@ outside that session. Local manual PowerPoint controls and the PDF player are pr
 
 - PPTX parser: existing 64 MiB source, 256 MiB archive expansion and XML/object/time/memory
   limits. Analysis: at most 100 slides and 120,000 UTF-8 bytes of extracted context; no
-  silent truncation. Provider: one 90-second invocation per generation attempt, 8,000 output
-  tokens, 2 MiB response, 40 generated actions per deck. Existing lifetime attempts,
+  silent truncation. Provider: one 180-second invocation per generation attempt, 16,000 output
+  tokens, 2 MiB response, 100 generated actions per deck and 40 per slide. Existing lifetime attempts,
   per-owner concurrency/quota and whole-job deadlines also apply. These bound requests and
   token consumption; account budgets remain alerts rather than a hard monetary cap.
+- The model builds a broad candidate menu covering meaningful facts, examples, individual
+  instructional steps and useful tool alternatives. Suggestions are choices, not overlays
+  to apply simultaneously. Empty authoring placeholders remain excluded; substantive
+  teaching instructions remain eligible. Invalid/unmatched source targets are omitted,
+  preserving the grounded candidates and summaries.
+- Large PowerPoint validation sets yield before a delivery's runtime deadline and resume
+  only remaining candidates from the saved analysis. Completed evidence is retained and
+  the model is not called again; a normal batch continuation does not spend a failure attempt.
 - Apply forward migrations `0012_powerpoint_analysis` and `0013_powerpoint_tools` with the
   migration identity before deploying compatible binaries. Existing PDF action/input hashes are preserved. Historical
   untyped analyses remain legacy; legacy writes get their deck's format through a narrow

@@ -103,15 +103,16 @@ def test_text_targets_are_grounded_and_decorative_text_frames_are_omitted():
         assert result.actions[0].params.target_text == slide.objects[0].text
         assert result.actions[0].params.source_shape_id == slide.objects[0].source_id
     raw["slides"][0]["actions"][0]["target_text"] = "a claim absent from the source"
-    with pytest.raises(ProviderFailure, match="pptx_unknown_text_target"):
-        analysis_document(
-            PowerPointOutput.model_validate(raw),
-            extraction,
-            manifest(extraction),
-            UUID(manifest(extraction).deck_id),
-            uuid4(),
-            uuid4(),
-        )
+    filtered = analysis_document(
+        PowerPointOutput.model_validate(raw),
+        extraction,
+        manifest(extraction),
+        UUID(manifest(extraction).deck_id),
+        uuid4(),
+        uuid4(),
+    )
+    assert filtered.slides[0].actions == ()
+    assert len(filtered.slides[1].actions) == 1
 
 
 def test_two_different_phrases_can_be_highlighted_in_one_text_box():
@@ -192,15 +193,16 @@ def test_budgets_unknown_objects_and_source_mismatch():
     content, extracted = source()
     result = output(extracted).model_dump(mode="json")
     result["slides"][0]["actions"][0]["object_id"] = "untrusted-object"
-    with pytest.raises(ProviderFailure, match="pptx_unknown_target"):
-        analysis_document(
-            PowerPointOutput.model_validate(result),
-            extracted,
-            manifest(extracted),
-            UUID(manifest(extracted).deck_id),
-            uuid4(),
-            uuid4(),
-        )
+    filtered = analysis_document(
+        PowerPointOutput.model_validate(result),
+        extracted,
+        manifest(extracted),
+        UUID(manifest(extracted).deck_id),
+        uuid4(),
+        uuid4(),
+    )
+    assert filtered.slides[0].actions == ()
+    assert len(filtered.slides[1].actions) == 1
     result = output(extracted).model_dump(mode="json")
     result["slides"][0]["actions"] *= 41
     with pytest.raises(ValidationError):
@@ -233,7 +235,7 @@ def test_provider_transport_structured_output_and_recoverable_failures(monkeypat
         assert "original PDF" not in body["messages"][0]["content"]
         assert extracted.source_sha256 in body["messages"][0]["content"]
         assert "Discuss the measured pilot results" in body["messages"][0]["content"]
-        assert body["max_tokens"] == 8000
+        assert body["max_tokens"] == 16000
         calls.append(body)
         return httpx.Response(
             200,
@@ -381,3 +383,23 @@ def test_plain_summary_text_is_normalized_without_weakening_validation(monkeypat
         parsed = asyncio.run(run())
         assert parsed.presentation.text == text and parsed.presentation.reason is None
         assert parsed.slides[0].summary.text == "Exact slide summary."
+
+
+@pytest.mark.parametrize("count", [100, 101])
+def test_comprehensive_candidate_budget_is_bounded(count):
+    _, extracted = source()
+    action = output(extracted).model_dump(mode="json")["slides"][0]["actions"][0]
+    raw = output(extracted).model_dump(mode="json")
+    raw["slides"] = [
+        dict(
+            number=i + 1,
+            summary={"text": "Grounded summary.", "reason": None},
+            actions=[dict(action) for _ in range(10 + (i == 9 and count == 101))],
+        )
+        for i in range(10)
+    ]
+    if count == 101:
+        with pytest.raises(ValidationError, match="budget"):
+            PowerPointOutput.model_validate(raw)
+    else:
+        assert sum(len(s.actions) for s in PowerPointOutput.model_validate(raw).slides) == 100

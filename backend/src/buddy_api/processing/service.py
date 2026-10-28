@@ -525,6 +525,17 @@ class Processor:
                         # Geometry inside a flattened image is deliberately kept as a
                         # candidate for #50/#51. Executor success cannot promote it.
                         continue
+                    if (
+                        _format == "pptx"
+                        and time.perf_counter() - job_started_at
+                        >= self.settings.runtime_seconds - 105
+                    ):
+                        # Preserve completed Office checks and resume the remaining
+                        # candidates before this delivery's deadline can interrupt one.
+                        async with self.database.sessions() as session, session.begin():
+                            await store.defer(session, job.id, token, 1)
+                        await blocking(lambda: self.queue.acknowledge(raw["ReceiptHandle"]))
+                        return
                     assert self.validation is not None
                     action = action_result.action
                     retry_key = uuid5(analysis_id, "validation:" + action.instance_id)

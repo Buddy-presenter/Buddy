@@ -371,7 +371,7 @@ async def defer(
     token: UUID,
     delay_seconds: int,
 ) -> None:
-    """Release a job while a durable validator reservation is still in flight.
+    """Release a delivery while validation waits or yields its remaining batch.
 
     This is a wait, not a failed processing attempt. Keep the existing extraction and
     analysis so the next delivery resumes at the same idempotent validation request.

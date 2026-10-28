@@ -278,3 +278,77 @@ def test_powerpoint_candidates_survive_runtime_failure_and_reject_pdf_evidence(m
             await db.close()
 
     asyncio.run(scenario())
+
+
+def test_large_powerpoint_validation_resumes_before_deadline_without_regeneration(
+    migrated_database, monkeypatch
+):
+    import sys
+    from types import SimpleNamespace
+
+    import buddy_api.processing.service as service_module
+    from buddy_api.analysis.contracts import PowerPointContentAction
+    from buddy_api.validation.contracts import PowerPointStoredResult
+    from buddy_api.validation.powerpoint import PowerPointProcessResult
+
+    elapsed = [0.0]
+    monkeypatch.setattr(service_module, "time", SimpleNamespace(perf_counter=lambda: elapsed[0]))
+
+    async def scenario():
+        content, _ = source()
+        db = Database(migrated_database)
+        try:
+            owner, deck, job = await seed(db, content=content, source_format="pptx")
+            provider = Provider(actions=("highlight_region", "draw_underline"))
+            worker, queue, _ = processor(db, content, provider=provider)
+            worker.settings = WORKER.model_copy(update={"runtime_seconds": 300})
+            calls = []
+
+            class Validator:
+                async def reconcile(self):
+                    pass
+
+                async def validate(self, owner_id, deck_id, key, request, **kwargs):
+                    calls.append(key)
+                    elapsed[0] += 250
+                    return PowerPointStoredResult(
+                        id=uuid4(),
+                        deck_id=deck_id,
+                        evidence=[],
+                        result=PowerPointProcessResult(
+                            state="needs-review",
+                            reasons=["test_runtime_unavailable"],
+                            runtime_platform=sys.platform,
+                            source_revision=deck.source_revision,
+                            source_sha256=deck.source_sha256,
+                            action_sha256=digest(
+                                PowerPointContentAction.model_validate(request.action)
+                            ),
+                        ),
+                    )
+
+            worker.validation = Validator()
+            for index in range(4):
+                if index:
+                    async with db.sessions() as session, session.begin():
+                        current = await session.get(ProcessingJob, job.id)
+                        current.not_before = store.now()
+                        outbox = await session.get(JobOutbox, job.id)
+                        outbox.available_at = store.now()
+                await worker.maintain()
+                await worker.run_message(queue.messages[-1])
+                current = await row(db, job.id)
+                if index < 3:
+                    assert current.status == "retry_wait" and current.attempts == 0
+                else:
+                    assert current.status == "analysis_ready" and current.attempts == 1
+            assert provider.calls == 1
+            assert len(calls) == len(set(calls)) == 4
+            async with db.sessions() as session:
+                record = await Analyses(session).latest_for_deck(deck.id, owner_id=owner.id)
+                result = await Analyses(session).read(record.id, owner_id=owner.id)
+                assert all(a.state != "candidate" for s in result.slides for a in s.actions)
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())

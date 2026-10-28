@@ -307,7 +307,7 @@ class PowerPointAnalysisInput(Model):
                 if r.x + r.width > source.source.width or r.y + r.height > source.source.height:
                     raise ValueError("PowerPoint action extends beyond its source slide.")
                 ids.add(action.instance_id)
-        if len(ids) > 40 or len(self.model_dump_json().encode()) > 8 * 1024 * 1024:
+        if len(ids) > 100 or len(self.model_dump_json().encode()) > 8 * 1024 * 1024:
             raise ValueError("PowerPoint analysis exceeds its budget.")
         return self
 
