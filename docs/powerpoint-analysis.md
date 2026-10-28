@@ -153,6 +153,12 @@ and the final generation check excludes template boilerplate and empty placehold
 The Review action list expands to its rows and uses the page's single scrollbar. Details
 buttons reserve their measured width, with the Tool column moved into details on narrow
 windows. Screenshots cover eight actions at both 800x600 and 1360x1000.
+Native wheel events over those actions scroll the outer page. A permissioned live
+Bedrock check on the supplied 12-slide value-proposition deck selected eight highlights
+and one frame, with no geometric text frames or placeholder callout. Its three selected
+Vanguard phrases passed real Office execution on private temporary copies; inspected
+renders confirm only the selected words receive the orange overlay. The original file
+is unchanged. This source-specific evidence stays in ignored local test output.
 
 The expanded workflow also passed with real staging S3/Bedrock and isolated local
 HTTP/PostgreSQL/Windows Office/Qt services. Six generated actions (oval, underline,

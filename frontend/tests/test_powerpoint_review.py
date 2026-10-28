@@ -262,6 +262,9 @@ def test_powerpoint_review_visual_layout(
     from dataclasses import replace
     from pathlib import Path
 
+    from PySide6.QtCore import QPoint
+    from PySide6.QtTest import QTest
+
     from buddy_desktop.visuals import apply_theme
 
     original_style, original_palette, original_font = qapp.styleSheet(), qapp.palette(), qapp.font()
@@ -313,6 +316,18 @@ def test_powerpoint_review_visual_layout(
         button = table.cellWidget(row, 3)
         assert table.columnWidth(3) >= button.sizeHint().width()
         assert table.rowHeight(row) >= button.sizeHint().height()
+    scroll = window.pages.currentWidget()
+    target_button = table.cellWidget(3, 3)
+    scroll.ensureWidgetVisible(target_button)
+    qtbot.wait(20)
+    previous_scroll = scroll.verticalScrollBar().value()
+    QTest.wheelEvent(
+        window.windowHandle(),
+        target_button.mapTo(window, target_button.rect().center()),
+        QPoint(0, -120),
+    )
+    qtbot.wait(20)
+    assert scroll.verticalScrollBar().value() > previous_scroll
     assert not window.review.content.isHidden()
     assert window.review.open_powerpoint.geometry().right() < window.review.content.width()
     assert window.review.run_powerpoint.geometry().right() < window.review.content.width()
