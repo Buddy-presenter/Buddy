@@ -99,7 +99,7 @@ class Processor:
     @staticmethod
     def _duplicate_candidate_ids(slides: Any) -> set[str]:
         """Keep duplicates visible, but never treat repeated same-region actions as usable."""
-        seen: set[tuple[str, str, float, float, float, float]] = set()
+        seen: set[tuple[str, str, float, float, float, float, str]] = set()
         duplicates: set[str] = set()
         for slide in slides:
             for result in slide.actions:
@@ -112,6 +112,7 @@ class Processor:
                     region.y,
                     region.width,
                     region.height,
+                    getattr(action.params, "target_text", ""),
                 )
                 if key in seen:
                     duplicates.add(action.instance_id)

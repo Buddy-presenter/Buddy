@@ -152,10 +152,11 @@ def analysis_document(
                 min(slide.width / 12700, (b.x + b.width) / 12700),
                 min(slide.height / 12700, (b.y + b.height) / 12700),
             )
-            # Never guess geometry for clipped, degenerate or duplicate targets.
+            # Unusable suggestions must not discard the deck's summaries/valid actions.
+            # Never guess geometry, enlarge tiny targets or execute duplicate annotations.
             key = (obj.id, action.type, action.target_text)
             if right - x < 12 or bottom - y < 12 or key in seen:
-                raise ProviderFailure("pptx_invalid_target", permanent=True)
+                continue
             seen.add(key)
             actions.append(
                 PowerPointContentAction(

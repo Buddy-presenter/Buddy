@@ -145,6 +145,9 @@ Text suggestions now include an exact, unique `target_text` and a server-derived
 `source_shape_id`. Office measures the selected character range, including UTF-16 offsets,
 instead of stretching annotations across empty text-container space. Separate phrases in
 the same object may have separate highlights. Missing or changed text fails closed.
+Duplicate suggestions and targets whose clipped source region is smaller than 12 points
+are omitted without discarding the deck's summaries or its valid suggestions. Distinct
+phrases within one text container are not treated as duplicate validation candidates.
 Geometric stars, diamonds, triangles and hexagons are omitted for text targets or distorted
 aspect ratios. The model chooses tools for content meaning, without variety quotas; useful
 highlights can repeat. System instructions are separate from untrusted extracted content,

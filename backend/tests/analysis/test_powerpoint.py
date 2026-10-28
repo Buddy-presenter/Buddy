@@ -130,6 +130,39 @@ def test_two_different_phrases_can_be_highlighted_in_one_text_box():
         uuid4(),
     )
     assert [a.params.target_text for a in document.slides[0].actions] == ["Revenue", "12%"]
+    from buddy_api.processing.service import Processor
+
+    assert Processor._duplicate_candidate_ids(document.slides) == set()
+
+
+def test_tiny_and_duplicate_suggestions_do_not_fail_the_complete_analysis():
+    _, extraction = source()
+    slide = extraction.slides[0]
+    tiny = slide.objects[1].model_copy(
+        update={"bounds": slide.objects[1].bounds.model_copy(update={"height": 5 * 12700})}
+    )
+    extraction = extraction.model_copy(
+        update={
+            "slides": (
+                slide.model_copy(update={"objects": (slide.objects[0], tiny, *slide.objects[2:])}),
+                *extraction.slides[1:],
+            )
+        }
+    )
+    generated = output(extraction).model_dump(mode="json")
+    valid = generated["slides"][0]["actions"][0]
+    generated["slides"][0]["actions"].extend([dict(valid), dict(valid, object_id=tiny.id)])
+    document = analysis_document(
+        PowerPointOutput.model_validate(generated),
+        extraction,
+        manifest(extraction),
+        UUID(manifest(extraction).deck_id),
+        uuid4(),
+        uuid4(),
+    )
+    assert len(document.slides[0].actions) == 1
+    assert document.slides[0].summary.text == generated["slides"][0]["summary"]["text"]
+    assert document.presentation_summary.text == generated["presentation"]["text"]
 
 
 @pytest.mark.parametrize(
