@@ -812,6 +812,8 @@ class ReviewWidget(Page):
 
     def action_selected(self) -> None:
         self.run_powerpoint.setEnabled(False)
+        self.evidence_choice.clear()
+        self.open_evidence.setEnabled(False)
         row = self.action_table.currentRow()
         if not 0 <= row < len(self.action_rows):
             self.preview.set_page(self.image, None)

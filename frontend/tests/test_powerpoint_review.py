@@ -411,11 +411,21 @@ def test_powerpoint_source_download_uses_a_transfer_timeout(monkeypatch):
 
 
 def test_action_details_are_opt_in_and_evidence_png_opens(desktop_window, monkeypatch, qtbot):
+    from dataclasses import replace
     from pathlib import Path
 
     content = b"PK-synthetic-source"
     deck, payload = powerpoint_payload(content)
     analysis = parse_analysis(payload, deck)
+    slide = analysis.slides[0]
+    first = slide.actions[0]
+    second = replace(
+        first,
+        instance_id="second-action",
+        validation_id=uuid4(),
+        evidence=(replace(first.evidence[0], id=uuid4()),),
+    )
+    analysis = replace(analysis, slides=(replace(slide, actions=(first, second)),))
     monkeypatch.setattr(ReviewService, "analysis", lambda *_args: analysis)
     monkeypatch.setattr(
         ReviewService,
@@ -436,11 +446,22 @@ def test_action_details_are_opt_in_and_evidence_png_opens(desktop_window, monkey
     qtbot.mouseClick(button, widgets.Qt.MouseButton.LeftButton)
     assert not review.details_panel.isHidden()
     assert "Validation record" in review.action_detail.toPlainText()
+    review.action_table.cellWidget(1, 3).click()
+    assert not review.details_panel.isHidden()
+    assert review.evidence_choice.count() == 1
+    assert review.evidence_choice.currentData() == second.evidence[0]
     png = (Path(__file__).parent / "fixtures/powerpoint/indexed-preview.png").read_bytes()
-    monkeypatch.setattr(ReviewService, "evidence", lambda *_args: (png, "image/png"))
+    requests = []
+
+    def evidence(_self, validation_id, artifact_id, sha256):
+        requests.append((validation_id, artifact_id, sha256))
+        return png, "image/png"
+
+    monkeypatch.setattr(ReviewService, "evidence", evidence)
     review.open_evidence.click()
     qtbot.waitUntil(lambda: not review.runner.busy)
     assert review._evidence_dialog is not None and review._evidence_dialog.isVisible()
+    assert requests == [(second.validation_id, second.evidence[0].id, second.evidence[0].sha256)]
     review.clear_private()
     assert review._evidence_dialog is None
 
