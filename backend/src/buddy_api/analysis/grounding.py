@@ -708,13 +708,35 @@ def ground_actions(
                             raise ExtractionError("page_geometry_mismatch")
                         converter = bitmap.get_posconv(page)
                         objects, tagged_objects = _object_rects(page, converter, width, height)
+                        candidate_targets = {}
+                        if any(action.target_id is not None for action in generated.actions):
+                            from buddy_api.analysis.text_candidates import candidate_page
+
+                            candidate_targets = {
+                                item.id: item
+                                for item in candidate_page(
+                                    page, page_index + 1, extraction.source_sha256
+                                )
+                            }
                         for action in generated.actions:
                             hint = _hint(action, width, height)
                             if hint is None:
                                 continue
                             rect: Rect | None = None
                             method: GroundingMethod = "pdf_glyphs"
-                            if action.target_text:
+                            if action.target_id is not None:
+                                target = candidate_targets.get(action.target_id)
+                                if (
+                                    target is None
+                                    or action.type != "highlight_region"
+                                    or action.target_text != target.text
+                                ):
+                                    continue
+                                method = "pdf_candidate_line"
+                                rect = _padded(
+                                    Rect(**target.region.model_dump()), width, height, zoom=False
+                                )
+                            elif action.target_text:
                                 matches = _matches_text(
                                     page, textpage, action.target_text, width, height, converter
                                 )
@@ -766,6 +788,7 @@ def ground_actions(
                                             "grounding_trace": GroundingTrace(
                                                 method=method,
                                                 target_text=action.target_text or None,
+                                                target_id=action.target_id,
                                                 model_region=Region(
                                                     x=action.x,
                                                     y=action.y,

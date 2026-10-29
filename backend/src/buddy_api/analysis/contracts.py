@@ -15,7 +15,12 @@ type Text = Annotated[str, Field(min_length=1, max_length=16000, pattern=r"\S")]
 type ValidationState = Literal["candidate", "validated", "rejected", "needs-review"]
 type ValidationKind = Literal["execution", "visual"]
 type GroundingMethod = Literal[
-    "pdf_glyphs", "pdf_words", "ocr_words", "pdf_visual_geometry", "visual_hint"
+    "pdf_glyphs",
+    "pdf_words",
+    "ocr_words",
+    "pdf_visual_geometry",
+    "visual_hint",
+    "pdf_candidate_line",
 ]
 type Publication = Literal["legacy", "partial", "awaiting_validation", "published"]
 MAX_GENERATED_ACTIONS_PER_DECK = 40
@@ -55,14 +60,19 @@ class GroundingTrace(Model):
     version: Literal["pdf-source-grounding-1"] = "pdf-source-grounding-1"
     method: GroundingMethod
     target_text: Annotated[str, Field(min_length=1, max_length=256, pattern=r"\S")] | None
+    target_id: str | None = Field(
+        default=None, max_length=128, exclude_if=lambda value: value is None
+    )
     model_region: Region
     resolved_region: Region
 
     @model_validator(mode="after")
     def target_matches_method(self) -> Self:
-        text_method = self.method in {"pdf_glyphs", "pdf_words", "ocr_words"}
+        text_method = self.method in {"pdf_glyphs", "pdf_words", "ocr_words", "pdf_candidate_line"}
         if text_method != (self.target_text is not None):
             raise ValueError("Text grounding requires a quoted target; visual grounding has none.")
+        if (self.method == "pdf_candidate_line") != (self.target_id is not None):
+            raise ValueError("Candidate grounding requires its source-measured target ID.")
         return self
 
 

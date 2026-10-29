@@ -107,6 +107,47 @@ aspect ratios must agree; values are not silently interpreted in the other plane
 
 ## Validation evidence and typed reads
 
+### Opt-in experiment: select measured text IDs instead of predicting boxes
+
+`execute_text_candidates(pdf_bytes)` builds a bounded ephemeral catalogue in the isolated
+parser process. It uses PDFium character origins to group horizontal text by actual
+baseline, glyph boxes for the line rectangle, and gaps to split separated columns.
+Targets receive IDs bound to the PDF digest, page, text and measured geometry. Identical
+phrases in different places have different IDs. No coordinates are memorized for a deck.
+
+Pass the catalogue as `BedrockProvider(region, text_candidates=catalog)` to opt in.
+The original PDF is still sent unchanged. This mode's output schema allows only
+`highlight_region`, `purpose` and `target_id`; it has no model-generated coordinate or
+text fields. Candidate text is untrusted input. Buddy fills in the selected target's
+text and rectangle, then independently remeasures the target ID in the grounding
+subprocess. Unknown, changed-source, cross-page or inconsistent text/ID combinations
+reject without falling back to coordinate guessing. Provenance records the selected ID
+and `pdf_candidate_line` method. This is still not independent semantic verification.
+
+This prototype is **not enabled in the normal worker**. It currently handles whole
+horizontal left-to-right text lines; it does not provide OCR candidates, graphics/diagram targets,
+rotated pages, precise arbitrary subphrases, or multi-line highlight contracts. Candidate
+extraction is bounded by 18 MiB, 100 pages, 200,000 characters/page, 2,000 candidates and
+80,000 candidate-text characters, plus the existing child resource/deadline limits.
+The existing provider request-size and action budgets still apply. Omitted targets do
+not imply the slide has no useful content. Real provider selection quality must be
+evaluated separately before making this the worker default.
+
+Run the offline geometry experiment without credentials or paid calls:
+
+```powershell
+.\.venv\Scripts\python.exe backend/scripts/try_candidate_regions.py deck.pdf `
+  --page 2 --contains "A unique phrase on the target line" `
+  --output build/private-candidate-experiment
+```
+
+It saves a catalogue, selected action/provenance JSON and a page overlay in a new private
+directory. The investigator selects a unique text line; deliberately incorrect initial
+coordinates demonstrate that target-ID remeasurement determines the final box. This
+tests geometry and isolation, not a model's judgment about what should be highlighted.
+Automated adapter tests use a fake only at the Bedrock HTTP boundary and assert that
+the real request schema never asks the model to predict a rectangle.
+
 New source-grounded analyses retain an optional `inputs.grounding` list in the existing
 immutable provenance JSON. Each record binds an action ID and hash to the exact quoted
 text (when applicable), the original model rectangle, final source rectangle, method
@@ -130,8 +171,9 @@ fixture is insufficient evidence for that rollout. Do not rewrite historical dig
 Text matching requires whole words, including normalized Unicode matching, so a target
 such as `net results` cannot be grounded to the suffix of `internet results`. Grounding
 still locates the supplied quote; it does not prove the purpose agrees with that quote.
-Candidate-based target selection, multi-line highlight contracts and independent visual
-QA/correction remain separate outstanding work in #135/#50/#51.
+The opt-in candidate experiment above addresses text-location selection. Its production
+integration, multi-line highlight contracts and independent visual QA/correction remain
+outstanding work in #135/#50/#51.
 
 `ValidationInput` (`buddy.validation.v1`) binds a unique validation ID to analysis ID/hash,
 action instance ID/hash and validator/renderer/display-profile versions. Evidence carries

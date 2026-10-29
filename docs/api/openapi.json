@@ -512,7 +512,8 @@
           "pdf_words",
           "ocr_words",
           "pdf_visual_geometry",
-          "visual_hint"
+          "visual_hint",
+          "pdf_candidate_line"
         ],
         "type": "string"
       },
@@ -527,6 +528,18 @@
           },
           "resolved_region": {
             "$ref": "#/components/schemas/Region"
+          },
+          "target_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Id"
           },
           "target_text": {
             "anyOf": [

@@ -83,7 +83,8 @@
         "pdf_words",
         "ocr_words",
         "pdf_visual_geometry",
-        "visual_hint"
+        "visual_hint",
+        "pdf_candidate_line"
       ],
       "type": "string"
     },
@@ -112,6 +113,19 @@
             }
           ],
           "title": "Target Text"
+        },
+        "target_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Id"
         },
         "model_region": {
           "$ref": "#/$defs/Region"
