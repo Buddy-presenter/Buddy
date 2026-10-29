@@ -15,6 +15,7 @@ from uuid import UUID, uuid5
 from sqlalchemy import exists, func, select
 
 from buddy_api.analysis.contracts import (
+    ActionGrounding,
     AnalysisInput,
     ContentAction,
     EvidenceReference,
@@ -703,6 +704,7 @@ class Processor:
         ):
             raise ProviderFailure("provider_slide_order")
         rendered: list[SlideOutput] = []
+        grounding: list[ActionGrounding] = []
         visual_qa_pending_instance_ids: list[str] = []
         for index, (model_slide, source_slide) in enumerate(
             zip(generated.slides, extraction.slides, strict=True)
@@ -744,6 +746,14 @@ class Processor:
                     )
                     if candidate.visual_qa_pending:
                         visual_qa_pending_instance_ids.append(instance_id)
+                    if candidate.grounding_trace is not None:
+                        grounding.append(
+                            ActionGrounding(
+                                instance_id=instance_id,
+                                action_sha256=digest(actions[-1]),
+                                trace=candidate.grounding_trace,
+                            )
+                        )
                 except ValueError:
                     raise ProviderFailure("provider_invalid_action") from None
             rendered.append(
@@ -763,6 +773,7 @@ class Processor:
                 display_profile="wide-1x",
                 validator_version="qt-executor-1",
                 manifest=manifest,
+                grounding=tuple(grounding),
                 visual_qa_pending_instance_ids=tuple(visual_qa_pending_instance_ids),
                 presentation_summary=cls._summary(
                     generated.presentation.text, generated.presentation.reason

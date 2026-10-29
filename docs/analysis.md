@@ -107,6 +107,32 @@ aspect ratios must agree; values are not silently interpreted in the other plane
 
 ## Validation evidence and typed reads
 
+New source-grounded analyses retain an optional `inputs.grounding` list in the existing
+immutable provenance JSON. Each record binds an action ID and hash to the exact quoted
+text (when applicable), the original model rectangle, final source rectangle, method
+(`pdf_glyphs`, `pdf_words`, `ocr_words`, `pdf_visual_geometry`, or `visual_hint`) and
+grounding version. The enclosing analysis pins the source hash/revision and renderer.
+Changed hashes or final geometry reject; unresolved visual hints must remain QA-pending.
+The provider cannot submit this server-owned metadata. The normal catalog is unchanged.
+
+This metadata is private document content, available only through the existing owned
+analysis read. It must not enter logs. Empty metadata is omitted from serialization so
+historical immutable analysis hashes remain valid. Older analyses have no trace, which
+must not be interpreted as evidence that source grounding ran. No database migration is
+needed: the existing provenance JSON stores the new versioned information.
+
+Compatibility direction matters: new readers accept historical records, but older strict
+readers do not understand non-empty grounding metadata or its changed analysis digest.
+Before deploying a worker that publishes traces, prove the rollback API can read a new
+traced analysis, or provide a reviewed compatible rollback reader. Passing an empty-trace
+fixture is insufficient evidence for that rollout. Do not rewrite historical digests.
+
+Text matching requires whole words, including normalized Unicode matching, so a target
+such as `net results` cannot be grounded to the suffix of `internet results`. Grounding
+still locates the supplied quote; it does not prove the purpose agrees with that quote.
+Candidate-based target selection, multi-line highlight contracts and independent visual
+QA/correction remain separate outstanding work in #135/#50/#51.
+
 `ValidationInput` (`buddy.validation.v1`) binds a unique validation ID to analysis ID/hash,
 action instance ID/hash and validator/renderer/display-profile versions. Evidence carries
 opaque artifact UUIDs, kind and SHA-256, never storage keys. The worker calls the existing

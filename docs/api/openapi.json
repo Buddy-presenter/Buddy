@@ -48,6 +48,27 @@
         "title": "AccountResponse",
         "type": "object"
       },
+      "ActionGrounding": {
+        "additionalProperties": false,
+        "properties": {
+          "action_sha256": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "instance_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "trace": {
+            "$ref": "#/components/schemas/GroundingTrace"
+          }
+        },
+        "required": [
+          "instance_id",
+          "action_sha256",
+          "trace"
+        ],
+        "title": "ActionGrounding",
+        "type": "object"
+      },
       "ActionResult": {
         "additionalProperties": false,
         "properties": {
@@ -114,6 +135,15 @@
             "default": "1",
             "title": "Extractor Version",
             "type": "string"
+          },
+          "grounding": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ActionGrounding"
+            },
+            "maxItems": 40,
+            "title": "Grounding",
+            "type": "array"
           },
           "job_id": {
             "format": "uuid",
@@ -474,6 +504,58 @@
           "sha256"
         ],
         "title": "EvidenceReference",
+        "type": "object"
+      },
+      "GroundingMethod": {
+        "enum": [
+          "pdf_glyphs",
+          "pdf_words",
+          "ocr_words",
+          "pdf_visual_geometry",
+          "visual_hint"
+        ],
+        "type": "string"
+      },
+      "GroundingTrace": {
+        "additionalProperties": false,
+        "properties": {
+          "method": {
+            "$ref": "#/components/schemas/GroundingMethod"
+          },
+          "model_region": {
+            "$ref": "#/components/schemas/Region"
+          },
+          "resolved_region": {
+            "$ref": "#/components/schemas/Region"
+          },
+          "target_text": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "pattern": "\\S",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Text"
+          },
+          "version": {
+            "const": "pdf-source-grounding-1",
+            "default": "pdf-source-grounding-1",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "method",
+          "target_text",
+          "model_region",
+          "resolved_region"
+        ],
+        "title": "GroundingTrace",
         "type": "object"
       },
       "HTTPValidationError": {

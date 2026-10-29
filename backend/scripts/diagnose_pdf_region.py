@@ -98,6 +98,9 @@ def diagnose(
         if saved_region is not None
         else None,
         "grounded_region": grounded,
+        "grounding_trace": actions[0].grounding_trace.model_dump(mode="json")
+        if actions and actions[0].grounding_trace is not None
+        else None,
         "intersection_over_union": overlap,
         "semantic_verified": False,
         "note": "Geometry comparison only. No model call, semantic approval or persisted changes.",

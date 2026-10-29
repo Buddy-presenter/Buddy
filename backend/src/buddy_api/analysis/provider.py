@@ -15,7 +15,7 @@ from botocore.awsrequest import AWSRequest  # type: ignore[import-untyped]
 from botocore.session import Session  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from buddy_api.analysis.contracts import MAX_GENERATED_ACTIONS_PER_DECK, Manifest
+from buddy_api.analysis.contracts import MAX_GENERATED_ACTIONS_PER_DECK, GroundingTrace, Manifest
 from buddy_api.extraction.contracts import Extraction
 from buddy_api.observability import emit_metric
 
@@ -63,6 +63,7 @@ class ModelAction(BaseModel):
     # Server-only handoff to the independent visual QA path. The provider schema does
     # not expose this field, so model output cannot mark its own action as reviewed.
     visual_qa_pending: bool = False
+    grounding_trace: GroundingTrace | None = None
     x: float = Field(ge=0)
     y: float = Field(ge=0)
     width: float = Field(gt=0)
@@ -316,7 +317,7 @@ class BedrockProvider:
             if not isinstance(payload, dict) or not isinstance(payload.get("slides"), list):
                 raise ValueError("Invalid analysis structure")
             if any(
-                "visual_qa_pending" in action
+                ("visual_qa_pending" in action or "grounding_trace" in action)
                 for slide in payload["slides"]
                 if isinstance(slide, dict) and isinstance(slide.get("actions"), list)
                 for action in slide["actions"]

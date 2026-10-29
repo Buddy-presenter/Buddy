@@ -20,7 +20,7 @@ from dataclasses import dataclass
 import pypdfium2 as pdfium  # type: ignore[import-untyped]
 import pypdfium2.raw as raw  # type: ignore[import-untyped]
 
-from buddy_api.analysis.contracts import Manifest
+from buddy_api.analysis.contracts import GroundingMethod, GroundingTrace, Manifest, Region
 from buddy_api.analysis.provider import ModelAction, ModelOutput
 from buddy_api.extraction.contracts import Extraction, ExtractionError
 
@@ -133,7 +133,9 @@ def _matches_text(
     converter: object,
 ) -> list[Rect]:
     matches: list[Rect] = []
-    with closing(textpage.search(quote, match_case=False)) as searcher:  # type: ignore[attr-defined]
+    with closing(
+        textpage.search(quote, match_case=False, match_whole_word=True)  # type: ignore[attr-defined]
+    ) as searcher:
         while (match := searcher.get_next()) is not None:
             start, count = match
             boxes = []
@@ -203,6 +205,17 @@ def _matches_normalized_text(
     start = 0
     while (start := normalized_text.find(normalized_quote, start)) >= 0:
         stop = start + len(normalized_quote)
+        if (
+            normalized_quote[0].isalnum()
+            and start > 0
+            and (normalized_text[start - 1].isalnum() or normalized_text[start - 1] == "_")
+        ) or (
+            normalized_quote[-1].isalnum()
+            and stop < len(normalized_text)
+            and (normalized_text[stop].isalnum() or normalized_text[stop] == "_")
+        ):
+            start += max(1, len(normalized_quote))
+            continue
         source_range = source_indices[start:stop]
         glyph_indices = sorted(
             {source_index for first, end in source_range for source_index in range(first, end)}
@@ -700,11 +713,13 @@ def ground_actions(
                             if hint is None:
                                 continue
                             rect: Rect | None = None
+                            method: GroundingMethod = "pdf_glyphs"
                             if action.target_text:
                                 matches = _matches_text(
                                     page, textpage, action.target_text, width, height, converter
                                 )
                                 if not matches:
+                                    method = "pdf_words"
                                     matches = _matches_text_words(
                                         page,
                                         textpage,
@@ -714,6 +729,7 @@ def ground_actions(
                                         converter,
                                     )
                                 if not matches:
+                                    method = "ocr_words"
                                     if page_index not in ocr_cache and ocr_pages < MAX_OCR_PAGES:
                                         ocr_cache[page_index] = _ocr_words(page, width, height)
                                         ocr_pages += 1
@@ -734,6 +750,7 @@ def ground_actions(
                                 )
                                 if grounded_target is not None:
                                     rect, qa_pending = grounded_target
+                                    method = "visual_hint" if qa_pending else "pdf_visual_geometry"
                                     if qa_pending:
                                         action = action.model_copy(
                                             update={"visual_qa_pending": True}
@@ -746,6 +763,22 @@ def ground_actions(
                                             "y": rect.y,
                                             "width": rect.width,
                                             "height": rect.height,
+                                            "grounding_trace": GroundingTrace(
+                                                method=method,
+                                                target_text=action.target_text or None,
+                                                model_region=Region(
+                                                    x=action.x,
+                                                    y=action.y,
+                                                    width=action.width,
+                                                    height=action.height,
+                                                ),
+                                                resolved_region=Region(
+                                                    x=rect.x,
+                                                    y=rect.y,
+                                                    width=rect.width,
+                                                    height=rect.height,
+                                                ),
+                                            ),
                                         }
                                     )
                                 )

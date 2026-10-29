@@ -298,6 +298,7 @@ class Analyses:
         inputs = AnalysisInput.model_validate(
             {
                 **(value.provenance or {}),
+                "visual_qa_pending_instance_ids": visual_qa_pending,
                 "presentation_summary": summary(value).model_dump(),
                 "slides": [
                     {

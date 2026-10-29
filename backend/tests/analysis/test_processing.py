@@ -2,12 +2,12 @@
 
 from io import BytesIO
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError
 
-from buddy_api.analysis.contracts import ValidationInput
+from buddy_api.analysis.contracts import AnalysisInput, ValidationInput, digest
 from buddy_api.analysis.provider import (
     ModelAction,
     ModelOutput,
@@ -53,6 +53,29 @@ def test_execution_validation_cannot_claim_semantic_verification():
         _validation(semantic_verified=True)
     with pytest.raises(ValidationError):
         _validation(validation_kind="visual")
+
+
+def test_grounding_trace_survives_binding_and_rejects_changed_geometry():
+    from backend.tests.analysis.test_grounding import _action, _load, _output
+
+    from buddy_api.analysis.grounding import ground_actions
+
+    content, extraction, manifest = _load(PDF)
+    generated = ground_actions(
+        content, extraction, manifest, _output(extraction, {0: (_action(),)})
+    )
+    document = Processor._analysis_document(
+        generated, extraction, manifest, UUID(manifest.deck_id), uuid4(), uuid4()
+    )
+    assert len(document.grounding) == 1
+    record = document.grounding[0]
+    assert record.action_sha256 == digest(document.slides[0].actions[0])
+    assert record.trace.target_text == "Buddy PDF presentation"
+    dumped = document.model_dump(mode="json")
+    assert AnalysisInput.model_validate(dumped) == document
+    dumped["grounding"][0]["trace"]["resolved_region"]["y"] += 10
+    with pytest.raises(ValidationError, match="Grounding does not match"):
+        AnalysisInput.model_validate(dumped)
 
 
 def test_model_output_is_bound_to_verified_manifest_and_stable_action_ids():

@@ -13,6 +13,7 @@ from buddy_api.analysis.grounding import (
     _ground_object_target,
     _match_ocr,
     _matches_normalized_text,
+    _matches_text,
     _matches_text_words,
     _snap_object,
     _tagged_content_ids,
@@ -62,11 +63,11 @@ def _load(path: Path):
     return content, extraction, manifest
 
 
-def _two_column_pdf() -> bytes:
+def _two_column_pdf(phrase=b"caf\xe9 results") -> bytes:
     """Build a deterministic WinAnsi source PDF with repeated text in two columns."""
     content = (
-        b"BT /F1 24 Tf 90 700 Td (caf\xe9 results) Tj ET "
-        b"BT /F1 24 Tf 390 700 Td (caf\xe9 results) Tj ET"
+        b"BT /F1 24 Tf 90 700 Td (" + phrase + b") Tj ET "
+        b"BT /F1 24 Tf 390 700 Td (" + phrase + b") Tj ET"
     )
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
@@ -112,6 +113,23 @@ def test_highlight_is_rebuilt_from_pdfium_glyph_positions_not_model_box():
     assert action.height < page.height / 8
     assert action.x + action.width <= page.width
     assert action.y + action.height <= page.height
+
+
+def test_text_grounding_declines_suffixes_inside_longer_words():
+    from contextlib import closing
+
+    import pypdfium2 as pdfium
+
+    with (
+        pdfium.PdfDocument(_two_column_pdf(b"internet results")) as document,
+        closing(document[0]) as page,
+        closing(page.get_textpage()) as textpage,
+        closing(page.render(scale=2)) as bitmap,
+    ):
+        converter = bitmap.get_posconv(page)
+        assert _matches_text(page, textpage, "internet results", 1224, 1584, converter)
+        assert _matches_text(page, textpage, "net results", 1224, 1584, converter) == []
+        assert _matches_text_words(page, textpage, "net results", 1224, 1584, converter) == []
 
 
 def test_rotated_and_cropped_page_text_maps_into_viewer_coordinate_plane():
@@ -385,6 +403,11 @@ def test_grounding_runs_inside_the_bounded_child_process():
 
     assert len(result.slides[0].actions) == 1
     assert result.slides[0].actions[0].height < manifest.slides[0].source.height / 8
+    trace = result.slides[0].actions[0].grounding_trace
+    assert trace is not None and trace.method == "pdf_glyphs"
+    assert trace.target_text == action.target_text
+    assert trace.model_region.width == action.width
+    assert trace.resolved_region.width == result.slides[0].actions[0].width
 
 
 def test_unix_child_does_not_use_data_limit_when_address_space_limit_is_unavailable(monkeypatch):
