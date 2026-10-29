@@ -420,7 +420,7 @@ class BedrockProvider:
             result = parse_model_output(payload)
         except ProviderFailure:
             raise
-        except (AttributeError, ValidationError, ValueError, TypeError):
+        except (AttributeError, KeyError, ValidationError, ValueError, TypeError):
             raise ProviderFailure("provider_malformed_output") from None
         if [item.number for item in result.slides] != list(range(1, len(dims) + 1)):
             raise ProviderFailure("provider_slide_order", permanent=True)

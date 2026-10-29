@@ -147,3 +147,32 @@ def test_candidate_provider_rejects_stale_source_and_cross_page_selection(monkey
 def test_rotated_page_is_not_misrepresented_as_horizontal_lines():
     catalog = execute_text_candidates(GEOMETRY_PDF.read_bytes())
     assert all(item.page != 2 for item in catalog.candidates)
+
+
+@pytest.mark.parametrize("malformation", ["missing_actions", "coordinates", "unknown_id"])
+def test_candidate_provider_sanitizes_invalid_selection_responses(malformation):
+    catalog = extract_candidates(_two_column_pdf())
+    action = {
+        "type": "highlight_region",
+        "purpose": "Synthetic target.",
+        "target_id": catalog.candidates[0].id,
+    }
+    slide = {"number": 1, "text": "Synthetic.", "reason": None, "actions": [action]}
+    if malformation == "missing_actions":
+        del slide["actions"]
+    elif malformation == "coordinates":
+        action["x"] = 123
+    else:
+        action["target_id"] = "invented-id"
+    raw = json.dumps(
+        response_for(
+            output_text=json.dumps(
+                {
+                    "presentation": {"text": "Synthetic.", "reason": None},
+                    "slides": [slide],
+                }
+            )
+        )
+    ).encode()
+    with pytest.raises(ProviderFailure, match="^provider_malformed_output$"):
+        BedrockProvider._decode_response(raw, [(1224, 1584)], catalog)
