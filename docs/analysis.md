@@ -124,7 +124,12 @@ subprocess. Unknown, changed-source, cross-page or inconsistent text/ID combinat
 reject without falling back to coordinate guessing. Provenance records the selected ID
 and `pdf_candidate_line` method. This is still not independent semantic verification.
 
-This prototype is **not enabled in the normal worker**. It currently handles whole
+The worker can opt in with `BUDDY_WORKER_TEXT_TARGETING=candidate_lines`; the default
+`quote` keeps the existing quote-and-hint method. The catalogue is extracted inside the
+fenced job, passed per request (not stored on a shared provider), and discarded afterward.
+Extraction failure fails the attempt; it does not silently switch back to coordinate
+guessing. [Worker enablement](pdf-workers.md#enable-candidate-line-targeting) describes
+deployment and desktop testing. This prototype currently handles whole
 horizontal left-to-right text lines; it does not provide OCR candidates, graphics/diagram targets,
 rotated pages, precise arbitrary subphrases, or multi-line highlight contracts. Candidate
 extraction is bounded by 18 MiB, 100 pages, 200,000 characters/page, 2,000 candidates and

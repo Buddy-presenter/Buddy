@@ -153,6 +153,11 @@ run "staging_worker_is_provisioned_paused_for_release_promotion" {
     error_message = "Terraform must create the worker as a paused service so the verified release driver controls its first start."
   }
 }
+run "reject_unknown_text_targeting" {
+  command = plan
+  variables { worker_text_targeting = "guess_coordinates" }
+  expect_failures = [var.worker_text_targeting]
+}
 run "production_redundancy" {
   command = plan
   variables {
@@ -297,8 +302,9 @@ run "reject_public_task_addresses_in_production" {
 run "private_upload_runtime_and_version_cleanup" {
   command = plan
   variables {
-    api_image    = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    worker_image = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    api_image             = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    worker_image          = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    worker_text_targeting = "candidate_lines"
   }
   # Supply only external computed identities needed to evaluate the API template.
   # Keep its mount, environment and IAM policy expressions under test unchanged.
@@ -408,6 +414,13 @@ run "private_upload_runtime_and_version_cleanup" {
       [for item in jsondecode(aws_ecs_task_definition.service["api"].container_definitions)[0].environment : item.value if item.name == "BUDDY_DATA_KMS_KEY_ARN"] == [aws_kms_key.data.arn]
     )
     error_message = "Upload workload configuration must use this environment's private KMS key."
+  }
+  assert {
+    condition = (
+      [for item in jsondecode(aws_ecs_task_definition.service["worker"].container_definitions)[0].environment : item.value if item.name == "BUDDY_WORKER_TEXT_TARGETING"] == ["candidate_lines"] &&
+      length([for item in jsondecode(aws_ecs_task_definition.service["api"].container_definitions)[0].environment : item if item.name == "BUDDY_WORKER_TEXT_TARGETING"]) == 0
+    )
+    error_message = "Candidate targeting must reach the worker without configuring the API to generate content."
   }
   assert {
     condition = alltrue([

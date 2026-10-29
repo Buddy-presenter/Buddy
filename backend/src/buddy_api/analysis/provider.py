@@ -285,7 +285,13 @@ class BedrockProvider:
         self.text_candidates = text_candidates
 
     def _signed_request(
-        self, content: bytes, extraction: Extraction, deck_id: str, manifest: Manifest
+        self,
+        content: bytes,
+        extraction: Extraction,
+        deck_id: str,
+        manifest: Manifest,
+        *,
+        text_candidates: TextCandidates | None = None,
     ) -> tuple[str, bytes, list[tuple[int, int]], dict[str, str]]:
         if not content.startswith(b"%PDF-") or len(content) > MAX_FILE_BYTES:
             raise ProviderFailure("provider_file_limit", permanent=True)
@@ -294,8 +300,8 @@ class BedrockProvider:
         dims = [(slide.width // 6350, slide.height // 6350) for slide in extraction.slides]
         schema = _json_schema(len(dims))
         prompt = _prompt(extraction, deck_id, manifest)
-        if self.text_candidates is not None:
-            catalog = self.text_candidates
+        catalog = text_candidates if text_candidates is not None else self.text_candidates
+        if catalog is not None:
             if (
                 catalog.source_sha256 != hashlib.sha256(content).hexdigest()
                 or catalog.source_sha256 != extraction.source_sha256
@@ -448,15 +454,22 @@ class BedrockProvider:
         raise RuntimeError("Use analyze_async from an active event loop")
 
     async def analyze_async(
-        self, content: bytes, extraction: Extraction, deck_id: str, manifest: Manifest
+        self,
+        content: bytes,
+        extraction: Extraction,
+        deck_id: str,
+        manifest: Manifest,
+        *,
+        text_candidates: TextCandidates | None = None,
     ) -> ModelOutput:
         """Invoke Bedrock with a cancellable transport and one end-to-end deadline."""
         started_at = time.perf_counter()
         environment = os.environ.get("BUDDY_ENVIRONMENT", "development")
+        catalog = text_candidates if text_candidates is not None else self.text_candidates
         try:
             async with asyncio.timeout(TIMEOUT_SECONDS):
                 endpoint, body, dims, headers = self._signed_request(
-                    content, extraction, deck_id, manifest
+                    content, extraction, deck_id, manifest, text_candidates=catalog
                 )
                 async with (
                     httpx.AsyncClient(transport=self.transport, timeout=None) as client,
@@ -485,7 +498,7 @@ class BedrockProvider:
             )
             raise
         try:
-            output = self._decode_response(bytes(raw), dims, self.text_candidates)
+            output = self._decode_response(bytes(raw), dims, catalog)
         except ProviderFailure:
             self._record_metrics(
                 environment, deck_id, extraction.source_revision, started_at, None, "failed"

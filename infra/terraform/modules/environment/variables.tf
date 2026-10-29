@@ -55,6 +55,15 @@ variable "worker_image" {
     error_message = "Worker image must be null or a real ECR digest; never use a placeholder."
   }
 }
+variable "worker_text_targeting" {
+  type        = string
+  default     = "quote"
+  description = "Opt-in PDF text targeting; candidate_lines selects source-measured line IDs."
+  validation {
+    condition     = contains(["quote", "candidate_lines"], var.worker_text_targeting)
+    error_message = "Worker text targeting must be quote or candidate_lines."
+  }
+}
 variable "start_services" {
   type    = bool
   default = false

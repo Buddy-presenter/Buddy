@@ -1,5 +1,6 @@
 """Coordinate-free model selection bound to real PDF geometry and source identity."""
 
+import asyncio
 import json
 
 import httpx
@@ -61,7 +62,8 @@ def test_selected_id_ignores_bad_model_geometry_and_rejects_unknown_ids():
         )
 
 
-def test_provider_candidate_request_never_asks_for_coordinates(monkeypatch):
+@pytest.mark.parametrize("binding", ["constructor", "request"])
+def test_provider_candidate_request_never_asks_for_coordinates(monkeypatch, binding):
     content = _two_column_pdf()
     catalog = extract_candidates(content)
     extraction, manifest = _load_bytes(content)
@@ -99,9 +101,22 @@ def test_provider_candidate_request_never_asks_for_coordinates(monkeypatch):
             ),
         )
 
-    result = BedrockProvider(
-        "eu-central-1", transport=httpx.MockTransport(handler), text_candidates=catalog
-    ).analyze(content, extraction, manifest.deck_id, manifest)
+    client = BedrockProvider(
+        "eu-central-1",
+        transport=httpx.MockTransport(handler),
+        text_candidates=catalog if binding == "constructor" else None,
+    )
+    result = asyncio.run(
+        client.analyze_async(
+            content,
+            extraction,
+            manifest.deck_id,
+            manifest,
+            text_candidates=catalog if binding == "request" else None,
+        )
+    )
+    if binding == "request":
+        assert client.text_candidates is None
     action = result.slides[0].actions[0]
     assert action.target_text == target.text and action.target_id == target.id
     assert action.x == target.region.x

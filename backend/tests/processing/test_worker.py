@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import io
+import json
 import os
 import subprocess
 import sys
@@ -12,11 +13,20 @@ from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
 
+import httpx
 import pytest
+from backend.tests.analysis.test_provider import Session, response_for
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from buddy_api.analysis.provider import ModelAction, ModelOutput, ModelSlide, ModelSummary
+from buddy_api.analysis import provider as provider_module
+from buddy_api.analysis.provider import (
+    BedrockProvider,
+    ModelAction,
+    ModelOutput,
+    ModelSlide,
+    ModelSummary,
+)
 from buddy_api.analysis.store import Analyses
 from buddy_api.app import create_app
 from buddy_api.auth import Principal, authenticated
@@ -164,6 +174,79 @@ def test_real_pdf_worker_pinned_source_duplicate_and_restart(migrated_database):
                 assert (await store.schedule(session, deck)).id == job.id
             await processor.run_message({"Body": "not-json", "ReceiptHandle": "poison"})
             assert "poison" not in sqs.acked
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_candidate_mode_persists_measured_trace_without_claiming_usable(
+    migrated_database, monkeypatch
+):
+    selected = {}
+    monkeypatch.setattr(provider_module, "Session", Session)
+
+    def handler(request):
+        body = json.loads(request.content)
+        prompt = body["messages"][0]["content"][1]["text"]
+        candidates = json.loads(prompt.split("Candidates: ", 1)[1])
+        target = next(item for item in candidates if item["page"] == 1)
+        selected.update(target)
+        return httpx.Response(
+            200,
+            json=response_for(
+                output_text=json.dumps(
+                    {
+                        "presentation": {"text": "Synthetic selection.", "reason": None},
+                        "slides": [
+                            {
+                                "number": number,
+                                "text": "Synthetic page summary.",
+                                "reason": None,
+                                "actions": [
+                                    {
+                                        "type": "highlight_region",
+                                        "purpose": "Focus on the selected first line.",
+                                        "target_id": target["id"],
+                                    }
+                                ]
+                                if number == 1
+                                else [],
+                            }
+                            for number in range(1, 4)
+                        ],
+                    }
+                )
+            ),
+        )
+
+    async def scenario():
+        db = Database(migrated_database)
+        try:
+            owner, deck, job = await seed(db)
+            queue = SQS()
+            processor = make_processor(
+                db,
+                SourceStorage(UPLOADS, S3(PDF.read_bytes())),
+                WORKER.model_copy(update={"text_targeting": "candidate_lines"}),
+                queue,
+                provider=BedrockProvider("eu-central-1", transport=httpx.MockTransport(handler)),
+            )
+            await processor.maintain()
+            await processor.run_message(queue.messages[0])
+            current = await row(db, job.id)
+            assert (current.status, current.error_code) == ("retry_wait", "validator_unavailable")
+            await db.close()
+            db = Database(migrated_database)
+            async with db.sessions() as session:
+                analyses = await Analyses(session).list(owner_id=owner.id)
+                result = await Analyses(session).read(analyses[0].id, owner_id=owner.id)
+            trace = result.inputs.grounding[0].trace
+            assert trace.method == "pdf_candidate_line" and trace.target_id == selected["id"]
+            action = result.slides[0].actions[0]
+            assert not action.usable
+            assert action.action.params.region == trace.resolved_region
+            assert trace.target_text == selected["text"]
         finally:
             await db.close()
 

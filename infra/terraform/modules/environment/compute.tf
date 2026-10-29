@@ -64,7 +64,7 @@ resource "aws_ecs_task_definition" "service" {
     mountPoints            = each.key != "migration" ? [{ sourceVolume = "upload-scratch", containerPath = "/var/lib/buddy-upload", readOnly = false }] : [],
     volumesFrom            = [],
     systemControls         = [],
-    environment            = local.environment,
+    environment            = concat(local.environment, each.key == "worker" ? [{ name = "BUDDY_WORKER_TEXT_TARGETING", value = var.worker_text_targeting }] : []),
     secrets                = [{ name = "BUDDY_DATABASE_URL", valueFrom = "${aws_secretsmanager_secret.database[each.key].arn}:url::" }],
     logConfiguration = { logDriver = "awslogs", options = {
       awslogs-group  = aws_cloudwatch_log_group.service[each.key].name,

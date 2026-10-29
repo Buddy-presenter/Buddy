@@ -9,7 +9,7 @@ from collections.abc import Callable
 from contextlib import suppress
 from datetime import timedelta
 from functools import partial
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid5
 
 from sqlalchemy import exists, func, select
@@ -19,6 +19,7 @@ from buddy_api.analysis.contracts import (
     AnalysisInput,
     ContentAction,
     EvidenceReference,
+    Manifest,
     Region,
     RegionParameters,
     SlideOutput,
@@ -47,7 +48,12 @@ from buddy_api.processing import store
 from buddy_api.processing.config import WorkerSettings
 from buddy_api.processing.contracts import Message, MetadataOutput, PDFSource
 from buddy_api.processing.queue import Queue
-from buddy_api.processing.stage import execute, execute_grounding, execute_manifest
+from buddy_api.processing.stage import (
+    execute,
+    execute_grounding,
+    execute_manifest,
+    execute_text_candidates,
+)
 from buddy_api.uploads.contracts import UploadError
 from buddy_api.uploads.service import UploadService, blocking
 from buddy_api.uploads.storage import SourceStorage
@@ -84,6 +90,28 @@ class Processor:
         )
         self.validation = validation or (
             ValidationService(self.uploads, validator_settings) if validator_settings else None
+        )
+
+    async def _generate_analysis(
+        self, content: bytes, extraction: Extraction, deck_id: str, manifest: Manifest
+    ) -> ModelOutput:
+        """Keep the opt-in catalogue local to one fenced job, never shared provider state."""
+        if self.settings.text_targeting == "candidate_lines":
+            catalog = await blocking(
+                partial(
+                    execute_text_candidates,
+                    content,
+                    min(120, self.settings.runtime_seconds - 15),
+                )
+            )
+            return await self.provider.analyze_async(
+                content, extraction, deck_id, manifest, text_candidates=catalog
+            )
+        analyze_async = getattr(self.provider, "analyze_async", None)
+        if analyze_async is not None:
+            return cast(ModelOutput, await analyze_async(content, extraction, deck_id, manifest))
+        return await blocking(
+            partial(self.provider.analyze, content, extraction, deck_id, manifest)
         )
 
     @staticmethod
@@ -406,19 +434,13 @@ class Processor:
             if existing is None:
                 if hashlib.sha256(content).hexdigest() != source_digest:
                     raise UploadError(409, "source_mismatch", "Accepted PDF source changed.")
-                analyze_async = getattr(self.provider, "analyze_async", None)
-                provider_call = (
-                    analyze_async(content, extraction, str(deck_id), manifest)
-                    if analyze_async is not None
-                    else blocking(
-                        partial(self.provider.analyze, content, extraction, str(deck_id), manifest)
-                    )
-                )
                 active_stage = "provider"
                 active_stage_started_at = time.perf_counter()
                 if not await persist_stage("provider", 60):
                     return
-                alive, generated = await fenced(provider_call)
+                alive, generated = await fenced(
+                    self._generate_analysis(content, extraction, str(deck_id), manifest)
+                )
                 if not alive:
                     return
                 alive, generated = await fenced(
