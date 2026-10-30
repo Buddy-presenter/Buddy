@@ -34,6 +34,10 @@ variable "worker_image" {
   type    = string
   default = null
 }
+variable "worker_text_targeting" {
+  type    = string
+  default = "quote"
+}
 variable "start_services" {
   type    = bool
   default = false
@@ -81,6 +85,7 @@ module "environment" {
   zone_id                     = var.zone_id
   api_image                   = var.api_image
   worker_image                = var.worker_image
+  worker_text_targeting       = var.worker_text_targeting
   start_services              = var.start_services
   worker_start_services       = var.worker_start_services
   enable_terraform_monitoring = false

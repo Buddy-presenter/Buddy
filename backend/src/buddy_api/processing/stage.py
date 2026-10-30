@@ -16,6 +16,7 @@ from buddy_api.analysis.contracts import Manifest
 from buddy_api.analysis.grounding import ground_actions
 from buddy_api.analysis.provider import ModelOutput, parse_model_output
 from buddy_api.analysis.rendering import render_manifest
+from buddy_api.analysis.text_candidates import TextCandidates, extract_candidates
 from buddy_api.extraction.contracts import Extraction, ExtractionError
 from buddy_api.extraction.runner import extract_pdf, parser_memory_limit
 from buddy_api.processing.contracts import MetadataOutput, PDFSource
@@ -87,6 +88,16 @@ def execute_manifest(
         return Manifest.model_validate(response)
     except (json.JSONDecodeError, TypeError, ValueError):
         raise ExtractionError("pdf_render_manifest_failed") from None
+
+
+def execute_text_candidates(content: bytes, seconds: float = 120) -> TextCandidates:
+    """Opt-in candidate extraction in the existing resource-limited parser process."""
+    with tempfile.TemporaryDirectory(prefix="stage-candidates-") as directory:
+        request = json.dumps(
+            {"operation": "text_candidates", "content": base64.b64encode(content).decode("ascii")}
+        ).encode()
+        stdout = _run_child(request, seconds, directory, storage_access=False)
+    return TextCandidates.model_validate_json(stdout)
 
 
 def execute_grounding(
@@ -206,7 +217,10 @@ def main() -> int:
         if len(raw) > 40 * 1024 * 1024:
             raise ValueError
         request = json.loads(raw)
-        if request.get("operation") == "render_manifest":
+        if request.get("operation") == "text_candidates":
+            content = base64.b64decode(request["content"], validate=True)
+            result = extract_candidates(content).model_dump_json()
+        elif request.get("operation") == "render_manifest":
             content = base64.b64decode(request["content"], validate=True)
             extraction = Extraction.model_validate(request["extraction"])
             result = render_manifest(content, extraction, request["deck_id"]).model_dump_json()
@@ -238,7 +252,8 @@ def main() -> int:
     finally:
         if storage:
             storage.close()
-    sys.stdout.write(result)
+    # Pipes must use UTF-8 consistently, including on Windows with a legacy code page.
+    sys.stdout.buffer.write(result.encode("utf-8"))
     return 0
 
 

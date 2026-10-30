@@ -220,12 +220,54 @@ def validation(result, action, *, state="validated", **changes):
         "validator_version": result.inputs.validator_version,
         "renderer_version": result.inputs.renderer_version,
         "display_profile": result.inputs.display_profile,
+        "validation_kind": "visual" if state == "validated" else "execution",
+        "semantic_verified": state == "validated",
         "state": state,
         "evidence": [{"id": uuid4(), "kind": "executor_result", "sha256": "d" * 64}],
         "reasons": () if state == "validated" else ("Synthetic rejected fixture",),
     }
     values.update(changes)
     return ValidationInput.model_validate(values)
+
+
+@pytest.mark.postgres
+def test_grounding_provenance_round_trip_survives_database_restart(migrated_database):
+    async def scenario():
+        db = Database(migrated_database)
+        try:
+            async with db.transaction() as repos:
+                owner = await repos.users.create("grounding-provenance-owner")
+                deck = await repos.decks.create(owner_id=owner.id, title="Synthetic grounding")
+                document = await prepare(repos, owner_id=owner.id, deck_id=deck.id)
+                action = document.slides[0].actions[0]
+                payload = document.model_dump(mode="json")
+                payload["grounding"] = [
+                    {
+                        "instance_id": action.instance_id,
+                        "action_sha256": digest(action),
+                        "trace": {
+                            "method": "pdf_glyphs",
+                            "target_text": "Synthetic target",
+                            "model_region": {"x": 0, "y": 0, "width": 100, "height": 30},
+                            "resolved_region": action.params.region.model_dump(mode="json"),
+                        },
+                    }
+                ]
+                document = AnalysisInput.model_validate(payload)
+                saved = await repos.analyses.create(
+                    owner_id=owner.id, deck_id=deck.id, version=1, document=document
+                )
+            await db.close()
+            db = Database(migrated_database)
+            async with db.transaction() as repos:
+                result = await repos.analyses.read(saved.id, owner_id=owner.id)
+                assert result.inputs is not None
+                assert result.inputs.grounding == document.grounding
+                assert result.analysis_sha256 == digest(document)
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.postgres

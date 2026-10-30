@@ -23,6 +23,7 @@ from buddy_api.processing.contracts import Message, PDFSource
         ("runtime_seconds", 1),
         ("queue_message_retention_seconds", 1209601),
         ("queue_redrive_max_receive_count", 1),
+        ("text_targeting", "guess_coordinates"),
     ],
 )
 def test_operator_limits_are_bounded(field, value):
@@ -42,11 +43,13 @@ def test_queue_retention_is_loaded_from_operator_environment():
             "BUDDY_WORKER_QUEUE_MESSAGE_RETENTION_SECONDS": "604800",
             "BUDDY_WORKER_RUNTIME_SECONDS": "600",
             "BUDDY_WORKER_QUEUE_REDRIVE_MAX_RECEIVE_COUNT": "5",
+            "BUDDY_WORKER_TEXT_TARGETING": "candidate_lines",
         }
     )
     assert settings is not None
     assert settings.queue_message_retention_seconds == 604800
     assert settings.runtime_seconds == 600
+    assert settings.text_targeting == "candidate_lines"
     assert settings.queue_redrive_max_receive_count == 5
     assert settings.queue_reconciliation_seconds == 2400
 
@@ -58,6 +61,7 @@ def test_queue_reconciliation_precedes_redrive_and_retention_horizons():
     )
 
     assert settings.queue_reconciliation_seconds == 1800
+    assert settings.text_targeting == "quote"
     assert settings.queue_reconciliation_seconds < (
         settings.runtime_seconds * settings.queue_redrive_max_receive_count
     )

@@ -1,6 +1,7 @@
 """Operator-controlled limits; queue identifiers never come from API clients."""
 
 from collections.abc import Mapping
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -11,6 +12,7 @@ class WorkerSettings(BaseModel):
         pattern=r"^https://sqs\.[a-z0-9-]+\.amazonaws\.com/\d{12}/[A-Za-z0-9_-]+$"
     )
     region: str = Field(pattern=r"^[a-z]{2}-[a-z-]+-\d$")
+    text_targeting: Literal["quote", "candidate_lines"] = "quote"
     owner_quota: int = Field(default=4, ge=1, le=32)
     concurrency: int = Field(default=2, ge=1, le=16)
     max_attempts: int = Field(default=3, ge=1, le=5)
@@ -49,6 +51,7 @@ class WorkerSettings(BaseModel):
                     name: values["BUDDY_WORKER_" + name.upper()]
                     for name in (
                         "owner_quota",
+                        "text_targeting",
                         "concurrency",
                         "max_attempts",
                         "lease_seconds",

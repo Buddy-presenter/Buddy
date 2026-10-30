@@ -28,3 +28,23 @@ Automated tests use deterministic typed records and local HTTP boundaries. No mo
 provider credential, AWS account or real user deck is needed for those checks. For live
 acceptance, sign in to an account with a saved PDF and completed or partial analysis; the
 matching source PDF must still be available to that owner.
+
+Execution validation is displayed as **execution validated; visual verification pending**.
+Those actions are inspectable but not usable until independent visual QA verifies the
+intended content. Older API responses are also displayed this way, even when their legacy
+`usable` field is true. PR #136 adds this safety gate; it does not implement automatic
+rectangle correction or the visual agent from #50/#51.
+
+To try the desktop against the configured staging service from PowerShell in `Buddy`:
+
+```powershell
+$env:BUDDY_API_URL = 'https://d3n3ijrboj39jr.cloudfront.net'
+.\.venv\Scripts\python.exe -m buddy_desktop
+```
+
+Sign in, open Library, upload a PDF or select a saved PDF, then open Review. Select an
+action to see its bounding rectangle, purpose, validation status and evidence. Backend
+changes require a reviewed staging deployment before the API's new fields can be checked;
+the desktop safely handles the older deployed response in the meantime. No AWS keys are
+needed in the desktop. Local PDF viewing works without sign-in: open Present, choose a
+local PDF, drag a rectangle and press H to highlight, Z to zoom, or R to reset.
