@@ -7,7 +7,7 @@ it, and the preflight verifies it still matches the live rollback image before m
 Do not reuse the historical first-deployment image or approve a one-step feature rollout
 when a schema change makes the current API reject the new migration head.
 
-## Two separately approved deployments
+## Schema bridge, reader preparation, then worker promotion
 
 After this PR merges and current-main CI succeeds, use **Backend promotion and rollback**
 on reviewed `main`, target `staging`:
@@ -19,7 +19,15 @@ on reviewed `main`, target `staging`:
    does not expand the live schema.
    GitHub's staging environment approval is still required.
 2. Verify the bridge is healthy, retain the successful deployment audit and inspect the
-   compatibility report. Then dispatch a **separate** run with `rollout_phase=feature`.
+   compatibility report. If the rollback API cannot read non-empty grounding provenance,
+   first dispatch a separate `rollout_phase=reader` run from reviewed current main.
+   This migrates/promotes only the API. Any existing worker must already be paused at
+   desired count zero with no running/pending tasks; the release does not pause it for you.
+   It retains the worker definition/count and rejects worker image input. This is safe
+   preparation while no worker can publish the new records, not feature activation.
+   Keep the worker paused until the feature rollout succeeds. Retain this healthy API
+   as the immediate rollback reader.
+3. Dispatch a **separate** run with `rollout_phase=feature`.
    Require a second staging approval. This run must observe the bridge as the immediate
    rollback target. It applies the forward repair through 0008 and promotes the feature
    image. Failed promotion restores the tested bridge without downgrading the database.
@@ -35,6 +43,15 @@ the feature promotion. Production promotion retains its separate acceptance poli
 staging transition does not certify production readiness.
 
 ## Mandatory proof before live migration
+
+Feature promotion and explicit rollback additionally seed a synthetic analysis with a
+non-empty `pdf_candidate_line` grounding trace, action hash and final rectangle. Both
+actual API images must read that same immutable record through their packaged repositories,
+validate its new content digest and preserve its unusable, unverified action state.
+Readers that drop the trace, reject it or hash a trace-free document fail preflight.
+The report records `traced_analysis=true`; reader-only proof cannot authorize a feature
+promotion or explicit rollback. The schema bridge and paused-worker reader preparation
+remain separate transitions and do not certify traced-record rollback compatibility.
 
 Each staging deployment and explicit rollback pulls immutable private ECR images and
 runs their real entrypoints against disposable PostgreSQL 17 in an internal Docker

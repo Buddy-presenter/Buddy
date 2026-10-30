@@ -75,6 +75,54 @@ async def run() -> None:
                 assert created.graph == {}
                 result = await repos.analyses.read(created.id, owner_id=OWNER)
                 assert result.inputs is not None and result.publication != "legacy"
+        if mode == "trace-write":
+            from buddy_api.analysis.contracts import AnalysisInput, digest
+
+            fixture = runpy.run_path("/test-support/backend/tests/support/analysis.py")
+            async with db.transaction() as repos:
+                document = await fixture["prepare"](repos, owner_id=OWNER, deck_id=DECK)
+                action = document.slides[1].actions[0]
+                values = document.model_dump(mode="json")
+                values["grounding"] = [
+                    {
+                        "instance_id": action.instance_id,
+                        "action_sha256": digest(action),
+                        "trace": {
+                            "method": "pdf_candidate_line",
+                            "target_text": "Synthetic revenue",
+                            "target_id": "synthetic-line-1",
+                            "model_region": action.params.region.model_dump(),
+                            "resolved_region": action.params.region.model_dump(),
+                        },
+                    }
+                ]
+                document = AnalysisInput.model_validate(values)
+                created = await repos.analyses.create(
+                    owner_id=OWNER, deck_id=DECK, version=5, document=document
+                )
+                # A stable lookup lets each actual reader find the same immutable row.
+                assert created.version == 5
+        if mode == "trace-read":
+            from buddy_api.analysis.contracts import digest
+
+            async with db.transaction() as repos:
+                rows = await repos.analyses.list(owner_id=OWNER)
+                record = next(row for row in rows if row.deck_id == DECK and row.version == 5)
+                result = await repos.analyses.read(record.id, owner_id=OWNER)
+                assert result.inputs is not None and len(result.inputs.grounding) == 1
+                assert result.analysis_sha256 == record.content_sha256 == digest(result.inputs)
+                trace = result.inputs.grounding[0]
+                action = result.slides[1].actions[0]
+                assert trace.trace.target_id == "synthetic-line-1"
+                assert trace.action_sha256 == digest(action.action)
+                assert trace.trace.resolved_region == action.action.params.region
+                assert not action.usable and not action.semantic_verified
+                try:
+                    await repos.analyses.read(record.id, owner_id=OTHER)
+                except RecordNotFound:
+                    pass
+                else:
+                    raise AssertionError("Cross-owner traced analysis read succeeded")
         async with db.transaction() as repos:
             record = await repos.analyses.get(ANALYSIS, owner_id=OWNER)
             assert record.graph == GRAPH
@@ -131,6 +179,7 @@ async def run() -> None:
                     "session": True,
                     "owner_isolation": True,
                     "mode": mode,
+                    "traced_analysis": mode == "trace-read",
                 }
             )
         )

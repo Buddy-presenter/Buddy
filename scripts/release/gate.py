@@ -30,10 +30,16 @@ def main() -> int:
     revision = os.environ.get("RELEASE_REVISION", os.environ["GITHUB_SHA"])
     target = os.environ["RELEASE_TARGET"]
     phase = os.environ.get("ROLLOUT_PHASE", "feature")
-    if phase not in {"feature", "compatibility"} or (
-        phase == "compatibility" and target != "staging"
+    if phase not in {"feature", "compatibility", "reader"} or (
+        phase in {"compatibility", "reader"} and target != "staging"
     ):
         raise ValueError("The compatibility bridge is a staging-only transition.")
+    if phase == "reader" and (
+        os.environ.get("WORKER_IMAGE") or os.environ.get("RELEASE_OPERATION") == "rollback"
+    ):
+        raise ValueError(
+            "Reader preparation permits API-only deployment, not worker promotion or rollback."
+        )
     if (
         not re.fullmatch(r"[a-f0-9]{40}", revision)
         or os.environ["GITHUB_REF"] != "refs/heads/main"
