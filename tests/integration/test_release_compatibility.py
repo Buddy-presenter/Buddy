@@ -209,6 +209,16 @@ def test_reader_preparation_cannot_publish_a_worker_image():
     assert not ecs.registered and not ecs.runs and not ecs.updates
 
 
+def test_schema_bridge_proof_cannot_publish_a_worker_image():
+    ecs, s3 = Ecs(), S3()
+    report = proof(ecs)
+    report.update(future_image=IMAGE, traced_analysis=False)
+    driver = Deployment(CONFIG, ecs, s3, Sts(), lambda _: None, compatibility_report=report)
+    with pytest.raises(DeploymentError, match="bridge preparation"):
+        driver.deploy(SHA, IMAGE, WORKER_IMAGE)
+    assert not ecs.registered and not ecs.runs and not ecs.updates
+
+
 def test_rollback_preflight_uses_retained_feature_schema_after_app_rollback(monkeypatch, tmp_path):
     import json
     import sys

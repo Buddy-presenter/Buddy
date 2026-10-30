@@ -452,6 +452,8 @@ class Deployment:
         try:
             previous = self.service_states()
             proof = self.compatibility_report or {}
+            if proof.get("future_image") and worker_image:
+                raise DeploymentError("Schema bridge preparation cannot promote a worker image.")
             if reader_only and (
                 self.config["environment"] != "staging"
                 or worker_image
