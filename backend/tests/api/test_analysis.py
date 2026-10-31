@@ -58,8 +58,8 @@ def test_pdf_and_powerpoint_reads_preserve_their_distinct_validation_gates(migra
                             extracted,
                             manifest(extracted, str(deck.id)),
                             deck.id,
-                            saved_extraction.id,
-                            job.id,
+                            job_id=job.id,
+                            extraction_id=saved_extraction.id,
                         )
                     saved = await repos.analyses.create(
                         owner_id=owner.id, deck_id=deck.id, version=1, document=document
