@@ -231,7 +231,9 @@ def powerpoint_result(deck, request, *, busy=False, validated=False):
         result=PowerPointProcessResult(
             state="validated" if validated else "needs-review",
             reasons=[] if validated else [POWERPOINT_BUSY_REASON if busy else "test_unavailable"],
-            runtime_platform=sys.platform,
+            # This fake is the external Office boundary; successful Office proof
+            # is Windows-specific even when the worker tests run on Linux.
+            runtime_platform="win32" if validated else sys.platform,
             source_revision=deck.source_revision,
             source_sha256=deck.source_sha256,
             action_sha256=digest(PowerPointContentAction.model_validate(request.action)),
