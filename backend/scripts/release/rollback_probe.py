@@ -156,7 +156,7 @@ async def run() -> None:
             if hasattr(repos.analyses, "read"):
                 for row in await repos.analyses.list(owner_id=OWNER):
                     result = await repos.analyses.read(row.id, owner_id=OWNER)
-                    if row.version == 4:
+                    if row.version in {4, 5}:
                         assert result.publication != "legacy" and result.inputs is not None
                     else:
                         assert result.publication == "legacy" and result.inputs is None
