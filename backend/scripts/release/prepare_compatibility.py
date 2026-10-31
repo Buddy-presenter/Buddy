@@ -47,6 +47,7 @@ def main() -> None:
     parser.add_argument("--revision", required=True)
     parser.add_argument("--candidate-image")
     parser.add_argument("--worker-image")
+    parser.add_argument("--reader-only", action="store_true")
     parser.add_argument("--future-image")
     parser.add_argument("--base-image")
     parser.add_argument("--rollback-revision")
@@ -60,6 +61,13 @@ def main() -> None:
     s3 = boto3.client("s3", region_name=config["region"])
     driver = Deployment(config, ecs, s3, boto3.client("sts", region_name=config["region"]))
     before = current_states(driver)
+    if args.reader_only and (
+        args.worker_image
+        or args.future_image
+        or args.rollback_revision
+        or ("worker" in before and before["worker"]["desiredCount"] != 0)
+    ):
+        raise DeploymentError("Reader preparation requires a paused worker and API-only promotion.")
     if not args.rollback_revision:
         driver.require_stable_source(before)
     rollback = before
@@ -148,6 +156,8 @@ def main() -> None:
         "baseline_image": previous_image if args.future_image else None,
         "schema_image": schema_image,
     }
+    if args.reader_only:
+        compatibility_args["reader_only"] = True
     if worker_image:
         compatibility_args.update(
             worker_image=worker_image,

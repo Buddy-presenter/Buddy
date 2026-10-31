@@ -147,7 +147,7 @@ recovery drills remain pending, as does live worker deployment and acceptance. T
 explicit completion gates for live staging #73 and production #76. Issue #38 covers the
 reviewed pipeline preparation; simulated tests do not establish deployment acceptance.
 
-The initial staging schema transition requires the [two-step compatibility rollout](staging-compatibility-rollout.md): a separately approved bridge release before the feature migration. Every staging promotion and explicit rollback requires fresh exact-image compatibility evidence before live changes.
+The initial staging schema transition requires the [compatibility rollout](staging-compatibility-rollout.md): a separately approved bridge release before the feature migration. If the rollback reader cannot read non-empty grounding traces, prepare the new API first with `rollout_phase=reader` while any existing worker is paused and drained. Keep it paused until feature promotion succeeds. Reader preparation retains the worker image/count; feature promotion and explicit rollback require fresh exact-image traced-analysis read/digest proof. Every staging promotion and explicit rollback requires fresh exact-image compatibility evidence before live changes.
 
 ## Automatic staging after merge (#93)
 

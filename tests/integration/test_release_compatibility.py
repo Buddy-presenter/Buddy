@@ -21,6 +21,7 @@ from test_release import (
 def proof(ecs):
     return {
         "passed": True,
+        "traced_analysis": True,
         "before": copy.deepcopy(ecs.state),
         "rollback": copy.deepcopy(ecs.state),
         "rollback_image": OLD_IMAGE,
@@ -110,6 +111,7 @@ def test_explicit_rollback_requires_a_fresh_test_of_its_actual_target():
     "target,phase",
     [
         ("production", "compatibility"),
+        ("production", "reader"),
         ("staging", "unknown"),
     ],
 )
@@ -153,6 +155,68 @@ def test_transition_gate_allows_staging_worker_after_current_revision_ci(monkeyp
 
     assert approved_checks(checks, SHA)
     assert release_gate["main"]() == 0
+
+
+@pytest.mark.parametrize("worker_count", [None, 0, 1])
+def test_reader_preparation_never_promotes_or_resumes_a_worker(worker_count):
+    ecs, s3 = Ecs(), S3()
+    if worker_count is not None:
+        ecs.state["worker"] = {"taskDefinition": PREFIX + "worker:1", "desiredCount": worker_count}
+    report = proof(ecs)
+    report.update(reader_only=True, traced_analysis=False)
+    if worker_count is not None:
+        report["worker_compatibility"] = {
+            "passed": True,
+            "target_image": OLD_WORKER_IMAGE,
+            "previous_image": OLD_WORKER_IMAGE,
+            "schema_image": IMAGE,
+        }
+    driver = Deployment(CONFIG, ecs, s3, Sts(), lambda _: None, compatibility_report=report)
+    if worker_count == 1:
+        with pytest.raises(DeploymentError, match="paused worker"):
+            driver.deploy(SHA, IMAGE, reader_only=True)
+        assert not ecs.registered and not ecs.runs and not ecs.updates
+    else:
+        driver.deploy(SHA, IMAGE, reader_only=True)
+        assert all(update["service"] != "worker" for update in ecs.updates)
+
+
+@pytest.mark.parametrize(
+    "proof_changes",
+    [
+        {"traced_analysis": False},
+        {"reader_only": True},
+        {"traced_analysis": None},
+    ],
+)
+def test_feature_promotion_cannot_reuse_reader_only_or_missing_trace_proof(proof_changes):
+    ecs, s3 = Ecs(), S3()
+    report = proof(ecs)
+    report.update(proof_changes)
+    driver = Deployment(CONFIG, ecs, s3, Sts(), lambda _: None, compatibility_report=report)
+    with pytest.raises(DeploymentError, match="traced-analysis"):
+        driver.deploy(SHA, IMAGE)
+    assert not ecs.registered and not ecs.runs and not ecs.updates
+
+
+def test_reader_preparation_cannot_publish_a_worker_image():
+    ecs, s3 = Ecs(), S3()
+    report = proof(ecs)
+    report.update(reader_only=True, traced_analysis=False)
+    driver = Deployment(CONFIG, ecs, s3, Sts(), lambda _: None, compatibility_report=report)
+    with pytest.raises(DeploymentError, match="API-only"):
+        driver.deploy(SHA, IMAGE, WORKER_IMAGE, reader_only=True)
+    assert not ecs.registered and not ecs.runs and not ecs.updates
+
+
+def test_schema_bridge_proof_cannot_publish_a_worker_image():
+    ecs, s3 = Ecs(), S3()
+    report = proof(ecs)
+    report.update(future_image=IMAGE, traced_analysis=False)
+    driver = Deployment(CONFIG, ecs, s3, Sts(), lambda _: None, compatibility_report=report)
+    with pytest.raises(DeploymentError, match="bridge preparation"):
+        driver.deploy(SHA, IMAGE, WORKER_IMAGE)
+    assert not ecs.registered and not ecs.runs and not ecs.updates
 
 
 def test_rollback_preflight_uses_retained_feature_schema_after_app_rollback(monkeypatch, tmp_path):
@@ -419,6 +483,39 @@ def test_worker_images_are_smoked_against_the_feature_schema(monkeypatch):
         "previous_image": OLD_WORKER_IMAGE,
         "schema_image": "feature-api",
     }
+
+
+@pytest.mark.parametrize("trace_verified", [True, False])
+def test_feature_proof_requires_both_readers_to_verify_trace(monkeypatch, trace_verified):
+    import json
+
+    from backend.scripts.release import image_compatibility as compatibility
+
+    probes = []
+
+    def docker(*args, **kwargs):
+        if "/checks/rollback_probe.py" in args:
+            probes.append(args[-1])
+            return json.dumps(
+                {
+                    "ready": True,
+                    "analysis": True,
+                    "session": True,
+                    "owner_isolation": True,
+                    "traced_analysis": trace_verified,
+                }
+            )
+        return "ok"
+
+    monkeypatch.setattr(compatibility, "docker", docker)
+    monkeypatch.setattr(compatibility.subprocess, "run", lambda *args, **kwargs: None)
+    if trace_verified:
+        report = compatibility.verify_images("previous", "candidate", pull_images=False)
+        assert probes[-3:] == ["trace-write", "trace-read", "trace-read"]
+        assert report["traced_analysis"] is True
+    else:
+        with pytest.raises(AssertionError):
+            compatibility.verify_images("previous", "candidate", pull_images=False)
 
 
 @pytest.mark.parametrize("state", ["draining", "pending", "in_progress"])
