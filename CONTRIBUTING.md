@@ -38,7 +38,9 @@ materially changes behavior, boundaries, configuration, entry points, commands, 
    calls and production credentials out of tests.
 5. Push the issue branch and open a PR targeting main, with `Closes #<issue>` and a
    concise description of behavior, validation, and limitations.
-6. Self-review the complete diff and test the actual implementation. Assign the PR to
+6. Self-review the complete diff and test the actual implementation. Wait for all required
+   CI checks to pass on the current PR head before requesting or re-requesting review.
+   Tell the requester when review has been requested. Assign the PR to
    **Lahhamix** and **yasminahanna** and request all other repository collaborators as
    reviewers, excluding the PR author; then
    verify the status workflow sets **Waiting for review**. Submitted feedback sets

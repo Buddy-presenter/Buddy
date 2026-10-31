@@ -222,7 +222,8 @@ def test_provider_accepts_multiple_distinct_actions_on_one_slide(monkeypatch):
     ]
 
 
-def test_provider_cannot_assign_server_owned_visual_qa_state(monkeypatch):
+@pytest.mark.parametrize("server_field", ["visual_qa_pending", "grounding_trace"])
+def test_provider_cannot_assign_server_owned_visual_qa_state(monkeypatch, server_field):
     extraction, manifest = inputs()
     monkeypatch.setattr(provider, "Session", Session)
     generated = {
@@ -237,7 +238,7 @@ def test_provider_cannot_assign_server_owned_visual_qa_state(monkeypatch):
                         "type": "zoom_region",
                         "purpose": "Focus on this crop.",
                         "target_text": None,
-                        "visual_qa_pending": True,
+                        server_field: True,
                         "x": 20,
                         "y": 30,
                         "width": 100,

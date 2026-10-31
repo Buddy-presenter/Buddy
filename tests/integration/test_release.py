@@ -183,6 +183,7 @@ class PreparedDeployment(Deployment):
     def evidence(self, candidate, rollback, worker_image=None, before=None):
         before = before or self.ecs.state
         self.compatibility_report = {
+            "traced_analysis": True,
             "passed": True,
             "candidate_image": candidate,
             "rollback_image": OLD_IMAGE

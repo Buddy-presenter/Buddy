@@ -71,6 +71,7 @@ def verify_images(
     worker_image: str | None = None,
     previous_worker_image: str | None = None,
     pull_images: bool = True,
+    reader_only: bool = False,
 ) -> dict:
     prefix = "buddy-compat-" + uuid4().hex[:12]
     pg, api = prefix + "-pg", prefix + "-api"
@@ -153,6 +154,8 @@ for attempt in range(30):
             assert all(
                 result[key] is True for key in ("ready", "analysis", "session", "owner_isolation")
             )
+            if mode == "trace-read":
+                assert result.get("traced_analysis") is True
         finally:
             docker("rm", "-fv", api)
             created.remove(api)
@@ -224,6 +227,10 @@ for attempt in range(30):
             probe(schema_image or candidate, "typed")
             probe(previous, "write")
             probe(candidate, "read")
+            if not reader_only:
+                probe(schema_image or candidate, "trace-write")
+                probe(previous, "trace-read")
+                probe(candidate, "trace-read")
         worker_schema = schema_image or future or candidate
         if worker_image:
             verify_worker_image(worker_image, worker_schema)
@@ -231,6 +238,8 @@ for attempt in range(30):
             verify_worker_image(previous_worker_image, worker_schema)
         return {
             "passed": True,
+            "reader_only": reader_only,
+            "traced_analysis": not future and not reader_only,
             "checks": {
                 "readiness": True,
                 "analysis": True,
@@ -274,6 +283,7 @@ def main() -> None:
     parser.add_argument("--future-image")
     parser.add_argument("--worker-image")
     parser.add_argument("--previous-worker-image")
+    parser.add_argument("--reader-only", action="store_true")
     parser.add_argument(
         "--local-images",
         action="store_true",
@@ -290,6 +300,7 @@ def main() -> None:
         worker_image=args.worker_image,
         previous_worker_image=args.previous_worker_image,
         pull_images=not args.local_images,
+        reader_only=args.reader_only,
     )
     args.output.write_text(json.dumps(report, indent=2))
 

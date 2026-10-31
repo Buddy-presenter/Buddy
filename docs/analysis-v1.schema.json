@@ -1,5 +1,26 @@
 {
   "$defs": {
+    "ActionGrounding": {
+      "additionalProperties": false,
+      "properties": {
+        "instance_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "action_sha256": {
+          "$ref": "#/$defs/Digest"
+        },
+        "trace": {
+          "$ref": "#/$defs/GroundingTrace"
+        }
+      },
+      "required": [
+        "instance_id",
+        "action_sha256",
+        "trace"
+      ],
+      "title": "ActionGrounding",
+      "type": "object"
+    },
     "ContentAction": {
       "additionalProperties": false,
       "properties": {
@@ -55,6 +76,72 @@
     "Digest": {
       "pattern": "^[0-9a-f]{64}$",
       "type": "string"
+    },
+    "GroundingMethod": {
+      "enum": [
+        "pdf_glyphs",
+        "pdf_words",
+        "ocr_words",
+        "pdf_visual_geometry",
+        "visual_hint",
+        "pdf_candidate_line"
+      ],
+      "type": "string"
+    },
+    "GroundingTrace": {
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "pdf-source-grounding-1",
+          "default": "pdf-source-grounding-1",
+          "title": "Version",
+          "type": "string"
+        },
+        "method": {
+          "$ref": "#/$defs/GroundingMethod"
+        },
+        "target_text": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Target Text"
+        },
+        "target_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Id"
+        },
+        "model_region": {
+          "$ref": "#/$defs/Region"
+        },
+        "resolved_region": {
+          "$ref": "#/$defs/Region"
+        }
+      },
+      "required": [
+        "method",
+        "target_text",
+        "model_region",
+        "resolved_region"
+      ],
+      "title": "GroundingTrace",
+      "type": "object"
     },
     "Identifier": {
       "maxLength": 128,
@@ -372,6 +459,15 @@
     },
     "manifest": {
       "$ref": "#/$defs/Manifest"
+    },
+    "grounding": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ActionGrounding"
+      },
+      "maxItems": 40,
+      "title": "Grounding",
+      "type": "array"
     },
     "presentation_summary": {
       "$ref": "#/$defs/Summary"

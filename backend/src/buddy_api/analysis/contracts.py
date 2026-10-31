@@ -13,6 +13,15 @@ type Identifier = Annotated[str, Field(min_length=1, max_length=128, pattern=r"\
 type Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 type Text = Annotated[str, Field(min_length=1, max_length=16000, pattern=r"\S")]
 type ValidationState = Literal["candidate", "validated", "rejected", "needs-review"]
+type ValidationKind = Literal["execution", "visual"]
+type GroundingMethod = Literal[
+    "pdf_glyphs",
+    "pdf_words",
+    "ocr_words",
+    "pdf_visual_geometry",
+    "visual_hint",
+    "pdf_candidate_line",
+]
 type Publication = Literal["legacy", "partial", "awaiting_validation", "published"]
 MAX_GENERATED_ACTIONS_PER_DECK = 40
 
@@ -45,6 +54,32 @@ class Region(Model):
 
 class RegionParameters(Model):
     region: Region
+
+
+class GroundingTrace(Model):
+    version: Literal["pdf-source-grounding-1"] = "pdf-source-grounding-1"
+    method: GroundingMethod
+    target_text: Annotated[str, Field(min_length=1, max_length=256, pattern=r"\S")] | None
+    target_id: str | None = Field(
+        default=None, max_length=128, exclude_if=lambda value: value is None
+    )
+    model_region: Region
+    resolved_region: Region
+
+    @model_validator(mode="after")
+    def target_matches_method(self) -> Self:
+        text_method = self.method in {"pdf_glyphs", "pdf_words", "ocr_words", "pdf_candidate_line"}
+        if text_method != (self.target_text is not None):
+            raise ValueError("Text grounding requires a quoted target; visual grounding has none.")
+        if (self.method == "pdf_candidate_line") != (self.target_id is not None):
+            raise ValueError("Candidate grounding requires its source-measured target ID.")
+        return self
+
+
+class ActionGrounding(Model):
+    instance_id: Identifier
+    action_sha256: Digest
+    trace: GroundingTrace
 
 
 class ContentAction(Model):
@@ -135,6 +170,10 @@ class AnalysisInput(Model):
     display_profile: Identifier
     validator_version: Identifier
     manifest: Manifest
+    # Omit empty metadata to preserve the hashes of historical analysis documents.
+    grounding: Annotated[
+        tuple[ActionGrounding, ...], Field(max_length=40, exclude_if=lambda value: not value)
+    ] = ()
     # Generated image/graphic subregions have no finer PDF object geometry. They remain
     # candidates until the independent visual QA workflow reviews their framing.
     visual_qa_pending_instance_ids: Annotated[
@@ -163,6 +202,24 @@ class AnalysisInput(Model):
                 # The isolated executor must see and reject them so the published
                 # analysis preserves the suggestion together with its reason/evidence.
         action_ids = {action.instance_id for slide in self.slides for action in slide.actions}
+        actions_by_id = {
+            action.instance_id: action for slide in self.slides for action in slide.actions
+        }
+        if len({item.instance_id for item in self.grounding}) != len(self.grounding):
+            raise ValueError("Duplicate grounding action references.")
+        for item in self.grounding:
+            grounded_action = actions_by_id.get(item.instance_id)
+            if (
+                grounded_action is None
+                or item.action_sha256 != digest(grounded_action)
+                or item.trace.resolved_region != grounded_action.params.region
+            ):
+                raise ValueError("Grounding does not match the immutable action geometry/hash.")
+            if (
+                item.trace.method == "visual_hint"
+                and item.instance_id not in self.visual_qa_pending_instance_ids
+            ):
+                raise ValueError("Unresolved visual hints must remain pending visual QA.")
         if (
             len(set(self.visual_qa_pending_instance_ids))
             != len(self.visual_qa_pending_instance_ids)
@@ -198,6 +255,8 @@ class ValidationInput(Model):
     validator_version: Identifier
     renderer_version: Identifier
     display_profile: Identifier
+    validation_kind: ValidationKind = "execution"
+    semantic_verified: bool = False
     state: ValidationState
     reasons: Annotated[
         tuple[Annotated[str, Field(min_length=1, max_length=512, pattern=r"\S")], ...],
@@ -213,6 +272,16 @@ class ValidationInput(Model):
             raise ValueError("Unusable results need reasons.")
         if self.state == "candidate" and (self.evidence or self.reasons):
             raise ValueError("Candidates do not claim validation evidence.")
+        if self.semantic_verified and not (
+            self.validation_kind == "visual" and self.state == "validated"
+        ):
+            raise ValueError("Semantic verification requires a validated visual review.")
+        if (
+            self.validation_kind == "visual"
+            and self.state == "validated"
+            and not self.semantic_verified
+        ):
+            raise ValueError("Validated visual review must verify the intended target.")
         if len({e.id for e in self.evidence}) != len(self.evidence):
             raise ValueError("Duplicate evidence references.")
         return self
@@ -222,6 +291,7 @@ class ActionResult(Model):
     action: ContentAction
     state: ValidationState
     usable: bool
+    semantic_verified: bool = False
     validation: ValidationInput | None
 
 

@@ -429,7 +429,12 @@ class Deployment:
             )
 
     def deploy(
-        self, revision: str, api_image: str, worker_image: str | None = None
+        self,
+        revision: str,
+        api_image: str,
+        worker_image: str | None = None,
+        *,
+        reader_only: bool = False,
     ) -> dict[str, Any]:
         validate(self.config, revision)
         services = ["api"]
@@ -446,6 +451,28 @@ class Deployment:
         self.record(revision, audit, finished=False)
         try:
             previous = self.service_states()
+            proof = self.compatibility_report or {}
+            if proof.get("future_image") and worker_image:
+                raise DeploymentError("Schema bridge preparation cannot promote a worker image.")
+            if reader_only and (
+                self.config["environment"] != "staging"
+                or worker_image
+                or proof.get("reader_only") is not True
+                or proof.get("future_image")
+                or ("worker" in previous and previous["worker"]["desiredCount"] != 0)
+            ):
+                raise DeploymentError(
+                    "Reader preparation requires a paused worker and API-only proof."
+                )
+            if (
+                self.config["environment"] == "staging"
+                and not reader_only
+                and (
+                    proof.get("reader_only") is True
+                    or (not proof.get("future_image") and proof.get("traced_analysis") is not True)
+                )
+            ):
+                raise DeploymentError("Feature promotion requires traced-analysis rollback proof.")
             if worker_image and "worker" not in previous:
                 raise DeploymentError(
                     "Provision the paused worker ECS service through Terraform before promotion."
@@ -596,6 +623,11 @@ class Deployment:
             audit["before"] = before
             audit["stage"] = "compatibility"
             current_api_image = self.task_image(before["api"]["taskDefinition"], "api")
+            if self.config["environment"] == "staging" and (
+                (self.compatibility_report or {}).get("traced_analysis") is not True
+                or (self.compatibility_report or {}).get("reader_only") is True
+            ):
+                raise DeploymentError("Rollback requires traced-analysis reader proof.")
             target_worker_image = (
                 self.task_image(previous["worker"]["taskDefinition"], "worker")
                 if "worker" in previous
@@ -636,6 +668,7 @@ def main() -> int:
     parser.add_argument("--revision", required=True)
     parser.add_argument("--api-image")
     parser.add_argument("--worker-image")
+    parser.add_argument("--reader-only", action="store_true")
     parser.add_argument("--rollback-revision")
     parser.add_argument("--compatibility-report")
     args = parser.parse_args()
@@ -667,9 +700,13 @@ def main() -> int:
             compatibility_report=proof,
         )
         if args.rollback_revision:
+            if args.reader_only:
+                raise DeploymentError("Reader preparation cannot be used for rollback.")
             result = deployment.rollback(args.revision, args.rollback_revision)
         elif args.api_image:
-            result = deployment.deploy(args.revision, args.api_image, args.worker_image)
+            result = deployment.deploy(
+                args.revision, args.api_image, args.worker_image, reader_only=args.reader_only
+            )
         else:
             raise DeploymentError("Specify an image or an audited rollback revision.")
         print(json.dumps(result))
