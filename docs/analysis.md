@@ -5,7 +5,8 @@ native PDF-capable InvokeModel API using Claude Sonnet 4.6. It persists exactly 
 outputs: one presentation summary, one ordered content summary per page, and zero or more
 parameterized content actions. Actions are limited to `zoom_region` and
 `highlight_region`; navigation and reset controls come from code. Existing PPTX upload
-and storage remain compatible, while PPTX analysis and playback are deferred.
+and storage feed the separate [PowerPoint analysis path](powerpoint-analysis.md), with its
+own catalog, slide-point geometry, read contracts and real Office validation boundary.
 
 ## Records and version isolation
 

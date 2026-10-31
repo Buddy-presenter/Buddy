@@ -9,11 +9,13 @@ the job. Rendered OCR pages are transient, are not sent to another provider or s
 evidence, and are removed with the child scratch directory. Default quote mode does not
 send extracted text; opt-in candidate mode sends its ephemeral text catalogue alongside
 the unchanged original PDF, as described below. Existing
-PPTX upload/storage remains compatible; PPTX analysis and playback are deferred.
+PPTX uploads now use separate PowerPoint inspection/analysis stages in the same durable
+worker lifecycle. See [PowerPoint analysis](powerpoint-analysis.md) for its distinct
+provider representation, catalog, and Windows/Office validation deployment prerequisite.
 
 ## Scheduling and publication
 
-An accepted PDF upload creates its revision-bound job and `job_outbox` row in the same
+An accepted PDF or PPTX upload creates its revision-bound job and `job_outbox` row in the same
 PostgreSQL transaction as the deck. The unique `(deck_id, source_revision)` constraint and
 transaction-scoped admission lock make scheduling idempotent across replicas. The API
 dispatcher also reconciles accepted pre-upgrade PDFs in bounded batches. Scheduling and

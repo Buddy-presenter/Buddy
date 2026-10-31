@@ -21,11 +21,18 @@ from buddy_api.uploads.service import UploadService, blocking
 from buddy_api.validation.config import ValidatorSettings
 from buddy_api.validation.contracts import (
     ArtifactReference,
+    PowerPointStoredResult,
     Precision,
     ProcessRequest,
     ProcessResult,
     StoredResult,
     ValidationRequest,
+)
+from buddy_api.validation.powerpoint import (
+    POWERPOINT_BUSY_REASON,
+    PowerPointProcessRequest,
+    PowerPointProcessResult,
+    PowerPointValidationRequest,
 )
 from buddy_api.validation.runner import run_validation
 
@@ -38,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 
 class ValidationService:
-    def __init__(self, uploads: UploadService, settings: ValidatorSettings):
+    def __init__(self, uploads: UploadService, settings: ValidatorSettings | None = None):
         self.uploads, self.settings = uploads, settings
 
     @staticmethod
@@ -46,15 +53,22 @@ class ValidationService:
         return f"sources/{row.owner_id}/{row.deck_id}/validation/{row.id}/{kind}.{KINDS[kind][0]}"
 
     @staticmethod
-    def public(row: ActionCheck) -> StoredResult:
+    def public(row: ActionCheck) -> StoredResult | PowerPointStoredResult:
         if row.status != "complete" or row.result is None:
             raise UploadError(
                 409, "validation_pending", "Validation has not completed; retry later."
             )
-        return StoredResult(
+        result_type: Any = (
+            PowerPointStoredResult if row.result.get("source_format") == "pptx" else StoredResult
+        )
+        public_result = result_type(
             id=row.id,
             deck_id=row.deck_id,
-            result=ProcessResult.model_validate(row.result),
+            result=(
+                PowerPointProcessResult.model_validate(row.result)
+                if row.result.get("source_format") == "pptx"
+                else ProcessResult.model_validate(row.result)
+            ),
             evidence=[
                 ArtifactReference.model_validate(
                     {k: value[k] for k in ("id", "kind", "sha256", "size_bytes")}
@@ -62,6 +76,8 @@ class ValidationService:
                 for value in row.artifacts
             ],
         )
+        assert isinstance(public_result, (StoredResult, PowerPointStoredResult))
+        return public_result
 
     async def owned(self, owner: UUID, identifier: UUID) -> ActionCheck:
         async with self.uploads.transaction() as session:
@@ -74,7 +90,7 @@ class ValidationService:
                 raise UploadError(404, "not_found", "Validation not found.")
             return row
 
-    async def read(self, owner: UUID, identifier: UUID) -> StoredResult:
+    async def read(self, owner: UUID, identifier: UUID) -> StoredResult | PowerPointStoredResult:
         return self.public(await self.owned(owner, identifier))
 
     async def evidence(self, owner: UUID, identifier: UUID, artifact: UUID) -> tuple[bytes, str]:
@@ -104,12 +120,15 @@ class ValidationService:
         owner: UUID,
         deck_id: UUID,
         key: UUID,
-        inputs: ValidationRequest,
+        inputs: ValidationRequest | PowerPointValidationRequest,
         *,
         source_content: bytes | None = None,
         precision: Precision = "standard",
         duplicate_candidate: bool = False,
-    ) -> StoredResult:
+    ) -> StoredResult | PowerPointStoredResult:
+        validator_settings = self.settings
+        if validator_settings is None:
+            raise UploadError(503, "validator_unavailable", "Action execution is not configured.")
         if self.uploads.parser_slot.locked():
             raise UploadError(
                 429, "validation_capacity", "Validation capacity is full; retry later.", 30
@@ -122,17 +141,29 @@ class ValidationService:
                 if deck is None:
                     raise UploadError(404, "not_found", "Presentation not found.")
                 revision, digest = deck.source_revision, deck.source_sha256
-                if deck.source_format != "pdf" or not revision or not digest:
+                expected_format = (
+                    "pptx" if isinstance(inputs, PowerPointValidationRequest) else "pdf"
+                )
+                if deck.source_format != expected_format or not revision or not digest:
                     raise UploadError(
                         409, "unsupported_source", "Action validation requires a saved PDF."
                     )
-                request = ProcessRequest(
-                    deck_id=deck_id,
-                    source_revision=revision,
-                    source_sha256=digest,
-                    precision=precision,
-                    duplicate_candidate=duplicate_candidate,
-                    **inputs.model_dump(),
+                request = (
+                    PowerPointProcessRequest(
+                        deck_id=deck_id,
+                        source_revision=revision,
+                        source_sha256=digest,
+                        **inputs.model_dump(),
+                    )
+                    if isinstance(inputs, PowerPointValidationRequest)
+                    else ProcessRequest(
+                        deck_id=deck_id,
+                        source_revision=revision,
+                        source_sha256=digest,
+                        precision=precision,
+                        duplicate_candidate=duplicate_candidate,
+                        **inputs.model_dump(),
+                    )
                 )
                 fingerprint = hashlib.sha256(
                     json.dumps(
@@ -145,6 +176,31 @@ class ValidationService:
                     .where(ActionCheck.owner_id == owner, ActionCheck.retry_key == key)
                     .with_for_update()
                 )
+                # Retain historical busy evidence, but use a fresh reservation for
+                # its recheck. Never overwrite an existing validation record ID.
+                for _ in range(16):
+                    if not (
+                        row
+                        and isinstance(inputs, PowerPointValidationRequest)
+                        and row.status == "complete"
+                        and row.result
+                        and POWERPOINT_BUSY_REASON in row.result.get("reasons", [])
+                    ):
+                        break
+                    if row.request_sha256 != fingerprint:
+                        raise UploadError(
+                            409, "idempotency_conflict", "Retry key belongs to another validation."
+                        )
+                    key = uuid5(key, "after-busy:" + str(row.id))
+                    row = await session.scalar(
+                        select(ActionCheck)
+                        .where(ActionCheck.owner_id == owner, ActionCheck.retry_key == key)
+                        .with_for_update()
+                    )
+                else:
+                    raise UploadError(
+                        409, "powerpoint_busy", "Waiting for PowerPoint to become available.", 30
+                    )
                 if row:
                     if row.request_sha256 != fingerprint:
                         raise UploadError(
@@ -212,21 +268,23 @@ class ValidationService:
                             version=version,
                             size=size,
                             sha256=digest,
-                            source_format="pdf",
+                            source_format=expected_format,
                         )
                     )
                 )
                 if (
                     len(content) != size
                     or hashlib.sha256(content).hexdigest() != digest
-                    or not content.startswith(b"%PDF-")
+                    or not content.startswith(b"PK" if expected_format == "pptx" else b"%PDF-")
                 ):
                     raise UploadError(
                         409, "source_mismatch", "Saved source does not match its accepted revision."
                     )
                 cancelled = Event()
                 task = asyncio.create_task(
-                    asyncio.to_thread(run_validation, content, request, self.settings, cancelled)
+                    asyncio.to_thread(
+                        run_validation, content, request, validator_settings, cancelled
+                    )
                 )
                 try:
                     bundle = await asyncio.shield(task)
@@ -234,6 +292,23 @@ class ValidationService:
                     cancelled.set()
                     await task
                     raise
+                if (
+                    isinstance(inputs, PowerPointValidationRequest)
+                    and POWERPOINT_BUSY_REASON in bundle.result.reasons
+                ):
+                    # No evidence has been uploaded. A transient process conflict
+                    # must not become a completed, permanently cached validation.
+                    async with self.uploads.transaction() as session:
+                        waiting = await session.get(ActionCheck, row.id, with_for_update=True)
+                        assert waiting is not None and waiting.status == "pending"
+                        waiting.status, waiting.storage_bytes = "failed", 0
+                        waiting.result, waiting.artifacts = None, []
+                    raise UploadError(
+                        409,
+                        "powerpoint_busy",
+                        "Save and close PowerPoint; validation will resume automatically.",
+                        30,
+                    )
                 artifacts: list[dict[str, Any]] = []
                 with tempfile.TemporaryDirectory(prefix="buddy-evidence-") as directory:
                     for kind, data in bundle.artifacts.items():
@@ -276,7 +351,7 @@ class ValidationService:
             except (Exception, asyncio.CancelledError):
                 async with self.uploads.transaction() as session:
                     current = await session.get(ActionCheck, row.id, with_for_update=True)
-                    if current is not None and current.status != "complete":
+                    if current is not None and current.status not in {"complete", "failed"}:
                         current.status = "cleanup"
                 await asyncio.shield(self.cleanup(row.id))
                 raise

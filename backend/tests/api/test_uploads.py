@@ -162,6 +162,29 @@ def transfer(client, identifier, content=SOURCE):
     )
 
 
+def test_source_download_releases_its_database_connection_before_storage(upload_app, monkeypatch):
+    from contextlib import AsyncExitStack
+
+    with upload_app() as (client, _cloud, service):
+        identifier = initialize(client).json()["data"]["id"]
+        assert transfer(client, identifier).status_code == 200
+        original_read = service.storage.read
+
+        async def use_the_entire_pool():
+            async with AsyncExitStack() as stack:
+                for _ in range(5):
+                    connection = await stack.enter_async_context(service.database.engine.connect())
+                    await connection.execute(select(1))
+
+        def checked_read(*args, **kwargs):
+            client.portal.call(use_the_entire_pool)
+            return original_read(*args, **kwargs)
+
+        monkeypatch.setattr(service.storage, "read", checked_read)
+        response = client.get(f"/api/v1/decks/{identifier}/powerpoint-source")
+        assert response.status_code == 200 and response.content == SOURCE
+
+
 def test_pdf_upload_storage_database_private_download_and_pptx_preservation(upload_app):
     fixture = Path(__file__).resolve().parents[3] / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf"
     content = fixture.read_bytes()
@@ -205,7 +228,7 @@ def test_pdf_upload_storage_database_private_download_and_pptx_preservation(uplo
                 stored = await session.get(Deck, UUID(identifier))
                 assert stored.source_format == "pdf"
                 assert stored.source_sha256 == hashlib.sha256(content).hexdigest()
-                assert await session.scalar(select(func.count()).select_from(ProcessingJob)) == 1
+                assert await session.scalar(select(func.count()).select_from(ProcessingJob)) == 2
                 job = await session.scalar(select(ProcessingJob))
                 assert job.deck_id == stored.id and job.source_revision == stored.source_revision
 
@@ -257,7 +280,7 @@ def test_original_bytes_private_identity_and_complete_retry_survive_restart(uplo
         assert list(cloud.objects.values())[0][1] == SOURCE
         assert "sources/" not in completed.text
         assert "storage_key" not in completed.text
-        assert client.get("/api/v1/decks").json()["data"]["items"][0]["status"] == "uploaded"
+        assert client.get("/api/v1/decks").json()["data"]["items"][0]["status"] == "queued"
         assert initialize(client, key).json()["data"]["deck"]["id"] == deck["id"]
         assert transfer(client, identifier).json()["data"]["deck"]["id"] == deck["id"]
         assert cloud.puts == 1
@@ -268,7 +291,7 @@ def test_original_bytes_private_identity_and_complete_retry_survive_restart(uplo
                 assert stored.source_revision == deck["source_revision"]
                 assert stored.source_size_bytes == len(SOURCE)
                 assert stored.source_version_id
-                assert await session.scalar(select(func.count()).select_from(ProcessingJob)) == 0
+                assert await session.scalar(select(func.count()).select_from(ProcessingJob)) == 1
 
         client.portal.call(persisted)
         client.headers["Authorization"] = "Bearer account-b"

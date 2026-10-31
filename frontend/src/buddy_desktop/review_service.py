@@ -5,10 +5,13 @@ import http.client
 import json
 import math
 from dataclasses import dataclass
+from importlib.resources import files
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, build_opener
 from uuid import UUID
+
+from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 
 from buddy_desktop.config import AppConfig
 from buddy_desktop.library_service import LibraryAccessExpired
@@ -50,15 +53,19 @@ class ReviewAction:
     validator_version: str
     renderer_version: str
     validation_id: UUID | None
+    raw: dict[str, Any] | None = None
+    runtime_version: str | None = None
+    action_sha256: str | None = None
 
 
 @dataclass(frozen=True)
 class ReviewSlide:
     slide_id: str
-    width: int
-    height: int
+    width: float
+    height: float
     summary: ReviewSummary
     actions: tuple[ReviewAction, ...]
+    native_slide_id: int = 0
 
 
 @dataclass(frozen=True)
@@ -72,6 +79,16 @@ class ReviewAnalysis:
     source_sha256: str | None
     presentation_summary: ReviewSummary
     slides: tuple[ReviewSlide, ...]
+    source_format: str = "pdf"
+    render_id: str = ""
+    office_safe: bool = False
+
+
+@dataclass(frozen=True)
+class DownloadedPowerPoint:
+    content: bytes
+    deck_id: str
+    revision: str
 
 
 def _dict(value: object) -> dict[str, Any]:
@@ -119,11 +136,27 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
     if type(action_limit_reached) is not bool:
         raise ValueError
     inputs = data.get("inputs")
+    source_format = data.get("source_format", "pdf")
+    if source_format not in {"pdf", "pptx"}:
+        raise ValueError
+    powerpoint = source_format == "pptx"
+    native_ids: dict[str, int] = {}
+    render_id = ""
+    office_safe = False
     summary = ReviewSummary("unavailable", None, "This analysis predates the review format.")
     source_revision = source_sha256 = None
-    widths: dict[str, tuple[int, int]] = {}
+    widths: dict[str, tuple[float, float]] = {}
     if inputs is not None:
         input_data = _dict(inputs)
+        if input_data.get("source_format", "pdf") != source_format:
+            raise ValueError
+        if powerpoint:
+            if (
+                input_data.get("schema_version") != "buddy.powerpoint.analysis.v2"
+                or input_data.get("catalog_version") != "powerpoint-2"
+            ):
+                raise ValueError
+            office_safe = input_data.get("office_safe") is True
         source_revision = _required_text(input_data.get("source_revision"))
         source_sha256 = _required_text(input_data.get("source_sha256"))
         if len(source_sha256) != 64 or any(
@@ -131,6 +164,11 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
         ):
             raise ValueError
         manifest = _dict(input_data["manifest"])
+        render_id = _required_text(manifest.get("render_id"))
+        if powerpoint and (
+            manifest.get("source_format") != "pptx" or manifest.get("version") != "powerpoint-2"
+        ):
+            raise ValueError
         if str(manifest["deck_id"]) != str(deck_id):
             raise ValueError
         rendered = manifest["slides"]
@@ -139,17 +177,26 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
         for slide in rendered:
             slide = _dict(slide)
             source = _dict(slide["source"])
+            if not powerpoint and source.get("units", "source_pixels") != "source_pixels":
+                raise ValueError
             width, height = source["width"], source["height"]
             current_slide_id = _required_text(slide.get("slide_id"))
             if (
-                type(width) is not int
-                or type(height) is not int
+                (type(width) not in (int, float) if powerpoint else type(width) is not int)
+                or (type(height) not in (int, float) if powerpoint else type(height) is not int)
+                or not math.isfinite(width)
+                or not math.isfinite(height)
                 or min(width, height) <= 0
                 or max(width, height) > 16384
                 or current_slide_id in widths
             ):
                 raise ValueError
             widths[current_slide_id] = (width, height)
+            if powerpoint:
+                native = slide.get("native_slide_id")
+                if type(native) is not int or native <= 0 or source.get("units") != "slide_points":
+                    raise ValueError
+                native_ids[current_slide_id] = native
         summary = _summary(input_data["presentation_summary"])
     raw_slides = data.get("slides")
     if not isinstance(raw_slides, list) or len(raw_slides) > 500:
@@ -167,7 +214,23 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
         for item in raw_actions:
             result = _dict(item)
             action = _dict(result.get("action"))
+            if action.get("source_format", "pdf") != source_format:
+                raise ValueError
+            if powerpoint:
+                definition = json.loads(
+                    files("buddy_desktop")
+                    .joinpath("powerpoint_contracts", "action-v2.schema.json")
+                    .read_text()
+                )
+                try:
+                    Draft202012Validator(definition).validate(action)
+                except Exception:
+                    raise ValueError("Invalid PowerPoint action") from None
+            elif action.get("version") != "1.1":
+                raise ValueError
             params = _dict(action.get("params"))
+            if not powerpoint and set(params) != {"region"}:
+                raise ValueError
             region = _dict(params.get("region"))
             rect: list[float] = []
             for key in ("x", "y", "width", "height"):
@@ -190,6 +253,7 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
             evidence: list[ReviewEvidence] = []
             reasons: tuple[str, ...] = ()
             validation_id = None
+            runtime_version = None
             validation_kind = "execution"
             semantic_verified = False
             profile = _required_text(_dict(inputs).get("display_profile")) if inputs else "unknown"
@@ -219,6 +283,11 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                 ):
                     raise ValueError
                 validation_id = UUID(str(validation["validation_id"]))
+                if validation.get("source_format", "pdf") != source_format:
+                    raise ValueError
+                runtime_version = _text(validation.get("runtime_version"), optional=True)
+                if powerpoint and result.get("state") == "validated" and not runtime_version:
+                    raise ValueError
                 if (
                     validation.get("analysis_id") != str(identifier)
                     or validation.get("analysis_sha256") != data.get("analysis_sha256")
@@ -262,7 +331,7 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                         )
                     )
                 reasons = tuple(_required_text(reason) for reason in raw_reasons)
-            if action.get("type") not in {"zoom_region", "highlight_region"}:
+            if not powerpoint and action.get("type") not in {"zoom_region", "highlight_region"}:
                 raise ValueError
             if inputs is not None:
                 manifest = _dict(_dict(inputs)["manifest"])
@@ -282,7 +351,9 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                 or result_semantic_verified != semantic_verified
             ):
                 raise ValueError
-            usable = result["state"] == "validated" and result_semantic_verified
+            if powerpoint and (validation_kind != "execution" or result_semantic_verified):
+                raise ValueError
+            usable = result["state"] == "validated" and (powerpoint or result_semantic_verified)
             legacy_execution = (
                 "semantic_verified" not in result
                 and isinstance(validation, dict)
@@ -291,6 +362,20 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
             )
             if result["usable"] != usable and not (
                 legacy_execution and result["state"] == "validated" and result["usable"]
+            ):
+                raise ValueError
+            if (
+                powerpoint
+                and result["usable"]
+                and (
+                    validation is None
+                    or not evidence
+                    or reasons
+                    or not runtime_version
+                    or profile != "windows-powerpoint-2"
+                    or validator != "powerpoint-executor-2"
+                    or renderer != "desktop-powerpoint-2"
+                )
             ):
                 raise ValueError
             actions.append(
@@ -310,10 +395,25 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                     validator,
                     renderer,
                     validation_id,
+                    action if powerpoint else None,
+                    runtime_version,
+                    hashlib.sha256(
+                        json.dumps(
+                            action, sort_keys=True, separators=(",", ":"), allow_nan=False
+                        ).encode()
+                    ).hexdigest()
+                    if powerpoint
+                    else None,
                 )
             )
         slides.append(
-            ReviewSlide(slide_id, *widths[slide_id], _summary(row["summary"]), tuple(actions))
+            ReviewSlide(
+                slide_id,
+                *widths[slide_id],
+                _summary(row["summary"]),
+                tuple(actions),
+                native_ids.get(slide_id, 0),
+            )
         )
     if inputs is not None and [slide.slide_id for slide in slides] != list(widths):
         raise ValueError
@@ -333,6 +433,9 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
         source_sha256,
         summary,
         tuple(slides),
+        source_format,
+        render_id,
+        office_safe,
     )
 
 
@@ -347,10 +450,13 @@ class ReviewService:
             self.config.api_url + path,
             headers={"Authorization": "Bearer " + self.access, "Accept": accept},
         )
+        timeout = (
+            max(120.0, self.config.request_timeout)
+            if path.endswith("/powerpoint-source") or "/evidence/" in path
+            else self.config.request_timeout
+        )
         try:
-            with build_opener(NoRedirects()).open(
-                request, timeout=self.config.request_timeout
-            ) as response:
+            with build_opener(NoRedirects()).open(request, timeout=timeout) as response:
                 content = response.read(limit + 1)
                 if len(content) > limit or response.headers.get_content_type() not in (
                     allowed_types or {accept}
@@ -380,20 +486,45 @@ class ReviewService:
                 "The backend returned an invalid or oversized review response."
             ) from None
 
-    def analysis(self, deck_id: UUID) -> ReviewAnalysis:
+    def analysis(self, deck_id: UUID, source_format: str = "pdf") -> ReviewAnalysis:
+        if source_format not in {"pdf", "pptx"}:
+            raise ServiceError("Unsupported saved analysis format.")
         content, _ = self._get(
-            f"/api/v1/analyses/by-deck/{deck_id}",
+            f"/api/v1/analyses/{'powerpoint/' if source_format == 'pptx' else ''}by-deck/{deck_id}",
             accept="application/json",
             limit=MAX_ANALYSIS_BYTES,
         )
         try:
-            return parse_analysis(json.loads(content), deck_id)
+            result = parse_analysis(json.loads(content), deck_id)
+            if result.source_format != source_format:
+                raise ValueError("The saved analysis format differs from its read contract.")
+            return result
         except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
             raise ServiceError(
                 "The saved analysis is inconsistent. Refresh or contact support."
             ) from None
 
-    def source(self, deck_id: UUID) -> DownloadedPDF:
+    def source(
+        self, deck_id: UUID, source_format: str = "pdf"
+    ) -> DownloadedPDF | DownloadedPowerPoint:
+        if source_format == "pptx":
+            content, headers = self._get(
+                f"/api/v1/decks/{deck_id}/powerpoint-source",
+                accept="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                limit=64 * 1024 * 1024,
+            )
+            revision = headers.get("X-Source-Revision")
+            if (
+                not isinstance(revision, str)
+                or not 1 <= len(revision) <= 128
+                or headers.get("X-Source-Format") != "pptx"
+                or not content.startswith(b"PK")
+                or hashlib.sha256(content).hexdigest() != headers.get("X-Source-Sha256")
+            ):
+                raise ServiceError("Saved PowerPoint integrity check failed.")
+            return DownloadedPowerPoint(content, str(deck_id), revision)
+        if source_format != "pdf":
+            raise ServiceError("Unsupported saved source format.")
         return PresentationService(self.config, self.access).download(str(deck_id))
 
     def evidence(

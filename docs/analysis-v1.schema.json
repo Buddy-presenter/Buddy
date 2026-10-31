@@ -3,11 +3,11 @@
     "ActionGrounding": {
       "additionalProperties": false,
       "properties": {
-        "instance_id": {
-          "$ref": "#/$defs/Identifier"
-        },
         "action_sha256": {
           "$ref": "#/$defs/Digest"
+        },
+        "instance_id": {
+          "$ref": "#/$defs/Identifier"
         },
         "trace": {
           "$ref": "#/$defs/GroundingTrace"
@@ -24,13 +24,14 @@
     "ContentAction": {
       "additionalProperties": false,
       "properties": {
-        "version": {
-          "const": "1.1",
-          "title": "Version",
-          "type": "string"
+        "deck_id": {
+          "$ref": "#/$defs/Identifier"
         },
         "instance_id": {
           "$ref": "#/$defs/Identifier"
+        },
+        "params": {
+          "$ref": "#/$defs/RegionParameters"
         },
         "purpose": {
           "maxLength": 512,
@@ -38,9 +39,6 @@
           "pattern": "\\S",
           "title": "Purpose",
           "type": "string"
-        },
-        "deck_id": {
-          "$ref": "#/$defs/Identifier"
         },
         "render_id": {
           "$ref": "#/$defs/Identifier"
@@ -56,8 +54,10 @@
           "title": "Type",
           "type": "string"
         },
-        "params": {
-          "$ref": "#/$defs/RegionParameters"
+        "version": {
+          "const": "1.1",
+          "title": "Version",
+          "type": "string"
         }
       },
       "required": [
@@ -91,14 +91,27 @@
     "GroundingTrace": {
       "additionalProperties": false,
       "properties": {
-        "version": {
-          "const": "pdf-source-grounding-1",
-          "default": "pdf-source-grounding-1",
-          "title": "Version",
-          "type": "string"
-        },
         "method": {
           "$ref": "#/$defs/GroundingMethod"
+        },
+        "model_region": {
+          "$ref": "#/$defs/Region"
+        },
+        "resolved_region": {
+          "$ref": "#/$defs/Region"
+        },
+        "target_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Id"
         },
         "target_text": {
           "anyOf": [
@@ -114,24 +127,11 @@
           ],
           "title": "Target Text"
         },
-        "target_id": {
-          "anyOf": [
-            {
-              "maxLength": 128,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Target Id"
-        },
-        "model_region": {
-          "$ref": "#/$defs/Region"
-        },
-        "resolved_region": {
-          "$ref": "#/$defs/Region"
+        "version": {
+          "const": "pdf-source-grounding-1",
+          "default": "pdf-source-grounding-1",
+          "title": "Version",
+          "type": "string"
         }
       },
       "required": [
@@ -152,11 +152,6 @@
     "Manifest": {
       "additionalProperties": false,
       "properties": {
-        "version": {
-          "const": "1.0",
-          "title": "Version",
-          "type": "string"
-        },
         "deck_id": {
           "$ref": "#/$defs/Identifier"
         },
@@ -171,6 +166,11 @@
           "minItems": 1,
           "title": "Slides",
           "type": "array"
+        },
+        "version": {
+          "const": "1.0",
+          "title": "Version",
+          "type": "string"
         }
       },
       "required": [
@@ -185,14 +185,14 @@
     "ManifestSlide": {
       "additionalProperties": false,
       "properties": {
+        "raster": {
+          "$ref": "#/$defs/Raster"
+        },
         "slide_id": {
           "$ref": "#/$defs/Identifier"
         },
         "source": {
           "$ref": "#/$defs/SourcePlane"
-        },
-        "raster": {
-          "$ref": "#/$defs/Raster"
         }
       },
       "required": [
@@ -206,10 +206,24 @@
     "Raster": {
       "additionalProperties": false,
       "properties": {
+        "height": {
+          "maximum": 8192,
+          "minimum": 1,
+          "title": "Height",
+          "type": "integer"
+        },
         "path": {
           "maxLength": 240,
           "pattern": "^[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*\\.png$",
           "title": "Path",
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/Digest"
+        },
+        "transform": {
+          "const": "scale",
+          "title": "Transform",
           "type": "string"
         },
         "width": {
@@ -217,20 +231,6 @@
           "minimum": 1,
           "title": "Width",
           "type": "integer"
-        },
-        "height": {
-          "maximum": 8192,
-          "minimum": 1,
-          "title": "Height",
-          "type": "integer"
-        },
-        "transform": {
-          "const": "scale",
-          "title": "Transform",
-          "type": "string"
-        },
-        "sha256": {
-          "$ref": "#/$defs/Digest"
         }
       },
       "required": [
@@ -246,6 +246,16 @@
     "Region": {
       "additionalProperties": false,
       "properties": {
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "number"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "number"
+        },
         "x": {
           "minimum": 0,
           "title": "X",
@@ -254,16 +264,6 @@
         "y": {
           "minimum": 0,
           "title": "Y",
-          "type": "number"
-        },
-        "width": {
-          "exclusiveMinimum": 0,
-          "title": "Width",
-          "type": "number"
-        },
-        "height": {
-          "exclusiveMinimum": 0,
-          "title": "Height",
           "type": "number"
         }
       },
@@ -292,12 +292,6 @@
     "SlideOutput": {
       "additionalProperties": false,
       "properties": {
-        "slide_id": {
-          "$ref": "#/$defs/Identifier"
-        },
-        "summary": {
-          "$ref": "#/$defs/Summary"
-        },
         "actions": {
           "default": [],
           "items": {
@@ -306,6 +300,12 @@
           "maxItems": 100,
           "title": "Actions",
           "type": "array"
+        },
+        "slide_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "summary": {
+          "$ref": "#/$defs/Summary"
         }
       },
       "required": [
@@ -318,27 +318,27 @@
     "SourcePlane": {
       "additionalProperties": false,
       "properties": {
-        "width": {
-          "maximum": 16384,
-          "minimum": 1,
-          "title": "Width",
-          "type": "integer"
-        },
         "height": {
           "maximum": 16384,
           "minimum": 1,
           "title": "Height",
           "type": "integer"
         },
+        "origin": {
+          "const": "top_left",
+          "title": "Origin",
+          "type": "string"
+        },
         "units": {
           "const": "source_pixels",
           "title": "Units",
           "type": "string"
         },
-        "origin": {
-          "const": "top_left",
-          "title": "Origin",
-          "type": "string"
+        "width": {
+          "maximum": 16384,
+          "minimum": 1,
+          "title": "Width",
+          "type": "integer"
         }
       },
       "required": [
@@ -353,6 +353,21 @@
     "Summary": {
       "additionalProperties": false,
       "properties": {
+        "reason": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
         "status": {
           "enum": [
             "pending",
@@ -372,21 +387,6 @@
             }
           ],
           "default": null
-        },
-        "reason": {
-          "anyOf": [
-            {
-              "maxLength": 512,
-              "minLength": 1,
-              "pattern": "\\S",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Reason"
         }
       },
       "required": [
@@ -404,11 +404,14 @@
   },
   "additionalProperties": false,
   "properties": {
-    "schema_version": {
-      "const": "buddy.analysis.v1",
-      "default": "buddy.analysis.v1",
-      "title": "Schema Version",
+    "catalog_version": {
+      "const": "1.1",
+      "default": "1.1",
+      "title": "Catalog Version",
       "type": "string"
+    },
+    "display_profile": {
+      "$ref": "#/$defs/Identifier"
     },
     "extraction_id": {
       "format": "uuid",
@@ -427,6 +430,44 @@
       "title": "Extractor Version",
       "type": "string"
     },
+    "grounding": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ActionGrounding"
+      },
+      "maxItems": 40,
+      "title": "Grounding",
+      "type": "array"
+    },
+    "job_id": {
+      "format": "uuid",
+      "title": "Job Id",
+      "type": "string"
+    },
+    "manifest": {
+      "$ref": "#/$defs/Manifest"
+    },
+    "presentation_summary": {
+      "$ref": "#/$defs/Summary"
+    },
+    "renderer_version": {
+      "$ref": "#/$defs/Identifier"
+    },
+    "schema_version": {
+      "const": "buddy.analysis.v1",
+      "default": "buddy.analysis.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "slides": {
+      "items": {
+        "$ref": "#/$defs/SlideOutput"
+      },
+      "maxItems": 500,
+      "minItems": 1,
+      "title": "Slides",
+      "type": "array"
+    },
     "source_revision": {
       "maxLength": 128,
       "minLength": 1,
@@ -437,49 +478,8 @@
     "source_sha256": {
       "$ref": "#/$defs/Digest"
     },
-    "job_id": {
-      "format": "uuid",
-      "title": "Job Id",
-      "type": "string"
-    },
-    "catalog_version": {
-      "const": "1.1",
-      "default": "1.1",
-      "title": "Catalog Version",
-      "type": "string"
-    },
-    "renderer_version": {
-      "$ref": "#/$defs/Identifier"
-    },
-    "display_profile": {
-      "$ref": "#/$defs/Identifier"
-    },
     "validator_version": {
       "$ref": "#/$defs/Identifier"
-    },
-    "manifest": {
-      "$ref": "#/$defs/Manifest"
-    },
-    "grounding": {
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/ActionGrounding"
-      },
-      "maxItems": 40,
-      "title": "Grounding",
-      "type": "array"
-    },
-    "presentation_summary": {
-      "$ref": "#/$defs/Summary"
-    },
-    "slides": {
-      "items": {
-        "$ref": "#/$defs/SlideOutput"
-      },
-      "maxItems": 500,
-      "minItems": 1,
-      "title": "Slides",
-      "type": "array"
     }
   },
   "required": [

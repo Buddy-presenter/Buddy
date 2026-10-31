@@ -14,39 +14,54 @@ from typing import Any
 
 from buddy_api.analysis.contracts import Manifest
 from buddy_api.analysis.grounding import ground_actions
+from buddy_api.analysis.powerpoint import powerpoint_manifest
 from buddy_api.analysis.provider import ModelOutput, parse_model_output
 from buddy_api.analysis.rendering import render_manifest
 from buddy_api.analysis.text_candidates import TextCandidates, extract_candidates
 from buddy_api.extraction.contracts import Extraction, ExtractionError
-from buddy_api.extraction.runner import extract_pdf, parser_memory_limit
-from buddy_api.processing.contracts import MetadataOutput, PDFSource
+from buddy_api.extraction.runner import extract_pdf, extract_pptx, parser_memory_limit
+from buddy_api.processing.contracts import (
+    MetadataOutput,
+    PDFSource,
+    PowerPointMetadataOutput,
+    PowerPointSource,
+)
 from buddy_api.uploads.config import UploadSettings
 from buddy_api.uploads.storage import SourceStorage
 
 
-def inspect_source(source: PDFSource, storage: SourceStorage) -> MetadataOutput:
+def inspect_source(
+    source: PDFSource | PowerPointSource, storage: SourceStorage
+) -> MetadataOutput | PowerPointMetadataOutput:
     content = storage.read(
         source.key,
         version=source.version,
         size=source.size,
         sha256=source.sha256,
-        source_format="pdf",
+        source_format="pptx" if isinstance(source, PowerPointSource) else "pdf",
     )
+    if isinstance(source, PowerPointSource):
+        metadata = extract_pptx(io.BytesIO(content), source_revision=source.revision)
+        return PowerPointMetadataOutput(
+            metadata=metadata, manifest=powerpoint_manifest(metadata, str(source.deck_id))
+        )
     return MetadataOutput(
         metadata=(metadata := extract_pdf(io.BytesIO(content), source_revision=source.revision)),
         manifest=render_manifest(content, metadata, str(source.deck_id)),
     )
 
 
-def execute(source: PDFSource, settings: UploadSettings, seconds: float = 90) -> MetadataOutput:
+def execute(
+    source: PDFSource | PowerPointSource, settings: UploadSettings, seconds: float = 90
+) -> MetadataOutput | PowerPointMetadataOutput:
     # Parent-owned workspace survives a killed child long enough to remove its artifacts.
     with tempfile.TemporaryDirectory(prefix="stage-") as directory:
         return _execute(source, settings, seconds, directory)
 
 
 def _execute(
-    source: PDFSource, settings: UploadSettings, seconds: float, directory: str
-) -> MetadataOutput:
+    source: PDFSource | PowerPointSource, settings: UploadSettings, seconds: float, directory: str
+) -> MetadataOutput | PowerPointMetadataOutput:
     request = json.dumps(
         {
             "operation": "inspect",
@@ -61,6 +76,8 @@ def _execute(
             raise OSError("Private source unavailable")
         if "error" in response:
             raise ExtractionError("pdf_inspection_failed")
+        if isinstance(source, PowerPointSource):
+            return PowerPointMetadataOutput.model_validate(response)
         return MetadataOutput.model_validate(response)
     except (json.JSONDecodeError, TypeError):
         raise ExtractionError("pdf_stage_failed") from None
@@ -231,7 +248,11 @@ def main() -> int:
             output = parse_model_output(request["output"])
             result = ground_actions(content, extraction, manifest, output).model_dump_json()
         else:
-            source = PDFSource.model_validate(request["source"])
+            source = (
+                PowerPointSource.model_validate(request["source"])
+                if request["source"].get("source_format") == "pptx"
+                else PDFSource.model_validate(request["source"])
+            )
             storage = SourceStorage(UploadSettings.model_validate(request["storage"]))
             result = inspect_source(source, storage).model_dump_json()
     except UploadError:
@@ -252,7 +273,8 @@ def main() -> int:
     finally:
         if storage:
             storage.close()
-    # Pipes must use UTF-8 consistently, including on Windows with a legacy code page.
+    # IPC is UTF-8 regardless of the Windows console code page. Real slide text
+    # may contain accented/non-Latin characters that a console cannot encode.
     sys.stdout.buffer.write(result.encode("utf-8"))
     return 0
 

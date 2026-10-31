@@ -203,7 +203,7 @@ def library_router() -> APIRouter:
                     analysis_matches_source = bool(
                         analysis_revision == deck.source_revision
                         and analysis_sha256 == deck.source_sha256
-                        and (deck.source_format != "pdf" or analysis_format == "pdf")
+                        and analysis_format == deck.source_format
                     )
                     source_matches = bool(
                         job_id and job_revision and job_revision == deck.source_revision
@@ -248,6 +248,8 @@ def library_router() -> APIRouter:
                         "retry_wait": ProcessingState.QUEUED,
                         "running": {
                             "pdf_metadata.v1": ProcessingState.INSPECTING,
+                            "pptx_metadata.v1": ProcessingState.INSPECTING,
+                            "pptx_analysis.v1": ProcessingState.ANALYZING,
                             "pdf_render": ProcessingState.ANALYZING,
                             "provider": ProcessingState.ANALYZING,
                             "pdf_analysis.v1": ProcessingState.ANALYZING,
@@ -309,6 +311,62 @@ def library_router() -> APIRouter:
             request_id=request.state.request_id,
         )
 
+    async def download_source(
+        identifier: UUID,
+        request: Request,
+        principal: Principal,
+        source_format: Literal["pdf", "pptx"],
+    ) -> Response:
+        uploads = service(request)
+        async with uploads.transaction() as session:
+            deck = await session.scalar(
+                select(Deck).where(Deck.id == identifier, Deck.owner_id == principal.id)
+            )
+            if deck is None:
+                raise HTTPException(404)
+            if deck.source_format != source_format:
+                raise UploadError(
+                    409,
+                    "presentation_unsupported",
+                    "The requested source format does not match this presentation.",
+                )
+            key, version, size, digest, revision = (
+                deck.source_key,
+                deck.source_version_id,
+                deck.source_size_bytes,
+                deck.source_sha256,
+                deck.source_revision,
+            )
+            if not key or not version or not size or not digest or not revision:
+                raise HTTPException(404)
+        # Authorization and immutable source pointers are captured above. Release
+        # the connection before waiting on storage or the bounded parser slot;
+        # concurrent slow downloads must not exhaust the API database pool.
+        async with uploads.parser_slot:
+            content = await blocking(
+                lambda: uploads.storage.read(
+                    key,
+                    version=version,
+                    size=size,
+                    sha256=digest,
+                    source_format=source_format,
+                )
+            )
+        return Response(
+            content,
+            media_type="application/pdf"
+            if source_format == "pdf"
+            else "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+                "X-Source-Sha256": digest,
+                "X-Source-Revision": revision,
+                "X-Source-Format": source_format,
+                "Content-Disposition": f'attachment; filename="presentation.{source_format}"',
+            },
+        )
+
     @router.get(
         "/{identifier}/source",
         response_class=Response,
@@ -322,48 +380,23 @@ def library_router() -> APIRouter:
     async def source(
         identifier: UUID, request: Request, principal: Annotated[Principal, Depends(authenticated)]
     ) -> Response:
-        uploads = service(request)
-        async with uploads.transaction() as session:
-            deck = await session.scalar(
-                select(Deck).where(Deck.id == identifier, Deck.owner_id == principal.id)
-            )
-            if deck is None:
-                raise HTTPException(404)
-            if deck.source_format != "pdf":
-                raise UploadError(
-                    409,
-                    "presentation_unsupported",
-                    "PPTX presentation is not supported yet. Export to PDF and upload it.",
-                )
-            key, version, size, digest, revision = (
-                deck.source_key,
-                deck.source_version_id,
-                deck.source_size_bytes,
-                deck.source_sha256,
-                deck.source_revision,
-            )
-            if not key or not version or not size or not digest or not revision:
-                raise HTTPException(404)
-            async with uploads.parser_slot:
-                content = await blocking(
-                    lambda: uploads.storage.read(
-                        key,
-                        version=version,
-                        size=size,
-                        sha256=digest,
-                        source_format=deck.source_format,
-                    )
-                )
-        return Response(
-            content,
-            media_type="application/pdf",
-            headers={
-                "Cache-Control": "no-store",
-                "X-Content-Type-Options": "nosniff",
-                "X-Source-Sha256": digest,
-                "X-Source-Revision": revision,
-                "Content-Disposition": 'attachment; filename="presentation.pdf"',
-            },
-        )
+        return await download_source(identifier, request, principal, "pdf")
+
+    @router.get(
+        "/{identifier}/powerpoint-source",
+        response_class=Response,
+        responses={
+            200: {
+                "content": {
+                    "application/vnd.openxmlformats-officedocument.presentationml.presentation": {}
+                },
+                "description": "Owner-only immutable original PowerPoint source.",
+            }
+        },
+    )
+    async def powerpoint_source(
+        identifier: UUID, request: Request, principal: Annotated[Principal, Depends(authenticated)]
+    ) -> Response:
+        return await download_source(identifier, request, principal, "pptx")
 
     return router

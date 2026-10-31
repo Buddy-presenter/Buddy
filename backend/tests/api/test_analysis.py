@@ -30,6 +30,73 @@ def sample():
     return json.loads(FIXTURE.read_text())
 
 
+@pytest.mark.postgres
+def test_pdf_and_powerpoint_reads_preserve_their_distinct_validation_gates(migrated_database):
+    from backend.tests.support.powerpoint import manifest, output, source
+
+    from buddy_api.analysis.powerpoint import analysis_document
+
+    async def scenario():
+        db = Database(migrated_database)
+        try:
+            async with db.transaction() as repos:
+                owner = await repos.users.create("cross-format-reader")
+                for source_format in ("pdf", "pptx"):
+                    deck = await repos.decks.create(
+                        owner_id=owner.id, title=source_format, source_format=source_format
+                    )
+                    if source_format == "pdf":
+                        document = await prepare(repos, owner_id=owner.id, deck_id=deck.id)
+                    else:
+                        _, extracted = source()
+                        job = await repos.jobs.create(owner_id=owner.id, deck_id=deck.id)
+                        saved_extraction = await repos.extractions.save(
+                            owner_id=owner.id, deck_id=deck.id, extraction=extracted
+                        )
+                        document = analysis_document(
+                            output(extracted),
+                            extracted,
+                            manifest(extracted, str(deck.id)),
+                            deck.id,
+                            job_id=job.id,
+                            extraction_id=saved_extraction.id,
+                        )
+                    saved = await repos.analyses.create(
+                        owner_id=owner.id, deck_id=deck.id, version=1, document=document
+                    )
+                    candidate = await repos.analyses.read(saved.id, owner_id=owner.id)
+                    assert not candidate.slides[0].actions[0].usable
+                    action = document.slides[0].actions[0]
+                    checked = await repos.analyses.record_validation(
+                        owner_id=owner.id,
+                        result=ValidationInput(
+                            source_format=source_format,
+                            runtime_version="Office-16-test" if source_format == "pptx" else None,
+                            validation_id=uuid4(),
+                            analysis_id=saved.id,
+                            analysis_sha256=candidate.analysis_sha256,
+                            instance_id=action.instance_id,
+                            action_sha256=digest(action),
+                            validator_version=document.validator_version,
+                            renderer_version=document.renderer_version,
+                            display_profile=document.display_profile,
+                            state="validated",
+                            evidence=({"id": uuid4(), "kind": "report", "sha256": "b" * 64},),
+                        ),
+                    )
+                    result = checked.slides[0].actions[0]
+                    assert result.usable == (source_format == "pptx")
+                    if source_format == "pdf":
+                        assert not result.semantic_verified
+                    else:
+                        assert "semantic_verified" not in result.model_dump()
+                        assert "visual_qa_pending_instance_ids" not in checked.inputs.model_dump()
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     "kind", ["next_slide", "previous_slide", "go_to_slide", "reset_view", "shell"]
 )

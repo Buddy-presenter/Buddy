@@ -1,5 +1,6 @@
 """Trusted, owner-scoped writes and typed reads of immutable analysis revisions."""
 
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
@@ -13,10 +14,20 @@ from buddy_api.analysis.contracts import (
     AnalysisInput,
     AnalysisResult,
     ContentAction,
+    ManifestSlide,
+    PowerPointActionResult,
+    PowerPointAnalysisInput,
+    PowerPointAnalysisResult,
+    PowerPointContentAction,
+    PowerPointManifestSlide,
+    PowerPointSlideOutput,
+    PowerPointSlideResult,
+    SlideOutput,
     SlideResult,
     Summary,
     ValidationInput,
     digest,
+    parse_analysis_input,
     publication,
 )
 from buddy_api.extraction.contracts import Extraction
@@ -81,14 +92,20 @@ class Analyses:
         )
 
     async def create(
-        self, *, owner_id: UUID, deck_id: UUID, version: int, document: AnalysisInput
+        self,
+        *,
+        owner_id: UUID,
+        deck_id: UUID,
+        version: int,
+        document: AnalysisInput | PowerPointAnalysisInput,
     ) -> AnalysisVersion:
         # Revalidate even model_construct/model_copy caller values; they bypass Pydantic validation.
         document_values = document.model_dump(mode="json")
-        document_values["visual_qa_pending_instance_ids"] = list(
-            document.visual_qa_pending_instance_ids
-        )
-        document = AnalysisInput.model_validate(document_values)
+        if isinstance(document, AnalysisInput):
+            document_values["visual_qa_pending_instance_ids"] = list(
+                document.visual_qa_pending_instance_ids
+            )
+        document = parse_analysis_input(document_values)
         visual_qa_pending = set(document.visual_qa_pending_instance_ids)
         if type(version) is not int or version < 1:
             raise ValueError("Analysis version must be positive.")
@@ -115,7 +132,9 @@ class Analyses:
             raise RecordNotFound("Owned analysis inputs were not found.")
         extracted = Extraction.model_validate(extraction.document)
         if (
-            document.manifest.deck_id != str(deck_id)
+            document.source_format != deck.source_format
+            or extracted.source_format != document.source_format
+            or document.manifest.deck_id != str(deck_id)
             or document.source_revision != extraction.source_revision
             or document.source_sha256 != extraction.source_sha256
             or extracted.source_revision != extraction.source_revision
@@ -125,9 +144,15 @@ class Analyses:
             or [s.index for s in extracted.slides] != list(range(len(extracted.slides)))
         ):
             raise PersistenceConflict("Analysis source/slide revision does not match extraction.")
-        for source, rendered in zip(extracted.slides, document.manifest.slides, strict=True):
+        manifest_slides = cast(
+            tuple[ManifestSlide | PowerPointManifestSlide, ...], document.manifest.slides
+        )
+        for source, rendered in zip(extracted.slides, manifest_slides, strict=True):
             # Extraction EMU and canonical source pixels are different planes, with equal aspect.
-            if source.width * rendered.source.height != source.height * rendered.source.width:
+            if (
+                abs(source.width * rendered.source.height - source.height * rendered.source.width)
+                > 0.01
+            ):
                 raise PersistenceConflict("Render geometry does not match the extracted slide.")
         content_hash = digest(document)
         existing = await self.session.scalar(
@@ -141,6 +166,7 @@ class Analyses:
             return existing
         value = AnalysisVersion(
             id=uuid4(),
+            source_format=document.source_format,
             owner_id=owner_id,
             deck_id=deck_id,
             version=version,
@@ -155,7 +181,8 @@ class Analyses:
         )
         self.session.add(value)
         await self.session.flush()
-        for position, output in enumerate(document.slides):
+        document_slides = cast(tuple[SlideOutput | PowerPointSlideOutput, ...], document.slides)
+        for position, output in enumerate(document_slides):
             slide = AnalysisSlide(
                 id=uuid4(),
                 owner_id=owner_id,
@@ -169,9 +196,13 @@ class Analyses:
             )
             self.session.add(slide)
             await self.session.flush()
-            for index, action in enumerate(output.actions):
+            content_actions = cast(
+                tuple[ContentAction | PowerPointContentAction, ...], output.actions
+            )
+            for index, action in enumerate(content_actions):
                 record = SlideAction(
                     id=uuid4(),
+                    source_format=document.source_format,
                     owner_id=owner_id,
                     deck_id=deck_id,
                     analysis_id=value.id,
@@ -190,6 +221,7 @@ class Analyses:
                 self.session.add(
                     ActionValidation(
                         owner_id=owner_id,
+                        source_format=document.source_format,
                         deck_id=deck_id,
                         analysis_id=value.id,
                         action_id=record.id,
@@ -204,9 +236,21 @@ class Analyses:
         await self.session.flush()
         return value
 
-    async def read(self, identifier: UUID, *, owner_id: UUID) -> AnalysisResult:
+    async def read(
+        self, identifier: UUID, *, owner_id: UUID
+    ) -> AnalysisResult | PowerPointAnalysisResult:
         value = await self.get(identifier, owner_id=owner_id)
         if value.publication == "legacy":
+            if value.source_format == "pptx":
+                return PowerPointAnalysisResult(
+                    id=value.id,
+                    deck_id=value.deck_id,
+                    version=value.version,
+                    publication="legacy",
+                    analysis_sha256=None,
+                    inputs=None,
+                    slides=(),
+                )
             return AnalysisResult(
                 id=value.id,
                 deck_id=value.deck_id,
@@ -221,7 +265,9 @@ class Analyses:
         except (ValidationError, ValueError, KeyError, TypeError):
             raise PersistenceUnavailable("Stored analysis contract is unavailable.") from None
 
-    async def _read(self, value: AnalysisVersion, owner_id: UUID) -> AnalysisResult:
+    async def _read(
+        self, value: AnalysisVersion, owner_id: UUID
+    ) -> AnalysisResult | PowerPointAnalysisResult:
         slides = list(
             await self.session.scalars(
                 select(AnalysisSlide)
@@ -251,13 +297,24 @@ class Analyses:
         visual_qa_pending = tuple(
             action.instance_id for action in actions if action.visual_qa_pending
         )
-        results = []
+        results: list[Any] = []
+        action_result_model: Any = (
+            PowerPointActionResult if value.source_format == "pptx" else ActionResult
+        )
+        slide_result_model: Any = (
+            PowerPointSlideResult if value.source_format == "pptx" else SlideResult
+        )
         for slide in slides:
             output = []
             for action in actions:
                 if action.slide_record_id != slide.id:
                     continue
-                instance = ContentAction.model_validate(
+                action_model = (
+                    PowerPointContentAction if value.source_format == "pptx" else ContentAction
+                )
+                if action.source_format != value.source_format:
+                    raise ValueError("Stored action format mismatch.")
+                instance = action_model.model_validate(
                     {
                         "version": action.catalog_version,
                         "instance_id": action.instance_id,
@@ -267,6 +324,7 @@ class Analyses:
                         "slide_id": slide.slide_id,
                         "type": action.action_type,
                         "params": action.parameters,
+                        **({"source_format": "pptx"} if value.source_format == "pptx" else {}),
                     }
                 )
                 stored = latest.get(action.id)
@@ -284,21 +342,32 @@ class Analyses:
                 state = evidence.state if evidence else "candidate"
                 semantic_verified = bool(evidence and evidence.semantic_verified)
                 output.append(
-                    ActionResult(
+                    action_result_model(
                         action=instance,
                         state=state,
-                        usable=state == "validated" and semantic_verified,
-                        semantic_verified=semantic_verified,
+                        usable=state == "validated"
+                        and (value.source_format == "pptx" or semantic_verified),
+                        **(
+                            {"semantic_verified": semantic_verified}
+                            if value.source_format == "pdf"
+                            else {}
+                        ),
                         validation=evidence,
                     )
                 )
             results.append(
-                SlideResult(slide_id=slide.slide_id, summary=summary(slide), actions=tuple(output))
+                slide_result_model(
+                    slide_id=slide.slide_id, summary=summary(slide), actions=tuple(output)
+                )
             )
-        inputs = AnalysisInput.model_validate(
+        inputs = parse_analysis_input(
             {
                 **(value.provenance or {}),
-                "visual_qa_pending_instance_ids": visual_qa_pending,
+                **(
+                    {"visual_qa_pending_instance_ids": visual_qa_pending}
+                    if value.source_format == "pdf"
+                    else {}
+                ),
                 "presentation_summary": summary(value).model_dump(),
                 "slides": [
                     {
@@ -310,10 +379,23 @@ class Analyses:
                 ],
             }
         )
-        if digest(inputs) != value.content_sha256 or (
-            inputs.extraction_id != value.extraction_id or inputs.job_id != value.job_id
+        if (
+            inputs.source_format != value.source_format
+            or digest(inputs) != value.content_sha256
+            or (inputs.extraction_id != value.extraction_id or inputs.job_id != value.job_id)
         ):
             raise ValueError("Analysis digest/lineage mismatch.")
+        if isinstance(inputs, PowerPointAnalysisInput):
+            return PowerPointAnalysisResult(
+                id=value.id,
+                deck_id=value.deck_id,
+                version=value.version,
+                publication=publication(inputs.presentation_summary, tuple(results)),
+                action_limit_reached=sum(len(s.actions) for s in results) == 100,
+                analysis_sha256=value.content_sha256,
+                inputs=inputs,
+                slides=tuple(results),
+            )
         return AnalysisResult(
             id=value.id,
             deck_id=value.deck_id,
@@ -334,6 +416,8 @@ class Analyses:
         provenance = value.provenance or {}
         if (
             evidence.analysis_id != value.id
+            or evidence.source_format != value.source_format
+            or action.source_format != value.source_format
             or evidence.analysis_sha256 != value.content_sha256
             or evidence.instance_id != action.instance_id
             or evidence.action_sha256 != action.content_sha256
@@ -346,7 +430,9 @@ class Analyses:
                 "Validation does not match the analysis/action/profile revision."
             )
 
-    async def record_validation(self, *, owner_id: UUID, result: ValidationInput) -> AnalysisResult:
+    async def record_validation(
+        self, *, owner_id: UUID, result: ValidationInput
+    ) -> AnalysisResult | PowerPointAnalysisResult:
         """Trusted validator boundary only. There is intentionally no HTTP write endpoint."""
         result = ValidationInput.model_validate(result.model_dump(mode="json"))
         value = await self.session.scalar(
@@ -390,6 +476,7 @@ class Analyses:
         self.session.add(
             ActionValidation(
                 id=result.validation_id,
+                source_format=result.source_format,
                 owner_id=owner_id,
                 deck_id=value.deck_id,
                 analysis_id=value.id,

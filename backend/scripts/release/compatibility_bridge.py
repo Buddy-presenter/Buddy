@@ -14,6 +14,8 @@ FEATURE_HEAD = "0008_rollback_compatibility"
 WORKER_HEAD = "0009_pdf_workers"
 ANALYSIS_WORKER_HEAD = "0010_analysis_worker"
 VISUAL_QA_HEAD = "0011_visual_qa_pending"
+POWERPOINT_HEAD = "0012_powerpoint_analysis"
+POWERPOINT_TOOLS_HEAD = "0013_powerpoint_tools"
 
 
 async def check_ready(self):
@@ -31,6 +33,8 @@ async def check_ready(self):
                 {WORKER_HEAD},
                 {ANALYSIS_WORKER_HEAD},
                 {VISUAL_QA_HEAD},
+                {POWERPOINT_HEAD},
+                {POWERPOINT_TOOLS_HEAD},
             ):
                 raise PersistenceUnavailable("Database is outside the tested compatibility window.")
             for table in Base.metadata.sorted_tables:

@@ -63,8 +63,21 @@ class PowerPointAction:
     fill_transparency: float = 0.62
     text: str = ""
     pointer_tool: str | None = None
+    auto_place: bool = False
+    source_shape_id: int | None = None
+    target_text: str = ""
 
     def validate(self) -> None:
+        if self.source_shape_id is not None and (
+            type(self.source_shape_id) is not int or self.source_shape_id <= 0
+        ):
+            raise PowerPointError("The source shape identity is invalid.")
+        if (
+            not isinstance(self.target_text, str)
+            or len(self.target_text) > 300
+            or (self.target_text and self.source_shape_id is None)
+        ):
+            raise PowerPointError("The source text target is invalid.")
         allowed = {
             "next_slide",
             "previous_slide",
@@ -72,6 +85,11 @@ class PowerPointAction:
             "draw_line",
             "draw_arrow",
             "draw_rectangle",
+            "draw_rounded_rectangle",
+            "draw_diamond",
+            "draw_triangle",
+            "draw_hexagon",
+            "draw_star",
             "draw_oval",
             "draw_underline",
             "draw_freehand",
@@ -144,6 +162,11 @@ class PowerPointAction:
             raise PowerPointError("This action does not accept drawing points.")
 
         region_kinds = {
+            "draw_rounded_rectangle",
+            "draw_diamond",
+            "draw_triangle",
+            "draw_hexagon",
+            "draw_star",
             "draw_rectangle",
             "draw_oval",
             "draw_underline",
@@ -174,6 +197,10 @@ class PowerPointAction:
 
         if type(self.color) is not int or not 0 <= self.color <= 0xFFFFFF:
             raise PowerPointError("Choose a valid annotation color.")
+        if type(self.auto_place) is not bool or (
+            self.auto_place and self.kind not in {"callout", "text_box"}
+        ):
+            raise PowerPointError("Automatic placement is only available for text annotations.")
         if not self._number(self.fill_transparency) or not 0 <= self.fill_transparency <= 1:
             raise PowerPointError("Fill transparency must be between 0 and 1.")
         if self.kind in {"text_box", "callout"}:

@@ -20,12 +20,20 @@ from buddy_api.analysis.contracts import (
     ContentAction,
     EvidenceReference,
     Manifest,
+    PowerPointAnalysisInput,
+    PowerPointManifest,
     Region,
     RegionParameters,
     SlideOutput,
     Summary,
     ValidationInput,
     digest,
+)
+from buddy_api.analysis.powerpoint import (
+    PowerPointOutput,
+    PowerPointProvider,
+    analysis_document,
+    powerpoint_manifest,
 )
 from buddy_api.analysis.provider import (
     MAX_FILE_BYTES,
@@ -46,7 +54,13 @@ from buddy_api.persistence.models import (
 )
 from buddy_api.processing import store
 from buddy_api.processing.config import WorkerSettings
-from buddy_api.processing.contracts import Message, MetadataOutput, PDFSource
+from buddy_api.processing.contracts import (
+    Message,
+    MetadataOutput,
+    PDFSource,
+    PowerPointMetadataOutput,
+    PowerPointSource,
+)
 from buddy_api.processing.queue import Queue
 from buddy_api.processing.stage import (
     execute,
@@ -59,6 +73,7 @@ from buddy_api.uploads.service import UploadService, blocking
 from buddy_api.uploads.storage import SourceStorage
 from buddy_api.validation.config import ValidatorSettings
 from buddy_api.validation.contracts import ValidationRequest
+from buddy_api.validation.powerpoint import POWERPOINT_BUSY_REASON, powerpoint_validation_request
 from buddy_api.validation.service import ValidationService
 
 logger = logging.getLogger(__name__)
@@ -72,8 +87,9 @@ class Processor:
         settings: WorkerSettings,
         queue: Queue,
         *,
-        inspector: Callable[[PDFSource], MetadataOutput] | None = None,
+        inspector: Callable[[Any], MetadataOutput | PowerPointMetadataOutput] | None = None,
         provider: BedrockProvider | None = None,
+        powerpoint_provider: PowerPointProvider | None = None,
         validation: ValidationService | None = None,
         validator_settings: ValidatorSettings | None = None,
         uploads: UploadService | None = None,
@@ -85,6 +101,7 @@ class Processor:
             )
         )
         self.provider = provider or BedrockProvider(settings.region)
+        self.powerpoint_provider = powerpoint_provider or PowerPointProvider(settings.region)
         self.uploads = uploads or UploadService(
             database, storage.settings, storage, owner_job_quota=settings.owner_quota
         )
@@ -93,9 +110,17 @@ class Processor:
         )
 
     async def _generate_analysis(
-        self, content: bytes, extraction: Extraction, deck_id: str, manifest: Manifest
-    ) -> ModelOutput:
+        self,
+        content: bytes,
+        extraction: Extraction,
+        deck_id: str,
+        manifest: Manifest | PowerPointManifest,
+    ) -> ModelOutput | PowerPointOutput:
         """Keep the opt-in catalogue local to one fenced job, never shared provider state."""
+        if isinstance(manifest, PowerPointManifest):
+            return await self.powerpoint_provider.analyze_async(
+                content, extraction, deck_id, manifest
+            )
         if self.settings.text_targeting == "candidate_lines":
             catalog = await blocking(
                 partial(
@@ -117,7 +142,7 @@ class Processor:
     @staticmethod
     def _duplicate_candidate_ids(slides: Any) -> set[str]:
         """Keep duplicates visible, but never treat repeated same-region actions as usable."""
-        seen: set[tuple[str, str, float, float, float, float]] = set()
+        seen: set[tuple[str, str, float, float, float, float, str]] = set()
         duplicates: set[str] = set()
         for slide in slides:
             for result in slide.actions:
@@ -130,6 +155,7 @@ class Processor:
                     region.y,
                     region.width,
                     region.height,
+                    getattr(action.params, "target_text", ""),
                 )
                 if key in seen:
                     duplicates.add(action.instance_id)
@@ -140,6 +166,7 @@ class Processor:
     async def maintain(self, *, publish: bool = True) -> None:
         async with self.database.sessions() as session, session.begin():
             await store.reconcile(session, self.settings)
+            await store.recover_powerpoint_waits(session, self.settings)
         if self.validation is not None:
             await self.validation.reconcile()
         # Recover accepted pre-upgrade PDFs and any missing scheduler transaction.
@@ -148,7 +175,7 @@ class Processor:
                 await session.scalars(
                     select(Deck)
                     .where(
-                        Deck.source_format == "pdf",
+                        Deck.source_format.in_(("pdf", "pptx")),
                         Deck.source_version_id.is_not(None),
                         ~exists(
                             select(ProcessingJob.id).where(
@@ -243,6 +270,9 @@ class Processor:
         assert job.lease_id is not None
         token = job.lease_id
         stage, saved_extraction_id = job.stage, job.extraction_id
+        metadata_stage = "pptx_metadata.v1" if source[5] == "pptx" else "pdf_metadata.v1"
+        analysis_stage = "pptx_analysis.v1" if source[5] == "pptx" else "pdf_analysis.v1"
+        render_stage = "pptx_inspection" if source[5] == "pptx" else "pdf_render"
         job_started_at = time.perf_counter()
         active_stage = stage
         active_stage_started_at = job_started_at
@@ -292,7 +322,7 @@ class Processor:
             analysis_version=analysis_version,
         )
 
-        def inspect() -> MetadataOutput:
+        def inspect() -> MetadataOutput | PowerPointMetadataOutput:
             key, version, size, source_digest, revision, source_format, deck_id, _owner_id = source
             if (
                 not key
@@ -300,13 +330,13 @@ class Processor:
                 or not size
                 or not source_digest
                 or not revision
-                or source_format != "pdf"
+                or source_format not in {"pdf", "pptx"}
             ):
                 raise ExtractionError("invalid_pdf_source")
-            if size > MAX_FILE_BYTES:
+            if source_format == "pdf" and size > MAX_FILE_BYTES:
                 raise ProviderFailure("provider_file_limit", permanent=True)
             return self.inspector(
-                PDFSource(
+                (PowerPointSource if source_format == "pptx" else PDFSource)(
                     key=key,
                     version=version,
                     size=size,
@@ -350,10 +380,11 @@ class Processor:
 
         try:
             key, version, size, source_digest, revision, _format, deck_id, owner_id = source
+            manifest: Any
             if not key or not version or not size or not source_digest:
                 raise ExtractionError("invalid_pdf_source")
             extraction_id: UUID | None = None
-            logger.info("Worker reading pinned PDF source for job %s", job.id)
+            logger.info("Worker reading pinned presentation source for job %s", job.id)
             alive, content = await fenced(
                 blocking(
                     lambda: self.storage.read(
@@ -361,15 +392,15 @@ class Processor:
                         version=version,
                         size=size,
                         sha256=source_digest,
-                        source_format="pdf",
+                        source_format=_format,
                     )
                 )
             )
             if not alive:
                 return
-            logger.info("Worker read pinned PDF source for job %s", job.id)
+            logger.info("Worker read pinned presentation source for job %s", job.id)
             if saved_extraction_id is not None:
-                active_stage = "pdf_render"
+                active_stage = render_stage
                 active_stage_started_at = time.perf_counter()
                 async with self.database.sessions() as session:
                     saved = await session.get(DeckExtraction, saved_extraction_id)
@@ -388,33 +419,36 @@ class Processor:
                 except ValueError:
                     raise ExtractionError("saved_extraction_invalid") from None
                 render_started_at = time.perf_counter()
-                alive, manifest = await fenced(
-                    blocking(
-                        partial(
-                            execute_manifest,
-                            content,
-                            extraction,
-                            str(deck_id),
-                            min(120, self.settings.runtime_seconds - 15),
+                if _format == "pptx":
+                    alive, manifest = True, powerpoint_manifest(extraction, str(deck_id))
+                else:
+                    alive, manifest = await fenced(
+                        blocking(
+                            partial(
+                                execute_manifest,
+                                content,
+                                extraction,
+                                str(deck_id),
+                                min(120, self.settings.runtime_seconds - 15),
+                            )
                         )
                     )
-                )
                 if not alive:
                     return
-                stage_metric("pdf_render", "success", render_started_at)
+                stage_metric(render_stage, "success", render_started_at)
                 if not await persist_stage("provider", 60):
                     return
-                active_stage = "pdf_analysis.v1"
+                active_stage = analysis_stage
                 active_stage_started_at = time.perf_counter()
                 extraction_id = saved_extraction_id
             else:
-                active_stage = "pdf_metadata.v1"
+                active_stage = metadata_stage
                 active_stage_started_at = time.perf_counter()
                 inspect_started_at = time.perf_counter()
                 alive, output = await fenced(blocking(inspect))
                 if not alive:
                     return
-                stage_metric("pdf_metadata.v1", "success", inspect_started_at)
+                stage_metric(metadata_stage, "success", inspect_started_at)
                 async with self.database.sessions() as session, session.begin():
                     extraction_id = await store.save_metadata(session, job.id, token, output)
                 if extraction_id is None:
@@ -443,25 +477,32 @@ class Processor:
                 )
                 if not alive:
                     return
-                alive, generated = await fenced(
-                    blocking(
-                        partial(
-                            execute_grounding,
-                            content,
-                            extraction,
-                            manifest,
-                            generated,
-                            min(120, self.settings.runtime_seconds - 15),
+                if _format == "pdf":
+                    alive, generated = await fenced(
+                        blocking(
+                            partial(
+                                execute_grounding,
+                                content,
+                                extraction,
+                                manifest,
+                                generated,
+                                min(120, self.settings.runtime_seconds - 15),
+                            )
                         )
                     )
-                )
                 if not alive:
                     return
-                active_stage = "pdf_analysis.v1"
+                active_stage = analysis_stage
                 active_stage_started_at = time.perf_counter()
-                document = self._analysis_document(
-                    generated, extraction, manifest, deck_id, job.id, extraction_id
-                )
+                document: AnalysisInput | PowerPointAnalysisInput
+                if _format == "pptx":
+                    document = analysis_document(
+                        generated, extraction, manifest, deck_id, job.id, extraction_id
+                    )
+                else:
+                    document = self._analysis_document(
+                        generated, extraction, manifest, deck_id, job.id, extraction_id
+                    )
                 async with self.database.sessions() as session, session.begin():
                     current = await session.scalar(
                         select(ProcessingJob).where(ProcessingJob.id == job.id).with_for_update()
@@ -503,8 +544,16 @@ class Processor:
             if analysis_hash is None:
                 raise ProviderFailure("stored_analysis_unavailable")
             visual_qa_pending = set(analysis_result.visual_qa_pending_instance_ids)
+
+            def needs_validation(result: Any) -> bool:
+                return result.state == "candidate" or (
+                    _format == "pptx"
+                    and result.validation is not None
+                    and POWERPOINT_BUSY_REASON in result.validation.reasons
+                )
+
             has_candidates = any(
-                action.state == "candidate" and action.action.instance_id not in visual_qa_pending
+                needs_validation(action) and action.action.instance_id not in visual_qa_pending
                 for slide in analysis_result.slides
                 for action in slide.actions
             )
@@ -515,12 +564,23 @@ class Processor:
             duplicate_candidate_ids = self._duplicate_candidate_ids(analysis_result.slides)
             for slide in analysis_result.slides:
                 for action_result in slide.actions:
-                    if action_result.state != "candidate":
+                    if not needs_validation(action_result):
                         continue
                     if action_result.action.instance_id in visual_qa_pending:
                         # Geometry inside a flattened image is deliberately kept as a
                         # candidate for #50/#51. Executor success cannot promote it.
                         continue
+                    if (
+                        _format == "pptx"
+                        and time.perf_counter() - job_started_at
+                        >= self.settings.runtime_seconds - 105
+                    ):
+                        # Preserve completed Office checks and resume the remaining
+                        # candidates before this delivery's deadline can interrupt one.
+                        async with self.database.sessions() as session, session.begin():
+                            await store.defer(session, job.id, token, 1)
+                        await blocking(lambda: self.queue.acknowledge(raw["ReceiptHandle"]))
+                        return
                     assert self.validation is not None
                     action = action_result.action
                     retry_key = uuid5(analysis_id, "validation:" + action.instance_id)
@@ -532,8 +592,12 @@ class Processor:
                             owner_id,
                             deck_id,
                             retry_key,
-                            ValidationRequest(
-                                action=action.model_dump(mode="json"), profile="wide-1x"
+                            (
+                                powerpoint_validation_request(action, analysis_result.inputs)
+                                if _format == "pptx"
+                                else ValidationRequest(
+                                    action=action.model_dump(mode="json"), profile="wide-1x"
+                                )
                             ),
                             source_content=content,
                             precision=("line" if action.type == "highlight_region" else "standard"),
@@ -543,11 +607,15 @@ class Processor:
                     if not alive:
                         return
                     stage_metric("validation", "success", validation_started_at)
-                    active_stage = "pdf_analysis.v1"
+                    active_stage = analysis_stage
                     active_stage_started_at = time.perf_counter()
                     result = stored.result
+                    if _format == "pptx" and POWERPOINT_BUSY_REASON in result.reasons:
+                        raise UploadError(409, "powerpoint_busy", "Waiting for PowerPoint.", 30)
                     validation_input = ValidationInput(
-                        validation_id=uuid5(analysis_id, "result:" + action.instance_id),
+                        source_format="pptx" if _format == "pptx" else "pdf",
+                        runtime_version=getattr(result, "office_version", None),
+                        validation_id=stored.id,
                         analysis_id=analysis_id,
                         analysis_sha256=analysis_hash,
                         instance_id=action.instance_id,
@@ -628,9 +696,16 @@ class Processor:
             if isinstance(exc, UploadError) and exc.code in {
                 "validation_pending",
                 "cleanup_pending",
+                "powerpoint_busy",
             }:
                 async with self.database.sessions() as session, session.begin():
-                    await store.defer(session, job.id, token, exc.retry_after or 30)
+                    await store.defer(
+                        session,
+                        job.id,
+                        token,
+                        exc.retry_after or 30,
+                        reason="powerpoint_busy" if exc.code == "powerpoint_busy" else None,
+                    )
                 await blocking(lambda: self.queue.acknowledge(raw["ReceiptHandle"]))
                 return
             # Never persist parser/provider exception text or arbitrary codes.
@@ -721,6 +796,8 @@ class Processor:
     ) -> AnalysisInput:
         from uuid import NAMESPACE_URL
 
+        if extraction.source_format != "pdf":
+            raise ProviderFailure("pdf_source_mismatch", permanent=True)
         if len(generated.slides) != len(extraction.slides) or len(manifest.slides) != len(
             extraction.slides
         ):

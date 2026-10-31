@@ -139,6 +139,8 @@ def run_application(
         window.runner.wait_for_shutdown()
         window.account.runner.wait_for_shutdown()
         window.library.runner.wait_for_shutdown()
+        window.review.runner.wait_for_shutdown()
+        window.review.cleanup_runner.wait_for_shutdown()
         window.present.executor.wait_for_shutdown()
         window.present.powerpoint_runner.wait_for_shutdown()
         activation.close()

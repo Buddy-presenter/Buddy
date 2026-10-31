@@ -293,6 +293,8 @@ class BedrockProvider:
         *,
         text_candidates: TextCandidates | None = None,
     ) -> tuple[str, bytes, list[tuple[int, int]], dict[str, str]]:
+        if extraction.source_format != "pdf":
+            raise ProviderFailure("pdf_source_mismatch", permanent=True)
         if not content.startswith(b"%PDF-") or len(content) > MAX_FILE_BYTES:
             raise ProviderFailure("provider_file_limit", permanent=True)
         if not 1 <= len(extraction.slides) <= MAX_PAGES:

@@ -239,7 +239,7 @@ def validate(folder: Path) -> dict[str, Any]:
         )
         reference = QImage(width * dpr, height * dpr, QImage.Format.Format_ARGB32)
         reference.setDevicePixelRatio(dpr)
-        reference.fill(QColor("#06090D"))
+        reference.fill(QColor("#000000"))
         painter = QPainter(reference)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         painter.translate(ox, oy)

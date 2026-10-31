@@ -5,6 +5,13 @@ separates them from future policy, residency, and retention work. Issue #36 is c
 privacy settings, policy acknowledgements, and a provider-retention approval workflow are
 not prerequisites or release blockers for Sprint 2.
 
+Issue #128 adds the separate [PowerPoint analysis boundary](powerpoint-analysis.md):
+bounded OOXML model input, an independent action catalog, database-enforced format
+isolation, and version-bound real Office execution reports. Linked/active material is
+never opened by its Office validator. A Linux worker cannot validate PowerPoint actions;
+it keeps them unavailable with an explicit reason. Deployment of a reviewed dedicated
+Windows/Office runtime remains a live-acceptance prerequisite.
+
 ## Source and ownership
 
 - Uploaded PDFs are stored as private, versioned S3 objects with server-side KMS

@@ -7,6 +7,10 @@ in its PDF surface. The connection from #108 and controls from #116 identify the
 deck/slide, navigate, and add or remove Buddy annotations. Region zoom remains an
 investigation in #111.
 
+Saved PPTX analysis, review and explicit execution of validated suggestions are described
+in [PowerPoint analysis](powerpoint-analysis.md). Those suggestions use a separate
+PowerPoint-only catalog and never enter the PDF executor.
+
 ## User flow and lifecycle
 
 - **Open PowerPoint…** asks for an existing `.pptx`, opens it read-only in a new desktop

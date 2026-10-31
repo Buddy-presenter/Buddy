@@ -1,0 +1,155 @@
+{
+  "$defs": {
+    "Identifier": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "\\S",
+      "type": "string"
+    },
+    "PowerPointParameters": {
+      "additionalProperties": false,
+      "properties": {
+        "region": {
+          "$ref": "#/$defs/Region"
+        },
+        "text": {
+          "default": "",
+          "maxLength": 300,
+          "title": "Text",
+          "type": "string"
+        },
+        "source_shape_id": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Shape Id"
+        },
+        "target_text": {
+          "default": "",
+          "maxLength": 300,
+          "title": "Target Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "region"
+      ],
+      "title": "PowerPointParameters",
+      "type": "object"
+    },
+    "Region": {
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "minimum": 0,
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "minimum": 0,
+          "title": "Y",
+          "type": "number"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "number"
+        },
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "title": "Region",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "source_format": {
+      "const": "pptx",
+      "default": "pptx",
+      "title": "Source Format",
+      "type": "string"
+    },
+    "version": {
+      "const": "powerpoint-2",
+      "default": "powerpoint-2",
+      "title": "Version",
+      "type": "string"
+    },
+    "instance_id": {
+      "$ref": "#/$defs/Identifier"
+    },
+    "purpose": {
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "\\S",
+      "title": "Purpose",
+      "type": "string"
+    },
+    "deck_id": {
+      "$ref": "#/$defs/Identifier"
+    },
+    "render_id": {
+      "$ref": "#/$defs/Identifier"
+    },
+    "slide_id": {
+      "$ref": "#/$defs/Identifier"
+    },
+    "type": {
+      "enum": [
+        "highlight_region",
+        "draw_rectangle",
+        "draw_oval",
+        "draw_underline",
+        "draw_arrow",
+        "callout",
+        "draw_line",
+        "filled_rectangle",
+        "filled_oval",
+        "text_box",
+        "draw_rounded_rectangle",
+        "draw_diamond",
+        "draw_triangle",
+        "draw_hexagon",
+        "draw_star"
+      ],
+      "title": "Type",
+      "type": "string"
+    },
+    "params": {
+      "$ref": "#/$defs/PowerPointParameters"
+    }
+  },
+  "required": [
+    "deck_id",
+    "instance_id",
+    "params",
+    "purpose",
+    "render_id",
+    "slide_id",
+    "source_format",
+    "type",
+    "version"
+  ],
+  "title": "PowerPointContentAction",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:buddy:powerpoint:action:2",
+  "x-source-format": "pptx"
+}

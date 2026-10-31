@@ -22,6 +22,16 @@ SESSION = UUID("40000000-0000-0000-0000-000000000001")
 GRAPH = {"nodes": [{"id": "synthetic-slide"}], "edges": [], "marker": "rollback"}
 
 
+async def typed_probe(repos):
+    fixture = runpy.run_path("/test-support/backend/tests/support/analysis.py")
+    # The legacy source is PPTX. Never relabel it as PDF: the expanded schema
+    # deliberately binds immutable analyses to their original deck's format.
+    deck = await repos.decks.create(
+        owner_id=OWNER, title="Synthetic PDF compatibility source", source_format="pdf"
+    )
+    return await fixture["create"](repos, owner_id=OWNER, deck_id=deck.id, version=4)
+
+
 async def run() -> None:
     bridge = Path("/opt/buddy/compatibility_bridge.py")
     if bridge.is_file():
@@ -69,9 +79,8 @@ async def run() -> None:
         if mode == "typed":
             # Only synthetic fixture data is loaded; create/read still execute
             # the packaged image's real extraction and analysis repositories.
-            fixture = runpy.run_path("/test-support/backend/tests/support/analysis.py")
             async with db.transaction() as repos:
-                created = await fixture["create"](repos, owner_id=OWNER, deck_id=DECK, version=4)
+                created = await typed_probe(repos)
                 assert created.graph == {}
                 result = await repos.analyses.read(created.id, owner_id=OWNER)
                 assert result.inputs is not None and result.publication != "legacy"
@@ -80,7 +89,12 @@ async def run() -> None:
 
             fixture = runpy.run_path("/test-support/backend/tests/support/analysis.py")
             async with db.transaction() as repos:
-                document = await fixture["prepare"](repos, owner_id=OWNER, deck_id=DECK)
+                # The historical fixture deck is PPTX. Grounded PDF records must
+                # use the separate PDF deck created by the typed probe.
+                typed = next(
+                    row for row in await repos.analyses.list(owner_id=OWNER) if row.version == 4
+                )
+                document = await fixture["prepare"](repos, owner_id=OWNER, deck_id=typed.deck_id)
                 action = document.slides[1].actions[0]
                 values = document.model_dump(mode="json")
                 values["grounding"] = [
@@ -98,7 +112,7 @@ async def run() -> None:
                 ]
                 document = AnalysisInput.model_validate(values)
                 created = await repos.analyses.create(
-                    owner_id=OWNER, deck_id=DECK, version=5, document=document
+                    owner_id=OWNER, deck_id=typed.deck_id, version=5, document=document
                 )
                 # A stable lookup lets each actual reader find the same immutable row.
                 assert created.version == 5
@@ -107,7 +121,7 @@ async def run() -> None:
 
             async with db.transaction() as repos:
                 rows = await repos.analyses.list(owner_id=OWNER)
-                record = next(row for row in rows if row.deck_id == DECK and row.version == 5)
+                record = next(row for row in rows if row.version == 5)
                 result = await repos.analyses.read(record.id, owner_id=OWNER)
                 assert result.inputs is not None and len(result.inputs.grounding) == 1
                 assert result.analysis_sha256 == record.content_sha256 == digest(result.inputs)
