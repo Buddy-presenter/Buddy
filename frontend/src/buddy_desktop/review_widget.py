@@ -169,6 +169,20 @@ class PagePreview(QWidget):
             painter.drawRect(QRectF(left + x * scale, top + y * scale, rw * scale, rh * scale))
 
 
+def _action_status(action: ReviewAction, source_format: str) -> str:
+    if source_format == "pptx":
+        if action.usable:
+            return "Ready"
+        if "powerpoint_worker_busy_use_dedicated_session" in action.reasons:
+            return "Waiting for PowerPoint"
+        return "Pending checks" if action.state == "candidate" else "Unavailable"
+    if action.semantic_verified:
+        return "visually verified"
+    if action.state == "validated":
+        return "execution validated; visual verification pending"
+    return action.state.replace("-", " ")
+
+
 class ReviewWidget(Page):
     """Saved review; PowerPoint actions run only after an explicit presenter command."""
 
@@ -858,13 +872,7 @@ class ReviewWidget(Page):
                 (
                     action.purpose,
                     action.action_type.replace("draw_", "").replace("_", " ").title(),
-                    "Ready"
-                    if action.usable
-                    else "Waiting for PowerPoint"
-                    if "powerpoint_worker_busy_use_dedicated_session" in action.reasons
-                    else "Pending checks"
-                    if action.state == "candidate"
-                    else "Unavailable",
+                    _action_status(action, self.source_format),
                 )
             ):
                 item = QTableWidgetItem(text)
@@ -946,14 +954,15 @@ class ReviewWidget(Page):
         )
         slide_id = self.analysis.slides[self.page_index].slide_id if self.analysis else "unknown"
         units = "PowerPoint slide points" if self.source_format == "pptx" else "PDF source pixels"
+        status = _action_status(action, self.source_format)
         lines = [
             f"Purpose: {action.purpose}",
             f"Type: {action.action_type}",
             f"Version: {action.version}",
             f"Target: slide {self.page_index + 1} ({slide_id})",
             f"Region ({units}): x={x:g}, y={y:g}, width={width:g}, height={height:g}",
-            f"Status: {action.state.replace('-', ' ')} · "
-            f"{'usable' if action.usable else 'not usable'}",
+            f"Status: {status} · {'usable' if action.usable else 'not usable'}",
+            f"Validation kind: {action.validation_kind}",
         ]
         if action.reasons:
             lines.append("Validation notes: " + "; ".join(action.reasons))

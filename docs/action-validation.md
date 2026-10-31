@@ -23,8 +23,11 @@ commands to the same callable/API.
   It derives source revision/hash from the owned record. The backend API and PDF analysis
   worker use this same isolated validator.
 
-`validated` means the action executed with the expected deterministic state and pixels
-in the reported runtime/profile. `rejected` covers bad catalog parameters, stale IDs,
+`validation_kind=execution` with `validated` means the action executed with the expected
+deterministic state and pixels in the reported runtime/profile. It is not semantic approval
+and is not runtime-usable by itself. An independent visual-QA result may use
+`validation_kind=visual` and `semantic_verified=true` only after inspecting the real audience
+viewport; only that validated combination is usable. `rejected` covers bad catalog parameters, stale IDs,
 unknown slides, unsupported actions or an unexpected execution/image result.
 `needs-review` covers crashes, resource limits, cancellation or an unsupported runtime.
 Every non-passing result has machine-readable reasons. `semantic_verified` is always

@@ -30,6 +30,73 @@ def sample():
     return json.loads(FIXTURE.read_text())
 
 
+@pytest.mark.postgres
+def test_pdf_and_powerpoint_reads_preserve_their_distinct_validation_gates(migrated_database):
+    from backend.tests.support.powerpoint import manifest, output, source
+
+    from buddy_api.analysis.powerpoint import analysis_document
+
+    async def scenario():
+        db = Database(migrated_database)
+        try:
+            async with db.transaction() as repos:
+                owner = await repos.users.create("cross-format-reader")
+                for source_format in ("pdf", "pptx"):
+                    deck = await repos.decks.create(
+                        owner_id=owner.id, title=source_format, source_format=source_format
+                    )
+                    if source_format == "pdf":
+                        document = await prepare(repos, owner_id=owner.id, deck_id=deck.id)
+                    else:
+                        _, extracted = source()
+                        job = await repos.jobs.create(owner_id=owner.id, deck_id=deck.id)
+                        saved_extraction = await repos.extractions.save(
+                            owner_id=owner.id, deck_id=deck.id, extraction=extracted
+                        )
+                        document = analysis_document(
+                            output(extracted),
+                            extracted,
+                            manifest(extracted, str(deck.id)),
+                            deck.id,
+                            saved_extraction.id,
+                            job.id,
+                        )
+                    saved = await repos.analyses.create(
+                        owner_id=owner.id, deck_id=deck.id, version=1, document=document
+                    )
+                    candidate = await repos.analyses.read(saved.id, owner_id=owner.id)
+                    assert not candidate.slides[0].actions[0].usable
+                    action = document.slides[0].actions[0]
+                    checked = await repos.analyses.record_validation(
+                        owner_id=owner.id,
+                        result=ValidationInput(
+                            source_format=source_format,
+                            runtime_version="Office-16-test" if source_format == "pptx" else None,
+                            validation_id=uuid4(),
+                            analysis_id=saved.id,
+                            analysis_sha256=candidate.analysis_sha256,
+                            instance_id=action.instance_id,
+                            action_sha256=digest(action),
+                            validator_version=document.validator_version,
+                            renderer_version=document.renderer_version,
+                            display_profile=document.display_profile,
+                            state="validated",
+                            evidence=({"id": uuid4(), "kind": "report", "sha256": "b" * 64},),
+                        ),
+                    )
+                    result = checked.slides[0].actions[0]
+                    assert result.usable == (source_format == "pptx")
+                    if source_format == "pdf":
+                        assert not result.semantic_verified
+                    else:
+                        assert "semantic_verified" not in result.model_dump()
+                        assert "visual_qa_pending_instance_ids" not in checked.inputs.model_dump()
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     "kind", ["next_slide", "previous_slide", "go_to_slide", "reset_view", "shell"]
 )
@@ -220,12 +287,54 @@ def validation(result, action, *, state="validated", **changes):
         "validator_version": result.inputs.validator_version,
         "renderer_version": result.inputs.renderer_version,
         "display_profile": result.inputs.display_profile,
+        "validation_kind": "visual" if state == "validated" else "execution",
+        "semantic_verified": state == "validated",
         "state": state,
         "evidence": [{"id": uuid4(), "kind": "executor_result", "sha256": "d" * 64}],
         "reasons": () if state == "validated" else ("Synthetic rejected fixture",),
     }
     values.update(changes)
     return ValidationInput.model_validate(values)
+
+
+@pytest.mark.postgres
+def test_grounding_provenance_round_trip_survives_database_restart(migrated_database):
+    async def scenario():
+        db = Database(migrated_database)
+        try:
+            async with db.transaction() as repos:
+                owner = await repos.users.create("grounding-provenance-owner")
+                deck = await repos.decks.create(owner_id=owner.id, title="Synthetic grounding")
+                document = await prepare(repos, owner_id=owner.id, deck_id=deck.id)
+                action = document.slides[0].actions[0]
+                payload = document.model_dump(mode="json")
+                payload["grounding"] = [
+                    {
+                        "instance_id": action.instance_id,
+                        "action_sha256": digest(action),
+                        "trace": {
+                            "method": "pdf_glyphs",
+                            "target_text": "Synthetic target",
+                            "model_region": {"x": 0, "y": 0, "width": 100, "height": 30},
+                            "resolved_region": action.params.region.model_dump(mode="json"),
+                        },
+                    }
+                ]
+                document = AnalysisInput.model_validate(payload)
+                saved = await repos.analyses.create(
+                    owner_id=owner.id, deck_id=deck.id, version=1, document=document
+                )
+            await db.close()
+            db = Database(migrated_database)
+            async with db.transaction() as repos:
+                result = await repos.analyses.read(saved.id, owner_id=owner.id)
+                assert result.inputs is not None
+                assert result.inputs.grounding == document.grounding
+                assert result.analysis_sha256 == digest(document)
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.postgres

@@ -13,20 +13,14 @@
     "PowerPointContentAction": {
       "additionalProperties": false,
       "properties": {
-        "source_format": {
-          "const": "pptx",
-          "default": "pptx",
-          "title": "Source Format",
-          "type": "string"
-        },
-        "version": {
-          "const": "powerpoint-2",
-          "default": "powerpoint-2",
-          "title": "Version",
-          "type": "string"
+        "deck_id": {
+          "$ref": "#/$defs/Identifier"
         },
         "instance_id": {
           "$ref": "#/$defs/Identifier"
+        },
+        "params": {
+          "$ref": "#/$defs/PowerPointParameters"
         },
         "purpose": {
           "maxLength": 512,
@@ -35,14 +29,17 @@
           "title": "Purpose",
           "type": "string"
         },
-        "deck_id": {
-          "$ref": "#/$defs/Identifier"
-        },
         "render_id": {
           "$ref": "#/$defs/Identifier"
         },
         "slide_id": {
           "$ref": "#/$defs/Identifier"
+        },
+        "source_format": {
+          "const": "pptx",
+          "default": "pptx",
+          "title": "Source Format",
+          "type": "string"
         },
         "type": {
           "enum": [
@@ -65,8 +62,11 @@
           "title": "Type",
           "type": "string"
         },
-        "params": {
-          "$ref": "#/$defs/PowerPointParameters"
+        "version": {
+          "const": "powerpoint-2",
+          "default": "powerpoint-2",
+          "title": "Version",
+          "type": "string"
         }
       },
       "required": [
@@ -84,18 +84,6 @@
     "PowerPointManifest": {
       "additionalProperties": false,
       "properties": {
-        "source_format": {
-          "const": "pptx",
-          "default": "pptx",
-          "title": "Source Format",
-          "type": "string"
-        },
-        "version": {
-          "const": "powerpoint-2",
-          "default": "powerpoint-2",
-          "title": "Version",
-          "type": "string"
-        },
         "deck_id": {
           "$ref": "#/$defs/Identifier"
         },
@@ -110,6 +98,18 @@
           "minItems": 1,
           "title": "Slides",
           "type": "array"
+        },
+        "source_format": {
+          "const": "pptx",
+          "default": "pptx",
+          "title": "Source Format",
+          "type": "string"
+        },
+        "version": {
+          "const": "powerpoint-2",
+          "default": "powerpoint-2",
+          "title": "Version",
+          "type": "string"
         }
       },
       "required": [
@@ -123,13 +123,13 @@
     "PowerPointManifestSlide": {
       "additionalProperties": false,
       "properties": {
-        "slide_id": {
-          "$ref": "#/$defs/Identifier"
-        },
         "native_slide_id": {
           "exclusiveMinimum": 0,
           "title": "Native Slide Id",
           "type": "integer"
+        },
+        "slide_id": {
+          "$ref": "#/$defs/Identifier"
         },
         "source": {
           "$ref": "#/$defs/PowerPointPlane"
@@ -149,12 +149,6 @@
         "region": {
           "$ref": "#/$defs/Region"
         },
-        "text": {
-          "default": "",
-          "maxLength": 300,
-          "title": "Text",
-          "type": "string"
-        },
         "source_shape_id": {
           "anyOf": [
             {
@@ -173,6 +167,12 @@
           "maxLength": 300,
           "title": "Target Text",
           "type": "string"
+        },
+        "text": {
+          "default": "",
+          "maxLength": 300,
+          "title": "Text",
+          "type": "string"
         }
       },
       "required": [
@@ -184,17 +184,17 @@
     "PowerPointPlane": {
       "additionalProperties": false,
       "properties": {
-        "width": {
-          "exclusiveMinimum": 0,
-          "maximum": 100000,
-          "title": "Width",
-          "type": "number"
-        },
         "height": {
           "exclusiveMinimum": 0,
           "maximum": 100000,
           "title": "Height",
           "type": "number"
+        },
+        "origin": {
+          "const": "top_left",
+          "default": "top_left",
+          "title": "Origin",
+          "type": "string"
         },
         "units": {
           "const": "slide_points",
@@ -202,11 +202,11 @@
           "title": "Units",
           "type": "string"
         },
-        "origin": {
-          "const": "top_left",
-          "default": "top_left",
-          "title": "Origin",
-          "type": "string"
+        "width": {
+          "exclusiveMinimum": 0,
+          "maximum": 100000,
+          "title": "Width",
+          "type": "number"
         }
       },
       "required": [
@@ -219,12 +219,6 @@
     "PowerPointSlideOutput": {
       "additionalProperties": false,
       "properties": {
-        "slide_id": {
-          "$ref": "#/$defs/Identifier"
-        },
-        "summary": {
-          "$ref": "#/$defs/Summary"
-        },
         "actions": {
           "default": [],
           "items": {
@@ -233,6 +227,12 @@
           "maxItems": 40,
           "title": "Actions",
           "type": "array"
+        },
+        "slide_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "summary": {
+          "$ref": "#/$defs/Summary"
         }
       },
       "required": [
@@ -245,6 +245,16 @@
     "Region": {
       "additionalProperties": false,
       "properties": {
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "number"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "number"
+        },
         "x": {
           "minimum": 0,
           "title": "X",
@@ -253,16 +263,6 @@
         "y": {
           "minimum": 0,
           "title": "Y",
-          "type": "number"
-        },
-        "width": {
-          "exclusiveMinimum": 0,
-          "title": "Width",
-          "type": "number"
-        },
-        "height": {
-          "exclusiveMinimum": 0,
-          "title": "Height",
           "type": "number"
         }
       },
@@ -278,6 +278,21 @@
     "Summary": {
       "additionalProperties": false,
       "properties": {
+        "reason": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
         "status": {
           "enum": [
             "pending",
@@ -297,21 +312,6 @@
             }
           ],
           "default": null
-        },
-        "reason": {
-          "anyOf": [
-            {
-              "maxLength": 512,
-              "minLength": 1,
-              "pattern": "\\S",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Reason"
         }
       },
       "required": [
@@ -329,16 +329,16 @@
   },
   "additionalProperties": false,
   "properties": {
-    "schema_version": {
-      "const": "buddy.powerpoint.analysis.v2",
-      "default": "buddy.powerpoint.analysis.v2",
-      "title": "Schema Version",
+    "catalog_version": {
+      "const": "powerpoint-2",
+      "default": "powerpoint-2",
+      "title": "Catalog Version",
       "type": "string"
     },
-    "source_format": {
-      "const": "pptx",
-      "default": "pptx",
-      "title": "Source Format",
+    "display_profile": {
+      "const": "windows-powerpoint-2",
+      "default": "windows-powerpoint-2",
+      "title": "Display Profile",
       "type": "string"
     },
     "extraction_id": {
@@ -358,6 +358,55 @@
       "title": "Extractor Version",
       "type": "string"
     },
+    "job_id": {
+      "format": "uuid",
+      "title": "Job Id",
+      "type": "string"
+    },
+    "manifest": {
+      "$ref": "#/$defs/PowerPointManifest"
+    },
+    "office_safe": {
+      "default": false,
+      "title": "Office Safe",
+      "type": "boolean"
+    },
+    "presentation_summary": {
+      "$ref": "#/$defs/Summary"
+    },
+    "renderer_version": {
+      "const": "desktop-powerpoint-2",
+      "default": "desktop-powerpoint-2",
+      "title": "Renderer Version",
+      "type": "string"
+    },
+    "representation": {
+      "const": "bounded_ooxml_extraction",
+      "default": "bounded_ooxml_extraction",
+      "title": "Representation",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "buddy.powerpoint.analysis.v2",
+      "default": "buddy.powerpoint.analysis.v2",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "slides": {
+      "items": {
+        "$ref": "#/$defs/PowerPointSlideOutput"
+      },
+      "maxItems": 100,
+      "minItems": 1,
+      "title": "Slides",
+      "type": "array"
+    },
+    "source_format": {
+      "const": "pptx",
+      "default": "pptx",
+      "title": "Source Format",
+      "type": "string"
+    },
     "source_revision": {
       "maxLength": 128,
       "minLength": 1,
@@ -368,60 +417,11 @@
     "source_sha256": {
       "$ref": "#/$defs/Digest"
     },
-    "office_safe": {
-      "default": false,
-      "title": "Office Safe",
-      "type": "boolean"
-    },
-    "representation": {
-      "const": "bounded_ooxml_extraction",
-      "default": "bounded_ooxml_extraction",
-      "title": "Representation",
-      "type": "string"
-    },
-    "job_id": {
-      "format": "uuid",
-      "title": "Job Id",
-      "type": "string"
-    },
-    "catalog_version": {
-      "const": "powerpoint-2",
-      "default": "powerpoint-2",
-      "title": "Catalog Version",
-      "type": "string"
-    },
-    "renderer_version": {
-      "const": "desktop-powerpoint-2",
-      "default": "desktop-powerpoint-2",
-      "title": "Renderer Version",
-      "type": "string"
-    },
-    "display_profile": {
-      "const": "windows-powerpoint-2",
-      "default": "windows-powerpoint-2",
-      "title": "Display Profile",
-      "type": "string"
-    },
     "validator_version": {
       "const": "powerpoint-executor-2",
       "default": "powerpoint-executor-2",
       "title": "Validator Version",
       "type": "string"
-    },
-    "manifest": {
-      "$ref": "#/$defs/PowerPointManifest"
-    },
-    "presentation_summary": {
-      "$ref": "#/$defs/Summary"
-    },
-    "slides": {
-      "items": {
-        "$ref": "#/$defs/PowerPointSlideOutput"
-      },
-      "maxItems": 100,
-      "minItems": 1,
-      "title": "Slides",
-      "type": "array"
     }
   },
   "required": [

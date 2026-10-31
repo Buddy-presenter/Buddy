@@ -340,11 +340,18 @@ class Analyses:
                     if stored is None or stored.state != evidence.state:
                         raise ValueError("Validation state mismatch.")
                 state = evidence.state if evidence else "candidate"
+                semantic_verified = bool(evidence and evidence.semantic_verified)
                 output.append(
                     action_result_model(
                         action=instance,
                         state=state,
-                        usable=state == "validated",
+                        usable=state == "validated"
+                        and (value.source_format == "pptx" or semantic_verified),
+                        **(
+                            {"semantic_verified": semantic_verified}
+                            if value.source_format == "pdf"
+                            else {}
+                        ),
                         validation=evidence,
                     )
                 )
@@ -356,6 +363,11 @@ class Analyses:
         inputs = parse_analysis_input(
             {
                 **(value.provenance or {}),
+                **(
+                    {"visual_qa_pending_instance_ids": visual_qa_pending}
+                    if value.source_format == "pdf"
+                    else {}
+                ),
                 "presentation_summary": summary(value).model_dump(),
                 "slides": [
                     {

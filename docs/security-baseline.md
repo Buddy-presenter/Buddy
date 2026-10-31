@@ -28,12 +28,21 @@ Windows/Office runtime remains a live-acceptance prerequisite.
 ## Model request
 
 The worker sends the unchanged, checksum-verified original PDF as a base64 PDF document to
-Amazon Bedrock's native InvokeModel API for Claude Sonnet 4.6. It does not submit extracted text,
+Amazon Bedrock's native InvokeModel API for Claude Sonnet 4.6. Default quote mode does not submit extracted text,
 rendered-page images, converted files, or sanitized/redacted copies. PDF content is
 untrusted input; the prompt says not to follow instructions embedded in the document, and
 the response is constrained to JSON summaries plus `zoom_region` and `highlight_region`
 objects. Buddy validates slide order, IDs, schema, catalog membership, coordinate bounds,
 ownership, source revision, and action hash before persistence.
+
+The opt-in [text-candidate experiment](analysis.md#opt-in-experiment-select-measured-text-ids-instead-of-predicting-boxes)
+also submits extracted horizontal line text, location-specific IDs and measured regions
+alongside the original PDF when the worker operator explicitly enables
+`BUDDY_WORKER_TEXT_TARGETING=candidate_lines` (default: `quote`). Its response selects IDs
+instead of supplying coordinates; selected geometry is independently measured again
+before grounding. Candidate text remains private, untrusted document content and is
+excluded from logs. Extraction is bounded to 2,000 candidates and 80,000 text characters
+per deck, with the existing encoded provider request limit still enforced.
 
 The worker uses its ECS task role through SigV4; no Anthropic API key or long-lived AWS key
 is stored in application configuration. IAM permits `bedrock:InvokeModel` only on the

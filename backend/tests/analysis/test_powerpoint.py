@@ -272,6 +272,42 @@ def test_provider_transport_structured_output_and_recoverable_failures(monkeypat
         )
 
 
+def test_pdf_candidate_mode_keeps_powerpoint_on_its_own_provider(monkeypatch):
+    from backend.tests.processing.test_powerpoint import processor
+
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "synthetic-test-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "synthetic-test-secret")
+    content, extracted = source()
+    generated = output(extracted)
+    calls = []
+
+    def handle(request):
+        calls.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "stop_reason": "tool_use",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "submit_powerpoint_analysis",
+                        "input": generated.model_dump(mode="json"),
+                    }
+                ],
+            },
+        )
+
+    provider = PowerPointProvider("eu-central-1", transport=httpx.MockTransport(handle))
+    worker, _, _ = processor(None, content, provider=provider)
+    worker.settings = worker.settings.model_copy(update={"text_targeting": "candidate_lines"})
+    result = asyncio.run(
+        worker._generate_analysis(
+            content, extracted, manifest(extracted).deck_id, manifest(extracted)
+        )
+    )
+    assert result == generated and len(calls) == 1
+
+
 def test_powerpoint_schema_packaging_and_stale_validator_source():
     import sys
 

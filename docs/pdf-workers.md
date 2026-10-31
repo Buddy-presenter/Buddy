@@ -5,8 +5,10 @@ PDF unchanged to Amazon Bedrock Claude Sonnet 4.6, then resolves generated targe
 bounded child process using PDFium text/object geometry and on-demand Tesseract OCR for
 unmatched text anchors. It persists ordered summaries and only source-grounded content-action
 candidates, then validates every action through the isolated #49 executor before completing
-the job. Rendered OCR pages and extracted content are transient, are not sent to another
-provider or saved as evidence, and are removed with the child scratch directory. Existing
+the job. Rendered OCR pages are transient, are not sent to another provider or saved as
+evidence, and are removed with the child scratch directory. Default quote mode does not
+send extracted text; opt-in candidate mode sends its ephemeral text catalogue alongside
+the unchanged original PDF, as described below. Existing
 PPTX uploads now use separate PowerPoint inspection/analysis stages in the same durable
 worker lifecycle. See [PowerPoint analysis](powerpoint-analysis.md) for its distinct
 provider representation, catalog, and Windows/Office validation deployment prerequisite.
@@ -34,6 +36,47 @@ because concurrency is temporarily full. Processing failures reset the outbox to
 existing bounded job retry schedule. Only the API role sends; workers receive/delete and
 reconcile DB leases. Multiple dispatchers lock job rows with SKIP LOCKED. No polling thread
 holds source bytes.
+
+## Enable candidate-line targeting
+
+The default worker mode is `quote`. To try the experimental text-ID method in the normal
+desktop Library/Review flow, start the reviewed worker with:
+
+```powershell
+$env:BUDDY_WORKER_TEXT_TARGETING = 'candidate_lines'
+.\.venv\Scripts\python.exe -m buddy_api.processing
+```
+
+This is a **worker** setting; setting it only in the desktop or API process has no effect.
+Local workers still need the existing database, private source storage, queue, validator
+and Bedrock access. The desktop never receives AWS credentials. This setting does not
+replace those services or enable a credential-free live model call.
+
+For ECS, both Terraform environment roots expose `worker_text_targeting` (default
+`quote`). Set it to `candidate_lines` in the reviewed environment configuration; it is
+included only in the worker task definition. Apply through the normal reviewed release
+process and verify the running worker image and task environment. This flag does not
+bypass staging compatibility checks: traced analyses require the compatible API and
+rollback reader described in [analysis](analysis.md). Do not start a trace-publishing
+worker against an incompatible reader.
+
+After deployment, open Buddy, sign in normally, and upload the test PDF as a **new deck**
+from Library. Wait for processing, then open Review and select the generated highlights.
+Opening the local PDF in Present does not request a new analysis. Completed old jobs and
+saved boxes are not regenerated when the flag changes; do not use Retry on a completed
+analysis to test a different generator. Candidate traces report `pdf_candidate_line` and
+the chosen target ID. Selection is performed by the live model; availability of a measured
+line does not guarantee the model selects it.
+
+This mode currently produces whole horizontal left-to-right text-line highlights only.
+It does not generate zooms, OCR/diagram targets, rotated-page targets or multiline boxes.
+Independent visual verification remains required for usability. Revert the setting to
+`quote` and restart/redeploy the worker to change **future** generation. Existing candidate
+analyses retain their immutable geometry and require the compatible reader to remain
+available; changing the flag is not a database or reader rollback.
+
+The [offline experiment](analysis.md#opt-in-experiment-select-measured-text-ids-instead-of-predicting-boxes)
+still works without AWS credentials and proves geometry only.
 
 ## States and limits
 

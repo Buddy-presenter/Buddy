@@ -108,13 +108,90 @@ aspect ratios must agree; values are not silently interpreted in the other plane
 
 ## Validation evidence and typed reads
 
+### Opt-in experiment: select measured text IDs instead of predicting boxes
+
+`execute_text_candidates(pdf_bytes)` builds a bounded ephemeral catalogue in the isolated
+parser process. It uses PDFium character origins to group horizontal text by actual
+baseline, glyph boxes for the line rectangle, and gaps to split separated columns.
+Targets receive IDs bound to the PDF digest, page, text and measured geometry. Identical
+phrases in different places have different IDs. No coordinates are memorized for a deck.
+
+Pass the catalogue as `BedrockProvider(region, text_candidates=catalog)` to opt in.
+The original PDF is still sent unchanged. This mode's output schema allows only
+`highlight_region`, `purpose` and `target_id`; it has no model-generated coordinate or
+text fields. Candidate text is untrusted input. Buddy fills in the selected target's
+text and rectangle, then independently remeasures the target ID in the grounding
+subprocess. Unknown, changed-source, cross-page or inconsistent text/ID combinations
+reject without falling back to coordinate guessing. Provenance records the selected ID
+and `pdf_candidate_line` method. This is still not independent semantic verification.
+
+The worker can opt in with `BUDDY_WORKER_TEXT_TARGETING=candidate_lines`; the default
+`quote` keeps the existing quote-and-hint method. The catalogue is extracted inside the
+fenced job, passed per request (not stored on a shared provider), and discarded afterward.
+Extraction failure fails the attempt; it does not silently switch back to coordinate
+guessing. [Worker enablement](pdf-workers.md#enable-candidate-line-targeting) describes
+deployment and desktop testing. This prototype currently handles whole
+horizontal left-to-right text lines; it does not provide OCR candidates, graphics/diagram targets,
+rotated pages, precise arbitrary subphrases, or multi-line highlight contracts. Candidate
+extraction is bounded by 18 MiB, 100 pages, 200,000 characters/page, 2,000 candidates and
+80,000 candidate-text characters, plus the existing child resource/deadline limits.
+The existing provider request-size and action budgets still apply. Omitted targets do
+not imply the slide has no useful content. Real provider selection quality must be
+evaluated separately before making this the worker default.
+
+Run the offline geometry experiment without credentials or paid calls:
+
+```powershell
+.\.venv\Scripts\python.exe backend/scripts/try_candidate_regions.py deck.pdf `
+  --page 2 --contains "A unique phrase on the target line" `
+  --output build/private-candidate-experiment
+```
+
+It saves a catalogue, selected action/provenance JSON and a page overlay in a new private
+directory. The investigator selects a unique text line; deliberately incorrect initial
+coordinates demonstrate that target-ID remeasurement determines the final box. This
+tests geometry and isolation, not a model's judgment about what should be highlighted.
+Automated adapter tests use a fake only at the Bedrock HTTP boundary and assert that
+the real request schema never asks the model to predict a rectangle.
+
+New source-grounded analyses retain an optional `inputs.grounding` list in the existing
+immutable provenance JSON. Each record binds an action ID and hash to the exact quoted
+text (when applicable), the original model rectangle, final source rectangle, method
+(`pdf_glyphs`, `pdf_words`, `ocr_words`, `pdf_visual_geometry`, or `visual_hint`) and
+grounding version. The enclosing analysis pins the source hash/revision and renderer.
+Changed hashes or final geometry reject; unresolved visual hints must remain QA-pending.
+The provider cannot submit this server-owned metadata. The normal catalog is unchanged.
+
+This metadata is private document content, available only through the existing owned
+analysis read. It must not enter logs. Empty metadata is omitted from serialization so
+historical immutable analysis hashes remain valid. Older analyses have no trace, which
+must not be interpreted as evidence that source grounding ran. No database migration is
+needed: the existing provenance JSON stores the new versioned information.
+
+Compatibility direction matters: new readers accept historical records, but older strict
+readers do not understand non-empty grounding metadata or its changed analysis digest.
+Before deploying a worker that publishes traces, prove the rollback API can read a new
+traced analysis, or provide a reviewed compatible rollback reader. Passing an empty-trace
+fixture is insufficient evidence for that rollout. Do not rewrite historical digests.
+
+Text matching requires whole words, including normalized Unicode matching, so a target
+such as `net results` cannot be grounded to the suffix of `internet results`. Grounding
+still locates the supplied quote; it does not prove the purpose agrees with that quote.
+The opt-in candidate experiment above addresses text-location selection. Its production
+integration, multi-line highlight contracts and independent visual QA/correction remain
+outstanding work in #135/#50/#51.
+
 `ValidationInput` (`buddy.validation.v1`) binds a unique validation ID to analysis ID/hash,
 action instance ID/hash and validator/renderer/display-profile versions. Evidence carries
 opaque artifact UUIDs, kind and SHA-256, never storage keys. The worker calls the existing
 isolated #49 validation service, which stores owner-scoped report/screenshots and returns
 the references bound to the exact source, action and profile. A reference alone is not
 proof of semantic correctness; the validator explicitly records that semantic grounding
-is not verified.
+is not verified. Execution validation therefore remains non-usable until an independent
+visual review is recorded. A visual review may set `validation_kind=visual` and
+`semantic_verified=true` only after inspecting the real audience viewport; only that
+validated combination is usable. Existing execution-only records default safely to
+non-semantic verification.
 
 The PDF [action validator](action-validation.md) produces owner-scoped standalone
 execution reports and private evidence. A standalone API request does not automatically
@@ -142,6 +219,36 @@ Published machine-readable schemas are `analysis-v1.schema.json`,
 `validation-v1.schema.json` and `generated-content-action-v1.1.schema.json` in this directory.
 
 ## Migration and checks
+
+### Diagnose a misplaced text rectangle
+
+Before changing generation or coordinates, compare the saved action with current source
+grounding. From the repository root, run the local diagnostic with the exact source PDF,
+one-based page number, quoted target, and optional saved source-pixel rectangle:
+
+```powershell
+.\.venv\Scripts\python.exe backend/scripts/diagnose_pdf_region.py deck.pdf `
+  --page 2 --target "Exact visible phrase" `
+  --saved-region 100 200 400 30 --source-sha256 <saved-source-sha256> `
+  --output build/private-region-check
+```
+
+The directory must be new. It contains a private JSON report and a full-resolution page
+overlay: orange is the saved region and green is current grounding. The report includes
+source identity, renderer version, canonical dimensions and intersection-over-union.
+A mismatched supplied source digest refuses comparison. Without a digest, source identity
+is explicitly unverified. Missing or ambiguous targets have no grounded rectangle.
+The command reuses the production bounded grounding subprocess, makes no provider calls,
+and changes no persisted analysis. Keep these artifacts out of Git and shared logs.
+
+Compare the saved rectangle, this overlay and the Review viewport. Correct source geometry
+with an incorrect stored box points toward old generation/grounding or different deployed
+worker code. Correct stored geometry with an incorrect overlay in Review points toward the
+client mapping/selection path. A supplied quote is an investigator's target: it does not
+prove that the original model used that quote, nor does a matching box prove semantic intent.
+
+The source-grounding version in code is not evidence that staging runs it. Confirm the
+worker image/commit and analysis timestamp before making a fresh provider request.
 
 Apply the analysis migration and the following worker-state migration explicitly with the
 migration identity. They archive each old

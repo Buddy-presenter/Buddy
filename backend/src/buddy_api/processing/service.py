@@ -9,16 +9,19 @@ from collections.abc import Callable
 from contextlib import suppress
 from datetime import timedelta
 from functools import partial
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid5
 
 from sqlalchemy import exists, func, select
 
 from buddy_api.analysis.contracts import (
+    ActionGrounding,
     AnalysisInput,
     ContentAction,
     EvidenceReference,
+    Manifest,
     PowerPointAnalysisInput,
+    PowerPointManifest,
     Region,
     RegionParameters,
     SlideOutput,
@@ -26,7 +29,12 @@ from buddy_api.analysis.contracts import (
     ValidationInput,
     digest,
 )
-from buddy_api.analysis.powerpoint import PowerPointProvider, analysis_document, powerpoint_manifest
+from buddy_api.analysis.powerpoint import (
+    PowerPointOutput,
+    PowerPointProvider,
+    analysis_document,
+    powerpoint_manifest,
+)
 from buddy_api.analysis.provider import (
     MAX_FILE_BYTES,
     BedrockProvider,
@@ -54,7 +62,12 @@ from buddy_api.processing.contracts import (
     PowerPointSource,
 )
 from buddy_api.processing.queue import Queue
-from buddy_api.processing.stage import execute, execute_grounding, execute_manifest
+from buddy_api.processing.stage import (
+    execute,
+    execute_grounding,
+    execute_manifest,
+    execute_text_candidates,
+)
 from buddy_api.uploads.contracts import UploadError
 from buddy_api.uploads.service import UploadService, blocking
 from buddy_api.uploads.storage import SourceStorage
@@ -94,6 +107,36 @@ class Processor:
         )
         self.validation = validation or (
             ValidationService(self.uploads, validator_settings) if validator_settings else None
+        )
+
+    async def _generate_analysis(
+        self,
+        content: bytes,
+        extraction: Extraction,
+        deck_id: str,
+        manifest: Manifest | PowerPointManifest,
+    ) -> ModelOutput | PowerPointOutput:
+        """Keep the opt-in catalogue local to one fenced job, never shared provider state."""
+        if isinstance(manifest, PowerPointManifest):
+            return await self.powerpoint_provider.analyze_async(
+                content, extraction, deck_id, manifest
+            )
+        if self.settings.text_targeting == "candidate_lines":
+            catalog = await blocking(
+                partial(
+                    execute_text_candidates,
+                    content,
+                    min(120, self.settings.runtime_seconds - 15),
+                )
+            )
+            return await self.provider.analyze_async(
+                content, extraction, deck_id, manifest, text_candidates=catalog
+            )
+        analyze_async = getattr(self.provider, "analyze_async", None)
+        if analyze_async is not None:
+            return cast(ModelOutput, await analyze_async(content, extraction, deck_id, manifest))
+        return await blocking(
+            partial(self.provider.analyze, content, extraction, deck_id, manifest)
         )
 
     @staticmethod
@@ -425,20 +468,13 @@ class Processor:
             if existing is None:
                 if hashlib.sha256(content).hexdigest() != source_digest:
                     raise UploadError(409, "source_mismatch", "Accepted PDF source changed.")
-                selected_provider = self.powerpoint_provider if _format == "pptx" else self.provider
-                analyze_async = getattr(selected_provider, "analyze_async", None)
-                provider_call = (
-                    analyze_async(content, extraction, str(deck_id), manifest)
-                    if analyze_async is not None
-                    else blocking(
-                        partial(self.provider.analyze, content, extraction, str(deck_id), manifest)
-                    )
-                )
                 active_stage = "provider"
                 active_stage_started_at = time.perf_counter()
                 if not await persist_stage("provider", 60):
                     return
-                alive, generated = await fenced(provider_call)
+                alive, generated = await fenced(
+                    self._generate_analysis(content, extraction, str(deck_id), manifest)
+                )
                 if not alive:
                     return
                 if _format == "pdf":
@@ -767,6 +803,7 @@ class Processor:
         ):
             raise ProviderFailure("provider_slide_order")
         rendered: list[SlideOutput] = []
+        grounding: list[ActionGrounding] = []
         visual_qa_pending_instance_ids: list[str] = []
         for index, (model_slide, source_slide) in enumerate(
             zip(generated.slides, extraction.slides, strict=True)
@@ -808,6 +845,14 @@ class Processor:
                     )
                     if candidate.visual_qa_pending:
                         visual_qa_pending_instance_ids.append(instance_id)
+                    if candidate.grounding_trace is not None:
+                        grounding.append(
+                            ActionGrounding(
+                                instance_id=instance_id,
+                                action_sha256=digest(actions[-1]),
+                                trace=candidate.grounding_trace,
+                            )
+                        )
                 except ValueError:
                     raise ProviderFailure("provider_invalid_action") from None
             rendered.append(
@@ -827,6 +872,7 @@ class Processor:
                 display_profile="wide-1x",
                 validator_version="qt-executor-1",
                 manifest=manifest,
+                grounding=tuple(grounding),
                 visual_qa_pending_instance_ids=tuple(visual_qa_pending_instance_ids),
                 presentation_summary=cls._summary(
                     generated.presentation.text, generated.presentation.reason

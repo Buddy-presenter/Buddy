@@ -40,6 +40,13 @@
       "pattern": "\\S",
       "type": "string"
     },
+    "ValidationKind": {
+      "enum": [
+        "execution",
+        "visual"
+      ],
+      "type": "string"
+    },
     "ValidationState": {
       "enum": [
         "candidate",
@@ -52,14 +59,46 @@
   },
   "additionalProperties": false,
   "properties": {
-    "source_format": {
-      "default": "pdf",
-      "enum": [
-        "pdf",
-        "pptx"
-      ],
-      "title": "Source Format",
+    "action_sha256": {
+      "$ref": "#/$defs/Digest"
+    },
+    "analysis_id": {
+      "format": "uuid",
+      "title": "Analysis Id",
       "type": "string"
+    },
+    "analysis_sha256": {
+      "$ref": "#/$defs/Digest"
+    },
+    "display_profile": {
+      "$ref": "#/$defs/Identifier"
+    },
+    "evidence": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EvidenceReference"
+      },
+      "maxItems": 20,
+      "title": "Evidence",
+      "type": "array"
+    },
+    "instance_id": {
+      "$ref": "#/$defs/Identifier"
+    },
+    "reasons": {
+      "default": [],
+      "items": {
+        "maxLength": 512,
+        "minLength": 1,
+        "pattern": "\\S",
+        "type": "string"
+      },
+      "maxItems": 20,
+      "title": "Reasons",
+      "type": "array"
+    },
+    "renderer_version": {
+      "$ref": "#/$defs/Identifier"
     },
     "runtime_version": {
       "anyOf": [
@@ -78,57 +117,34 @@
       "title": "Schema Version",
       "type": "string"
     },
+    "semantic_verified": {
+      "default": false,
+      "title": "Semantic Verified",
+      "type": "boolean"
+    },
+    "source_format": {
+      "default": "pdf",
+      "enum": [
+        "pdf",
+        "pptx"
+      ],
+      "title": "Source Format",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/ValidationState"
+    },
     "validation_id": {
       "format": "uuid",
       "title": "Validation Id",
       "type": "string"
     },
-    "analysis_id": {
-      "format": "uuid",
-      "title": "Analysis Id",
-      "type": "string"
-    },
-    "analysis_sha256": {
-      "$ref": "#/$defs/Digest"
-    },
-    "instance_id": {
-      "$ref": "#/$defs/Identifier"
-    },
-    "action_sha256": {
-      "$ref": "#/$defs/Digest"
+    "validation_kind": {
+      "$ref": "#/$defs/ValidationKind",
+      "default": "execution"
     },
     "validator_version": {
       "$ref": "#/$defs/Identifier"
-    },
-    "renderer_version": {
-      "$ref": "#/$defs/Identifier"
-    },
-    "display_profile": {
-      "$ref": "#/$defs/Identifier"
-    },
-    "state": {
-      "$ref": "#/$defs/ValidationState"
-    },
-    "reasons": {
-      "default": [],
-      "items": {
-        "maxLength": 512,
-        "minLength": 1,
-        "pattern": "\\S",
-        "type": "string"
-      },
-      "maxItems": 20,
-      "title": "Reasons",
-      "type": "array"
-    },
-    "evidence": {
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/EvidenceReference"
-      },
-      "maxItems": 20,
-      "title": "Evidence",
-      "type": "array"
     }
   },
   "required": [
