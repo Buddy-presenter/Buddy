@@ -1,5 +1,10 @@
 # Desktop shell boundaries
 
+The sidebar's **How to use** page (Alt+7) provides an offline guide to local PDF
+presentation, account and Library uploads, saved analysis review, keyboard shortcuts,
+Windows PowerPoint controls and troubleshooting. It is available without signing in.
+Its buttons open Present, Library and Settings. Profile retains Alt+6.
+
 The application has one `QApplication` and one event loop. `app.py` validates environment
 configuration before constructing Qt, loads native preferences, and owns shutdown.
 `MainWindow` manages routes and app lifecycle; `views.py` contains reusable pages and

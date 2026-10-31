@@ -31,6 +31,7 @@ from buddy_desktop.review_widget import ReviewWidget
 from buddy_desktop.services import Health, HealthService
 from buddy_desktop.slide_executor import Completion
 from buddy_desktop.tasks import TaskRunner
+from buddy_desktop.tutorial_page import TutorialPage
 from buddy_desktop.views import HomePage, SettingsPage, divider
 from buddy_desktop.visuals import BuddyMark, app_icon, command, icon
 
@@ -83,7 +84,7 @@ class MainWindow(QMainWindow):
         self.navigation.setObjectName("navigation")
         self.navigation.setIconSize(QSize(18, 18))
         self.navigation.setAccessibleName("Workspace navigation")
-        self.navigation.setFixedHeight(5 * 38)
+        self.navigation.setFixedHeight(6 * 38)
         self.navigation.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         for name, image in (
             ("Home", "house"),
@@ -91,6 +92,7 @@ class MainWindow(QMainWindow):
             ("Review", "search"),
             ("Present", "presentation"),
             ("Settings", "settings-2"),
+            ("How to use", "library-big"),
         ):
             glyph = icon(image)
             glyph.addPixmap(icon(image, "#FFB27F").pixmap(40, 40), QIcon.Mode.Selected)
@@ -99,6 +101,8 @@ class MainWindow(QMainWindow):
         sidebar_layout.addStretch()
         self.pages = QStackedWidget()
         self.home = HomePage(config.api_url)
+        self.tutorial = TutorialPage()
+        self.tutorial.route_requested.connect(self._select_route)
         self.account = AccountWidget(config.api_url)
         self.profile = ProfilePage(self.account)
         self.profile.controls_requested.connect(self._show_account_controls)
@@ -132,6 +136,7 @@ class MainWindow(QMainWindow):
             self.present,
             self.preferences,
             self.profile,
+            self.tutorial,
         ]
         for page in page_widgets:
             scroll = QScrollArea()
@@ -215,7 +220,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(workspace, 1)
         self.setCentralWidget(root)
         self._motion_changed(self.preferences.reduce_motion.isChecked())
-        self.navigation.currentRowChanged.connect(self.navigate)
+        # Profile keeps its existing page index and Alt+6 shortcut. The sixth
+        # sidebar item opens the guide, which follows Profile in the page stack.
+        self.navigation.currentRowChanged.connect(lambda row: self.navigate(6 if row == 5 else row))
         self.navigation.setCurrentRow(0)
         self._create_menu()
         self.statusBar().setAccessibleName("Application status")
@@ -238,6 +245,10 @@ class MainWindow(QMainWindow):
         account_action.setShortcut(QKeySequence("Alt+6"))
         account_action.triggered.connect(self._show_account)
         workspace_menu.addAction(account_action)
+        tutorial_action = QAction("&How to use", self)
+        tutorial_action.setShortcut(QKeySequence("Alt+7"))
+        tutorial_action.triggered.connect(lambda: self._select_route(6))
+        workspace_menu.addAction(tutorial_action)
         fullscreen_action = QAction("Presentation &full screen", self)
         fullscreen_action.setShortcut(QKeySequence("F11"))
         fullscreen_action.triggered.connect(self.present.enter_fullscreen)
@@ -281,7 +292,7 @@ class MainWindow(QMainWindow):
             self._private_presentation = bool(manifest and manifest.account_bound)
 
     def _select_route(self, index: int) -> None:
-        self.navigation.setCurrentRow(index)
+        self.navigation.setCurrentRow(5 if index == 6 else index)
         self.navigation.setFocus()
 
     @Slot()
@@ -383,7 +394,7 @@ class MainWindow(QMainWindow):
             previous = self.pages.currentIndex()
             self.pages.setCurrentIndex(index)
             self.route_title.setText(
-                ("Home", "Library", "Review", "Present", "Settings", "Profile")[index]
+                ("Home", "Library", "Review", "Present", "Settings", "Profile", "How to use")[index]
             )
             self.profile.activate(index == 5)
             self.library.activate(index == 1)
