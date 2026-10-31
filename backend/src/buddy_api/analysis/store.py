@@ -379,8 +379,7 @@ class Analyses:
                 deck_id=value.deck_id,
                 version=value.version,
                 publication=publication(inputs.presentation_summary, tuple(results)),
-                action_limit_reached=sum(len(s.actions) for s in results)
-                == MAX_GENERATED_ACTIONS_PER_DECK,
+                action_limit_reached=sum(len(s.actions) for s in results) == 100,
                 analysis_sha256=value.content_sha256,
                 inputs=inputs,
                 slides=tuple(results),

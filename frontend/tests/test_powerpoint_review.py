@@ -523,3 +523,43 @@ def test_annotation_layout_uses_clear_space_and_refuses_crowded_slides():
         )
     with pytest.raises(PowerPointError, match="No clear space"):
         annotation_box(target, 720, 540, "A takeaway", (Region(0, 0, 720, 540),))
+
+
+def test_busy_checks_refresh_without_reopening_or_downloading_the_source(
+    desktop_window, monkeypatch, qtbot
+):
+    from dataclasses import replace
+
+    content = b"PK-synthetic-source"
+    deck, payload = powerpoint_payload(content, usable=False)
+    payload["data"]["slides"][0]["actions"][0]["validation"]["reasons"] = [
+        "powerpoint_worker_busy_use_dedicated_session"
+    ]
+    waiting = parse_analysis(payload, deck)
+    current = [waiting]
+    reads = []
+    monkeypatch.setattr(ReviewService, "analysis", lambda *_args: current[0])
+
+    def source_read(*_args):
+        reads.append(1)
+        return DownloadedPowerPoint(content, str(deck), "revision-1")
+
+    monkeypatch.setattr(ReviewService, "source", source_read)
+    window = desktop_window()
+    window.account.session = SimpleNamespace(
+        tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
+    )
+    window.account.session_changed.emit()
+    window.navigation.setCurrentRow(2)
+    review = window.review
+    review.set_deck(deck, "Waiting.pptx", "processing", "pptx")
+    qtbot.waitUntil(lambda: not review.runner.busy)
+    assert review.action_table.item(0, 2).text() == "Waiting for PowerPoint"
+    assert "automatically" in review.action_status.text()
+    action = replace(waiting.slides[0].actions[0], state="validated", usable=True, reasons=())
+    current[0] = replace(waiting, slides=(replace(waiting.slides[0], actions=(action,)),))
+    review.refresh_checks_button.click()
+    qtbot.waitUntil(lambda: not review.runner.busy)
+    assert review.action_table.item(0, 2).text() == "Ready"
+    assert len(reads) == 1 and review.pdf_content == content
+    assert "1 of 1" in review.notice.text()

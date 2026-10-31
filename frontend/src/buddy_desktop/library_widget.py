@@ -63,7 +63,11 @@ PROCESSING_TEXT = {
     "inspecting_pdf_metadata": ("Inspecting PDF", "Checking page order and dimensions."),
     "analyzing": ("Analyzing", "Preparing slide summaries and suggested actions."),
     "validating": ("Validating", "Checking suggested actions against the source PDF."),
-    "review_ready": ("Review ready", "Summaries and action evidence are available to review."),
+    "review_ready": (
+        "Results available",
+        "Processing is complete. Only actions marked Ready passed execution checks; "
+        "open Review for per-action results.",
+    ),
     "partial": ("Partial results", "Some results are available; unavailable items show why."),
     "failed": ("Failed", "Processing failed. Contact support if retry is unavailable."),
     "cancelled": ("Cancelled", "Processing was cancelled. You can retry if allowed."),
@@ -594,6 +598,12 @@ class LibraryWidget(QWidget):
         processing = deck.processing
         if processing is not None:
             if deck.source_format == "pptx":
+                if processing.error_code == "powerpoint_busy":
+                    return (
+                        "Waiting for PowerPoint",
+                        "Save and close desktop PowerPoint. Checks resume automatically; "
+                        "existing successful checks are kept.",
+                    )
                 if processing.state == "inspecting_pdf_metadata":
                     return "Inspecting PowerPoint", "Reading slide order, dimensions and notes."
                 if processing.state == "validating":

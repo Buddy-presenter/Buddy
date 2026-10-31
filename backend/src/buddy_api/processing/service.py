@@ -60,7 +60,7 @@ from buddy_api.uploads.service import UploadService, blocking
 from buddy_api.uploads.storage import SourceStorage
 from buddy_api.validation.config import ValidatorSettings
 from buddy_api.validation.contracts import ValidationRequest
-from buddy_api.validation.powerpoint import powerpoint_validation_request
+from buddy_api.validation.powerpoint import POWERPOINT_BUSY_REASON, powerpoint_validation_request
 from buddy_api.validation.service import ValidationService
 
 logger = logging.getLogger(__name__)
@@ -123,6 +123,7 @@ class Processor:
     async def maintain(self, *, publish: bool = True) -> None:
         async with self.database.sessions() as session, session.begin():
             await store.reconcile(session, self.settings)
+            await store.recover_powerpoint_waits(session, self.settings)
         if self.validation is not None:
             await self.validation.reconcile()
         # Recover accepted pre-upgrade PDFs and any missing scheduler transaction.
@@ -507,8 +508,16 @@ class Processor:
             if analysis_hash is None:
                 raise ProviderFailure("stored_analysis_unavailable")
             visual_qa_pending = set(analysis_result.visual_qa_pending_instance_ids)
+
+            def needs_validation(result: Any) -> bool:
+                return result.state == "candidate" or (
+                    _format == "pptx"
+                    and result.validation is not None
+                    and POWERPOINT_BUSY_REASON in result.validation.reasons
+                )
+
             has_candidates = any(
-                action.state == "candidate" and action.action.instance_id not in visual_qa_pending
+                needs_validation(action) and action.action.instance_id not in visual_qa_pending
                 for slide in analysis_result.slides
                 for action in slide.actions
             )
@@ -519,7 +528,7 @@ class Processor:
             duplicate_candidate_ids = self._duplicate_candidate_ids(analysis_result.slides)
             for slide in analysis_result.slides:
                 for action_result in slide.actions:
-                    if action_result.state != "candidate":
+                    if not needs_validation(action_result):
                         continue
                     if action_result.action.instance_id in visual_qa_pending:
                         # Geometry inside a flattened image is deliberately kept as a
@@ -565,6 +574,8 @@ class Processor:
                     active_stage = analysis_stage
                     active_stage_started_at = time.perf_counter()
                     result = stored.result
+                    if _format == "pptx" and POWERPOINT_BUSY_REASON in result.reasons:
+                        raise UploadError(409, "powerpoint_busy", "Waiting for PowerPoint.", 30)
                     validation_input = ValidationInput(
                         source_format="pptx" if _format == "pptx" else "pdf",
                         runtime_version=getattr(result, "office_version", None),
@@ -649,9 +660,16 @@ class Processor:
             if isinstance(exc, UploadError) and exc.code in {
                 "validation_pending",
                 "cleanup_pending",
+                "powerpoint_busy",
             }:
                 async with self.database.sessions() as session, session.begin():
-                    await store.defer(session, job.id, token, exc.retry_after or 30)
+                    await store.defer(
+                        session,
+                        job.id,
+                        token,
+                        exc.retry_after or 30,
+                        reason="powerpoint_busy" if exc.code == "powerpoint_busy" else None,
+                    )
                 await blocking(lambda: self.queue.acknowledge(raw["ReceiptHandle"]))
                 return
             # Never persist parser/provider exception text or arbitrary codes.

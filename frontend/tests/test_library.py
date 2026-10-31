@@ -506,6 +506,33 @@ def test_inspection_label_matches_the_source_format(source_format, label):
     assert LibraryWidget.deck_status_text(deck)[0] == label
 
 
+def test_busy_powerpoint_status_distinguishes_waiting_from_completed_checks():
+    from dataclasses import replace
+
+    from buddy_desktop.library_widget import LibraryWidget
+
+    deck = DeckSummary(
+        uuid4(),
+        "Slides",
+        datetime.now(UTC),
+        "processing",
+        1,
+        source_format="pptx",
+        processing=ProcessingDetail(
+            uuid4(), "queued", "validation", 80, 0, "powerpoint_busy", False, True
+        ),
+    )
+    label, guidance = LibraryWidget.deck_status_text(deck)
+    assert label == "Waiting for PowerPoint" and "automatically" in guidance
+    complete = replace(
+        deck,
+        status="ready",
+        processing=replace(deck.processing, state="review_ready", error_code=None),
+    )
+    label, guidance = LibraryWidget.deck_status_text(complete)
+    assert label == "Results available" and "Only actions marked Ready" in guidance
+
+
 def test_poll_keeps_rows_selectable_and_preserves_latest_selection(
     desktop_window, monkeypatch, qtbot
 ):

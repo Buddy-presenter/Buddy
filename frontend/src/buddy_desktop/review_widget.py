@@ -61,6 +61,11 @@ class EvidenceResult:
     mime: str
 
 
+@dataclass(frozen=True)
+class UpdatedChecks:
+    analysis: ReviewAnalysis
+
+
 class ActionTable(QTableWidget):
     """Let the page scroll once; action rows never form a nested scroll area."""
 
@@ -298,8 +303,14 @@ class ReviewWidget(Page):
 
         self.actions_title = QLabel("Suggested actions")
         self.actions_title.setObjectName("sectionTitle")
+        self.actions_title.setWordWrap(True)
         action_header = QHBoxLayout()
         action_header.addWidget(self.actions_title, 1)
+        self.refresh_checks_button = QPushButton("Refresh checks")
+        command(self.refresh_checks_button, "refresh-cw")
+        self.refresh_checks_button.setEnabled(False)
+        self.refresh_checks_button.clicked.connect(self.refresh_checks)
+        action_header.addWidget(self.refresh_checks_button)
         action_header.addWidget(self.run_powerpoint)
         content_layout.addLayout(action_header)
         self.action_table = ActionTable(0, 4)
@@ -381,6 +392,31 @@ class ReviewWidget(Page):
         if time.monotonic() >= session.tokens.expires - 30:
             return None
         return session.tokens.access
+
+    def refresh_checks(self) -> None:
+        access = self.token()
+        if (
+            self.runner.busy
+            or self.closing
+            or self.analysis is None
+            or not access
+            or self.deck_id is None
+        ):
+            return
+        service = ReviewService(self.config, access)
+        deck_id, source_format = self.deck_id, self.source_format
+        self.request_generation = self.generation
+        self.pending_operation = "checks"
+        self.refresh_checks_button.setEnabled(False)
+        self.activity_changed.emit(True)
+
+        def work() -> UpdatedChecks | LibraryAccessExpired:
+            try:
+                return UpdatedChecks(service.analysis(deck_id, source_format))
+            except LibraryAccessExpired as exc:
+                return exc
+
+        self.runner.submit(work)
 
     def configure(self, config: AppConfig) -> None:
         self.config = config
@@ -465,6 +501,7 @@ class ReviewWidget(Page):
         self.content.hide()
         self.run_powerpoint.setEnabled(False)
         self.open_powerpoint.setEnabled(False)
+        self.refresh_checks_button.setEnabled(False)
         self.pending_load = False
         if not keep_deck:
             self.deck_id = None
@@ -579,13 +616,33 @@ class ReviewWidget(Page):
         operation, self.pending_operation = self.pending_operation, ""
         if isinstance(result, LibraryAccessExpired):
             self.account.expire_session(str(result))
+        elif isinstance(result, UpdatedChecks):
+            current = self.analysis
+            if current is None or (
+                result.analysis.id,
+                result.analysis.source_revision,
+                result.analysis.source_sha256,
+            ) != (current.id, current.source_revision, current.source_sha256):
+                self.notice.setText(
+                    "The saved analysis changed. Open this deck again from Library."
+                )
+                return
+            self.analysis = result.analysis
+            self._display_page()
+            actions = [a for s in self.analysis.slides for a in s.actions]
+            self.notice.setText(
+                f"Checks refreshed: {sum(a.usable for a in actions)} "
+                f"of {len(actions)} actions Ready. "
+                "Pending checks resume automatically when PowerPoint is closed."
+            )
         elif isinstance(result, LoadedReview):
             self.analysis = result.analysis
             self.pdf_content = result.pdf_content
             # This account-bound PDF is cleared when the account or backend changes.
             notices = [result.notice] if result.notice else []
             if result.analysis is not None and result.analysis.action_limit_reached:
-                notices.append("All 40 available action slots were used in this analysis.")
+                limit = 100 if self.source_format == "pptx" else 40
+                notices.append(f"All {limit} available action slots were used in this analysis.")
             self.notice.setText("\n\n".join(notices))
             self.sizes = result.sizes
             self.image = result.first_image
@@ -662,6 +719,9 @@ class ReviewWidget(Page):
             self.notice.setText("Validation evidence unavailable: " + message)
             self.open_evidence.setEnabled(self.evidence_choice.count() > 0)
             return
+        if operation == "checks":
+            self.notice.setText("Could not refresh checks: " + message)
+            return
         if operation == "page":
             self.notice.setText("Page could not be rendered: " + message)
             return
@@ -672,6 +732,9 @@ class ReviewWidget(Page):
         self.content.hide()
 
     def idle(self) -> None:
+        self.refresh_checks_button.setEnabled(
+            self.analysis is not None and self.token() is not None
+        )
         if (
             self.pending_load
             and self.active
@@ -797,9 +860,11 @@ class ReviewWidget(Page):
                     action.action_type.replace("draw_", "").replace("_", " ").title(),
                     "Ready"
                     if action.usable
-                    else "Checking"
+                    else "Waiting for PowerPoint"
+                    if "powerpoint_worker_busy_use_dedicated_session" in action.reasons
+                    else "Pending checks"
                     if action.state == "candidate"
-                    else "Needs review",
+                    else "Unavailable",
                 )
             ):
                 item = QTableWidgetItem(text)
@@ -853,7 +918,11 @@ class ReviewWidget(Page):
         self.action_status.setText(
             "Ready to run on this slide."
             if action.usable
-            else "This action is still being checked."
+            else "Save and close desktop PowerPoint. Buddy will automatically recheck this "
+            "action; reopen Review to see the updated result."
+            if "powerpoint_worker_busy_use_dedicated_session" in action.reasons
+            else "Validation is pending. Save and close PowerPoint if it is open; "
+            "Buddy resumes checks automatically."
             if action.state == "candidate"
             else "This action is unavailable. Open Details to see why."
         )

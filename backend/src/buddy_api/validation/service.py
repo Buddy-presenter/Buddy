@@ -29,6 +29,7 @@ from buddy_api.validation.contracts import (
     ValidationRequest,
 )
 from buddy_api.validation.powerpoint import (
+    POWERPOINT_BUSY_REASON,
     PowerPointProcessRequest,
     PowerPointProcessResult,
     PowerPointValidationRequest,
@@ -175,6 +176,31 @@ class ValidationService:
                     .where(ActionCheck.owner_id == owner, ActionCheck.retry_key == key)
                     .with_for_update()
                 )
+                # Retain historical busy evidence, but use a fresh reservation for
+                # its recheck. Never overwrite an existing validation record ID.
+                for _ in range(16):
+                    if not (
+                        row
+                        and isinstance(inputs, PowerPointValidationRequest)
+                        and row.status == "complete"
+                        and row.result
+                        and POWERPOINT_BUSY_REASON in row.result.get("reasons", [])
+                    ):
+                        break
+                    if row.request_sha256 != fingerprint:
+                        raise UploadError(
+                            409, "idempotency_conflict", "Retry key belongs to another validation."
+                        )
+                    key = uuid5(key, "after-busy:" + str(row.id))
+                    row = await session.scalar(
+                        select(ActionCheck)
+                        .where(ActionCheck.owner_id == owner, ActionCheck.retry_key == key)
+                        .with_for_update()
+                    )
+                else:
+                    raise UploadError(
+                        409, "powerpoint_busy", "Waiting for PowerPoint to become available.", 30
+                    )
                 if row:
                     if row.request_sha256 != fingerprint:
                         raise UploadError(
@@ -266,6 +292,23 @@ class ValidationService:
                     cancelled.set()
                     await task
                     raise
+                if (
+                    isinstance(inputs, PowerPointValidationRequest)
+                    and POWERPOINT_BUSY_REASON in bundle.result.reasons
+                ):
+                    # No evidence has been uploaded. A transient process conflict
+                    # must not become a completed, permanently cached validation.
+                    async with self.uploads.transaction() as session:
+                        waiting = await session.get(ActionCheck, row.id, with_for_update=True)
+                        assert waiting is not None and waiting.status == "pending"
+                        waiting.status, waiting.storage_bytes = "failed", 0
+                        waiting.result, waiting.artifacts = None, []
+                    raise UploadError(
+                        409,
+                        "powerpoint_busy",
+                        "Save and close PowerPoint; validation will resume automatically.",
+                        30,
+                    )
                 artifacts: list[dict[str, Any]] = []
                 with tempfile.TemporaryDirectory(prefix="buddy-evidence-") as directory:
                     for kind, data in bundle.artifacts.items():
@@ -308,7 +351,7 @@ class ValidationService:
             except (Exception, asyncio.CancelledError):
                 async with self.uploads.transaction() as session:
                     current = await session.get(ActionCheck, row.id, with_for_update=True)
-                    if current is not None and current.status != "complete":
+                    if current is not None and current.status not in {"complete", "failed"}:
                         current.status = "cleanup"
                 await asyncio.shield(self.cleanup(row.id))
                 raise

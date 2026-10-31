@@ -13,6 +13,8 @@ from buddy_api.analysis.contracts import (
     PowerPointContentAction,
 )
 
+POWERPOINT_BUSY_REASON = "powerpoint_worker_busy_use_dedicated_session"
+
 
 class PowerPointValidationRequest(Model):
     source_format: Literal["pptx"] = "pptx"

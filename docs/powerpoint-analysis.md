@@ -128,6 +128,21 @@ outside that session. Local manual PowerPoint controls and the PDF player are pr
 - Large PowerPoint validation sets yield before a delivery's runtime deadline and resume
   only remaining candidates from the saved analysis. Completed evidence is retained and
   the model is not called again; a normal batch continuation does not spend a failure attempt.
+- The catalog prompt describes all 15 supported annotation tools by affordance with no
+  preferred subset, examples favoring a tool family, or frequency quotas. Source grounding,
+  geometric fit and readability remain execution constraints. A live neutral-prompt check
+  retained 93 grounded candidates spanning ten tool types; this is generation evidence,
+  not a claim that every candidate has passed Office execution.
+- A busy PowerPoint process is a temporary wait, not a completed action failure. Its
+  reservation is released without evidence writes and the durable worker retries later,
+  keeping completed checks and the original analysis. Historical completed busy checks
+  are automatically reopened for the current source/latest analysis under the normal
+  owner quota. Fresh idempotent reservations retain the old evidence/history rather than
+  overwriting a validation ID.
+- Library says **Waiting for PowerPoint** while blocked and **Results available** when
+  processing finishes. Only per-action **Ready** means execution passed. Review separates
+  pending/waiting/unavailable actions and offers **Refresh checks**, a metadata-only read
+  that preserves the slide preview and connected presentation.
 - Apply forward migrations `0012_powerpoint_analysis` and `0013_powerpoint_tools` with the
   migration identity before deploying compatible binaries. Existing PDF action/input hashes are preserved. Historical
   untyped analyses remain legacy; legacy writes get their deck's format through a narrow

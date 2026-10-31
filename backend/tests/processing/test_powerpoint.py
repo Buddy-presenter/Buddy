@@ -32,6 +32,158 @@ from buddy_api.uploads.storage import SourceStorage
 pytestmark = pytest.mark.postgres
 
 
+def test_powerpoint_busy_waits_and_recovers_historical_results(migrated_database):
+    from buddy_api.validation.powerpoint import POWERPOINT_BUSY_REASON
+
+    async def scenario():
+        content, _ = source()
+        db = Database(migrated_database)
+        try:
+            owner, deck, job = await seed(db, content=content, source_format="pptx")
+            provider = Provider(actions=("draw_rectangle",))
+            worker, queue, _ = processor(db, content, provider=provider)
+            calls = []
+
+            class Validator:
+                busy = True
+                validated = False
+
+                async def reconcile(self):
+                    pass
+
+                async def validate(self, owner_id, deck_id, key, request, **kwargs):
+                    calls.append(request)
+                    return powerpoint_result(
+                        deck, request, busy=self.busy, validated=self.validated
+                    )
+
+            validator = Validator()
+            worker.validation = validator
+            await worker.maintain()
+            await worker.run_message(queue.messages[-1])
+            current = await row(db, job.id)
+            assert current.status == "retry_wait" and current.attempts == 0
+            assert current.error_code == "powerpoint_busy"
+            async with db.sessions() as session, session.begin():
+                current = await session.get(ProcessingJob, job.id)
+                current.not_before = store.now()
+                outbox = await session.get(JobOutbox, job.id)
+                outbox.available_at = store.now()
+            validator.busy = False
+            await worker.maintain()
+            await worker.run_message(queue.messages[-1])
+            assert (await row(db, job.id)).status == "analysis_ready"
+            async with db.sessions() as session, session.begin():
+                analyses = Analyses(session)
+                record = await analyses.latest_for_deck(deck.id, owner_id=owner.id)
+                result = await analyses.read(record.id, owner_id=owner.id)
+                first = result.slides[0].actions[0]
+                await analyses.record_validation(
+                    owner_id=owner.id,
+                    result=ValidationInput(
+                        source_format="pptx",
+                        validation_id=uuid4(),
+                        analysis_id=result.id,
+                        analysis_sha256=result.analysis_sha256,
+                        instance_id=first.action.instance_id,
+                        action_sha256=digest(first.action),
+                        validator_version="powerpoint-executor-2",
+                        renderer_version="desktop-powerpoint-2",
+                        display_profile="windows-powerpoint-2",
+                        state="needs-review",
+                        reasons=(POWERPOINT_BUSY_REASON,),
+                    ),
+                )
+            old_calls = len(calls)
+            validator.validated = True
+            await worker.maintain()
+            await worker.run_message(queue.messages[-1])
+            assert (await row(db, job.id)).status == "analysis_ready"
+            assert len(calls) == old_calls + 1 and provider.calls == 1
+            async with db.sessions() as session:
+                result = await Analyses(session).read(record.id, owner_id=owner.id)
+                assert result.slides[0].actions[0].usable
+                assert result.slides[1].actions[0].state == "needs-review"
+            generation = (await row(db, job.id)).generation
+            await worker.maintain()
+            assert (await row(db, job.id)).generation == generation
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_powerpoint_busy_is_not_cached_as_completed_evidence(migrated_database, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from backend.tests.support.powerpoint import manifest
+
+    import buddy_api.validation.service as service_module
+    from buddy_api.analysis.powerpoint import analysis_document
+    from buddy_api.persistence.models import ActionCheck
+    from buddy_api.uploads.contracts import UploadError
+    from buddy_api.validation.config import ValidatorSettings
+    from buddy_api.validation.powerpoint import powerpoint_validation_request
+    from buddy_api.validation.service import ValidationService
+
+    async def scenario():
+        content, extracted = source()
+        db = Database(migrated_database)
+        try:
+            owner, deck, _job = await seed(db, content=content, source_format="pptx")
+            uploads = UploadService(db, UPLOADS, SourceStorage(UPLOADS, S3(content)))
+            validator = ValidationService(uploads, ValidatorSettings(python=sys.executable))
+            document = analysis_document(
+                output(extracted),
+                extracted,
+                manifest(extracted, deck.id),
+                deck.id,
+                uuid4(),
+                uuid4(),
+            )
+            request = powerpoint_validation_request(document.slides[0].actions[0], document)
+            calls = []
+
+            def run(_content, process_request, _settings, _cancelled):
+                calls.append(process_request)
+                stored = powerpoint_result(deck, process_request, busy=len(calls) == 1)
+                return SimpleNamespace(result=stored.result, artifacts={})
+
+            monkeypatch.setattr(service_module, "run_validation", run)
+            key = uuid4()
+            with pytest.raises(UploadError) as failure:
+                await validator.validate(owner.id, deck.id, key, request, source_content=content)
+            assert failure.value.code == "powerpoint_busy"
+            async with db.sessions() as session, session.begin():
+                cached = await session.scalar(
+                    select(ActionCheck).where(ActionCheck.retry_key == key)
+                )
+                assert (
+                    cached.status == "failed"
+                    and cached.storage_bytes == 0
+                    and cached.result is None
+                )
+                # Reproduce the old completed busy cache without overwriting it on recheck.
+                cached.status = "complete"
+                cached.result = powerpoint_result(deck, calls[0], busy=True).result.model_dump(
+                    mode="json"
+                )
+                old_id = cached.id
+            checked = await validator.validate(
+                owner.id, deck.id, key, request, source_content=content
+            )
+            assert checked.id != old_id and len(calls) == 2
+            again = await validator.validate(
+                owner.id, deck.id, key, request, source_content=content
+            )
+            assert again.id == checked.id and len(calls) == 2
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())
+
+
 class S3:
     def __init__(self, content):
         self.content = content
@@ -61,6 +213,33 @@ class Provider:
         if self.fail:
             raise ProviderFailure("provider_access_denied", permanent=True)
         return output(extraction, self.actions)
+
+
+def powerpoint_result(deck, request, *, busy=False, validated=False):
+    import sys
+
+    from buddy_api.analysis.contracts import PowerPointContentAction
+    from buddy_api.validation.contracts import ArtifactReference, PowerPointStoredResult
+    from buddy_api.validation.powerpoint import POWERPOINT_BUSY_REASON, PowerPointProcessResult
+
+    return PowerPointStoredResult(
+        id=uuid4(),
+        deck_id=deck.id,
+        evidence=[ArtifactReference(id=uuid4(), kind="report", sha256="a" * 64, size_bytes=1)]
+        if validated
+        else [],
+        result=PowerPointProcessResult(
+            state="validated" if validated else "needs-review",
+            reasons=[] if validated else [POWERPOINT_BUSY_REASON if busy else "test_unavailable"],
+            runtime_platform=sys.platform,
+            source_revision=deck.source_revision,
+            source_sha256=deck.source_sha256,
+            action_sha256=digest(PowerPointContentAction.model_validate(request.action)),
+            office_version="16.0.test" if validated else None,
+            before_sha256="1" * 64 if validated else None,
+            after_sha256="2" * 64 if validated else None,
+        ),
+    )
 
 
 def processor(db, content, *, provider=None):
