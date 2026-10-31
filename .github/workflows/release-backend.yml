@@ -11,9 +11,9 @@ on:
         options: [staging, production]
         required: true
       rollout_phase:
-        description: 'Staging transition: compatibility first, then feature after a separate approval'
+        description: 'Staging: compatibility bridge, paused-worker reader preparation if needed, then feature'
         type: choice
-        options: [feature, compatibility]
+        options: [feature, compatibility, reader]
         default: feature
       worker_image:
         description: 'Optional immutable worker digest for production-only promotion'
@@ -166,6 +166,7 @@ jobs:
           API_IMAGE: ${{ steps.image.outputs.api_image }}
           FUTURE_IMAGE: ${{ steps.image.outputs.future_image }}
           BASE_IMAGE: ${{ steps.image.outputs.previous_image }}
+          ROLLOUT_PHASE: ${{ inputs.rollout_phase || 'feature' }}
           ROLLBACK_REVISION: ${{ inputs.rollback_revision }}
           AWS_ACCOUNT: ${{ vars.BUDDY_AWS_ACCOUNT_ID }}
           AWS_REGION: ${{ vars.BUDDY_AWS_REGION }}
@@ -178,6 +179,7 @@ jobs:
           args=(--revision "$RELEASE_REVISION" --output compatibility-report.json)
           if [ -n "$ROLLBACK_REVISION" ]; then args+=(--rollback-revision "$ROLLBACK_REVISION"); else args+=(--candidate-image "$API_IMAGE"); fi
           if [ -n "$FUTURE_IMAGE" ]; then args+=(--future-image "$FUTURE_IMAGE" --base-image "$BASE_IMAGE"); fi
+          if [ "$ROLLOUT_PHASE" = reader ]; then args+=(--reader-only); fi
           if [ -n "$STAGING_WORKER_IMAGE" ]; then args+=(--worker-image "$STAGING_WORKER_IMAGE"); fi
           python -m backend.scripts.release.prepare_compatibility "${args[@]}"
       - name: Retain credential-free compatibility evidence
@@ -221,9 +223,11 @@ jobs:
           WORKER_SERVICE_EXISTS: ${{ steps.worker_service.outputs.exists || 'false' }}
           ROLLBACK_REVISION: ${{ inputs.rollback_revision }}
           RELEASE_TARGET: ${{ inputs.target || 'staging' }}
+          ROLLOUT_PHASE: ${{ inputs.rollout_phase || 'feature' }}
         shell: bash
         run: |
           args=(--revision "$RELEASE_REVISION")
+          if [ "$ROLLOUT_PHASE" = reader ]; then args+=(--reader-only); fi
           if [ "$RELEASE_TARGET" = staging ]; then args+=(--compatibility-report compatibility-report.json); fi
           if [ -n "$ROLLBACK_REVISION" ]; then
             args+=(--rollback-revision "$ROLLBACK_REVISION")

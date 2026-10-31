@@ -88,10 +88,11 @@ jobs:
           git archive dc1bb7743f9fa95e5fd75fe7a488ca5262c06b75 | tar -x -C "$RUNNER_TEMP/buddy-previous-source"
           docker build -f "$RUNNER_TEMP/buddy-previous-source/infra/container/Dockerfile" -t buddy-previous:ci "$RUNNER_TEMP/buddy-previous-source"
           docker build -f infra/container/Dockerfile.compatibility --build-arg PREVIOUS_IMAGE=buddy-previous:ci -t buddy-bridge:ci .
-      - name: Exercise both rollout phases against disposable PostgreSQL
+      - name: Exercise bridge, paused reader preparation and traced feature rollback
         run: |
           python -m backend.scripts.release.image_compatibility --local-images --initial-image buddy-previous:ci --baseline-image buddy-previous:ci --previous-image buddy-previous:ci --candidate-image buddy-bridge:ci --future-image buddy-api:ci --output bridge-compatibility.json
-          python -m backend.scripts.release.image_compatibility --local-images --initial-image buddy-previous:ci --previous-image buddy-bridge:ci --candidate-image buddy-api:ci --output feature-compatibility.json
+          python -m backend.scripts.release.image_compatibility --local-images --initial-image buddy-previous:ci --previous-image buddy-bridge:ci --candidate-image buddy-api:ci --reader-only --output reader-compatibility.json
+          python -m backend.scripts.release.image_compatibility --local-images --initial-image buddy-previous:ci --previous-image buddy-api:ci --candidate-image buddy-api:ci --output feature-compatibility.json
       - name: Execute the packaged PDF validator without networking
         run: python infra/container/smoke_validator.py --image buddy-api:ci
       - name: Start the real read-only API container
