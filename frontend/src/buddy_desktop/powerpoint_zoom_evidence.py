@@ -37,7 +37,10 @@ def capture(info: PresentationInfo, driver: WindowsPowerPointZoom) -> QImage:
             api.SetCursorPos((x + width - 1, y))
             time.sleep(1)
             driver._guard(info)
-            if gui.ClientToScreen(info.window_id, (left, top)) != origin:
+            if (
+                gui.ClientToScreen(info.window_id, (left, top)) != origin
+                or gui.GetClientRect(info.window_id) != (left, top, right, bottom)
+            ):
                 raise PowerPointError("The slideshow moved during capture.")
             bitmap.CreateCompatibleBitmap(screen, width, height)
             previous = memory.SelectObject(bitmap)
@@ -91,6 +94,12 @@ def verify_zoom(
     before: QImage, after: QImage, reset: QImage, info: PresentationInfo, region: Region
 ) -> None:
     """Require a visible fixed-2x viewport transform and a return to the original view."""
+    if (
+        any(image.isNull() for image in (before, after, reset))
+        or before.size() != after.size()
+        or before.size() != reset.size()
+    ):
+        raise PowerPointError("The slideshow geometry changed during zoom validation.")
     cx = min(0.75, max(0.25, (region.x + region.width / 2) / info.slide_width))
     cy = min(0.75, max(0.25, (region.y + region.height / 2) / info.slide_height))
     expected = before.copy(
