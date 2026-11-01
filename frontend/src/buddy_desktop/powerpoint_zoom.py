@@ -113,6 +113,16 @@ class WindowsPowerPointZoom:
         window.View.GotoSlide(info.slide_index, 0)
         validate()
 
+    def focus(self, info: PresentationInfo) -> None:
+        if self.gui.GetForegroundWindow() != info.window_id:
+            try:
+                self.gui.SetForegroundWindow(info.window_id)
+            except Exception:
+                # Some Windows builds return an error even when activation succeeds.
+                # The actual foreground window is authoritative; never force input.
+                self._guard(info)
+        self._guard(info)
+
     def zoom(self, info: PresentationInfo, region: Region, validate: Callable[[], Any]) -> None:
         validate()
         hwnd = info.window_id
@@ -121,7 +131,7 @@ class WindowsPowerPointZoom:
         if not self.gui.IsWindow(hwnd) or self.gui.IsIconic(hwnd):
             raise PowerPointError("Restore the PowerPoint slideshow before zooming.")
         self.reset(info, validate)
-        self.gui.SetForegroundWindow(hwnd)
+        self.focus(info)
         self._guard(info, validate)
         with self._physical_pixels():
             original = self.api.GetCursorPos()

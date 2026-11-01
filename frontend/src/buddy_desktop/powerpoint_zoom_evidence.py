@@ -37,10 +37,9 @@ def capture(info: PresentationInfo, driver: WindowsPowerPointZoom) -> QImage:
             api.SetCursorPos((x + width - 1, y))
             time.sleep(1)
             driver._guard(info)
-            if (
-                gui.ClientToScreen(info.window_id, (left, top)) != origin
-                or gui.GetClientRect(info.window_id) != (left, top, right, bottom)
-            ):
+            if gui.ClientToScreen(info.window_id, (left, top)) != origin or gui.GetClientRect(
+                info.window_id
+            ) != (left, top, right, bottom):
                 raise PowerPointError("The slideshow moved during capture.")
             bitmap.CreateCompatibleBitmap(screen, width, height)
             previous = memory.SelectObject(bitmap)

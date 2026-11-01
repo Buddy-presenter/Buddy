@@ -149,3 +149,26 @@ def test_held_modifiers_prevent_native_zoom_input(native_driver):
         driver.zoom(info(), Region(120, 60, 240, 150), validate)
     assert events == []
     assert jumps == []
+
+
+def test_focus_uses_actual_foreground_and_never_forces_denied_activation():
+    driver = WindowsPowerPointZoom.__new__(WindowsPowerPointZoom)
+    foreground = [42]
+    calls = []
+
+    def activate(hwnd):
+        calls.append(hwnd)
+        raise RuntimeError("Activation denied")
+
+    driver.gui = SimpleNamespace(
+        IsWindow=lambda hwnd: True,
+        IsIconic=lambda hwnd: False,
+        GetForegroundWindow=lambda: foreground[0],
+        SetForegroundWindow=activate,
+    )
+    driver.focus(info())
+    assert calls == []
+    foreground[0] = 99
+    with pytest.raises(PowerPointError, match="lost focus"):
+        driver.focus(info())
+    assert calls == [42]

@@ -120,7 +120,7 @@ def validate(folder: Path) -> dict[str, Any]:
             from buddy_desktop.powerpoint_zoom_evidence import capture, png, verify_zoom
 
             driver = adapter._zoom_driver()
-            driver.gui.SetForegroundWindow(info.window_id)
+            driver.focus(info)
             adapter.execute(PowerPointAction("reset_zoom", info))
             before_image = capture(info, driver)
             before = png(before_image)
