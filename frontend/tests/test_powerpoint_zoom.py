@@ -15,6 +15,14 @@ def info():
     return PresentationInfo("deck.pptx", "deck.pptx", 1, 3, 42, 256, 960, 540)
 
 
+def test_native_zoom_rejects_other_platforms_before_loading_windows_bindings(monkeypatch):
+    import buddy_desktop.powerpoint_zoom as zoom
+
+    monkeypatch.setattr(zoom.sys, "platform", "darwin")
+    with pytest.raises(PowerPointError, match="Windows only"):
+        WindowsPowerPointZoom()
+
+
 @pytest.mark.parametrize(
     "client,expected",
     [

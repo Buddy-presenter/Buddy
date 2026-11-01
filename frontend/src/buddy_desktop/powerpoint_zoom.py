@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes
 import importlib
 import math
+import sys
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -37,7 +38,15 @@ class WindowsPowerPointZoom:
     Reset re-enters the same slide without resetting builds; it never sends Escape.
     """
 
+    gui: Any
+    api: Any
+    types: Any
+    uia: Any
+    user: Any
+
     def __init__(self) -> None:
+        if sys.platform != "win32":
+            raise PowerPointError("Native PowerPoint zoom is available on Windows only.")
         self.gui = importlib.import_module("win32gui")
         self.api = importlib.import_module("win32api")
         client = importlib.import_module("comtypes.client")
