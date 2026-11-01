@@ -119,8 +119,13 @@ class WindowsPowerPointZoom:
                 self.gui.SetForegroundWindow(info.window_id)
             except Exception:
                 # Some Windows builds return an error even when activation succeeds.
-                # The actual foreground window is authoritative; never force input.
-                self._guard(info)
+                pass
+            if self.gui.GetForegroundWindow() != info.window_id:
+                try:
+                    self.uia.ElementFromHandle(info.window_id).SetFocus()
+                except Exception:
+                    pass
+        # The actual foreground window is authoritative; never send input elsewhere.
         self._guard(info)
 
     def zoom(self, info: PresentationInfo, region: Region, validate: Callable[[], Any]) -> None:

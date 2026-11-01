@@ -172,3 +172,23 @@ def test_focus_uses_actual_foreground_and_never_forces_denied_activation():
     with pytest.raises(PowerPointError, match="lost focus"):
         driver.focus(info())
     assert calls == [42]
+
+
+def test_accessibility_focus_fallback_is_bound_to_the_selected_show():
+    driver = WindowsPowerPointZoom.__new__(WindowsPowerPointZoom)
+    foreground = [99]
+    handles = []
+    driver.gui = SimpleNamespace(
+        IsWindow=lambda _: True,
+        IsIconic=lambda _: False,
+        GetForegroundWindow=lambda: foreground[0],
+        SetForegroundWindow=lambda _: None,
+    )
+
+    def element(hwnd):
+        handles.append(hwnd)
+        return SimpleNamespace(SetFocus=lambda: foreground.__setitem__(0, hwnd))
+
+    driver.uia = SimpleNamespace(ElementFromHandle=element)
+    driver.focus(info())
+    assert foreground == [42] and handles == [42]
