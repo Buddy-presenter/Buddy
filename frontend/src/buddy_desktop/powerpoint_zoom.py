@@ -134,8 +134,15 @@ class WindowsPowerPointZoom:
                 root = self.uia.ElementFromHandle(hwnd)
                 condition = self.uia.CreatePropertyCondition(30011, "OpticalZoomButton")
                 button = root.FindFirst(4, condition)
-                if not button or not button.CurrentIsEnabled:
-                    raise PowerPointError("This PowerPoint slideshow does not expose native zoom.")
+                deadline = time.monotonic() + 5
+                while not button or not button.CurrentIsEnabled:
+                    self._guard(info, validate)
+                    if time.monotonic() >= deadline:
+                        raise PowerPointError(
+                            "This PowerPoint slideshow does not expose native zoom."
+                        )
+                    time.sleep(0.05)
+                    button = self.uia.ElementFromHandle(hwnd).FindFirst(4, condition)
                 self._guard(info, validate)
                 pattern = button.GetCurrentPattern(10000).QueryInterface(
                     self.types.IUIAutomationInvokePattern

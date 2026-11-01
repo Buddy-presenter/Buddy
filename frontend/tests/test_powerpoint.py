@@ -764,6 +764,32 @@ def test_navigation_after_buddy_zoom_restores_view_before_changing_slides(contro
     assert service._zoom_window_id is None
 
 
+def test_generated_zoom_rejects_changed_source_bounds_before_native_input(
+    control_automation, monkeypatch
+):
+    service, file, _, _, _, _ = control_automation
+    info = service.status(file)
+    monkeypatch.setattr(
+        service,
+        "_source_shape",
+        lambda *_args: SimpleNamespace(
+            Left=20,
+            Top=30,
+            Width=40,
+            Height=50,
+        ),
+    )
+    command = PowerPointAction(
+        "zoom_region",
+        info,
+        region=Region(100, 30, 40, 50),
+        source_shape_id=2,
+    )
+    with pytest.raises(PowerPointError, match="differs from the source"):
+        service.execute(command)
+    assert service._zoom_window_id is None
+
+
 def test_managed_line_and_highlight_shapes_erase_without_stale_ink(control_automation):
     service, file, _, app, _, window = control_automation
     info = service.status(file)

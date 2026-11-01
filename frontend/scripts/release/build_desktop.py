@@ -234,6 +234,8 @@ def build(
             "--hidden-import",
             "win32gui",
             "--hidden-import",
+            "win32ui",
+            "--hidden-import",
             "win32process",
         ]
     command += [str(ROOT / "frontend/scripts/release/desktop_entry.py")]

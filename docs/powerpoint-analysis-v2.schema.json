@@ -57,7 +57,8 @@
             "draw_diamond",
             "draw_triangle",
             "draw_hexagon",
-            "draw_star"
+            "draw_star",
+            "zoom_region"
           ],
           "title": "Type",
           "type": "string"

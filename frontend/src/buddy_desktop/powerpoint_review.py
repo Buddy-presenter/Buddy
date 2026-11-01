@@ -68,6 +68,8 @@ class PowerPointReviewSession:
             info = self.automation.status(self.path)
             if info is None:
                 raise PowerPointError("The saved PowerPoint slideshow ended. Open it again.")
+            # Review browsing always restores the full view, including on the same slide.
+            info = self.automation.execute(PowerPointAction("reset_zoom", info)).info
             if info.slide_index != index + 1:
                 info = self.automation.execute(
                     PowerPointAction("go_to_slide", info, slide_number=index + 1)
@@ -79,6 +81,9 @@ class PowerPointReviewSession:
             ):
                 raise PowerPointError("The live PowerPoint geometry differs from this analysis.")
             return self.automation.preview(info)
+
+    def reset_zoom(self, index: int, slide: ReviewSlide) -> PowerPointFrame:
+        return self.show(index, slide)
 
     def apply(self, action: ReviewAction, analysis: ReviewAnalysis, index: int) -> PowerPointFrame:
         with self.lock:

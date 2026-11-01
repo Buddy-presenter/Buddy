@@ -31,13 +31,16 @@ keeps rows selectable and preserves the selected deck when results reorder.
 
 `powerpoint-2` permits highlight, rectangle, oval, underline, arrow, callout, line,
 filled rectangle, filled oval, text box, rounded rectangle, diamond, triangle, hexagon
-and star actions. Generation considers the whole catalog and selects a useful, varied
+and star actions, plus native fixed-2x `zoom_region`. Generation considers the whole catalog and selects a useful, varied
 subset rather than forcing decoration. Every generated action selects an extracted object ID;
 the server derives the rectangle from that object's actual bounds in PowerPoint slide
 points (12,700 EMU per point). Unsupported, duplicate, clipped/degenerate or unknown targets
 fail explicitly. Calls cannot supply arbitrary tools or executable code. Callouts and text boxes
 accept bounded text. Navigation/reset remain code-owned; manual pointer/freehand/erase/undo
-controls remain presenter-owned. PowerPoint region zoom remains #111.
+controls remain presenter-owned. Zoom selects a complete source object, with empty text
+and target_text, rather than inventing focus coordinates. It has equal consideration with
+every other tool, with no preference, quota or forced variety. Native focus may clamp near
+edges; a target larger than half the slide will not fit entirely in the fixed-2x viewport.
 
 The separate schemas are packaged in `analysis/powerpoint_contracts/` on the server and
 `powerpoint_contracts/` in the desktop wheel, with a parity test. PowerPoint's analysis
@@ -46,11 +49,15 @@ native slide IDs, without pretending that a PDF raster or render cache exists. S
 format is explicit in the catalog, source, analysis, action and execution report. New
 database format columns and composite foreign keys prevent cross-format records.
 
-PowerPoint reads use `GET /api/v1/analyses/powerpoint/by-deck/{deck_id}` and original bytes
+Updated PowerPoint reads use `GET /api/v2/analyses/powerpoint/by-deck/{deck_id}` and original bytes
 use `GET /api/v1/decks/{deck_id}/powerpoint-source`. Existing PDF analysis/source endpoints
 retain their PDF contracts and reject PowerPoint access. Authentication, ownership,
 private evidence, bounded reads and `Cache-Control: no-store` apply to both formats.
 There is no HTTP endpoint through which a desktop client can assert successful validation.
+The v1 read endpoint retains its original annotation-only response models. It continues
+to serve compatible analyses and returns 409 with an upgrade message for analyses that
+contain zoom, rather than sending an unknown action enum to older clients. The API schema
+compatibility gate covers both endpoints; PDF endpoints remain on v1.
 Generated text annotations find clear space beside the target using the actual Office
 object/text bounds. Text wraps and fits inside a bounded box; callouts have an orange
 frame and a leader pointing at their target. No clear space means an unavailable action,
@@ -106,6 +113,21 @@ does not provision a Windows VM or claim that an Office runtime is deployed in A
    opening that source. The raw action hash, source hash, native slide, geometry, window and
    recorded Office build are checked again. A different Office build requires revalidation.
    No action runs automatically when reading or selecting a suggestion.
+
+5. A validated zoom runs in the native slideshow; the Review reference remains a static
+   full-slide export. Use **Reset zoom** to restore the full slide without erasing annotations.
+   Browsing slides or running another action also restores the full view first.
+
+Zoom validation uses physical-pixel captures of the exact foreground slideshow, not
+PowerPoint's unchanged slide export or read-only Zoom property. On the dedicated interactive
+Windows worker it compares the visible viewport with the expected 2x crop, resets zoom,
+checks that the original view returned and verifies no shapes were added or removed.
+Changed animation/media frames, unavailable UIA, focus loss or an unconfirmed viewport
+leave the action unavailable. These are execution/viewport checks, not semantic approval.
+Only successful bound before/after captures are published as private evidence. Linux
+workers still cannot validate native Office actions. The additive catalog keeps existing
+saved actions readable; apply migration `0014_powerpoint_zoom` before processing new zoom
+suggestions. Old desktop/worker builds must be upgraded to execute the new action.
 
 Private sources, previews and results clear on sign-out, account/backend/deck change and
 shutdown. A separate cleanup runner closes only the downloaded private presentation and

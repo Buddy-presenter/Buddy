@@ -154,7 +154,8 @@ and supports negative monitor origins. Automated geometry tests cover these case
 physical multiple monitors, projector/screen-share output, other Office versions and
 localized Office installations still need acceptance testing. Missing native accessibility
 controls fail with a recoverable error. This Windows-only path requires the packaged
-`comtypes` UIA binding; PDF playback and upload/Review contracts are unchanged.
+`comtypes` UIA binding. The uploaded generation/Review path can also suggest and validate
+native zoom; see [PowerPoint analysis](powerpoint-analysis.md). PDF playback is unchanged.
 
 ## Recorded Windows acceptance and repeatable smoke
 

@@ -490,7 +490,9 @@ class ReviewService:
         if source_format not in {"pdf", "pptx"}:
             raise ServiceError("Unsupported saved analysis format.")
         content, _ = self._get(
-            f"/api/v1/analyses/{'powerpoint/' if source_format == 'pptx' else ''}by-deck/{deck_id}",
+            f"/api/v2/analyses/powerpoint/by-deck/{deck_id}"
+            if source_format == "pptx"
+            else f"/api/v1/analyses/by-deck/{deck_id}",
             accept="application/json",
             limit=MAX_ANALYSIS_BYTES,
         )

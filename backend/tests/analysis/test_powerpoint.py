@@ -80,6 +80,31 @@ def test_pdf_actions_and_pdf_sources_are_rejected_in_powerpoint_path():
         PowerPointProvider("eu-central-1").request_body(b"%PDF-1.7", pdf, manifest(extraction))
 
 
+def test_zoom_uses_real_object_bounds_and_neutral_generation_guidance():
+    content, extracted = source()
+    doc = analysis_document(
+        output(extracted, ("zoom_region",)),
+        extracted,
+        manifest(extracted),
+        UUID(manifest(extracted).deck_id),
+        uuid4(),
+        uuid4(),
+    )
+    action = doc.slides[0].actions[0]
+    assert action.type == "zoom_region" and action.params.source_shape_id is not None
+    assert action.params.region.width == 300
+    invalid = action.model_dump(mode="json")
+    invalid["params"]["source_shape_id"] = None
+    with pytest.raises(ValueError, match="source object"):
+        PowerPointContentAction.model_validate(invalid)
+    prompt = str(
+        PowerPointProvider("eu-central-1").request_body(content, extracted, manifest(extracted))
+    )
+    assert "equal terms" in prompt and "without tool-frequency targets" in prompt
+    assert "zoom_region enlarges a source object" in prompt
+    assert "No PDF actions, zoom" not in prompt
+
+
 def test_text_targets_are_grounded_and_decorative_text_frames_are_omitted():
     _, extraction = source()
     raw = output(extraction, ("highlight_region", "draw_star", "draw_diamond")).model_dump(
@@ -167,7 +192,7 @@ def test_tiny_and_duplicate_suggestions_do_not_fail_the_complete_analysis():
 
 
 @pytest.mark.parametrize(
-    "kind", ["zoom_region", "next_slide", "erase_drawing", "draw_freehand", "run_code"]
+    "kind", ["reset_zoom", "next_slide", "erase_drawing", "draw_freehand", "run_code"]
 )
 def test_generated_catalog_rejects_noncontent_or_pdf_only_actions(kind):
     _, extracted = source()

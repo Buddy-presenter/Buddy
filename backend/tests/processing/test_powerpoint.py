@@ -421,15 +421,16 @@ def test_malformed_model_response_retries_then_publishes_without_manual_retry(
     asyncio.run(scenario())
 
 
-def test_powerpoint_candidates_survive_runtime_failure_and_reject_pdf_evidence(migrated_database):
+@pytest.mark.parametrize("kind", ["draw_rectangle", "zoom_region"])
+def test_powerpoint_candidates_survive_runtime_failure_and_reject_pdf_evidence(
+    migrated_database, kind
+):
     async def scenario():
         content, _ = source()
         db = Database(migrated_database)
         try:
             owner, deck, job = await seed(db, content=content, source_format="pptx")
-            worker, queue, _ = processor(
-                db, content, provider=Provider(actions=("draw_rectangle",))
-            )
+            worker, queue, _ = processor(db, content, provider=Provider(actions=(kind,)))
             await worker.maintain()
             await worker.run_message(queue.messages[0])
             current = await row(db, job.id)
@@ -455,10 +456,23 @@ def test_powerpoint_candidates_survive_runtime_failure_and_reject_pdf_evidence(m
                 )
                 with pytest.raises(PersistenceConflict):
                     await analyses.record_validation(owner_id=owner.id, result=bad)
+            return owner.id, deck.id
         finally:
             await db.close()
 
-    asyncio.run(scenario())
+    owner_id, deck_id = asyncio.run(scenario())
+    app = create_app(Settings(Environment.TEST, ("testserver",), database=migrated_database))
+    app.dependency_overrides[authenticated] = lambda: Principal(owner_id, "owner@example.test")
+    with TestClient(app) as client:
+        path = f"/api/v2/analyses/powerpoint/by-deck/{deck_id}"
+        response = client.get(path)
+        assert response.status_code == 200
+        assert response.headers["Cache-Control"] == "no-store"
+        assert response.json()["data"]["slides"][0]["actions"][0]["action"]["type"] == kind
+        legacy = client.get(f"/api/v1/analyses/powerpoint/by-deck/{deck_id}")
+        assert legacy.status_code == (409 if kind == "zoom_region" else 200)
+        app.dependency_overrides[authenticated] = lambda: Principal(uuid4(), "other@example.test")
+        assert client.get(path).status_code in {403, 404}
 
 
 def test_large_powerpoint_validation_resumes_before_deadline_without_regeneration(

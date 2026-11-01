@@ -782,6 +782,27 @@ class PowerPointAutomation:
                 self._zoom_window_id = None
             if action.kind in {"zoom_region", "reset_zoom"}:
                 if action.kind == "zoom_region" and action.region is not None:
+                    if action.source_shape_id is not None:
+                        source = self._source_shape(
+                            window.Presentation.Slides.Item(info.slide_index).Shapes,
+                            action.source_shape_id,
+                        )
+                        actual = tuple(
+                            map(float, (source.Left, source.Top, source.Width, source.Height))
+                        )
+                        expected = (
+                            action.region.x,
+                            action.region.y,
+                            action.region.width,
+                            action.region.height,
+                        )
+                        if action.target_text or any(
+                            not math.isfinite(a) or abs(a - b) > 0.5
+                            for a, b in zip(actual, expected, strict=True)
+                        ):
+                            raise PowerPointError(
+                                "The saved zoom target differs from the source object."
+                            )
                     view.PointerType = 1
                     # Retain cleanup ownership even if confirmation fails after input.
                     self._zoom_window_id = info.window_id
