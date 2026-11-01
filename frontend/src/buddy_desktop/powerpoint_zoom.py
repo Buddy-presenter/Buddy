@@ -8,7 +8,7 @@ import math
 import sys
 import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from typing import Any
 
 from buddy_desktop.powerpoint_contract import PowerPointError, PresentationInfo
@@ -115,16 +115,12 @@ class WindowsPowerPointZoom:
 
     def focus(self, info: PresentationInfo) -> None:
         if self.gui.GetForegroundWindow() != info.window_id:
-            try:
+            # Some Windows builds return an error even when activation succeeds.
+            with suppress(Exception):
                 self.gui.SetForegroundWindow(info.window_id)
-            except Exception:
-                # Some Windows builds return an error even when activation succeeds.
-                pass
             if self.gui.GetForegroundWindow() != info.window_id:
-                try:
+                with suppress(Exception):
                     self.uia.ElementFromHandle(info.window_id).SetFocus()
-                except Exception:
-                    pass
         # The actual foreground window is authoritative; never send input elsewhere.
         self._guard(info)
 
