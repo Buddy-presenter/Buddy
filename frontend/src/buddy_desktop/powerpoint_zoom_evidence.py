@@ -106,7 +106,13 @@ def distance(first: QImage, second: QImage) -> float:
 
 
 def verify_zoom(
-    before: QImage, after: QImage, reset: QImage, info: PresentationInfo, region: Region
+    before: QImage,
+    after: QImage,
+    reset: QImage,
+    info: PresentationInfo,
+    region: Region,
+    *,
+    client_size: tuple[int, int] | None = None,
 ) -> None:
     """Require a visible fixed-2x viewport transform and a return to the original view."""
     if (
@@ -117,14 +123,31 @@ def verify_zoom(
         raise PowerPointError("The slideshow geometry changed during zoom validation.")
     cx = min(0.75, max(0.25, (region.x + region.width / 2) / info.slide_width))
     cy = min(0.75, max(0.25, (region.y + region.height / 2) / info.slide_height))
-    expected = before.copy(
-        round((cx - 0.25) * before.width()),
-        round((cy - 0.25) * before.height()),
-        round(before.width() / 2),
-        round(before.height() / 2),
-    )
+    # Office clamps its focus viewport against the display canvas, including
+    # letterbox bars. Cropped slide captures therefore need bounded registration
+    # near the edges; a slide-only clamp wrongly rejects successful native zoom.
+    padding_x = padding_y = 0.0
+    if client_size is not None:
+        width, height = client_size
+        scale = min(width / info.slide_width, height / info.slide_height)
+        if scale <= 0:
+            raise PowerPointError("The slideshow display geometry is unavailable.")
+        padding_x = (width / (info.slide_width * scale) - 1) / 2
+        padding_y = (height / (info.slide_height * scale) - 1) / 2
+    offsets_x = [padding_x * factor for factor in (-1, -0.5, 0, 0.5, 1)] if padding_x else [0]
+    offsets_y = [padding_y * factor for factor in (-1, -0.5, 0, 0.5, 1)] if padding_y else [0]
+    best = 1.0
+    for dx in offsets_x:
+        for dy in offsets_y:
+            expected = before.copy(
+                round(min(0.5, max(0, cx - 0.25 + dx)) * before.width()),
+                round(min(0.5, max(0, cy - 0.25 + dy)) * before.height()),
+                round(before.width() / 2),
+                round(before.height() / 2),
+            )
+            best = min(best, distance(expected, after))
     unchanged = distance(before, after)
-    if unchanged < 0.015 or distance(expected, after) >= unchanged * 0.8:
+    if unchanged < 0.015 or best >= unchanged * 0.8:
         raise PowerPointError("The captured slideshow did not confirm native 2x zoom.")
     if distance(before, reset) > 0.02:
         raise PowerPointError("The slideshow did not return to its original full-slide view.")

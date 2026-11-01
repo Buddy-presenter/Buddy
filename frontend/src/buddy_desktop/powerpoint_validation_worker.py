@@ -121,6 +121,9 @@ def validate(folder: Path) -> dict[str, Any]:
 
             driver = adapter._zoom_driver()
             driver.focus(info)
+            with driver._physical_pixels():
+                left, top, right, bottom = driver.gui.GetClientRect(info.window_id)
+                client_size = (right - left, bottom - top)
             adapter.execute(PowerPointAction("reset_zoom", info))
             before_image = capture(info, driver)
             before = png(before_image)
@@ -137,7 +140,15 @@ def validate(folder: Path) -> dict[str, Any]:
             adapter.execute(PowerPointAction("reset_zoom", after_info))
             reset_image = capture(after_info, driver)
             assert action.region is not None
-            verify_zoom(before_image, after_image, reset_image, info, action.region)
+            stage = "zoom_viewport_proof"
+            verify_zoom(
+                before_image,
+                after_image,
+                reset_image,
+                info,
+                action.region,
+                client_size=client_size,
+            )
             if presentation.Slides.Item(info.slide_index).Shapes.Count != original_shapes:
                 raise ValueError("Zoom changed source shapes")
         else:

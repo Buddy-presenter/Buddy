@@ -122,6 +122,8 @@ Zoom validation uses physical-pixel captures of the exact foreground slideshow, 
 PowerPoint's unchanged slide export or read-only Zoom property. On the dedicated interactive
 Windows worker it compares the visible viewport with the expected 2x crop, resets zoom,
 checks that the original view returned and verifies no shapes were added or removed.
+Near slide edges, image registration is bounded by the measured display letterboxing:
+PowerPoint clamps against the display canvas, not solely the slide's content rectangle.
 Changed animation/media frames, unavailable UIA, focus loss or an unconfirmed viewport
 leave the action unavailable. These are execution/viewport checks, not semantic approval.
 Only successful bound before/after captures are published as private evidence.
