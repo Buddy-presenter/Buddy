@@ -11,6 +11,7 @@ class ValidatorSettings(BaseModel):
     seconds: int = Field(default=60, ge=5, le=90)
     powerpoint_seconds: int = Field(default=60, ge=5, le=90)
     memory_mb: int = Field(default=768, ge=256, le=768)
+    powerpoint_memory_mb: int = Field(default=1536, ge=256, le=1536)
 
     @field_validator("python")
     @classmethod

@@ -27,6 +27,10 @@ def capture(info: PresentationInfo, driver: WindowsPowerPointZoom) -> QImage:
         y = origin[1] + (bottom - top - height) // 2
         if min(width, height) < 100 or width * height > 32_000_000:
             raise PowerPointError("The slideshow capture size is unavailable.")
+        # Bound evidence allocations before copying pixels out of GDI. Office's own
+        # rendering shares the same worker budget; three native 4K frames do not fit.
+        ratio = min(1.0, 1280 / max(width, height))
+        capture_width, capture_height = round(width * ratio), round(height * ratio)
         # Move the pointer off the slide and allow the native toolbar to fade.
         original = api.GetCursorPos()
         dc = gui.GetDC(0)
@@ -41,12 +45,23 @@ def capture(info: PresentationInfo, driver: WindowsPowerPointZoom) -> QImage:
                 info.window_id
             ) != (left, top, right, bottom):
                 raise PowerPointError("The slideshow moved during capture.")
-            bitmap.CreateCompatibleBitmap(screen, width, height)
+            bitmap.CreateCompatibleBitmap(screen, capture_width, capture_height)
             previous = memory.SelectObject(bitmap)
             try:
-                memory.BitBlt((0, 0), (width, height), screen, (x, y), 0x00CC0020)
+                gui.SetStretchBltMode(memory.GetSafeHdc(), 4)  # HALFTONE
+                memory.StretchBlt(
+                    (0, 0),
+                    (capture_width, capture_height),
+                    screen,
+                    (x, y),
+                    (width, height),
+                    0x00CC0020,
+                )
                 image = QImage(
-                    bitmap.GetBitmapBits(True), width, height, QImage.Format.Format_RGB32
+                    bitmap.GetBitmapBits(True),
+                    capture_width,
+                    capture_height,
+                    QImage.Format.Format_RGB32,
                 ).copy()
             finally:
                 memory.SelectObject(previous)
@@ -82,7 +97,8 @@ def distance(first: QImage, second: QImage) -> float:
         ).scaled(
             96, 54, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation
         )
-        return bytes(image.convertToFormat(QImage.Format.Format_RGB888).constBits())
+        image = image.convertToFormat(QImage.Format.Format_RGB888)
+        return bytes(image.constBits())
 
     return sum(abs(a - b) for a, b in zip(pixels(first), pixels(second), strict=True)) / (
         96 * 54 * 3 * 255

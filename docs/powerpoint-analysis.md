@@ -124,8 +124,12 @@ Windows worker it compares the visible viewport with the expected 2x crop, reset
 checks that the original view returned and verifies no shapes were added or removed.
 Changed animation/media frames, unavailable UIA, focus loss or an unconfirmed viewport
 leave the action unavailable. These are execution/viewport checks, not semantic approval.
-Only successful bound before/after captures are published as private evidence. Linux
-workers still cannot validate native Office actions. The additive catalog keeps existing
+Only successful bound before/after captures are published as private evidence.
+Zoom evidence is downsampled in GDI to at most 1280 pixels on its longest edge before
+allocating Python image copies. The separately bounded Office worker budget is 1536 MiB
+for Python plus its owned Office process; the PDF budget remains 768 MiB. The real uploaded
+deck exceeded the previous shared budget while PowerPoint rendered its native zoom.
+Linux workers still cannot validate native Office actions. The additive catalog keeps existing
 saved actions readable; apply migration `0014_powerpoint_zoom` before processing new zoom
 suggestions. Old desktop/worker builds must be upgraded to execute the new action.
 

@@ -464,3 +464,13 @@ def test_comprehensive_candidate_budget_is_bounded(count):
             PowerPointOutput.model_validate(raw)
     else:
         assert sum(len(s.actions) for s in PowerPointOutput.model_validate(raw).slides) == 100
+
+
+def test_office_rendering_budget_is_separate_and_bounded():
+    import sys
+
+    settings = ValidatorSettings(python=sys.executable)
+    assert settings.memory_mb == 768
+    assert settings.powerpoint_memory_mb == 1536
+    with pytest.raises(ValueError):
+        ValidatorSettings(python=sys.executable, powerpoint_memory_mb=1537)
