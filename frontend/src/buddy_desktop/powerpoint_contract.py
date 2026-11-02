@@ -82,6 +82,8 @@ class PowerPointAction:
             "next_slide",
             "previous_slide",
             "go_to_slide",
+            "zoom_region",
+            "reset_zoom",
             "draw_line",
             "draw_arrow",
             "draw_rectangle",
@@ -162,6 +164,7 @@ class PowerPointAction:
             raise PowerPointError("This action does not accept drawing points.")
 
         region_kinds = {
+            "zoom_region",
             "draw_rounded_rectangle",
             "draw_diamond",
             "draw_triangle",

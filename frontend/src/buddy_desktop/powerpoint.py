@@ -42,11 +42,14 @@ class PowerPointAutomation:
         com_loader: Callable[[], tuple[Any, Any]] | None = None,
         progid_probe: Callable[[], None] | None = None,
         process_probe: Callable[[], bool] | None = None,
+        zoom_factory: Callable[[], Any] | None = None,
     ) -> None:
         self._platform_name = platform_name or sys.platform
         self._com_loader = com_loader
         self._progid_probe = progid_probe
         self._process_probe = process_probe or self._powerpoint_process_running
+        self._zoom_factory = zoom_factory
+        self._zoom_window_id: int | None = None
         # One PowerPointAutomation instance serves a single TaskRunner, so operations are
         # serialized. The slide names themselves survive a Buddy restart while the
         # read-only PowerPoint session remains open; Reset scans by this private prefix.
@@ -205,7 +208,13 @@ class PowerPointAutomation:
         points = action.points
         if action.source_shape_id is not None:
             source = cls._source_shape(shapes, action.source_shape_id)
-            if source.HasTextFrame and source.TextFrame.HasText:
+            if r is None:
+                r = Region(*map(float, (source.Left, source.Top, source.Width, source.Height)))
+            if getattr(source, "HasTable", False) and action.target_text:
+                from buddy_desktop.powerpoint_table import table_region
+
+                r = table_region(source, action.target_text)
+            elif source.HasTextFrame and source.TextFrame.HasText:
                 if action.kind in {"draw_diamond", "draw_triangle", "draw_hexagon", "draw_star"}:
                     raise PowerPointError("This geometric outline cannot safely frame text.")
                 tr = source.TextFrame.TextRange
@@ -232,6 +241,27 @@ class PowerPointAutomation:
                     points = ((r.x, r.y), (r.x + r.width, r.y + r.height))
             elif action.target_text:
                 raise PowerPointError("The source object no longer contains the selected text.")
+            if action.kind == "draw_arrow" and r is not None:
+                from buddy_desktop.powerpoint_layout import pointer_points
+
+                occupied = []
+                for index in range(1, shapes.Count + 1):
+                    item = shapes.Item(index)
+                    if int(getattr(item, "Id", -1)) == action.source_shape_id:
+                        continue
+                    bounds = tuple(map(float, (item.Left, item.Top, item.Width, item.Height)))
+                    if (
+                        bounds[2] * bounds[3]
+                        >= action.target.slide_width * action.target.slide_height * 0.85
+                    ):
+                        continue
+                    if bounds[2] > 0 and bounds[3] > 0:
+                        occupied.append(Region(*bounds))
+                points = pointer_points(
+                    r, action.target.slide_width, action.target.slide_height, tuple(occupied)
+                )
+            elif action.kind == "draw_line" and r is not None:
+                points = ((r.x, r.y), (r.x + r.width, r.y + r.height))
         created: list[Any] = []
         names: list[str] = []
         try:
@@ -771,7 +801,45 @@ class PowerPointAutomation:
             window = self._target_window(application, action.target)
             info = self._snapshot(window)
             view = window.View
-            if action.kind in {"next_slide", "previous_slide", "go_to_slide"}:
+            if self._zoom_window_id == info.window_id and action.kind not in {
+                "zoom_region",
+                "reset_zoom",
+            }:
+                view.GotoSlide(info.slide_index, 0)
+                self._zoom_window_id = None
+            if action.kind in {"zoom_region", "reset_zoom"}:
+                if action.kind == "zoom_region" and action.region is not None:
+                    if action.source_shape_id is not None:
+                        source = self._source_shape(
+                            window.Presentation.Slides.Item(info.slide_index).Shapes,
+                            action.source_shape_id,
+                        )
+                        actual = tuple(
+                            map(float, (source.Left, source.Top, source.Width, source.Height))
+                        )
+                        expected = (
+                            action.region.x,
+                            action.region.y,
+                            action.region.width,
+                            action.region.height,
+                        )
+                        if action.target_text or any(
+                            not math.isfinite(a) or abs(a - b) > 0.5
+                            for a, b in zip(actual, expected, strict=True)
+                        ):
+                            raise PowerPointError(
+                                "The saved zoom target differs from the source object."
+                            )
+                    view.PointerType = 1
+                    # Retain cleanup ownership even if confirmation fails after input.
+                    self._zoom_window_id = info.window_id
+                    self._zoom_driver().zoom(
+                        info, action.region, lambda: self._target_window(application, action.target)
+                    )
+                else:
+                    view.GotoSlide(info.slide_index, 0)
+                    self._zoom_window_id = None
+            elif action.kind in {"next_slide", "previous_slide", "go_to_slide"}:
                 target = (
                     info.slide_index + 1
                     if action.kind == "next_slide"
@@ -842,9 +910,19 @@ class PowerPointAutomation:
         except PowerPointError:
             raise
         except Exception as exc:
+            if action.kind in {"zoom_region", "reset_zoom"}:
+                raise PowerPointError(
+                    "PowerPoint could not confirm zoom. Return to its slideshow, then try "
+                    "Reset zoom. The command was not retried."
+                ) from exc
             raise PowerPointError(
                 "PowerPoint could not finish the action. Check the slide; erase ink if needed. "
                 "The action was not retried."
             ) from exc
         finally:
             self._end_com(pythoncom)
+
+    def _zoom_driver(self) -> Any:
+        from buddy_desktop.powerpoint_zoom import WindowsPowerPointZoom
+
+        return (self._zoom_factory or WindowsPowerPointZoom)()

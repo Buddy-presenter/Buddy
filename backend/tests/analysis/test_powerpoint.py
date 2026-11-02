@@ -80,6 +80,61 @@ def test_pdf_actions_and_pdf_sources_are_rejected_in_powerpoint_path():
         PowerPointProvider("eu-central-1").request_body(b"%PDF-1.7", pdf, manifest(extraction))
 
 
+def test_zoom_uses_real_object_bounds_and_neutral_generation_guidance():
+    content, extracted = source()
+    doc = analysis_document(
+        output(extracted, ("zoom_region",)),
+        extracted,
+        manifest(extracted),
+        UUID(manifest(extracted).deck_id),
+        uuid4(),
+        uuid4(),
+    )
+    action = doc.slides[0].actions[0]
+    assert action.type == "zoom_region" and action.params.source_shape_id is not None
+    assert action.params.region.width == 300
+    invalid = action.model_dump(mode="json")
+    invalid["params"]["source_shape_id"] = None
+    with pytest.raises(ValueError, match="source object"):
+        PowerPointContentAction.model_validate(invalid)
+    prompt = str(
+        PowerPointProvider("eu-central-1").request_body(content, extracted, manifest(extracted))
+    )
+    assert "equal terms" in prompt and "without tool-frequency targets" in prompt
+    assert "zoom_region enlarges a source object" in prompt
+    assert "No PDF actions, zoom" not in prompt
+    assert "Do not zoom titles" in prompt
+    assert "actual legibility benefit" in prompt
+    assert "never fill a zoom quota" in prompt
+
+
+def test_zoom_allows_large_source_objects_for_native_central_detail_focus():
+    _, extracted = source()
+    slide = extracted.slides[0]
+    obj = slide.objects[0]
+    oversized = obj.model_copy(
+        update={"bounds": obj.bounds.model_copy(update={"width": 800 * 12700})}
+    )
+    changed = extracted.model_copy(
+        update={
+            "slides": (
+                slide.model_copy(update={"objects": (oversized, *slide.objects[1:])}),
+                *extracted.slides[1:],
+            )
+        }
+    )
+    document = analysis_document(
+        output(changed, ("zoom_region", "draw_rectangle")),
+        changed,
+        manifest(changed),
+        UUID(manifest(changed).deck_id),
+        uuid4(),
+        uuid4(),
+    )
+    assert [a.type for a in document.slides[0].actions] == ["zoom_region", "draw_rectangle"]
+    assert {a.type for a in document.slides[1].actions} == {"zoom_region", "draw_rectangle"}
+
+
 def test_text_targets_are_grounded_and_decorative_text_frames_are_omitted():
     _, extraction = source()
     raw = output(extraction, ("highlight_region", "draw_star", "draw_diamond")).model_dump(
@@ -167,7 +222,7 @@ def test_tiny_and_duplicate_suggestions_do_not_fail_the_complete_analysis():
 
 
 @pytest.mark.parametrize(
-    "kind", ["zoom_region", "next_slide", "erase_drawing", "draw_freehand", "run_code"]
+    "kind", ["reset_zoom", "next_slide", "erase_drawing", "draw_freehand", "run_code"]
 )
 def test_generated_catalog_rejects_noncontent_or_pdf_only_actions(kind):
     _, extracted = source()
@@ -439,3 +494,13 @@ def test_comprehensive_candidate_budget_is_bounded(count):
             PowerPointOutput.model_validate(raw)
     else:
         assert sum(len(s.actions) for s in PowerPointOutput.model_validate(raw).slides) == 100
+
+
+def test_office_rendering_budget_is_separate_and_bounded():
+    import sys
+
+    settings = ValidatorSettings(python=sys.executable)
+    assert settings.memory_mb == 768
+    assert settings.powerpoint_memory_mb == 1536
+    with pytest.raises(ValueError):
+        ValidatorSettings(python=sys.executable, powerpoint_memory_mb=1537)

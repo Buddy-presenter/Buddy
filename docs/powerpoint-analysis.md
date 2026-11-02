@@ -31,13 +31,29 @@ keeps rows selectable and preserves the selected deck when results reorder.
 
 `powerpoint-2` permits highlight, rectangle, oval, underline, arrow, callout, line,
 filled rectangle, filled oval, text box, rounded rectangle, diamond, triangle, hexagon
-and star actions. Generation considers the whole catalog and selects a useful, varied
+and star actions, plus native fixed-2x `zoom_region`. Generation considers the whole catalog and selects a useful, varied
 subset rather than forcing decoration. Every generated action selects an extracted object ID;
 the server derives the rectangle from that object's actual bounds in PowerPoint slide
 points (12,700 EMU per point). Unsupported, duplicate, clipped/degenerate or unknown targets
 fail explicitly. Calls cannot supply arbitrary tools or executable code. Callouts and text boxes
 accept bounded text. Navigation/reset remain code-owned; manual pointer/freehand/erase/undo
-controls remain presenter-owned. PowerPoint region zoom remains #111.
+controls remain presenter-owned. Zoom selects a complete source object, with empty text
+and target_text, rather than inventing focus coordinates. It has equal consideration with
+every other tool, with no preference, quota or forced variety. Native focus may clamp near
+edges; large source objects are allowed, with central-detail focus rather than a promise
+that the complete object fits at 2x. The prompt actively considers zoom for a legibility
+or clear audience-focus benefit, such as important comparisons, tables, chart labels, detailed diagrams,
+code, equations, formulas or small substantive body text. A meaningful result or relationship
+may also warrant focus when enlargement helps explain it, grounded in slide content and
+speaker notes rather than assumed presenter intent. Readable substantive content can still
+benefit from audience focus; generic titles and branding alone do not justify zoom.
+These semantic choices remain model judgments. Existing saved suggestions are preserved;
+new analyses use this guidance.
+
+Generated arrows point from clear nearby space to the selected object's edge, without
+crossing its text or claiming to connect two objects. If no clear pointer position exists,
+validation leaves it unavailable. Table phrases resolve against the actual Office cells;
+matching rows or cells are measured directly, and missing or ambiguous phrases are refused.
 
 The separate schemas are packaged in `analysis/powerpoint_contracts/` on the server and
 `powerpoint_contracts/` in the desktop wheel, with a parity test. PowerPoint's analysis
@@ -46,11 +62,15 @@ native slide IDs, without pretending that a PDF raster or render cache exists. S
 format is explicit in the catalog, source, analysis, action and execution report. New
 database format columns and composite foreign keys prevent cross-format records.
 
-PowerPoint reads use `GET /api/v1/analyses/powerpoint/by-deck/{deck_id}` and original bytes
+Updated PowerPoint reads use `GET /api/v2/analyses/powerpoint/by-deck/{deck_id}` and original bytes
 use `GET /api/v1/decks/{deck_id}/powerpoint-source`. Existing PDF analysis/source endpoints
 retain their PDF contracts and reject PowerPoint access. Authentication, ownership,
 private evidence, bounded reads and `Cache-Control: no-store` apply to both formats.
 There is no HTTP endpoint through which a desktop client can assert successful validation.
+The v1 read endpoint retains its original annotation-only response models. It continues
+to serve compatible analyses and returns 409 with an upgrade message for analyses that
+contain zoom, rather than sending an unknown action enum to older clients. The API schema
+compatibility gate covers both endpoints; PDF endpoints remain on v1.
 Generated text annotations find clear space beside the target using the actual Office
 object/text bounds. Text wraps and fits inside a bounded box; callouts have an orange
 frame and a leader pointing at their target. No clear space means an unavailable action,
@@ -106,6 +126,27 @@ does not provision a Windows VM or claim that an Office runtime is deployed in A
    opening that source. The raw action hash, source hash, native slide, geometry, window and
    recorded Office build are checked again. A different Office build requires revalidation.
    No action runs automatically when reading or selecting a suggestion.
+
+5. A validated zoom runs in the native slideshow; the Review reference remains a static
+   full-slide export. Use **Reset zoom** to restore the full slide without erasing annotations.
+   Browsing slides or running another action also restores the full view first.
+
+Zoom validation uses physical-pixel captures of the exact foreground slideshow, not
+PowerPoint's unchanged slide export or read-only Zoom property. On the dedicated interactive
+Windows worker it compares the visible viewport with the expected 2x crop, resets zoom,
+checks that the original view returned and verifies no shapes were added or removed.
+Near slide edges, image registration is bounded by the measured display letterboxing:
+PowerPoint clamps against the display canvas, not solely the slide's content rectangle.
+Changed animation/media frames, unavailable UIA, focus loss or an unconfirmed viewport
+leave the action unavailable. These are execution/viewport checks, not semantic approval.
+Only successful bound before/after captures are published as private evidence.
+Zoom evidence is downsampled in GDI to at most 1280 pixels on its longest edge before
+allocating Python image copies. The separately bounded Office worker budget is 1536 MiB
+for Python plus its owned Office process; the PDF budget remains 768 MiB. The real uploaded
+deck exceeded the previous shared budget while PowerPoint rendered its native zoom.
+Linux workers still cannot validate native Office actions. The additive catalog keeps existing
+saved actions readable; apply migration `0014_powerpoint_zoom` before processing new zoom
+suggestions. Old desktop/worker builds must be upgraded to execute the new action.
 
 Private sources, previews and results clear on sign-out, account/backend/deck change and
 shutdown. A separate cleanup runner closes only the downloaded private presentation and

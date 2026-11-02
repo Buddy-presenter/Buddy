@@ -293,6 +293,11 @@ class ReviewWidget(Page):
         self.open_powerpoint = QPushButton("Open saved PowerPoint")
         command(self.open_powerpoint, "external-link")
         self.open_powerpoint.clicked.connect(self.open_saved_powerpoint)
+        self.reset_powerpoint_zoom = QPushButton("Reset zoom")
+        command(self.reset_powerpoint_zoom, "refresh-cw")
+        self.reset_powerpoint_zoom.clicked.connect(self.reset_saved_powerpoint_zoom)
+        self.reset_powerpoint_zoom.hide()
+        self.reset_powerpoint_zoom.setEnabled(False)
         self.run_powerpoint = QPushButton("Run action")
         self.run_powerpoint.setAccessibleName("Run selected action in PowerPoint")
         command(self.run_powerpoint, "arrow-right", primary=True)
@@ -300,6 +305,7 @@ class ReviewWidget(Page):
         for button in (self.open_powerpoint, self.run_powerpoint):
             button.hide()
         powerpoint_row.addWidget(self.open_powerpoint)
+        powerpoint_row.addWidget(self.reset_powerpoint_zoom)
         powerpoint_row.addStretch(1)
         content_layout.addLayout(powerpoint_row)
 
@@ -514,6 +520,7 @@ class ReviewWidget(Page):
         self.slide_summary.clear()
         self.content.hide()
         self.run_powerpoint.setEnabled(False)
+        self.reset_powerpoint_zoom.setEnabled(False)
         self.open_powerpoint.setEnabled(False)
         self.refresh_checks_button.setEnabled(False)
         self.pending_load = False
@@ -675,6 +682,7 @@ class ReviewWidget(Page):
             self._expand_summary(False)
             powerpoint = self.source_format == "pptx"
             self.open_powerpoint.setVisible(powerpoint)
+            self.reset_powerpoint_zoom.setVisible(powerpoint)
             self.run_powerpoint.setVisible(powerpoint)
             self.open_powerpoint.setEnabled(
                 powerpoint
@@ -746,6 +754,13 @@ class ReviewWidget(Page):
         self.content.hide()
 
     def idle(self) -> None:
+        self.reset_powerpoint_zoom.setEnabled(
+            self.source_format == "pptx"
+            and self._pptx_session is not None
+            and not self.runner.busy
+            and not self.closing
+            and bool(self.token())
+        )
         self.refresh_checks_button.setEnabled(
             self.analysis is not None and self.token() is not None
         )
@@ -816,6 +831,25 @@ class ReviewWidget(Page):
         self.runner.submit(
             lambda: RenderedPage(
                 index, powerpoint_image(session.apply(action, analysis, index).png)
+            )
+        )
+
+    def reset_saved_powerpoint_zoom(self) -> None:
+        session, analysis, index = self._pptx_session, self.analysis, self.page_index
+        if (
+            session is None
+            or analysis is None
+            or self.runner.busy
+            or self.closing
+            or self.source_format != "pptx"
+            or not self.token()
+        ):
+            return
+        self.request_generation, self.pending_operation = self.generation, "powerpoint_action"
+        self.activity_changed.emit(True)
+        self.runner.submit(
+            lambda: RenderedPage(
+                index, powerpoint_image(session.reset_zoom(index, analysis.slides[index]).png)
             )
         )
 
@@ -924,7 +958,12 @@ class ReviewWidget(Page):
         action = self.action_rows[row]
         self.details_toggle.setChecked(False)
         self.action_status.setText(
-            "Ready to run on this slide."
+            "Ready for native 2× zoom in PowerPoint. This reference stays at full-slide size; "
+            "use Reset zoom to restore the slideshow."
+            if self.source_format == "pptx"
+            and action.usable
+            and action.action_type == "zoom_region"
+            else "Ready to run on this slide."
             if action.usable
             else "Save and close desktop PowerPoint. Buddy will automatically recheck this "
             "action; reopen Review to see the updated result."
@@ -938,7 +977,9 @@ class ReviewWidget(Page):
         slide = self.analysis.slides[self.page_index] if self.analysis else None
         self.preview.set_page(
             self.image,
-            None if self.source_format == "pptx" else action.region,
+            None
+            if self.source_format == "pptx" and action.action_type != "zoom_region"
+            else action.region,
             (slide.width, slide.height) if slide and self.source_format == "pptx" else None,
         )
         self.run_powerpoint.setEnabled(

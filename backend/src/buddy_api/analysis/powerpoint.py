@@ -52,6 +52,7 @@ ACTION_TYPES = (
     "draw_triangle",
     "draw_hexagon",
     "draw_star",
+    "zoom_region",
 )
 MAX_CONTEXT_BYTES = 120_000
 MAX_OUTPUT_TOKENS = 16000
@@ -75,6 +76,7 @@ class SuggestedAction(Model):
         "draw_triangle",
         "draw_hexagon",
         "draw_star",
+        "zoom_region",
     ]
     purpose: str = Field(min_length=1, max_length=512, pattern=r"\S")
     object_id: str = Field(min_length=1, max_length=128)
@@ -139,6 +141,8 @@ def analysis_document(
             if obj is None or obj.bounds is None or obj.kind in {"group", "unsupported"}:
                 continue
             b = obj.bounds
+            if action.type == "zoom_region" and (action.text or action.target_text):
+                continue
             if action.type in GEOMETRIC_TYPES and (
                 obj.text.strip() or b.height == 0 or not 0.5 <= b.width / b.height <= 2
             ):
@@ -250,11 +254,30 @@ class PowerPointProvider:
             "Tool affordances: highlight_region adds translucent emphasis; draw_rectangle "
             "frames a region; draw_rounded_rectangle groups a region with rounded corners; "
             "draw_oval circles a target; draw_underline marks a text baseline; draw_arrow "
-            "indicates direction or a relationship; draw_line marks a boundary or connection; "
+            "points from clear space to one specific source target. It cannot connect two "
+            "different source objects or depict flow between columns; never claim such a "
+            "relationship in its purpose. Prefer highlighting over pointing at generic headings. "
+            "draw_line marks a boundary or connection; "
             "filled_rectangle and filled_oval add translucent area emphasis in their respective "
             "shapes; callout attaches a factual explanation with a leader; text_box adds a "
             "standalone factual label; draw_diamond, draw_triangle, draw_hexagon and draw_star "
-            "outline compact non-text targets with the corresponding geometry. "
+            "outline compact non-text targets with the corresponding geometry; zoom_region "
+            "enlarges a source object with native fixed 2x focus (not fit-to-region scaling). "
+            "Zoom can provide an actual legibility benefit or a clear audience-focus benefit: "
+            "a compact dense table, chart labels, a detailed diagram, code, equations or "
+            "formulas, or small substantive body text that the audience must examine. "
+            "It may isolate a meaningful equation, result, relationship or other substantive "
+            "detail the presenter is explaining when enlargement helps the audience follow "
+            "that explanation. Ground this purpose in the slide content and speaker notes; "
+            "do not assume presenter intent or enlarge arbitrary content for emphasis. "
+            "Actively consider zoom on each substantive slide: it can isolate the key result, "
+            "an important comparison, equation, visual detail, table or explanatory passage, "
+            "even when readable, if focusing the audience helps explain it. "
+            "Do not zoom titles or branding merely for emphasis. Do not exclude useful body "
+            "content just because it is already readable. Larger objects are allowed: fixed "
+            "2x focus shows their central detail and may crop edges; describe that honestly "
+            "rather than claiming the complete object will fit. "
+            "If there is no useful detail to enlarge, suggest no zoom; never fill a zoom quota. "
             "Choose according to the source target, communicative purpose, geometry and "
             "readability, without tool-frequency targets or decorative variety. Do not decorate "
             "placeholders, authoring boilerplate or labels with no presentation purpose. "
@@ -266,7 +289,9 @@ class PowerPointProvider:
             "Any tool may repeat across distinct targets when justified. Return no actions "
             "only when the slide genuinely has no substantive feasible targets. "
             "Every action must select one exact existing object_id on "
-            "that slide. For text targets, set target_text to a short exact, unique verbatim "
+            "that slide. For zoom_region leave text and target_text empty to select the "
+            "complete source object. For other text targets, set target_text to a short exact, "
+            "unique verbatim "
             "substring of that object's text (not a paraphrase). Select the specific phrase "
             "that supports the action, not a whole paragraph. PowerPoint measures that text "
             "at execution; object bounds are only the fallback for non-text targets. "
@@ -278,7 +303,7 @@ class PowerPointProvider:
             "Actions are audience-facing presentation aids, not authoring critique. Do not "
             "annotate duplication warnings, speculate about missing content, or tell the author "
             "to edit the deck. Emphasize only source-grounded presentation content. "
-            "No PDF actions, zoom, navigation, arbitrary tools or executable code. "
+            "No PDF actions, navigation, arbitrary tools or executable code. "
             "Before submitting, remove actions aimed at template boilerplate such as fill-in "
             "instructions, XYZ/ellipsis placeholders, section titles without substantive content, "
             "and empty form fields. Do not add a callout explaining where content belongs. "

@@ -4,8 +4,8 @@ Buddy's **Present** page can open a local `.pptx` in desktop Microsoft PowerPoin
 Windows and start its slideshow, or connect to a slideshow the user already started.
 PowerPoint owns rendering and playback; Buddy does not convert the source or draw slides
 in its PDF surface. The connection from #108 and controls from #116 identify the current
-deck/slide, navigate, and add or remove Buddy annotations. Region zoom remains an
-investigation in #111.
+deck/slide, navigate, and add or remove Buddy annotations. Manual native region zoom
+is available in the Present controls (#111); generated/uploaded zoom actions remain out of scope.
 
 Saved PPTX analysis, review and explicit execution of validated suggestions are described
 in [PowerPoint analysis](powerpoint-analysis.md). Those suggestions use a separate
@@ -106,7 +106,7 @@ Buddy provides selected-area erase and erase-all instead.
 
 Coordinates use the real `PageSetup` slide dimensions in points. The preview uses an
 aspect-preserving viewport mapping and Qt logical pixels. No mouse injection, screen
-position guessing, or Windows magnifier is used. This avoids dependence on slideshow
+position guessing, or Windows magnifier is used for annotations. This avoids dependence on slideshow
 placement, display scaling, or monitor pixel origin. Selections and preview images are
 invalidated when the connected window, slide ID, or dimensions change; **Refresh preview**
 reloads authored slide content, and PowerPoint remains the authoritative display.
@@ -125,6 +125,37 @@ rejected, including different decks with duplicate filenames. Fullscreen mode us
 native slideshow class; the windowed fallback currently recognizes the English
 `PowerPoint Slide Show` frame title. Use fullscreen mode for localized Office installations
 whose windowed title is different. Native fallback modules are included in Windows bundles.
+
+## Manual native region zoom (#111)
+
+Select an area in the full-slide reference (or enter its slide-point coordinates), then
+choose **Zoom to selected area (2×)**. Buddy focuses the selected PowerPoint slideshow,
+invokes its native `OpticalZoomButton` through Windows UI Automation, and selects the
+region's center. PowerPoint supplies the live magnified slide, including its authored
+content; Buddy's reference stays at full-slide size. This uses PowerPoint's fixed initial
+200% magnification, not an exact fit-to-rectangle scale. Near slide edges, PowerPoint
+clamps the focus position. Use **Reset zoom** to restore the complete slide.
+
+Reset uses `GotoSlide(currentSlide, msoFalse)`: it keeps existing animation builds and
+annotations, does not save or change the source file, and never blindly sends Escape
+(which could end a slideshow the presenter already reset). Buddy restores full-slide view
+before subsequent manual navigation or annotation commands after a Buddy zoom. Native
+arrow keys pan while magnified; use Buddy's navigation controls or reset before navigating
+directly in PowerPoint. Disconnect leaves PowerPoint's current view alone.
+
+The UIA command is selected by its automation ID, not localized labels/menu coordinates.
+The adapter checks the exact connected slide before/after input, foreground focus, window
+geometry, occlusion, and held mouse/modifier keys. UIA provider calls and selector waits
+are bounded. A rejected/uncertain command is not replayed. If a native focus selector is
+left open after interruption, cancel it in PowerPoint with Esc before retrying.
+
+Screen mapping runs with per-monitor physical pixels, includes aspect-ratio letterboxing,
+and supports negative monitor origins. Automated geometry tests cover these cases;
+physical multiple monitors, projector/screen-share output, other Office versions and
+localized Office installations still need acceptance testing. Missing native accessibility
+controls fail with a recoverable error. This Windows-only path requires the packaged
+`comtypes` UIA binding. The uploaded generation/Review path can also suggest and validate
+native zoom; see [PowerPoint analysis](powerpoint-analysis.md). PDF playback is unchanged.
 
 ## Recorded Windows acceptance and repeatable smoke
 

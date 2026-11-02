@@ -123,10 +123,13 @@ needed for actual Linux offscreen rendering; retain their packaged license notic
 Terraform passes the validator executable to the staging task template. API memory is
 2 GiB to leave headroom for API/PDF bytes plus the constrained Qt process tree. One local
 resource slot is shared by upload validation, PDF/evidence reads and action checks.
-The validator process tree has a 768-MiB sampled RSS limit, a 60-second parent deadline,
+The PDF validator process tree has a 768-MiB sampled RSS limit, a 60-second parent deadline,
 45-second Qt deadline, 32-file/256-MiB scratch limit, and POSIX CPU/file-size limits.
 Windows additionally uses a kill-on-close Job Object; POSIX cleanup kills the isolated
 process group. Cancellation signals the monitor and stops that process tree.
+The dedicated Windows PowerPoint validator has a separate 1536-MiB aggregate budget
+including its exact owned Office process; native zoom rendering exceeded the PDF budget
+on a real uploaded deck. Its evidence buffers are downsampled before copying native pixels.
 
 The worker uses a fresh offscreen application, private HOME/temp locations, and an
 environment allowlist without AWS/database credentials. It only reads fixed job inputs
