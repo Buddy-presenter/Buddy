@@ -40,14 +40,20 @@ accept bounded text. Navigation/reset remain code-owned; manual pointer/freehand
 controls remain presenter-owned. Zoom selects a complete source object, with empty text
 and target_text, rather than inventing focus coordinates. It has equal consideration with
 every other tool, with no preference, quota or forced variety. Native focus may clamp near
-edges; generation omits targets larger than half the slide width or height because they
-cannot fit entirely in the fixed-2x viewport. The prompt reserves zoom for a legibility
-or clear audience-focus benefit, such as dense tables, chart labels, detailed diagrams,
+edges; large source objects are allowed, with central-detail focus rather than a promise
+that the complete object fits at 2x. The prompt actively considers zoom for a legibility
+or clear audience-focus benefit, such as important comparisons, tables, chart labels, detailed diagrams,
 code, equations, formulas or small substantive body text. A meaningful result or relationship
 may also warrant focus when enlargement helps explain it, grounded in slide content and
-speaker notes rather than assumed presenter intent. It excludes titles, branding, footers and already-readable bullets used merely
-for emphasis. These semantic choices remain model judgments; the size limit is enforced
-by the server. Existing saved suggestions are preserved; new analyses use this guidance.
+speaker notes rather than assumed presenter intent. Readable substantive content can still
+benefit from audience focus; generic titles and branding alone do not justify zoom.
+These semantic choices remain model judgments. Existing saved suggestions are preserved;
+new analyses use this guidance.
+
+Generated arrows point from clear nearby space to the selected object's edge, without
+crossing its text or claiming to connect two objects. If no clear pointer position exists,
+validation leaves it unavailable. Table phrases resolve against the actual Office cells;
+matching rows or cells are measured directly, and missing or ambiguous phrases are refused.
 
 The separate schemas are packaged in `analysis/powerpoint_contracts/` on the server and
 `powerpoint_contracts/` in the desktop wheel, with a parity test. PowerPoint's analysis

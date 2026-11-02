@@ -108,7 +108,7 @@ def test_zoom_uses_real_object_bounds_and_neutral_generation_guidance():
     assert "never fill a zoom quota" in prompt
 
 
-def test_zoom_filters_targets_that_cannot_fit_the_native_view_without_dropping_annotations():
+def test_zoom_allows_large_source_objects_for_native_central_detail_focus():
     _, extracted = source()
     slide = extracted.slides[0]
     obj = slide.objects[0]
@@ -131,7 +131,7 @@ def test_zoom_filters_targets_that_cannot_fit_the_native_view_without_dropping_a
         uuid4(),
         uuid4(),
     )
-    assert [a.type for a in document.slides[0].actions] == ["draw_rectangle"]
+    assert [a.type for a in document.slides[0].actions] == ["zoom_region", "draw_rectangle"]
     assert {a.type for a in document.slides[1].actions} == {"zoom_region", "draw_rectangle"}
 
 

@@ -143,10 +143,6 @@ def analysis_document(
             b = obj.bounds
             if action.type == "zoom_region" and (action.text or action.target_text):
                 continue
-            if action.type == "zoom_region" and (
-                b.width > slide.width / 2 or b.height > slide.height / 2
-            ):
-                continue  # Native fixed-2x focus cannot keep this complete target in view.
             if action.type in GEOMETRIC_TYPES and (
                 obj.text.strip() or b.height == 0 or not 0.5 <= b.width / b.height <= 2
             ):
@@ -258,22 +254,29 @@ class PowerPointProvider:
             "Tool affordances: highlight_region adds translucent emphasis; draw_rectangle "
             "frames a region; draw_rounded_rectangle groups a region with rounded corners; "
             "draw_oval circles a target; draw_underline marks a text baseline; draw_arrow "
-            "indicates direction or a relationship; draw_line marks a boundary or connection; "
+            "points from clear space to one specific source target. It cannot connect two "
+            "different source objects or depict flow between columns; never claim such a "
+            "relationship in its purpose. Prefer highlighting over pointing at generic headings. "
+            "draw_line marks a boundary or connection; "
             "filled_rectangle and filled_oval add translucent area emphasis in their respective "
             "shapes; callout attaches a factual explanation with a leader; text_box adds a "
             "standalone factual label; draw_diamond, draw_triangle, draw_hexagon and draw_star "
             "outline compact non-text targets with the corresponding geometry; zoom_region "
             "enlarges a source object with native fixed 2x focus (not fit-to-region scaling). "
-            "Zoom needs an actual legibility benefit or a clear audience-focus benefit: "
+            "Zoom can provide an actual legibility benefit or a clear audience-focus benefit: "
             "a compact dense table, chart labels, a detailed diagram, code, equations or "
             "formulas, or small substantive body text that the audience must examine. "
             "It may isolate a meaningful equation, result, relationship or other substantive "
             "detail the presenter is explaining when enlargement helps the audience follow "
             "that explanation. Ground this purpose in the slide content and speaker notes; "
             "do not assume presenter intent or enlarge arbitrary content for emphasis. "
-            "Do not zoom titles, section headings, branding, taglines, footers or ordinary "
-            "already-readable bullets merely for emphasis; use a relevant annotation instead. "
-            "The complete target must fit within half the slide width and height at 2x. "
+            "Actively consider zoom on each substantive slide: it can isolate the key result, "
+            "an important comparison, equation, visual detail, table or explanatory passage, "
+            "even when readable, if focusing the audience helps explain it. "
+            "Do not zoom titles or branding merely for emphasis. Do not exclude useful body "
+            "content just because it is already readable. Larger objects are allowed: fixed "
+            "2x focus shows their central detail and may crop edges; describe that honestly "
+            "rather than claiming the complete object will fit. "
             "If there is no useful detail to enlarge, suggest no zoom; never fill a zoom quota. "
             "Choose according to the source target, communicative purpose, geometry and "
             "readability, without tool-frequency targets or decorative variety. Do not decorate "

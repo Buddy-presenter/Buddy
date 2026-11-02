@@ -208,7 +208,13 @@ class PowerPointAutomation:
         points = action.points
         if action.source_shape_id is not None:
             source = cls._source_shape(shapes, action.source_shape_id)
-            if source.HasTextFrame and source.TextFrame.HasText:
+            if r is None:
+                r = Region(*map(float, (source.Left, source.Top, source.Width, source.Height)))
+            if getattr(source, "HasTable", False) and action.target_text:
+                from buddy_desktop.powerpoint_table import table_region
+
+                r = table_region(source, action.target_text)
+            elif source.HasTextFrame and source.TextFrame.HasText:
                 if action.kind in {"draw_diamond", "draw_triangle", "draw_hexagon", "draw_star"}:
                     raise PowerPointError("This geometric outline cannot safely frame text.")
                 tr = source.TextFrame.TextRange
@@ -235,6 +241,27 @@ class PowerPointAutomation:
                     points = ((r.x, r.y), (r.x + r.width, r.y + r.height))
             elif action.target_text:
                 raise PowerPointError("The source object no longer contains the selected text.")
+            if action.kind == "draw_arrow" and r is not None:
+                from buddy_desktop.powerpoint_layout import pointer_points
+
+                occupied = []
+                for index in range(1, shapes.Count + 1):
+                    item = shapes.Item(index)
+                    if int(getattr(item, "Id", -1)) == action.source_shape_id:
+                        continue
+                    bounds = tuple(map(float, (item.Left, item.Top, item.Width, item.Height)))
+                    if (
+                        bounds[2] * bounds[3]
+                        >= action.target.slide_width * action.target.slide_height * 0.85
+                    ):
+                        continue
+                    if bounds[2] > 0 and bounds[3] > 0:
+                        occupied.append(Region(*bounds))
+                points = pointer_points(
+                    r, action.target.slide_width, action.target.slide_height, tuple(occupied)
+                )
+            elif action.kind == "draw_line" and r is not None:
+                points = ((r.x, r.y), (r.x + r.width, r.y + r.height))
         created: list[Any] = []
         names: list[str] = []
         try:
