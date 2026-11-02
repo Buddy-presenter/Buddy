@@ -42,8 +42,10 @@ and target_text, rather than inventing focus coordinates. It has equal considera
 every other tool, with no preference, quota or forced variety. Native focus may clamp near
 edges; generation omits targets larger than half the slide width or height because they
 cannot fit entirely in the fixed-2x viewport. The prompt reserves zoom for a legibility
-benefit, such as dense tables, chart labels, detailed diagrams, code or small substantive
-body text. It excludes titles, branding, footers and already-readable bullets used merely
+or clear audience-focus benefit, such as dense tables, chart labels, detailed diagrams,
+code, equations, formulas or small substantive body text. A meaningful result or relationship
+may also warrant focus when enlargement helps explain it, grounded in slide content and
+speaker notes rather than assumed presenter intent. It excludes titles, branding, footers and already-readable bullets used merely
 for emphasis. These semantic choices remain model judgments; the size limit is enforced
 by the server. Existing saved suggestions are preserved; new analyses use this guidance.
 
