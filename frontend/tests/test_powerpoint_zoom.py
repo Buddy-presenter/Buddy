@@ -121,6 +121,17 @@ def test_native_zoom_waits_for_selector_and_confirms_completion(native_driver):
     assert state["cursor"] == (400, 300)
 
 
+def test_native_toolbar_is_revealed_inside_the_slide_not_in_letterbox_bars(native_driver):
+    driver, state, events, _, validate = native_driver
+    driver.gui.GetClientRect = lambda _: (0, 0, 1920, 1200)
+    button = driver.uia.ElementFromHandle(42).FindFirst(4, None)
+    driver.uia.ElementFromHandle = lambda _: SimpleNamespace(
+        FindFirst=lambda *_: button if 60 < state["cursor"][1] < 1140 else None,
+    )
+    driver.zoom(info(), Region(120, 60, 240, 150), validate)
+    assert events == [2, 4]
+
+
 def test_occlusion_or_missing_native_control_never_clicks_the_slide(native_driver):
     driver, state, events, _, validate = native_driver
     state["covered"] = True

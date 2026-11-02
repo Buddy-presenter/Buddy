@@ -40,7 +40,12 @@ accept bounded text. Navigation/reset remain code-owned; manual pointer/freehand
 controls remain presenter-owned. Zoom selects a complete source object, with empty text
 and target_text, rather than inventing focus coordinates. It has equal consideration with
 every other tool, with no preference, quota or forced variety. Native focus may clamp near
-edges; a target larger than half the slide will not fit entirely in the fixed-2x viewport.
+edges; generation omits targets larger than half the slide width or height because they
+cannot fit entirely in the fixed-2x viewport. The prompt reserves zoom for a legibility
+benefit, such as dense tables, chart labels, detailed diagrams, code or small substantive
+body text. It excludes titles, branding, footers and already-readable bullets used merely
+for emphasis. These semantic choices remain model judgments; the size limit is enforced
+by the server. Existing saved suggestions are preserved; new analyses use this guidance.
 
 The separate schemas are packaged in `analysis/powerpoint_contracts/` on the server and
 `powerpoint_contracts/` in the desktop wheel, with a parity test. PowerPoint's analysis

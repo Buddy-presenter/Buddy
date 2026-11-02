@@ -103,6 +103,36 @@ def test_zoom_uses_real_object_bounds_and_neutral_generation_guidance():
     assert "equal terms" in prompt and "without tool-frequency targets" in prompt
     assert "zoom_region enlarges a source object" in prompt
     assert "No PDF actions, zoom" not in prompt
+    assert "Do not zoom titles" in prompt
+    assert "actual legibility benefit" in prompt
+    assert "never fill a zoom quota" in prompt
+
+
+def test_zoom_filters_targets_that_cannot_fit_the_native_view_without_dropping_annotations():
+    _, extracted = source()
+    slide = extracted.slides[0]
+    obj = slide.objects[0]
+    oversized = obj.model_copy(
+        update={"bounds": obj.bounds.model_copy(update={"width": 800 * 12700})}
+    )
+    changed = extracted.model_copy(
+        update={
+            "slides": (
+                slide.model_copy(update={"objects": (oversized, *slide.objects[1:])}),
+                *extracted.slides[1:],
+            )
+        }
+    )
+    document = analysis_document(
+        output(changed, ("zoom_region", "draw_rectangle")),
+        changed,
+        manifest(changed),
+        UUID(manifest(changed).deck_id),
+        uuid4(),
+        uuid4(),
+    )
+    assert [a.type for a in document.slides[0].actions] == ["draw_rectangle"]
+    assert {a.type for a in document.slides[1].actions} == {"zoom_region", "draw_rectangle"}
 
 
 def test_text_targets_are_grounded_and_decorative_text_frames_are_omitted():

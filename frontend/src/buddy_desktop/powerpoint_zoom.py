@@ -141,7 +141,15 @@ class WindowsPowerPointZoom:
             corner = self.gui.ClientToScreen(hwnd, (bounds[2], bounds[3]))
             target = focus_point(info, region, (*origin, *corner))
             try:
-                self.api.SetCursorPos((origin[0] + 20, corner[1] - 20))
+                # The slideshow's client area can include black bars. Hover the
+                # actual slide, where PowerPoint reveals its native controls.
+                inset = min(16.0, info.slide_width / 4, info.slide_height / 4)
+                toolbar_point = focus_point(
+                    info,
+                    Region(0, info.slide_height - inset, inset, inset),
+                    (*origin, *corner),
+                )
+                self.api.SetCursorPos(toolbar_point)
                 root = self.uia.ElementFromHandle(hwnd)
                 condition = self.uia.CreatePropertyCondition(30011, "OpticalZoomButton")
                 button = root.FindFirst(4, condition)

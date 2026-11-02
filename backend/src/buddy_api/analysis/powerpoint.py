@@ -143,6 +143,10 @@ def analysis_document(
             b = obj.bounds
             if action.type == "zoom_region" and (action.text or action.target_text):
                 continue
+            if action.type == "zoom_region" and (
+                b.width > slide.width / 2 or b.height > slide.height / 2
+            ):
+                continue  # Native fixed-2x focus cannot keep this complete target in view.
             if action.type in GEOMETRIC_TYPES and (
                 obj.text.strip() or b.height == 0 or not 0.5 <= b.width / b.height <= 2
             ):
@@ -260,6 +264,12 @@ class PowerPointProvider:
             "standalone factual label; draw_diamond, draw_triangle, draw_hexagon and draw_star "
             "outline compact non-text targets with the corresponding geometry; zoom_region "
             "enlarges a source object with native fixed 2x focus (not fit-to-region scaling). "
+            "Zoom needs an actual legibility benefit: a compact dense table, chart labels, "
+            "a detailed diagram, code or small substantive body text that the audience must read. "
+            "Do not zoom titles, section headings, branding, taglines, footers or ordinary "
+            "already-readable bullets merely for emphasis; use a relevant annotation instead. "
+            "The complete target must fit within half the slide width and height at 2x. "
+            "If there is no useful detail to enlarge, suggest no zoom; never fill a zoom quota. "
             "Choose according to the source target, communicative purpose, geometry and "
             "readability, without tool-frequency targets or decorative variety. Do not decorate "
             "placeholders, authoring boilerplate or labels with no presentation purpose. "
