@@ -232,11 +232,14 @@ class Deployment:
                     "Staging worker releases require exact-image compatibility evidence."
                 )
             prior_worker_image = self.task_image(before["worker"]["taskDefinition"], "worker")
+            worker_schema = (
+                proof["rollback_image"] if proof.get("future_image") else proof.get("schema_image")
+            )
             if (
                 worker_compatibility.get("passed") is not True
                 or worker_compatibility.get("target_image") != worker_image
                 or worker_compatibility.get("previous_image") != prior_worker_image
-                or worker_compatibility.get("schema_image") != proof.get("schema_image")
+                or worker_compatibility.get("schema_image") != worker_schema
             ):
                 raise DeploymentError("Worker image compatibility evidence does not match staging.")
             image_digest(self.config, worker_image, "worker")

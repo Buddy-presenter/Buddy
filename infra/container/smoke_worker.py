@@ -204,6 +204,9 @@ def verify(image, schema_image=None):
             "--entrypoint",
             "python",
             image,
+            "-u",
+            "-X",
+            "faulthandler",
             "/smoke_worker_entrypoint.py",
         )
         containers.append(worker)
@@ -223,8 +226,14 @@ def verify(image, schema_image=None):
                     f"Worker smoke failed analysis: status={state}, error={error}; "
                     + docker("logs", worker)
                 )
-            if json.loads(docker("inspect", worker))[0]["State"]["Status"] != "running":
-                raise RuntimeError("Worker smoke exited: " + docker("logs", worker))
+            container_state = json.loads(docker("inspect", worker))[0]["State"]
+            if container_state["Status"] != "running":
+                raise RuntimeError(
+                    "Worker smoke exited: "
+                    f"status={container_state['Status']}, "
+                    f"exit_code={container_state.get('ExitCode')}, "
+                    f"oom_killed={container_state.get('OOMKilled')}; " + docker("logs", worker)
+                )
             time.sleep(1)
         else:
             details = sql(

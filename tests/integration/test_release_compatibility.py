@@ -445,7 +445,31 @@ def test_bridge_compatibility_fixture_starts_from_the_live_image_schema(monkeypa
     assert report["rollback_image"] == baseline
 
 
-def test_worker_images_are_smoked_against_the_feature_schema(monkeypatch):
+@pytest.mark.parametrize("bridge", [False, True])
+@pytest.mark.parametrize("wrong_schema", [False, True])
+def test_worker_schema_proof_is_bound_to_the_actual_rollout_phase(bridge, wrong_schema):
+    ecs, s3 = Ecs(), S3()
+    ecs.state["worker"] = {"taskDefinition": PREFIX + "worker:1", "desiredCount": 0}
+    report = proof(ecs)
+    if bridge:
+        report.update(future_image=IMAGE, baseline_image=OLD_IMAGE, traced_analysis=False)
+    schema = OLD_IMAGE if bridge else IMAGE
+    report["worker_compatibility"] = {
+        "passed": True,
+        "target_image": OLD_WORKER_IMAGE,
+        "previous_image": OLD_WORKER_IMAGE,
+        "schema_image": (IMAGE if bridge else OLD_IMAGE) if wrong_schema else schema,
+    }
+    driver = Deployment(CONFIG, ecs, s3, Sts(), compatibility_report=report)
+    if wrong_schema:
+        with pytest.raises(DeploymentError, match="Worker image compatibility"):
+            driver.compatible(IMAGE, ecs.state, ecs.state, worker_image=OLD_WORKER_IMAGE)
+    else:
+        driver.compatible(IMAGE, ecs.state, ecs.state, worker_image=OLD_WORKER_IMAGE)
+
+
+@pytest.mark.parametrize("bridge", [False, True])
+def test_worker_images_are_smoked_against_the_phase_schema(monkeypatch, bridge):
     import json
 
     from backend.scripts.release import image_compatibility as compatibility
@@ -455,7 +479,13 @@ def test_worker_images_are_smoked_against_the_feature_schema(monkeypatch):
     def docker(*args, **kwargs):
         if "/checks/rollback_probe.py" in args:
             return json.dumps(
-                {"ready": True, "analysis": True, "session": True, "owner_isolation": True}
+                {
+                    "ready": True,
+                    "analysis": True,
+                    "session": True,
+                    "owner_isolation": True,
+                    "traced_analysis": True,
+                }
             )
         return "ok"
 
@@ -470,18 +500,20 @@ def test_worker_images_are_smoked_against_the_feature_schema(monkeypatch):
     report = compatibility.verify_images(
         OLD_IMAGE,
         IMAGE,
-        future="feature-api",
+        baseline_image=OLD_IMAGE if bridge else None,
+        future="feature-api" if bridge else None,
         worker_image=WORKER_IMAGE,
         previous_worker_image=OLD_WORKER_IMAGE,
         pull_images=False,
     )
 
-    assert observed == [(WORKER_IMAGE, "feature-api"), (OLD_WORKER_IMAGE, "feature-api")]
+    schema = OLD_IMAGE if bridge else IMAGE
+    assert observed == [(WORKER_IMAGE, schema), (OLD_WORKER_IMAGE, schema)]
     assert report["worker_compatibility"] == {
         "passed": True,
         "target_image": WORKER_IMAGE,
         "previous_image": OLD_WORKER_IMAGE,
-        "schema_image": "feature-api",
+        "schema_image": schema,
     }
 
 

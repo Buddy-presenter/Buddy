@@ -231,7 +231,10 @@ for attempt in range(30):
                 probe(schema_image or candidate, "trace-write")
                 probe(previous, "trace-read")
                 probe(candidate, "trace-read")
-        worker_schema = schema_image or future or candidate
+        # A bridge leaves the live schema and worker unchanged. Test that worker
+        # against the baseline's packaged migrations, not the future feature DDL.
+        # Feature promotion separately proves both workers on its expanded schema.
+        worker_schema = (baseline_image or initial) if future else (schema_image or candidate)
         if worker_image:
             verify_worker_image(worker_image, worker_schema)
         if previous_worker_image:
