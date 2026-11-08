@@ -33,7 +33,9 @@ on reviewed `main`, target `staging`:
    image. Failed promotion restores the tested bridge without downgrading the database.
 
 During the compatibility phase, do not promote a new worker image: the existing worker
-stays on its current digest and is smoke-tested against the bridge schema. During the
+stays on its current digest and is smoke-tested against the unchanged baseline schema,
+using the bridge's exact base image to apply migrations in the disposable worker test.
+The future feature schema must not be used for this phase. During the
 feature phase, staging builds the worker from that same reviewed revision, smoke-tests the
 candidate and the prior worker image against the feature schema, then promotes API and
 worker together when the Terraform-managed worker service exists. If this is the first
