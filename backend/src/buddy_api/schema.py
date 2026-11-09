@@ -29,7 +29,11 @@ def generate_schema() -> dict[str, Any]:
                 continue
             responses = operation.get("responses")
             validation = responses.get("422") if isinstance(responses, dict) else None
-            if isinstance(validation, dict):
+            if isinstance(validation, dict) and validation.get("description") in {
+                "Unprocessable Entity",
+                "Unprocessable Content",
+                "Validation Error",
+            }:
                 validation["description"] = "Unprocessable Entity"
     return schema
 
