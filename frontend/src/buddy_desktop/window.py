@@ -104,7 +104,7 @@ class MainWindow(QMainWindow):
         self.profile.controls_requested.connect(self._show_account_controls)
         self.library = LibraryWidget(config, self.account)
         self.review = ReviewWidget(config, self.account)
-        self.present = PresentWidget()
+        self.present = PresentWidget(config, settings)
         self._private_presentation = False
         self.library.present_requested.connect(self._open_saved_pdf)
         self.library.review_requested.connect(self._open_review)
@@ -207,6 +207,7 @@ class MainWindow(QMainWindow):
         menu.addWidget(self.account)
         popover_layout.addLayout(menu)
         self.account.session_changed.connect(self._account_identity)
+        self.present.session_access_expired.connect(self.account.expire_session)
         self.account.profile_loaded.connect(self._profile_identity)
         self._account_identity()
         self.library.signin_requested.connect(self._show_account_controls)
@@ -270,6 +271,7 @@ class MainWindow(QMainWindow):
     def _clear_private_pdf(self) -> None:
         if self._private_presentation:
             self._private_presentation = False
+            self.present.clear_session_binding()
             if self.present.fullscreen is not None:
                 self.present.fullscreen.close()
             self.present.executor.clear()
@@ -332,6 +334,11 @@ class MainWindow(QMainWindow):
 
     def _account_identity(self) -> None:
         signed_in = bool(self.account.account_id)
+        tokens = self.account.session.tokens if self.account.session is not None else None
+        self.present.set_account_identity(
+            self.account.account_id if signed_in else None,
+            tokens.access if signed_in and tokens is not None else None,
+        )
         self.profile_action.setVisible(signed_in)
         self.account_divider.setVisible(signed_in)
         # Never retain an email across sign-out, expiry, or backend changes.
@@ -558,6 +565,7 @@ class MainWindow(QMainWindow):
         self.account.configure(url)
         self.library.configure(self.config)
         self.review.configure(self.config)
+        self.present.configure(self.config)
         self.preferences.url.setText(url)
         self.preferences.set_endpoint(url)
         self.connection_status.setText("Connection not checked")
@@ -587,6 +595,7 @@ class MainWindow(QMainWindow):
             or self.library.runner.busy
             or self.review.runner.busy
             or self.present.executor.busy
+            or self.present.session_runner.busy
             or self.review.cleanup_runner.busy
             or self.present.powerpoint_runner.busy
         ):
