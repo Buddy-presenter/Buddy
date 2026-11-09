@@ -235,11 +235,19 @@ class Deployment:
             worker_schema = (
                 proof["rollback_image"] if proof.get("future_image") else proof.get("schema_image")
             )
+            expected_worker_profile = (
+                "compatibility"
+                if proof.get("future_image")
+                or proof.get("rollback_revision")
+                or proof.get("reader_only")
+                else "feature"
+            )
             if (
                 worker_compatibility.get("passed") is not True
                 or worker_compatibility.get("target_image") != worker_image
                 or worker_compatibility.get("previous_image") != prior_worker_image
                 or worker_compatibility.get("schema_image") != worker_schema
+                or worker_compatibility.get("profile") != expected_worker_profile
             ):
                 raise DeploymentError("Worker image compatibility evidence does not match staging.")
             image_digest(self.config, worker_image, "worker")

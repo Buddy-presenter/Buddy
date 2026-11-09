@@ -88,6 +88,9 @@ permissioned synthetic PDF through the real worker entrypoint, checks persisted 
 lease recovery, malformed-PDF failure and restart idempotency, and then runs the previous
 worker image against that same schema when one exists. It uses deterministic fakes only at
 the external SQS/S3/provider boundaries; no live queue, user PDF or Bedrock call is used.
+The feature worker smoke also verifies scanned-PDF grounding. Compatibility and rollback
+smokes run older worker images without importing that feature-only module, while still
+exercising the real worker entrypoint and PDF processing path.
 
 PR CI builds an old-source fixture from the pinned image's exact source commit and tests
 both phases without AWS credentials. This checks the source contract, not the private

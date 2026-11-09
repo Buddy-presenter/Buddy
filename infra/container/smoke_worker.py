@@ -24,7 +24,9 @@ def docker(*args, timeout=180):
     return result.stdout.strip()
 
 
-def verify(image, schema_image=None):
+def verify(image, schema_image=None, profile="feature"):
+    if profile not in {"compatibility", "feature"}:
+        raise ValueError(f"Unsupported worker smoke profile: {profile}")
     prefix = "buddy-worker-smoke-" + uuid4().hex[:10]
     pg, worker = prefix + "-pg", prefix + "-worker"
     source = (ROOT / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf").read_bytes()
@@ -204,6 +206,8 @@ def verify(image, schema_image=None):
             + ":/scanned-source-anchor.pdf:ro",
             "-e",
             "BUDDY_SMOKE_PDF_SHA256=" + hashlib.sha256(source).hexdigest(),
+            "-e",
+            "BUDDY_SMOKE_PROFILE=" + profile,
             *args,
             "--entrypoint",
             "python",
@@ -314,8 +318,17 @@ def main():
         "--schema-image",
         help="API image whose migrations define the schema used to test worker compatibility.",
     )
+    parser.add_argument(
+        "--profile",
+        choices=("compatibility", "feature"),
+        default="feature",
+        help=(
+            "Feature smoke requires current worker-only capabilities; compatibility smoke "
+            "exercises older images without importing APIs they never shipped."
+        ),
+    )
     args = parser.parse_args()
-    verify(args.image, args.schema_image)
+    verify(args.image, args.schema_image, args.profile)
 
 
 if __name__ == "__main__":

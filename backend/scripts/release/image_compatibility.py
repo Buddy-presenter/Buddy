@@ -36,8 +36,12 @@ def docker(*args: str, timeout: int = 180) -> str:
     return result.stdout.strip()
 
 
-def verify_worker_image(worker_image: str, schema_image: str) -> None:
+def verify_worker_image(
+    worker_image: str, schema_image: str, *, profile: str = "feature"
+) -> None:
     """Run an exact worker image against a disposable database at the release schema."""
+    if profile not in {"compatibility", "feature"}:
+        raise ValueError(f"Unsupported worker smoke profile: {profile}")
     smoke = CHECKS.parents[2] / "infra/container/smoke_worker.py"
     result = subprocess.run(
         [
@@ -47,6 +51,8 @@ def verify_worker_image(worker_image: str, schema_image: str) -> None:
             worker_image,
             "--schema-image",
             schema_image,
+            "--profile",
+            profile,
         ],
         capture_output=True,
         text=True,
@@ -70,6 +76,7 @@ def verify_images(
     schema_image: str | None = None,
     worker_image: str | None = None,
     previous_worker_image: str | None = None,
+    worker_profile: str | None = None,
     pull_images: bool = True,
     reader_only: bool = False,
 ) -> dict:
@@ -77,6 +84,9 @@ def verify_images(
     pg, api = prefix + "-pg", prefix + "-api"
     network = prefix + "-network"
     created = []
+    effective_worker_profile = worker_profile or ("compatibility" if future else "feature")
+    if effective_worker_profile not in {"compatibility", "feature"}:
+        raise ValueError(f"Unsupported worker smoke profile: {effective_worker_profile}")
 
     def psql(statement: str) -> None:
         docker(
@@ -236,9 +246,9 @@ for attempt in range(30):
         # Feature promotion separately proves both workers on its expanded schema.
         worker_schema = (baseline_image or initial) if future else (schema_image or candidate)
         if worker_image:
-            verify_worker_image(worker_image, worker_schema)
+            verify_worker_image(worker_image, worker_schema, profile=effective_worker_profile)
         if previous_worker_image:
-            verify_worker_image(previous_worker_image, worker_schema)
+            verify_worker_image(previous_worker_image, worker_schema, profile="compatibility")
         return {
             "passed": True,
             "reader_only": reader_only,
@@ -262,6 +272,7 @@ for attempt in range(30):
                     "target_image": worker_image,
                     "previous_image": previous_worker_image,
                     "schema_image": worker_schema,
+                    "profile": effective_worker_profile,
                 }
                 if worker_image
                 else None

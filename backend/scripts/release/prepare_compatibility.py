@@ -155,6 +155,16 @@ def main() -> None:
         "future": args.future_image,
         "baseline_image": previous_image if args.future_image else None,
         "schema_image": schema_image,
+        # Only a newly built feature worker must prove APIs introduced by that
+        # feature. Bridge and rollback runs deliberately exercise older images.
+        "worker_profile": (
+            "feature"
+            if args.worker_image
+            and not args.future_image
+            and not args.rollback_revision
+            and not args.reader_only
+            else "compatibility"
+        ),
     }
     if args.reader_only:
         compatibility_args["reader_only"] = True
@@ -166,6 +176,7 @@ def main() -> None:
     report = verify_images(previous_image, candidate, **compatibility_args)
     report.update(
         revision=args.revision,
+        rollback_revision=args.rollback_revision,
         environment="staging",
         account_id=config["account_id"],
         before=before,
