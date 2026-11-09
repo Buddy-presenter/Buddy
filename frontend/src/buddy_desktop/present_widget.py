@@ -508,7 +508,11 @@ class PresentWidget(Page):
             or (self._session_attempt == key and not force)
         ):
             return
-        self._session_attempt = key
+        if self.session_runner.busy:
+            # The runner has one slot. Defer this start until an older deck's
+            # request has completed; the old generation's response is ignored.
+            self._session_followup = "ensure"
+            return
         self._session_error = False
         self._session_ended = False
         self.session_status.setText("Restoring saved presentation position…")
@@ -517,12 +521,16 @@ class PresentWidget(Page):
             self._session_generation,
             self.session_service,
         )
-        self._submit_session_task(
+        submitted = self._submit_session_task(
             "start",
             generation,
             None,
             lambda: service.start(access, manifest.deck_id),
         )
+        if submitted:
+            self._session_attempt = key
+        else:
+            self._session_followup = "ensure"
 
     def _submit_session_task(
         self,
@@ -530,9 +538,9 @@ class PresentWidget(Page):
         generation: int,
         state: SessionState | None,
         operation: Callable[[], PresentationSession],
-    ) -> None:
+    ) -> bool:
         if self.session_runner.busy:
-            return
+            return False
 
         def work() -> tuple[str, PresentationSession | None, str | None]:
             try:
@@ -549,6 +557,8 @@ class PresentWidget(Page):
             self.session_runner.submit(work)
         except RuntimeError:
             self._session_request = None
+            return False
+        return True
 
     def _current_local_state(self) -> SessionState | None:
         manifest, slide = self.executor.manifest, self.surface.slide
@@ -588,7 +598,15 @@ class PresentWidget(Page):
             if self._session_attempt is not None:
                 self._session_pending_state = state
             return
-        if state == self._session.state:
+        request = self._session_request
+        in_flight_state = (
+            request[2]
+            if request is not None
+            and request[0] == "update"
+            and request[1] == self._session_generation
+            else None
+        )
+        if state == in_flight_state or (state == self._session.state and in_flight_state is None):
             self._session_pending_state = None
             return
         self._session_pending_state = state
@@ -736,7 +754,9 @@ class PresentWidget(Page):
         if self._closing:
             return
         followup, self._session_followup = self._session_followup, None
-        if followup == "read_conflict":
+        if followup == "ensure":
+            self._ensure_session()
+        elif followup == "read_conflict":
             self._read_latest_session(conflict=True)
         elif followup == "flush":
             self._flush_session_state()
