@@ -388,10 +388,38 @@ class PresentationSession(OwnedRecord):
             ["analysis_versions.id", "analysis_versions.deck_id", "analysis_versions.owner_id"],
             ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            ["analysis_version_id", "active_slide_id"],
+            ["analysis_slides.analysis_id", "analysis_slides.slide_id"],
+            name="fk_presentation_sessions_active_slide",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["analysis_version_id", "last_accepted_action_id"],
+            ["slide_actions.analysis_id", "slide_actions.instance_id"],
+            name="fk_presentation_sessions_last_action",
+            ondelete="RESTRICT",
+        ),
         CheckConstraint("status IN ('created','active','ended')", name="status"),
         CheckConstraint("state_version >= 0", name="state_version_nonnegative"),
+        CheckConstraint(
+            "focus_view IN ('slide','zoom_region','highlight_region')", name="focus_view"
+        ),
+        CheckConstraint(
+            "(focus_view = 'slide' AND focus_region IS NULL) OR "
+            "(focus_view IN ('zoom_region','highlight_region') AND focus_region IS NOT NULL)",
+            name="focus_region_consistency",
+        ),
+        CheckConstraint(
+            "autonomy_mode IN ('manual','assisted','autonomous')", name="autonomy_mode"
+        ),
     )
     deck_id: Mapped[UUID] = mapped_column(index=True)
     analysis_version_id: Mapped[UUID] = mapped_column(index=True)
     status: Mapped[str] = mapped_column(String(16), server_default="created")
     state_version: Mapped[int] = mapped_column(server_default="0")
+    active_slide_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    focus_view: Mapped[str] = mapped_column(String(24), server_default="slide")
+    focus_region: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    autonomy_mode: Mapped[str] = mapped_column(String(16), server_default="manual")
+    last_accepted_action_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
