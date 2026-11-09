@@ -420,6 +420,10 @@ class PresentationSession(OwnedRecord):
     state_version: Mapped[int] = mapped_column(server_default="0")
     active_slide_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     focus_view: Mapped[str] = mapped_column(String(24), server_default="slide")
-    focus_region: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # None represents the absence of a focused region, so persist it as SQL NULL
+    # for the database's focus_view/focus_region consistency constraint.
+    focus_region: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
     autonomy_mode: Mapped[str] = mapped_column(String(16), server_default="manual")
     last_accepted_action_id: Mapped[str | None] = mapped_column(String(128), nullable=True)

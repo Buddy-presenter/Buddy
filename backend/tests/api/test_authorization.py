@@ -265,6 +265,7 @@ def test_session_lifecycle_is_durable_owner_scoped_and_versioned(ready_session_a
     restarted = client.post(deck_path, headers=headers, json={"deck_id": str(ids["decks"])})
     assert restarted.status_code == 200, restarted.text
     assert restarted.json()["data"]["id"] != first["id"]
+    assert restarted.json()["data"]["state"]["focus_region"] is None
     client.portal.call(client.app.state.database.close)
 
 
