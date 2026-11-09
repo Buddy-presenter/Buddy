@@ -1,5 +1,6 @@
 """Authenticated, durable presentation-session lifecycle and versioned state."""
 
+import logging
 from datetime import datetime
 from typing import Annotated, Literal, cast
 from uuid import UUID
@@ -22,6 +23,8 @@ from buddy_api.persistence.models import (
     ProcessingJob,
     SlideAction,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class SessionContract(BaseModel):
@@ -338,7 +341,12 @@ def session_router() -> APIRouter:
                 return SessionResponse(data=snapshot(record), request_id=request.state.request_id)
         except HTTPException:
             raise
-        except IntegrityError:
+        except IntegrityError as exc:
+            constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+            logger.exception(
+                "Presentation session start violated a database integrity constraint (%s).",
+                constraint or "unknown",
+            )
             raise HTTPException(
                 409, "The session changed concurrently. Refresh and retry."
             ) from None
