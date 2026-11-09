@@ -180,7 +180,16 @@ class PreparedDeployment(Deployment):
     Deployment directly to reject missing, stale, mismatched and drifted evidence.
     """
 
-    def evidence(self, candidate, rollback, worker_image=None, before=None):
+    def evidence(
+        self,
+        candidate,
+        rollback,
+        worker_image=None,
+        before=None,
+        *,
+        worker_profile=None,
+        rollback_revision=None,
+    ):
         before = before or self.ecs.state
         self.compatibility_report = {
             "traced_analysis": True,
@@ -203,6 +212,7 @@ class PreparedDeployment(Deployment):
                 True,
             ),
             "schema_image": candidate,
+            "rollback_revision": rollback_revision,
         }
         if worker_image:
             previous_worker_image = None
@@ -215,6 +225,8 @@ class PreparedDeployment(Deployment):
                 "target_image": worker_image,
                 "previous_image": previous_worker_image,
                 "schema_image": candidate,
+                "profile": worker_profile
+                or ("compatibility" if worker_image == previous_worker_image else "feature"),
             }
 
     def deploy(self, revision, api_image, worker_image=None):
@@ -223,7 +235,12 @@ class PreparedDeployment(Deployment):
             evidence_worker = self.ecs.describe_task_definition(
                 taskDefinition=self.ecs.state["worker"]["taskDefinition"]
             )["taskDefinition"]["containerDefinitions"][0]["image"]
-        self.evidence(api_image, self.ecs.state, evidence_worker)
+        self.evidence(
+            api_image,
+            self.ecs.state,
+            evidence_worker,
+            worker_profile="feature" if worker_image else "compatibility",
+        )
         return super().deploy(revision, api_image, worker_image)
 
     def rollback(self, revision, previous_revision):
@@ -237,7 +254,14 @@ class PreparedDeployment(Deployment):
             worker_image = self.ecs.describe_task_definition(
                 taskDefinition=target["worker"]["taskDefinition"]
             )["taskDefinition"]["containerDefinitions"][0]["image"]
-        self.evidence(candidate, target, worker_image, before=self.ecs.state)
+        self.evidence(
+            candidate,
+            target,
+            worker_image,
+            before=self.ecs.state,
+            worker_profile="compatibility",
+            rollback_revision=previous_revision,
+        )
         return super().rollback(revision, previous_revision)
 
 

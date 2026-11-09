@@ -457,7 +457,7 @@ def test_worker_schema_proof_is_bound_to_the_actual_rollout_phase(bridge, wrong_
     if bridge:
         report.update(future_image=IMAGE, baseline_image=OLD_IMAGE, traced_analysis=False)
     schema = OLD_IMAGE if bridge else IMAGE
-    expected_profile = "compatibility" if bridge else "feature"
+    expected_profile = "compatibility"
     report["worker_compatibility"] = {
         "passed": True,
         "target_image": OLD_WORKER_IMAGE,
@@ -482,7 +482,7 @@ def test_worker_schema_proof_rejects_a_mismatched_smoke_profile():
         "target_image": OLD_WORKER_IMAGE,
         "previous_image": OLD_WORKER_IMAGE,
         "schema_image": IMAGE,
-        "profile": "compatibility",
+        "profile": "feature",
     }
     driver = Deployment(CONFIG, ecs, s3, Sts(), compatibility_report=report)
 

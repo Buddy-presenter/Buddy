@@ -240,6 +240,7 @@ class Deployment:
                 if proof.get("future_image")
                 or proof.get("rollback_revision")
                 or proof.get("reader_only")
+                or worker_image == prior_worker_image
                 else "feature"
             )
             if (
