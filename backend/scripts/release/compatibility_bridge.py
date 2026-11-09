@@ -16,6 +16,7 @@ ANALYSIS_WORKER_HEAD = "0010_analysis_worker"
 VISUAL_QA_HEAD = "0011_visual_qa_pending"
 POWERPOINT_HEAD = "0012_powerpoint_analysis"
 POWERPOINT_TOOLS_HEAD = "0013_powerpoint_tools"
+SESSION_STATE_HEAD = "0014_session_state"
 
 
 async def check_ready(self):
@@ -35,6 +36,7 @@ async def check_ready(self):
                 {VISUAL_QA_HEAD},
                 {POWERPOINT_HEAD},
                 {POWERPOINT_TOOLS_HEAD},
+                {SESSION_STATE_HEAD},
             ):
                 raise PersistenceUnavailable("Database is outside the tested compatibility window.")
             for table in Base.metadata.sorted_tables:

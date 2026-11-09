@@ -18,7 +18,20 @@ DOCUMENTATION_KEYS = {"description", "title", "summary", "examples", "example", 
 
 def generate_schema() -> dict[str, Any]:
     # Exporting contracts does not read production secrets or start external services.
-    return create_app(Settings(Environment.TEST)).openapi()
+    schema = create_app(Settings(Environment.TEST)).openapi()
+    # FastAPI/Starlette releases use different default phrases for HTTP 422 across
+    # supported Python runtimes. Keep the checked-in contract deterministic.
+    for path in schema.get("paths", {}).values():
+        if not isinstance(path, dict):
+            continue
+        for operation in path.values():
+            if not isinstance(operation, dict):
+                continue
+            responses = operation.get("responses")
+            validation = responses.get("422") if isinstance(responses, dict) else None
+            if isinstance(validation, dict):
+                validation["description"] = "Unprocessable Entity"
+    return schema
 
 
 def breaking_changes(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
