@@ -595,7 +595,7 @@ class PresentWidget(Page):
         if state is None:
             return
         if self._session is None:
-            if self._session_attempt is not None:
+            if self._session_attempt is not None or self._session_followup == "ensure":
                 self._session_pending_state = state
             return
         request = self._session_request
@@ -606,7 +606,7 @@ class PresentWidget(Page):
             and request[1] == self._session_generation
             else None
         )
-        if state == in_flight_state or (state == self._session.state and in_flight_state is None):
+        if state == self._session.state and in_flight_state is None:
             self._session_pending_state = None
             return
         self._session_pending_state = state

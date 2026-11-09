@@ -20,6 +20,7 @@ from buddy_desktop.presentation_session_service import (
     PresentationSessionService,
     SessionState,
 )
+from buddy_desktop.services import ServiceError
 from buddy_desktop.slide_contract import Manifest, Slide
 from buddy_desktop.slide_surface import SlideSurface
 
@@ -142,6 +143,83 @@ def test_position_returned_to_acknowledged_state_is_saved_after_inflight_update(
         widget.shutdown()
 
 
+def test_position_matching_inflight_update_remains_retryable_after_failure(
+    qtbot: QtBot, tmp_path: Path
+) -> None:
+    settings = QSettings(str(tmp_path / "buddy.ini"), QSettings.Format.IniFormat)
+    widget = PresentWidget(AppConfig("http://127.0.0.1:8000"), settings)
+    qtbot.addWidget(widget)
+    manifest = replace(_manifest(), account_bound=True)
+    first_state = SessionState(manifest.slides[0].slide_id)
+    desired_state = SessionState(manifest.slides[1].slide_id)
+    widget.executor.manifest = manifest
+    widget.executor.current_index = 0
+    widget.surface.commit(
+        manifest.slides[0], QImage(str(manifest.root / "wide.png")), manifest.slides[0].full
+    )
+    widget._account_id = "owner"
+    widget._session_access = "test-access"
+    widget._session_deck_id = manifest.deck_id
+    widget._session_attempt = ("owner", manifest.deck_id)
+    widget._session = _session(manifest.deck_id, first_state)
+    widget._refresh()
+    first_update_started = Event()
+    release_first_update = Event()
+    sent_states: list[SessionState] = []
+
+    class DelayedFailureService:
+        def update(
+            self, _access: str, session: PresentationSession, state: SessionState
+        ) -> PresentationSession:
+            sent_states.append(state)
+            if len(sent_states) == 1:
+                first_update_started.set()
+                release_first_update.wait(5)
+                raise ServiceError("Temporary sync failure")
+            return _session(session.deck_id, state, session.state_version + 1)
+
+    widget.session_service = cast(PresentationSessionService, DelayedFailureService())
+    try:
+        widget.executor.current_index = 1
+        widget.surface.commit(
+            manifest.slides[1], QImage(str(manifest.root / "wide.png")), manifest.slides[1].full
+        )
+        widget._queue_session_state()
+        qtbot.waitUntil(first_update_started.is_set)
+
+        widget.executor.current_index = 0
+        widget.surface.commit(
+            manifest.slides[0], QImage(str(manifest.root / "wide.png")), manifest.slides[0].full
+        )
+        widget._queue_session_state()
+        widget.executor.current_index = 1
+        widget.surface.commit(
+            manifest.slides[1], QImage(str(manifest.root / "wide.png")), manifest.slides[1].full
+        )
+        widget._queue_session_state()
+        assert widget._session_pending_state == desired_state
+
+        release_first_update.set()
+        qtbot.waitUntil(lambda: not widget.session_runner.busy and widget._session_error)
+        assert widget._session_pending_state == desired_state
+        assert not widget.session_retry_button.isHidden()
+
+        widget.session_retry_button.click()
+        qtbot.waitUntil(
+            lambda: (
+                not widget.session_runner.busy
+                and widget._session is not None
+                and widget._session.state == desired_state
+                and widget._session_pending_state is None
+            )
+        )
+        assert sent_states == [desired_state, desired_state]
+        assert widget.surface.slide == manifest.slides[1]
+    finally:
+        release_first_update.set()
+        widget.shutdown()
+
+
 def test_new_deck_session_start_waits_for_previous_deck_request(
     qtbot: QtBot, tmp_path: Path
 ) -> None:
@@ -153,6 +231,7 @@ def test_new_deck_session_start_waits_for_previous_deck_request(
     first_started = Event()
     release_first = Event()
     started_decks: list[str] = []
+    updated_states: list[SessionState] = []
 
     class DelayedService:
         def start(self, _access: str, deck_id: str) -> PresentationSession:
@@ -166,6 +245,12 @@ def test_new_deck_session_start_waits_for_previous_deck_request(
                 else next_manifest.slides[0].slide_id
             )
             return _session(deck_id, state)
+
+        def update(
+            self, _access: str, session: PresentationSession, state: SessionState
+        ) -> PresentationSession:
+            updated_states.append(state)
+            return _session(session.deck_id, state, session.state_version + 1)
 
     widget.session_service = cast(PresentationSessionService, DelayedService())
     widget._account_id = "owner"
@@ -192,15 +277,27 @@ def test_new_deck_session_start_waits_for_previous_deck_request(
         assert widget._session_followup == "ensure"
         assert widget._session_attempt is None
 
+        widget.executor.current_index = 1
+        widget.surface.commit(
+            next_manifest.slides[1],
+            QImage(str(next_manifest.root / "wide.png")),
+            next_manifest.slides[1].full,
+        )
+        widget._queue_session_state()
+        desired_state = SessionState(next_manifest.slides[1].slide_id)
+        assert widget._session_pending_state == desired_state
+
         release_first.set()
         qtbot.waitUntil(
             lambda: (
                 not widget.session_runner.busy
                 and widget._session is not None
                 and widget._session.deck_id == next_manifest.deck_id
+                and widget._session.state == desired_state
             )
         )
         assert started_decks == [first_manifest.deck_id, next_manifest.deck_id]
+        assert updated_states == [desired_state]
         assert widget._session_attempt == ("owner", next_manifest.deck_id)
     finally:
         release_first.set()
