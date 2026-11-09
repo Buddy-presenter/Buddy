@@ -92,7 +92,7 @@ Unmigrated/outdated/unavailable databases produce the shared redacted 503 envelo
 | Deck | UUID, owner, nonempty title, optional private source-object key, UTC creation time. No object is fabricated or uploaded here. |
 | Processing job | Owner/deck, pending/running/succeeded/failed status and nonnegative attempts. Processing remains its own workflow. |
 | Analysis version | Owner/deck/job/extraction, immutable version provenance, presentation summary and publication state. Related records store slide summaries, content actions and validation history; see [analysis](analysis.md). Historical untyped payloads are archived and require reprocessing. |
-| Presentation session | Owner/deck, pinned matching analysis version, created/active/ended status and nonnegative state version. No raw audio/transcript persistence. |
+| Presentation session | Owner/deck, pinned matching analysis version, active stable slide ID, focused view/region, autonomy mode, last accepted validated action ID, status and state version. No audio or full transcript is persisted. |
 
 All children have database-enforced owner/deck consistency. Deletion is restricted until
 the explicit cleanup/deletion workflow can coordinate dependent database and storage data.
