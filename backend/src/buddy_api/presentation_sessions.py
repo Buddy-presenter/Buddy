@@ -6,14 +6,17 @@ from typing import Annotated, Literal, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.exceptions import HTTPException
 
+from buddy_api.analysis.contracts import ValidationInput
+from buddy_api.analysis.store import action_is_usable, check_validation_evidence
 from buddy_api.auth import Principal, authenticated
 from buddy_api.contracts import ErrorResponse
+from buddy_api.persistence.errors import PersistenceConflict
 from buddy_api.persistence.models import (
     ActionValidation,
     AnalysisSlide,
@@ -123,7 +126,9 @@ async def owned_session(
 ) -> PresentationSession:
     query = select(PresentationSession).where(PresentationSession.id == identifier)
     if lock:
-        query = query.with_for_update()
+        # Refresh a session previously read into this AsyncSession's identity map.
+        # A concurrent end may commit while resume waits for this row lock.
+        query = query.with_for_update().execution_options(populate_existing=True)
     record = await db.scalar(query)
     if record is None:
         raise HTTPException(404)
@@ -187,25 +192,43 @@ async def current_ready_analysis(
     return analysis, slides
 
 
-async def validate_action(db: AsyncSession, analysis_id: UUID, identifier: str | None) -> None:
+async def validate_action(
+    db: AsyncSession,
+    analysis: AnalysisVersion,
+    owner_id: UUID,
+    identifier: str | None,
+) -> None:
     if identifier is None:
         return
     action = await db.scalar(
         select(SlideAction).where(
-            SlideAction.analysis_id == analysis_id,
+            SlideAction.analysis_id == analysis.id,
+            SlideAction.owner_id == owner_id,
             SlideAction.instance_id == identifier,
         )
     )
     if action is None:
         raise HTTPException(422, "The action does not belong to this session analysis.")
-    latest_state = await db.scalar(
-        select(ActionValidation.state)
+    latest = await db.scalar(
+        select(ActionValidation)
         .where(ActionValidation.action_id == action.id)
-        .order_by(ActionValidation.sequence.desc())
+        .where(ActionValidation.analysis_id == analysis.id, ActionValidation.owner_id == owner_id)
+        .order_by(ActionValidation.sequence.desc(), ActionValidation.id.desc())
         .limit(1)
     )
-    if latest_state != "validated":
+    if latest is None or latest.state != "validated" or latest.document is None:
         raise HTTPException(422, "Only validated actions can be accepted into a session.")
+    try:
+        evidence = ValidationInput.model_validate(latest.document)
+        check_validation_evidence(analysis, action, evidence)
+    except (PersistenceConflict, ValidationError, ValueError, TypeError):
+        raise HTTPException(
+            422, "Only current, usable actions can be accepted into a session."
+        ) from None
+    if latest.state != evidence.state or not action_is_usable(
+        analysis.source_format, evidence.state, evidence.semantic_verified
+    ):
+        raise HTTPException(422, "Only current, usable actions can be accepted into a session.")
 
 
 async def validate_focus_region(
@@ -426,12 +449,13 @@ def session_router() -> APIRouter:
                 )
                 if slide is None:
                     raise HTTPException(422, "The slide does not belong to this session analysis.")
+                analysis = await db.get(AnalysisVersion, record.analysis_version_id)
+                if analysis is None:
+                    raise HTTPException(503) from None
                 await validate_focus_region(
                     db, record.analysis_version_id, values.active_slide_id, values.focus_region
                 )
-                await validate_action(
-                    db, record.analysis_version_id, values.last_accepted_action_id
-                )
+                await validate_action(db, analysis, principal.id, values.last_accepted_action_id)
                 apply_state(record, values)
                 record.state_version += 1
                 return SessionResponse(data=snapshot(record), request_id=request.state.request_id)
