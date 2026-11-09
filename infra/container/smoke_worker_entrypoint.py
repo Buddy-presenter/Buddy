@@ -7,7 +7,6 @@ from pathlib import Path
 from uuid import uuid4
 
 from buddy_api.analysis.contracts import Manifest
-from buddy_api.analysis.grounding import ground_actions
 from buddy_api.analysis.provider import (
     BedrockProvider,
     ModelAction,
@@ -46,7 +45,7 @@ async def deterministic_analysis(
     )
 
 
-def verify_scanned_grounding() -> None:
+def verify_scanned_grounding(ground_actions) -> None:
     content = Path("/scanned-source-anchor.pdf").read_bytes()
     extraction = extract_pdf(io.BytesIO(content), source_revision="scan-smoke")
     manifest = render_manifest(content, extraction, str(uuid4()))
@@ -77,5 +76,13 @@ def verify_scanned_grounding() -> None:
 
 
 BedrockProvider.analyze_async = deterministic_analysis
-verify_scanned_grounding()
+profile = os.environ.get("BUDDY_SMOKE_PROFILE")
+if profile not in {"compatibility", "feature"}:
+    raise RuntimeError("Worker smoke profile must be explicitly set")
+if profile == "feature":
+    from buddy_api.analysis.grounding import ground_actions
+
+    verify_scanned_grounding(ground_actions)
+else:
+    print("Compatibility profile: skipped feature-only grounding assertion.")
 raise SystemExit(main())
