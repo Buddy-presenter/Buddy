@@ -47,10 +47,12 @@ def private_api(database_settings, monkeypatch):
             deck = await repos.decks.create(
                 owner_id=owner.id, title="private", source_key="secret-key"
             )
+            job = await repos.jobs.create(owner_id=owner.id, deck_id=deck.id)
             from backend.tests.support.analysis import create
 
-            analysis = await create(repos, owner_id=owner.id, deck_id=deck.id, version=1)
-            job = await repos.jobs.create(owner_id=owner.id, deck_id=deck.id)
+            analysis = await create(
+                repos, owner_id=owner.id, deck_id=deck.id, job_id=job.id, version=1
+            )
             presentation = await repos.sessions.create(
                 owner_id=owner.id, deck_id=deck.id, analysis_version_id=analysis.id
             )
