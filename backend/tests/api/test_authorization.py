@@ -4,17 +4,28 @@ import asyncio
 from types import SimpleNamespace
 from uuid import uuid4
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from starlette.exceptions import HTTPException
 
-from buddy_api import authorization
+from buddy_api import authorization, presentation_sessions
+from buddy_api.analysis.contracts import EvidenceReference, ValidationInput, digest
 from buddy_api.app import create_app
 from buddy_api.auth import CognitoVerifier, Principal, VerifiedIdentity
 from buddy_api.config import Environment, Settings
 from buddy_api.contracts import ErrorResponse
 from buddy_api.persistence.database import Database
-from buddy_api.persistence.models import RenderedAsset
+from buddy_api.persistence.models import (
+    AnalysisSlide,
+    AnalysisVersion,
+    Deck,
+    PresentationSession,
+    ProcessingJob,
+    RenderedAsset,
+)
+from buddy_api.presentation_sessions import current_ready_analysis
 from buddy_identity.config import IdentityConfig, SessionExpired
 from tests.api.test_database import database_settings as database_settings
 from tests.api.test_database import migrate
@@ -39,10 +50,12 @@ def private_api(database_settings, monkeypatch):
             deck = await repos.decks.create(
                 owner_id=owner.id, title="private", source_key="secret-key"
             )
+            job = await repos.jobs.create(owner_id=owner.id, deck_id=deck.id)
             from backend.tests.support.analysis import create
 
-            analysis = await create(repos, owner_id=owner.id, deck_id=deck.id, version=1)
-            job = await repos.jobs.create(owner_id=owner.id, deck_id=deck.id)
+            analysis = await create(
+                repos, owner_id=owner.id, deck_id=deck.id, job_id=job.id, version=1
+            )
             presentation = await repos.sessions.create(
                 owner_id=owner.id, deck_id=deck.id, analysis_version_id=analysis.id
             )
@@ -121,22 +134,306 @@ def test_verified_owner_writes_persist_and_no_owner_override(private_api):
         client.patch(
             session_path, headers=headers, json={"status": "active", "state_version": 0}
         ).status_code
-        == 200
+        == 403
     )
-    assert (
-        client.patch(
-            session_path, headers=headers, json={"status": "ended", "state_version": 0}
-        ).status_code
-        == 409
+
+
+@pytest.fixture
+def ready_session_api(private_api, database_settings):
+    client, identifiers, owner, other = private_api
+    database = client.app.state.database
+
+    async def prepare():
+        async with database.sessions() as db, db.begin():
+            record = await db.get(PresentationSession, identifiers["sessions"])
+            deck = await db.get(Deck, identifiers["decks"])
+            analysis = await db.get(AnalysisVersion, record.analysis_version_id)
+            job = await db.get(ProcessingJob, analysis.job_id)
+            slides = list(
+                (
+                    await db.scalars(
+                        select(AnalysisSlide)
+                        .where(AnalysisSlide.analysis_id == analysis.id)
+                        .order_by(AnalysisSlide.position)
+                    )
+                ).all()
+            )
+            revision = (analysis.provenance or {})["source_revision"]
+            digest = (analysis.provenance or {})["source_sha256"]
+            deck.source_key = "ready-source"
+            deck.source_revision = revision
+            deck.source_sha256 = digest
+            deck.source_size_bytes = 1024
+            deck.source_version_id = "version-1"
+            deck.source_slide_count = len(slides)
+            job.status = "succeeded"
+            job.source_revision = revision
+            analysis.publication = "published"
+            record.status = "active"
+            record.state_version = 4
+            record.active_slide_id = slides[0].slide_id
+
+    client.portal.call(prepare)
+    return client, identifiers, owner, other, database_settings
+
+
+@pytest.mark.postgres
+def test_session_lifecycle_is_durable_owner_scoped_and_versioned(ready_session_api):
+    client, ids, owner_id, _, database_settings = ready_session_api
+    headers = {"Authorization": "Bearer owner"}
+    path = "/api/v1/sessions"
+    deck_path = f"{path}"
+    started = client.post(deck_path, headers=headers, json={"deck_id": str(ids["decks"])})
+    assert started.status_code == 200
+    first = started.json()["data"]
+    assert first["status"] == "active"
+    assert first["state_version"] == 4
+    assert first["state"]["focus_view"] == "slide"
+    assert first["state"]["autonomy_mode"] == "manual"
+    assert "transcript" not in first["state"]
+
+    duplicate = client.post(deck_path, headers=headers, json={"deck_id": str(ids["decks"])})
+    assert duplicate.status_code == 200
+    assert duplicate.json()["data"]["id"] == first["id"]
+    assert duplicate.json()["data"]["state_version"] == first["state_version"]
+
+    state_path = f"{path}/{first['id']}/state"
+    region = {"x": 20, "y": 30, "width": 300, "height": 180}
+    changed = client.patch(
+        state_path,
+        headers=headers,
+        json={
+            "expected_state_version": 4,
+            "active_slide_id": first["state"]["active_slide_id"],
+            "focus_view": "zoom_region",
+            "focus_region": region,
+            "autonomy_mode": "assisted",
+            "last_accepted_action_id": None,
+        },
     )
-    assert (
-        client.patch(
-            session_path, headers=headers, json={"status": "ended", "state_version": 1}
-        ).status_code
-        == 200
+    assert changed.status_code == 200
+    assert changed.json()["data"]["state_version"] == 5
+    assert changed.json()["data"]["state"]["focus_region"] == region
+
+    stale = client.patch(
+        state_path,
+        headers=headers,
+        json={
+            "expected_state_version": 4,
+            "active_slide_id": first["state"]["active_slide_id"],
+            "focus_view": "slide",
+            "focus_region": None,
+            "autonomy_mode": "manual",
+            "last_accepted_action_id": None,
+        },
     )
-    assert client.delete(session_path, headers=headers).status_code == 200
-    assert client.get(session_path, headers=headers).status_code == 404
+    assert stale.status_code == 409
+    resumed = client.post(f"{path}/{first['id']}/resume", headers=headers)
+    assert resumed.status_code == 200
+    assert resumed.json()["data"]["state_version"] == 5
+    read = client.get(f"{path}/{first['id']}", headers=headers)
+    assert read.status_code == 200
+    assert read.json()["data"]["state"]["focus_region"] == region
+
+    # A fresh database engine sees the same state, like a service restart.
+    previous_database = client.app.state.database
+    client.portal.call(previous_database.close)
+    client.app.state.database = Database(database_settings)
+    restored = client.get(f"{path}/{first['id']}", headers=headers)
+    assert restored.status_code == 200
+    assert restored.json()["data"]["state_version"] == 5
+    ended = client.post(
+        f"{path}/{first['id']}/end",
+        headers=headers,
+        json={"expected_state_version": 5},
+    )
+    assert ended.status_code == 200
+    assert ended.json()["data"]["status"] == "ended"
+    assert ended.json()["data"]["state_version"] == 6
+    assert client.post(f"{path}/{first['id']}/resume", headers=headers).status_code == 409
+    retained = client.get(f"{path}/{first['id']}", headers=headers)
+    assert retained.status_code == 200
+    assert retained.json()["data"]["status"] == "ended"
+
+    async def verify_ready_after_end():
+        async with client.app.state.database.sessions() as db:
+            deck = await db.get(Deck, ids["decks"])
+            assert deck is not None
+            analysis, slides = await current_ready_analysis(db, deck, owner_id)
+            return str(analysis.id), len(slides)
+
+    # Ending one session does not invalidate the ready analysis needed by a new session.
+    assert client.portal.call(verify_ready_after_end) == (first["analysis_version_id"], 2)
+    restarted = client.post(deck_path, headers=headers, json={"deck_id": str(ids["decks"])})
+    assert restarted.status_code == 200, restarted.text
+    assert restarted.json()["data"]["id"] != first["id"]
+    assert restarted.json()["data"]["state"]["focus_region"] is None
+    client.portal.call(client.app.state.database.close)
+
+
+@pytest.mark.postgres
+def test_session_routes_require_owner_ready_deck_and_valid_typed_state(ready_session_api):
+    client, ids, _, _, _ = ready_session_api
+    base = "/api/v1/sessions"
+    foreign = client.post(
+        base,
+        headers={"Authorization": "Bearer other"},
+        json={"deck_id": str(ids["decks"])},
+    )
+    assert foreign.status_code == 403
+    assert client.post(base, json={"deck_id": str(ids["decks"])}).status_code == 401
+
+    database = client.app.state.database
+
+    async def make_unready():
+        async with database.sessions() as db, db.begin():
+            record = await db.get(PresentationSession, ids["sessions"])
+            job = await db.get(
+                ProcessingJob, (await db.get(AnalysisVersion, record.analysis_version_id)).job_id
+            )
+            job.status = "running"
+
+    client.portal.call(make_unready)
+    unready = client.post(
+        base, headers={"Authorization": "Bearer owner"}, json={"deck_id": str(ids["decks"])}
+    )
+    assert unready.status_code == 409
+
+    invalid = client.post(
+        base,
+        headers={"Authorization": "Bearer owner"},
+        json={"deck_id": str(ids["decks"]), "transcript": "must not persist"},
+    )
+    assert invalid.status_code == 422
+
+
+@pytest.mark.postgres
+def test_session_rejects_execution_only_pdf_action(ready_session_api):
+    client, ids, owner_id, _, _ = ready_session_api
+    database = client.app.state.database
+
+    async def publish_execution_only_pdf_analysis():
+        from backend.tests.support.analysis import prepare as prepare_analysis
+
+        async with database.transaction() as repos:
+            document = await prepare_analysis(
+                repos,
+                owner_id=owner_id,
+                deck_id=ids["decks"],
+                job_id=ids["jobs"],
+                actions=True,
+            )
+            saved = await repos.analyses.create(
+                owner_id=owner_id,
+                deck_id=ids["decks"],
+                version=2,
+                document=document,
+            )
+            result = await repos.analyses.read(saved.id, owner_id=owner_id)
+            assert result.inputs is not None
+            action_ids = []
+            for slide in result.slides:
+                for action in slide.actions:
+                    execution = ValidationInput(
+                        validation_id=uuid4(),
+                        analysis_id=result.id,
+                        analysis_sha256=result.analysis_sha256,
+                        instance_id=action.action.instance_id,
+                        action_sha256=digest(action.action),
+                        validator_version=result.inputs.validator_version,
+                        renderer_version=result.inputs.renderer_version,
+                        display_profile=result.inputs.display_profile,
+                        validation_kind="execution",
+                        semantic_verified=False,
+                        state="validated",
+                        evidence=(
+                            EvidenceReference(id=uuid4(), kind="executor_result", sha256="e" * 64),
+                        ),
+                    )
+                    result = await repos.analyses.record_validation(
+                        owner_id=owner_id, result=execution
+                    )
+                    action_ids.append((slide.slide_id, action.action.instance_id))
+            assert result.publication == "published"
+            assert all(not action.usable for slide in result.slides for action in slide.actions)
+            return result.id, action_ids[0]
+
+    analysis_id, (slide_id, action_id) = client.portal.call(publish_execution_only_pdf_analysis)
+    headers = {"Authorization": "Bearer owner"}
+    started = client.post("/api/v1/sessions", headers=headers, json={"deck_id": str(ids["decks"])})
+    assert started.status_code == 200, started.text
+    session = started.json()["data"]
+    assert str(session["analysis_version_id"]) == str(analysis_id)
+    rejected = client.patch(
+        f"/api/v1/sessions/{session['id']}/state",
+        headers=headers,
+        json={
+            "expected_state_version": session["state_version"],
+            "active_slide_id": slide_id,
+            "focus_view": "slide",
+            "focus_region": None,
+            "autonomy_mode": "manual",
+            "last_accepted_action_id": action_id,
+        },
+    )
+    assert rejected.status_code == 422
+
+
+@pytest.mark.postgres
+def test_resume_does_not_resurrect_created_session_ended_during_lock_wait(
+    ready_session_api, monkeypatch
+):
+    client, ids, _, _, _ = ready_session_api
+    database = client.app.state.database
+
+    async def make_created():
+        async with database.sessions() as db, db.begin():
+            record = await db.get(PresentationSession, ids["sessions"])
+            assert record is not None
+            record.status = "created"
+            record.state_version = 0
+            record.active_slide_id = None
+
+    client.portal.call(make_created)
+
+    async def race_end_and_resume():
+        deck_locked = asyncio.Event()
+        continue_resume = asyncio.Event()
+        original_find_deck = presentation_sessions.find_deck
+
+        async def pause_after_deck_lock(db, principal, identifier):
+            deck = await original_find_deck(db, principal, identifier)
+            deck_locked.set()
+            await continue_resume.wait()
+            return deck
+
+        monkeypatch.setattr(presentation_sessions, "find_deck", pause_after_deck_lock)
+        headers = {"Authorization": "Bearer owner"}
+        session_path = f"/api/v1/sessions/{ids['sessions']}"
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=client.app), base_url="http://testserver"
+        ) as api:
+            resume_task = asyncio.create_task(api.post(f"{session_path}/resume", headers=headers))
+            try:
+                await asyncio.wait_for(deck_locked.wait(), timeout=5)
+                ended = await api.post(
+                    f"{session_path}/end",
+                    headers=headers,
+                    json={"expected_state_version": 0},
+                )
+            finally:
+                continue_resume.set()
+            resumed = await resume_task
+            final = await api.get(session_path, headers=headers)
+            return ended, resumed, final
+
+    ended, resumed, final = client.portal.call(race_end_and_resume)
+    assert ended.status_code == 200, ended.text
+    assert ended.json()["data"]["status"] == "ended"
+    assert resumed.status_code == 409, resumed.text
+    assert final.status_code == 200
+    assert final.json()["data"]["status"] == "ended"
+    assert final.json()["data"]["state_version"] == 1
 
 
 @pytest.mark.postgres
