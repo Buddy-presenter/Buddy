@@ -248,13 +248,12 @@ def test_session_lifecycle_is_durable_owner_scoped_and_versioned(ready_session_a
     assert ended.json()["data"]["status"] == "ended"
     assert ended.json()["data"]["state_version"] == 6
     assert client.post(f"{path}/{first['id']}/resume", headers=headers).status_code == 409
+    retained = client.get(f"{path}/{first['id']}", headers=headers)
+    assert retained.status_code == 200
+    assert retained.json()["data"]["status"] == "ended"
     restarted = client.post(deck_path, headers=headers, json={"deck_id": str(ids["decks"])})
     assert restarted.status_code == 200, restarted.text
     assert restarted.json()["data"]["id"] != first["id"]
-    assert (
-        client.delete(f"/api/v1/resources/sessions/{first['id']}", headers=headers).status_code
-        == 200
-    )
     client.portal.call(client.app.state.database.close)
 
 
