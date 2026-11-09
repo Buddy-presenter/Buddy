@@ -36,9 +36,7 @@ def docker(*args: str, timeout: int = 180) -> str:
     return result.stdout.strip()
 
 
-def verify_worker_image(
-    worker_image: str, schema_image: str, *, profile: str = "feature"
-) -> None:
+def verify_worker_image(worker_image: str, schema_image: str, *, profile: str = "feature") -> None:
     """Run an exact worker image against a disposable database at the release schema."""
     if profile not in {"compatibility", "feature"}:
         raise ValueError(f"Unsupported worker smoke profile: {profile}")
