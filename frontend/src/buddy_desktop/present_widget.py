@@ -2,6 +2,7 @@
 
 import sys
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -711,6 +712,14 @@ class PresentWidget(Page):
             if self._session_pending_state is None:
                 self._restore_session_state(session.state)
             else:
+                if session.state is not None:
+                    pending_state = self._session_pending_state
+                    self._session_pending_state = replace(
+                        session.state,
+                        active_slide_id=pending_state.active_slide_id,
+                        focus_view=pending_state.focus_view,
+                        focus_region=pending_state.focus_region,
+                    )
                 self.session_status.setText("Presentation session connected.")
                 self._session_followup = "flush"
         elif kind == "update":

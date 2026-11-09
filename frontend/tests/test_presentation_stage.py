@@ -239,10 +239,14 @@ def test_new_deck_session_start_waits_for_previous_deck_request(
             if deck_id == first_manifest.deck_id:
                 first_started.set()
                 release_first.wait(5)
-            state = SessionState(
-                first_manifest.slides[0].slide_id
+            state = (
+                SessionState(first_manifest.slides[0].slide_id)
                 if deck_id == first_manifest.deck_id
-                else next_manifest.slides[0].slide_id
+                else SessionState(
+                    next_manifest.slides[0].slide_id,
+                    autonomy_mode="assisted",
+                    last_accepted_action_id="accepted-action-1",
+                )
             )
             return _session(deck_id, state)
 
@@ -284,8 +288,19 @@ def test_new_deck_session_start_waits_for_previous_deck_request(
             next_manifest.slides[1].full,
         )
         widget._queue_session_state()
-        desired_state = SessionState(next_manifest.slides[1].slide_id)
-        assert widget._session_pending_state == desired_state
+        local_state = SessionState(next_manifest.slides[1].slide_id)
+        assert widget._session_pending_state == local_state
+        resumed_state = SessionState(
+            next_manifest.slides[0].slide_id,
+            autonomy_mode="assisted",
+            last_accepted_action_id="accepted-action-1",
+        )
+        expected_state = replace(
+            resumed_state,
+            active_slide_id=local_state.active_slide_id,
+            focus_view=local_state.focus_view,
+            focus_region=local_state.focus_region,
+        )
 
         release_first.set()
         qtbot.waitUntil(
@@ -293,11 +308,11 @@ def test_new_deck_session_start_waits_for_previous_deck_request(
                 not widget.session_runner.busy
                 and widget._session is not None
                 and widget._session.deck_id == next_manifest.deck_id
-                and widget._session.state == desired_state
+                and widget._session.state == expected_state
             )
         )
         assert started_decks == [first_manifest.deck_id, next_manifest.deck_id]
-        assert updated_states == [desired_state]
+        assert updated_states == [expected_state]
         assert widget._session_attempt == ("owner", next_manifest.deck_id)
     finally:
         release_first.set()
