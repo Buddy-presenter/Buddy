@@ -23,6 +23,7 @@ from buddy_api.persistence.models import (
     ProcessingJob,
     RenderedAsset,
 )
+from buddy_api.presentation_sessions import current_ready_analysis
 from buddy_identity.config import IdentityConfig, SessionExpired
 from tests.api.test_database import database_settings as database_settings
 from tests.api.test_database import migrate
@@ -176,7 +177,7 @@ def ready_session_api(private_api, database_settings):
 
 @pytest.mark.postgres
 def test_session_lifecycle_is_durable_owner_scoped_and_versioned(ready_session_api):
-    client, ids, _, _, database_settings = ready_session_api
+    client, ids, owner_id, _, database_settings = ready_session_api
     headers = {"Authorization": "Bearer owner"}
     path = "/api/v1/sessions"
     deck_path = f"{path}"
@@ -251,6 +252,16 @@ def test_session_lifecycle_is_durable_owner_scoped_and_versioned(ready_session_a
     retained = client.get(f"{path}/{first['id']}", headers=headers)
     assert retained.status_code == 200
     assert retained.json()["data"]["status"] == "ended"
+
+    async def verify_ready_after_end():
+        async with client.app.state.database.sessions() as db:
+            deck = await db.get(Deck, ids["decks"])
+            assert deck is not None
+            analysis, slides = await current_ready_analysis(db, deck, owner_id)
+            return str(analysis.id), len(slides)
+
+    # Ending one session does not invalidate the ready analysis needed by a new session.
+    assert client.portal.call(verify_ready_after_end) == (first["analysis_version_id"], 2)
     restarted = client.post(deck_path, headers=headers, json={"deck_id": str(ids["decks"])})
     assert restarted.status_code == 200, restarted.text
     assert restarted.json()["data"]["id"] != first["id"]
