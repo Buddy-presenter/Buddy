@@ -213,6 +213,7 @@ class PreparedDeployment(Deployment):
             ),
             "schema_image": candidate,
             "rollback_revision": rollback_revision,
+            "worker_image_explicit": worker_profile == "feature",
         }
         if worker_image:
             previous_worker_image = None

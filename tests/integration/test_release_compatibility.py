@@ -38,6 +38,7 @@ def proof(ecs):
             ],
             True,
         ),
+        "worker_image_explicit": False,
     }
 
 
@@ -317,6 +318,7 @@ def test_bridge_preflight_uses_the_exact_current_service_image_as_its_schema_bas
         "schema_image": None,
         "worker_profile": "compatibility",
     }
+    assert json.loads((tmp_path / "proof.json").read_text())["worker_image_explicit"] is False
 
 
 def test_worker_preflight_binds_candidate_and_previous_worker_images_to_live_service(
@@ -366,6 +368,7 @@ def test_worker_preflight_binds_candidate_and_previous_worker_images_to_live_ser
     assert observed["previous_worker_image"] == OLD_WORKER_IMAGE
     assert observed["schema_image"] is None
     assert observed["worker_profile"] == "feature"
+    assert json.loads((tmp_path / "proof.json").read_text())["worker_image_explicit"] is True
     assert (
         json.loads((tmp_path / "proof.json").read_text())["rollback"]["worker"]["desiredCount"] == 0
     )
@@ -488,6 +491,23 @@ def test_worker_schema_proof_rejects_a_mismatched_smoke_profile():
 
     with pytest.raises(DeploymentError, match="Worker image compatibility"):
         driver.compatible(IMAGE, ecs.state, ecs.state, worker_image=OLD_WORKER_IMAGE)
+
+
+def test_explicit_feature_worker_keeps_feature_profile_when_digest_matches_live_worker():
+    ecs, s3 = Ecs(), S3()
+    ecs.state["worker"] = {"taskDefinition": PREFIX + "worker:1", "desiredCount": 0}
+    report = proof(ecs)
+    report["worker_image_explicit"] = True
+    report["worker_compatibility"] = {
+        "passed": True,
+        "target_image": OLD_WORKER_IMAGE,
+        "previous_image": OLD_WORKER_IMAGE,
+        "schema_image": IMAGE,
+        "profile": "feature",
+    }
+    driver = Deployment(CONFIG, ecs, s3, Sts(), compatibility_report=report)
+
+    driver.compatible(IMAGE, ecs.state, ecs.state, worker_image=OLD_WORKER_IMAGE)
 
 
 @pytest.mark.parametrize("bridge", [False, True])

@@ -91,6 +91,10 @@ the external SQS/S3/provider boundaries; no live queue, user PDF or Bedrock call
 The feature worker smoke also verifies scanned-PDF grounding. Compatibility and rollback
 smokes run older worker images without importing that feature-only module, while still
 exercising the real worker entrypoint and PDF processing path.
+The profile is selected from rollout intent: an explicitly supplied worker image in a
+feature release uses the feature profile even when its digest equals the live worker;
+bridge, rollback and existing-worker checks use the compatibility profile. The preflight
+records that intent and promotion validates it against the worker smoke evidence.
 
 PR CI builds an old-source fixture from the pinned image's exact source commit and tests
 both phases without AWS credentials. This checks the source contract, not the private

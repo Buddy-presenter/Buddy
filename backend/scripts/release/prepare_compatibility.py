@@ -151,20 +151,19 @@ def main() -> None:
         if previous_image != base_image:
             raise DeploymentError("Bridge base image drifted from the stable staging service.")
         image_digest(config, args.future_image, "api")
+    feature_worker_release = bool(
+        args.worker_image
+        and not args.future_image
+        and not args.rollback_revision
+        and not args.reader_only
+    )
     compatibility_args = {
         "future": args.future_image,
         "baseline_image": previous_image if args.future_image else None,
         "schema_image": schema_image,
-        # Only a newly built feature worker must prove APIs introduced by that
-        # feature. Bridge and rollback runs deliberately exercise older images.
-        "worker_profile": (
-            "feature"
-            if args.worker_image
-            and not args.future_image
-            and not args.rollback_revision
-            and not args.reader_only
-            else "compatibility"
-        ),
+        # The feature profile follows an explicitly supplied worker image in a
+        # feature release, even when its digest matches the deployed worker.
+        "worker_profile": "feature" if feature_worker_release else "compatibility",
     }
     if args.reader_only:
         compatibility_args["reader_only"] = True
@@ -177,6 +176,7 @@ def main() -> None:
     report.update(
         revision=args.revision,
         rollback_revision=args.rollback_revision,
+        worker_image_explicit=feature_worker_release,
         environment="staging",
         account_id=config["account_id"],
         before=before,

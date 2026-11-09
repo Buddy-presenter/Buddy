@@ -235,14 +235,13 @@ class Deployment:
             worker_schema = (
                 proof["rollback_image"] if proof.get("future_image") else proof.get("schema_image")
             )
-            expected_worker_profile = (
-                "compatibility"
-                if proof.get("future_image")
-                or proof.get("rollback_revision")
-                or proof.get("reader_only")
-                or worker_image == prior_worker_image
-                else "feature"
+            feature_worker_release = (
+                proof.get("worker_image_explicit") is True
+                and not proof.get("future_image")
+                and not proof.get("rollback_revision")
+                and not proof.get("reader_only")
             )
+            expected_worker_profile = "feature" if feature_worker_release else "compatibility"
             if (
                 worker_compatibility.get("passed") is not True
                 or worker_compatibility.get("target_image") != worker_image
