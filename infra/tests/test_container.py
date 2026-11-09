@@ -22,6 +22,24 @@ def load(name):
     return module
 
 
+@pytest.mark.parametrize("command", ["logs", "inspect"])
+def test_worker_smoke_keeps_stderr_logs_without_corrupting_machine_output(monkeypatch, command):
+    smoke = load("smoke_worker")
+    result = subprocess.CompletedProcess(
+        ["docker", command, "synthetic-worker"],
+        0,
+        stdout='{"State":{"ExitCode":1}}\n',
+        stderr="Traceback: synthetic startup error\n",
+    )
+    monkeypatch.setattr(smoke.subprocess, "run", lambda *args, **kwargs: result)
+    output = smoke.docker(command, "synthetic-worker")
+    if command == "logs":
+        assert "Traceback: synthetic startup error" in output
+        assert result.stdout.strip() in output
+    else:
+        assert json.loads(output)["State"]["ExitCode"] == 1
+
+
 @pytest.mark.parametrize(
     "uri",
     [

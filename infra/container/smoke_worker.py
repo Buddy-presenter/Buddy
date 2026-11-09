@@ -17,6 +17,10 @@ def docker(*args, timeout=180):
     result = subprocess.run(["docker", *args], capture_output=True, text=True, timeout=timeout)
     if result.returncode:
         raise RuntimeError(f"Worker smoke Docker {args[0]} failed: {result.stderr[-2000:]}")
+    # Docker forwards container stderr to its own stderr even when `logs` succeeds.
+    # Parsing commands still need stdout alone, but diagnostics need both streams.
+    if args[0] == "logs":
+        return (result.stdout + result.stderr).strip()
     return result.stdout.strip()
 
 
