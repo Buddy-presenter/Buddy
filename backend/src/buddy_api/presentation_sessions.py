@@ -1,7 +1,7 @@
 """Authenticated, durable presentation-session lifecycle and versioned state."""
 
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
@@ -88,9 +88,19 @@ def snapshot(record: PresentationSession) -> SessionSnapshot:
     if record.active_slide_id is not None:
         state = SessionState(
             active_slide_id=record.active_slide_id,
-            focus_view=record.focus_view,
-            focus_region=record.focus_region,
-            autonomy_mode=record.autonomy_mode,
+            focus_view=cast(
+                Literal["slide", "zoom_region", "highlight_region"],
+                record.focus_view,
+            ),
+            focus_region=(
+                FocusRegion.model_validate(record.focus_region)
+                if record.focus_region is not None
+                else None
+            ),
+            autonomy_mode=cast(
+                Literal["manual", "assisted", "autonomous"],
+                record.autonomy_mode,
+            ),
             last_accepted_action_id=record.last_accepted_action_id,
         )
     return SessionSnapshot(
@@ -98,7 +108,7 @@ def snapshot(record: PresentationSession) -> SessionSnapshot:
         owner_id=record.owner_id,
         deck_id=record.deck_id,
         analysis_version_id=record.analysis_version_id,
-        status=record.status,
+        status=cast(Literal["created", "active", "ended"], record.status),
         state_version=record.state_version,
         state=state,
         created_at=record.created_at,
