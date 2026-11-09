@@ -192,6 +192,7 @@ class Deployment:
         before: dict[str, dict[str, Any]],
         *,
         worker_image: str | None = None,
+        expected_worker_profile: str = "compatibility",
     ) -> None:
         """Bind tested container results to the actual immediate rollback target."""
         if self.config["environment"] != "staging":
@@ -235,19 +236,14 @@ class Deployment:
             worker_schema = (
                 proof["rollback_image"] if proof.get("future_image") else proof.get("schema_image")
             )
-            feature_worker_release = (
-                proof.get("worker_image_explicit") is True
-                and not proof.get("future_image")
-                and not proof.get("rollback_revision")
-                and not proof.get("reader_only")
-            )
-            expected_worker_profile = "feature" if feature_worker_release else "compatibility"
+            expected_image_explicit = expected_worker_profile == "feature"
             if (
                 worker_compatibility.get("passed") is not True
                 or worker_compatibility.get("target_image") != worker_image
                 or worker_compatibility.get("previous_image") != prior_worker_image
                 or worker_compatibility.get("schema_image") != worker_schema
                 or worker_compatibility.get("profile") != expected_worker_profile
+                or proof.get("worker_image_explicit") is not expected_image_explicit
             ):
                 raise DeploymentError("Worker image compatibility evidence does not match staging.")
             image_digest(self.config, worker_image, "worker")
@@ -498,7 +494,15 @@ class Deployment:
                 if "worker" in previous
                 else None
             )
-            self.compatible(api_image, previous, previous, worker_image=compatibility_worker_image)
+            self.compatible(
+                api_image,
+                previous,
+                previous,
+                worker_image=compatibility_worker_image,
+                expected_worker_profile=(
+                    "feature" if worker_image is not None else "compatibility"
+                ),
+            )
             audit["compatibility"] = self.compatibility_report
             audit["stage"] = "definition_setup"
             definitions = {"api": self.task("api", api_image)}
@@ -649,6 +653,7 @@ class Deployment:
                 previous,
                 before,
                 worker_image=target_worker_image,
+                expected_worker_profile="compatibility",
             )
             audit["compatibility"] = self.compatibility_report
             if self.states(list(previous)) != before:

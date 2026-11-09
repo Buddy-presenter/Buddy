@@ -507,7 +507,32 @@ def test_explicit_feature_worker_keeps_feature_profile_when_digest_matches_live_
     }
     driver = Deployment(CONFIG, ecs, s3, Sts(), compatibility_report=report)
 
-    driver.compatible(IMAGE, ecs.state, ecs.state, worker_image=OLD_WORKER_IMAGE)
+    driver.compatible(
+        IMAGE,
+        ecs.state,
+        ecs.state,
+        worker_image=OLD_WORKER_IMAGE,
+        expected_worker_profile="feature",
+    )
+
+
+def test_explicit_worker_promotion_rejects_compatibility_only_proof_with_equal_digest():
+    ecs, s3 = Ecs(), S3()
+    ecs.state["worker"] = {"taskDefinition": PREFIX + "worker:1", "desiredCount": 0}
+    report = proof(ecs)
+    report["worker_compatibility"] = {
+        "passed": True,
+        "target_image": OLD_WORKER_IMAGE,
+        "previous_image": OLD_WORKER_IMAGE,
+        "schema_image": IMAGE,
+        "profile": "compatibility",
+    }
+    driver = Deployment(CONFIG, ecs, s3, Sts(), compatibility_report=report)
+
+    with pytest.raises(DeploymentError, match="deployment setup was rejected"):
+        driver.deploy(SHA, IMAGE, OLD_WORKER_IMAGE)
+
+    assert not ecs.registered and not ecs.runs and not ecs.updates
 
 
 @pytest.mark.parametrize("bridge", [False, True])
