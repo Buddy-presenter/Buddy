@@ -421,9 +421,17 @@ class Analyses:
             or evidence.analysis_sha256 != value.content_sha256
             or evidence.instance_id != action.instance_id
             or evidence.action_sha256 != action.content_sha256
-            or any(
-                getattr(evidence, key) != provenance.get(key)
-                for key in ("validator_version", "renderer_version", "display_profile")
+            or evidence.renderer_version != provenance.get("renderer_version")
+            or evidence.display_profile != provenance.get("display_profile")
+            or (
+                evidence.validator_version != provenance.get("validator_version")
+                and not (
+                    action.source_format == "pptx"
+                    and action.action_type == "zoom_region"
+                    and provenance.get("validator_version") == "powerpoint-executor-2"
+                    and evidence.validator_version
+                    in {"powerpoint-executor-3", "powerpoint-executor-4"}
+                )
             )
         ):
             raise PersistenceConflict(

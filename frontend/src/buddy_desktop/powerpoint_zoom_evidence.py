@@ -8,12 +8,13 @@ from PySide6.QtCore import QBuffer, QIODevice, Qt
 from PySide6.QtGui import QImage
 
 from buddy_desktop.powerpoint_contract import PowerPointError, PresentationInfo
+from buddy_desktop.powerpoint_direct_zoom import direct_zoom_plan
 from buddy_desktop.powerpoint_zoom import WindowsPowerPointZoom
 from buddy_desktop.slide_contract import Region
 
 
 def capture(info: PresentationInfo, driver: WindowsPowerPointZoom) -> QImage:
-    """Capture only the bound foreground slideshow's slide area in physical pixels."""
+    """Capture the bound fullscreen slideshow display in physical pixels."""
     gui, api = driver.gui, driver.api
     ui: Any = importlib.import_module("win32ui")
     driver._guard(info)
@@ -21,10 +22,9 @@ def capture(info: PresentationInfo, driver: WindowsPowerPointZoom) -> QImage:
         left, top, right, bottom = gui.GetClientRect(info.window_id)
         origin = gui.ClientToScreen(info.window_id, (left, top))
         width, height = right - left, bottom - top
-        scale = min(width / info.slide_width, height / info.slide_height)
-        width, height = round(info.slide_width * scale), round(info.slide_height * scale)
-        x = origin[0] + (right - left - width) // 2
-        y = origin[1] + (bottom - top - height) // 2
+        if origin != (0, 0):
+            raise PowerPointError("The fullscreen slideshow must be on the primary display.")
+        x, y = origin
         if min(width, height) < 100 or width * height > 32_000_000:
             raise PowerPointError("The slideshow capture size is unavailable.")
         # Bound evidence allocations before copying pixels out of GDI. Office's own
@@ -114,40 +114,28 @@ def verify_zoom(
     *,
     client_size: tuple[int, int] | None = None,
 ) -> None:
-    """Require a visible fixed-2x viewport transform and a return to the original view."""
+    """Require the exact planned display transform and a return to the original view."""
     if (
         any(image.isNull() for image in (before, after, reset))
         or before.size() != after.size()
         or before.size() != reset.size()
     ):
         raise PowerPointError("The slideshow geometry changed during zoom validation.")
-    cx = min(0.75, max(0.25, (region.x + region.width / 2) / info.slide_width))
-    cy = min(0.75, max(0.25, (region.y + region.height / 2) / info.slide_height))
-    # Office clamps its focus viewport against the display canvas, including
-    # letterbox bars. Cropped slide captures therefore need bounded registration
-    # near the edges; a slide-only clamp wrongly rejects successful native zoom.
-    padding_x = padding_y = 0.0
-    if client_size is not None:
-        width, height = client_size
-        scale = min(width / info.slide_width, height / info.slide_height)
-        if scale <= 0:
-            raise PowerPointError("The slideshow display geometry is unavailable.")
-        padding_x = (width / (info.slide_width * scale) - 1) / 2
-        padding_y = (height / (info.slide_height * scale) - 1) / 2
-    offsets_x = [padding_x * factor for factor in (-1, -0.5, 0, 0.5, 1)] if padding_x else [0]
-    offsets_y = [padding_y * factor for factor in (-1, -0.5, 0, 0.5, 1)] if padding_y else [0]
-    best = 1.0
-    for dx in offsets_x:
-        for dy in offsets_y:
-            expected = before.copy(
-                round(min(0.5, max(0, cx - 0.25 + dx)) * before.width()),
-                round(min(0.5, max(0, cy - 0.25 + dy)) * before.height()),
-                round(before.width() / 2),
-                round(before.height() / 2),
-            )
-            best = min(best, distance(expected, after))
+    width, height = client_size or (before.width(), before.height())
+    plan = direct_zoom_plan(info, region, (0, 0, width, height), (width, height))
+    expected = before.copy(
+        round(plan.x * before.width() / width),
+        round(plan.y * before.height() / height),
+        round(before.width() / plan.scale),
+        round(before.height() / plan.scale),
+    ).scaled(
+        before.size(),
+        Qt.AspectRatioMode.IgnoreAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    best = distance(expected, after)
     unchanged = distance(before, after)
     if unchanged < 0.015 or best >= unchanged * 0.8:
-        raise PowerPointError("The captured slideshow did not confirm native 2x zoom.")
+        raise PowerPointError("The captured slideshow did not confirm the direct zoom.")
     if distance(before, reset) > 0.02:
         raise PowerPointError("The slideshow did not return to its original full-slide view.")

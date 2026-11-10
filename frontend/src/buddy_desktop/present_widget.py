@@ -2,6 +2,7 @@
 
 import sys
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal, Slot
@@ -515,6 +516,8 @@ class PresentWidget(Page):
 
     @Slot()
     def _disconnect_powerpoint(self) -> None:
+        with suppress(Exception):
+            self.powerpoint.release_zoom()
         self._powerpoint_poll.stop()
         # Invalidate in-flight work: neither late success nor failure may restore
         # a connection or restart polling after the user explicitly disconnects.
@@ -727,6 +730,8 @@ class PresentWidget(Page):
 
     def shutdown(self) -> None:
         self._closing = True
+        with suppress(Exception):
+            self.powerpoint.release_zoom()
         self._queued_powerpoint_action = None
         self._queued_powerpoint_preview = None
         self._queued_powerpoint_operation = None

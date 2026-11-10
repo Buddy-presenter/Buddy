@@ -17,41 +17,30 @@ def scene():
     return image
 
 
-def test_zoom_proof_requires_actual_two_times_transform_and_reset():
+@pytest.mark.parametrize(
+    "region",
+    [
+        Region(280, 160, 400, 220),
+        Region(180, 95, 600, 350),
+        Region(380, 210, 200, 120),
+        Region(280, 468, 400, 24),
+    ],
+)
+def test_direct_proof_checks_target_and_reset(region):
+    from buddy_desktop.powerpoint_direct_zoom import direct_zoom_plan
+
     before = scene()
     info = PresentationInfo("test.pptx", "test.pptx", 1, 1, 123, 256, 960, 540)
-    region = Region(400, 220, 160, 100)
-    after = before.copy(240, 135, 480, 270).scaled(
+    plan = direct_zoom_plan(info, region, (0, 0, 960, 540), (960, 540))
+    after = before.copy(plan.x, plan.y, round(960 / plan.scale), round(540 / plan.scale)).scaled(
         960, 540, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation
     )
     verify_zoom(before, after, before, info, region)
     assert png(before).startswith(b"\x89PNG")
-    with pytest.raises(PowerPointError, match="2x"):
+    with pytest.raises(PowerPointError):
         verify_zoom(before, before, before, info, region)
-    with pytest.raises(PowerPointError, match="original"):
+    with pytest.raises(PowerPointError):
         verify_zoom(before, after, after, info, region)
-    unrelated = QImage(before)
-    unrelated.fill(QColor("orange"))
-    with pytest.raises(PowerPointError, match="2x"):
-        verify_zoom(before, unrelated, before, info, region)
-    with pytest.raises(PowerPointError, match="geometry"):
-        verify_zoom(before, after.scaled(480, 270), before, info, region)
-
-
-def test_letterboxed_edge_zoom_uses_display_bounded_registration():
-    before = scene()
-    painter = QPainter(before)
-    for y in range(0, 540, 20):
-        painter.fillRect(QRect(0, y, 960, 20), QColor(y * 13 % 256, y * 7 % 256, y * 19 % 256))
-    painter.end()
-    info = PresentationInfo("test.pptx", "test.pptx", 1, 1, 123, 256, 960, 540)
-    region = Region(400, 480, 160, 24)
-    after = before.copy(240, 240, 480, 270).scaled(
-        960, 540, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation
-    )
-    with pytest.raises(PowerPointError, match="2x"):
-        verify_zoom(before, after, before, info, region)
-    verify_zoom(before, after, before, info, region, client_size=(1920, 1200))
 
 
 def test_native_capture_downsamples_before_allocating_image_buffers(monkeypatch):

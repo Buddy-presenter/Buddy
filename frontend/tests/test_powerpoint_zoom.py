@@ -71,135 +71,42 @@ def test_focus_guard_aborts_before_input_when_slide_or_foreground_changes():
 @pytest.fixture
 def native_driver():
     driver = WindowsPowerPointZoom.__new__(WindowsPowerPointZoom)
-    state = {"selector": False, "cursor": (400, 300), "foreground": 42, "covered": False}
-    events = []
-    jumps = []
-    driver.gui = SimpleNamespace(
-        IsWindow=lambda hwnd: True,
-        IsIconic=lambda hwnd: False,
-        GetForegroundWindow=lambda: state["foreground"],
-        SetForegroundWindow=lambda hwnd: state.update(foreground=hwnd),
-        GetClientRect=lambda hwnd: (0, 0, 1920, 1080),
-        ClientToScreen=lambda hwnd, point: point,
-        WindowFromPoint=lambda point: 99 if state["covered"] else 42,
-        IsChild=lambda parent, child: False,
-    )
-
-    def mouse(kind, *args):
-        events.append(kind)
-        if kind == 4:
-            state["selector"] = False
-
-    driver.api = SimpleNamespace(
-        GetAsyncKeyState=lambda key: 0,
-        GetCursorPos=lambda: state["cursor"],
-        SetCursorPos=lambda point: state.update(cursor=point),
-        mouse_event=mouse,
-    )
-    pattern = SimpleNamespace(Invoke=lambda: state.update(selector=True))
-    button = SimpleNamespace(
-        CurrentIsEnabled=True,
-        GetCurrentPattern=lambda kind: SimpleNamespace(QueryInterface=lambda interface: pattern),
-    )
-    driver.types = SimpleNamespace(IUIAutomationInvokePattern=object())
-    driver.uia = SimpleNamespace(
-        ElementFromHandle=lambda hwnd: SimpleNamespace(FindFirst=lambda scope, condition: button),
-        CreatePropertyCondition=lambda prop, value: (prop, value),
-    )
-    driver._physical_pixels = nullcontext
-    driver._zoom_window = lambda hwnd: 77 if state["selector"] else None
-    window = SimpleNamespace(View=SimpleNamespace(GotoSlide=lambda *args: jumps.append(args)))
-    return driver, state, events, jumps, lambda: window
-
-
-def test_native_zoom_waits_for_selector_and_confirms_completion(native_driver):
-    driver, state, events, jumps, validate = native_driver
-    driver.zoom(info(), Region(120, 60, 240, 150), validate)
-    assert events == [2, 4]
-    assert jumps == [(1, 0)]
-    assert not state["selector"]
-    assert state["cursor"] == (400, 300)
-
-
-def test_native_toolbar_is_revealed_inside_the_slide_not_in_letterbox_bars(native_driver):
-    driver, state, events, _, validate = native_driver
-    driver.gui.GetClientRect = lambda _: (0, 0, 1920, 1200)
-    button = driver.uia.ElementFromHandle(42).FindFirst(4, None)
-    driver.uia.ElementFromHandle = lambda _: SimpleNamespace(
-        FindFirst=lambda *_: button if 60 < state["cursor"][1] < 1140 else None,
-    )
-    driver.zoom(info(), Region(120, 60, 240, 150), validate)
-    assert events == [2, 4]
-
-
-def test_occlusion_or_missing_native_control_never_clicks_the_slide(native_driver):
-    driver, state, events, _, validate = native_driver
-    state["covered"] = True
-    with pytest.raises(PowerPointError, match="covered"):
-        driver.zoom(info(), Region(120, 60, 240, 150), validate)
-    assert events == []
-    state["covered"] = False
-    driver.uia.ElementFromHandle = lambda hwnd: SimpleNamespace(FindFirst=lambda *args: None)
-    with pytest.raises(PowerPointError, match="does not expose"):
-        driver.zoom(info(), Region(120, 60, 240, 150), validate)
-    assert events == []
-
-
-def test_reset_is_safe_when_already_full_size_and_sends_no_escape(native_driver):
-    driver, _, events, jumps, validate = native_driver
-    driver.reset(info(), validate)
-    driver.reset(info(), validate)
-    assert jumps == [(1, 0), (1, 0)]
-    assert events == []
-
-
-def test_held_modifiers_prevent_native_zoom_input(native_driver):
-    driver, _, events, jumps, validate = native_driver
-    driver.api.GetAsyncKeyState = lambda key: 0x8000 if key == 17 else 0
-    with pytest.raises(PowerPointError, match="Release"):
-        driver.zoom(info(), Region(120, 60, 240, 150), validate)
-    assert events == []
-    assert jumps == []
-
-
-def test_focus_uses_actual_foreground_and_never_forces_denied_activation():
-    driver = WindowsPowerPointZoom.__new__(WindowsPowerPointZoom)
-    foreground = [42]
-    calls = []
-
-    def activate(hwnd):
-        calls.append(hwnd)
-        raise RuntimeError("Activation denied")
-
-    driver.gui = SimpleNamespace(
-        IsWindow=lambda hwnd: True,
-        IsIconic=lambda hwnd: False,
-        GetForegroundWindow=lambda: foreground[0],
-        SetForegroundWindow=activate,
-    )
-    driver.focus(info())
-    assert calls == []
-    foreground[0] = 99
-    with pytest.raises(PowerPointError, match="lost focus"):
-        driver.focus(info())
-    assert calls == [42]
-
-
-def test_accessibility_focus_fallback_is_bound_to_the_selected_show():
-    driver = WindowsPowerPointZoom.__new__(WindowsPowerPointZoom)
-    foreground = [99]
-    handles = []
+    state = {"foreground": 42, "covered": False, "monitors": 1, "plans": []}
     driver.gui = SimpleNamespace(
         IsWindow=lambda _: True,
         IsIconic=lambda _: False,
-        GetForegroundWindow=lambda: foreground[0],
-        SetForegroundWindow=lambda _: None,
+        GetForegroundWindow=lambda: state["foreground"],
+        GetClientRect=lambda _: (0, 0, 1920, 1080),
+        ClientToScreen=lambda _, point: point,
+        WindowFromPoint=lambda _: 99 if state["covered"] else 42,
+        IsChild=lambda *_: False,
     )
+    driver.api = SimpleNamespace(
+        GetAsyncKeyState=lambda _: 0,
+        GetSystemMetrics=lambda n: {0: 1920, 1: 1080, 80: state["monitors"]}[n],
+    )
+    driver._physical_pixels = nullcontext
+    driver.magnifier = SimpleNamespace(
+        release=lambda: None, apply=lambda hwnd, plan: state["plans"].append((hwnd, plan))
+    )
+    return driver, state
 
-    def element(hwnd):
-        handles.append(hwnd)
-        return SimpleNamespace(SetFocus=lambda: foreground.__setitem__(0, hwnd))
 
-    driver.uia = SimpleNamespace(ElementFromHandle=element)
-    driver.focus(info())
-    assert foreground == [42] and handles == [42]
+def test_direct_zoom_applies_one_transform_without_keyboard_input(native_driver):
+    driver, state = native_driver
+    driver.zoom(info(), Region(120, 60, 240, 150), lambda: None)
+    assert len(state["plans"]) == 1
+    assert state["plans"][0][0] == 42
+    assert state["plans"][0][1].scale > 1
+
+
+def test_direct_zoom_refuses_other_monitors_or_obscured_slide(native_driver):
+    driver, state = native_driver
+    state["monitors"] = 2
+    with pytest.raises(PowerPointError, match="single display"):
+        driver.zoom(info(), Region(120, 60, 240, 150), lambda: None)
+    state["monitors"] = 1
+    state["covered"] = True
+    with pytest.raises(PowerPointError, match="covered"):
+        driver.zoom(info(), Region(120, 60, 240, 150), lambda: None)
+    assert not state["plans"]

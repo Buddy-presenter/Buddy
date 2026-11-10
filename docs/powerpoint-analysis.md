@@ -31,7 +31,7 @@ keeps rows selectable and preserves the selected deck when results reorder.
 
 `powerpoint-2` permits highlight, rectangle, oval, underline, arrow, callout, line,
 filled rectangle, filled oval, text box, rounded rectangle, diamond, triangle, hexagon
-and star actions, plus native fixed-2x `zoom_region`. Generation considers the whole catalog and selects a useful, varied
+and star actions, plus direct screen-magnification `zoom_region`. Generation considers the whole catalog and selects a useful, varied
 subset rather than forcing decoration. Every generated action selects an extracted object ID;
 the server derives the rectangle from that object's actual bounds in PowerPoint slide
 points (12,700 EMU per point). Unsupported, duplicate, clipped/degenerate or unknown targets
@@ -40,8 +40,8 @@ accept bounded text. Navigation/reset remain code-owned; manual pointer/freehand
 controls remain presenter-owned. Zoom selects a complete source object, with empty text
 and target_text, rather than inventing focus coordinates. It has equal consideration with
 every other tool, with no preference, quota or forced variety. Native focus may clamp near
-edges; large source objects are allowed, with central-detail focus rather than a promise
-that the complete object fits at 2x. The prompt actively considers zoom for a legibility
+edges; Buddy directly sets the screen magnification and position to fit the selected source object.
+The prompt actively considers zoom for a legibility
 or clear audience-focus benefit, such as important comparisons, tables, chart labels, detailed diagrams,
 code, equations, formulas or small substantive body text. A meaningful result or relationship
 may also warrant focus when enlargement helps explain it, grounded in slide content and
@@ -133,7 +133,7 @@ does not provision a Windows VM or claim that an Office runtime is deployed in A
 
 Zoom validation uses physical-pixel captures of the exact foreground slideshow, not
 PowerPoint's unchanged slide export or read-only Zoom property. On the dedicated interactive
-Windows worker it compares the visible viewport with the expected 2x crop, resets zoom,
+Windows worker it compares the visible viewport with the expected fitted crop, resets zoom,
 checks that the original view returned and verifies no shapes were added or removed.
 Near slide edges, image registration is bounded by the measured display letterboxing:
 PowerPoint clamps against the display canvas, not solely the slide's content rectangle.
@@ -143,7 +143,7 @@ Only successful bound before/after captures are published as private evidence.
 Zoom evidence is downsampled in GDI to at most 1280 pixels on its longest edge before
 allocating Python image copies. The separately bounded Office worker budget is 1536 MiB
 for Python plus its owned Office process; the PDF budget remains 768 MiB. The real uploaded
-deck exceeded the previous shared budget while PowerPoint rendered its native zoom.
+deck exceeded the previous shared budget while PowerPoint rendered its slideshow.
 Linux workers still cannot validate native Office actions. The additive catalog keeps existing
 saved actions readable; apply migration `0014_powerpoint_zoom` before processing new zoom
 suggestions. Old desktop/worker builds must be upgraded to execute the new action.

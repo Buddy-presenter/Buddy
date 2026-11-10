@@ -30,7 +30,11 @@ def validate(folder: Path) -> dict[str, Any]:
         "state": "needs-review",
         "reasons": ["powerpoint_execution_unavailable"],
         "semantic_verified": False,
-        "validator_version": "powerpoint-executor-2",
+        "validator_version": (
+            "powerpoint-executor-4"
+            if request["action"].get("type") == "zoom_region"
+            else "powerpoint-executor-2"
+        ),
         "renderer_version": "desktop-powerpoint-2",
         "profile": "windows-powerpoint-2",
         "runtime_platform": sys.platform,
@@ -176,7 +180,14 @@ def validate(folder: Path) -> dict[str, Any]:
             after_sha256=hashlib.sha256(after).hexdigest(),
         )
     except Exception as exc:
-        result["reasons"] = ["powerpoint_execution_failed", "stage_" + stage, type(exc).__name__]
+        if str(exc) == "This region is too large to fit at a magnified level.":
+            result["reasons"] = ["powerpoint_zoom_target_too_large"]
+        else:
+            result["reasons"] = [
+                "powerpoint_execution_failed",
+                "stage_" + stage,
+                type(exc).__name__,
+            ]
     finally:
         if presentation is not None:
             with suppress(Exception):

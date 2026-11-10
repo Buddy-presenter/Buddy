@@ -958,13 +958,17 @@ class ReviewWidget(Page):
         action = self.action_rows[row]
         self.details_toggle.setChecked(False)
         self.action_status.setText(
-            "Ready for native 2× zoom in PowerPoint. This reference stays at full-slide size; "
-            "use Reset zoom to restore the slideshow."
+            "Ready for direct screen zoom. This reference stays full-size; zoom resets when "
+            "you switch away from PowerPoint or choose Reset zoom."
             if self.source_format == "pptx"
             and action.usable
             and action.action_type == "zoom_region"
             else "Ready to run on this slide."
             if action.usable
+            else "This selection is too large to fit at a magnified level."
+            if "powerpoint_zoom_target_too_large" in action.reasons
+            else "This zoom was checked with an older version and needs a new validation."
+            if "zoom_requires_fitted_view_revalidation" in action.reasons
             else "Save and close desktop PowerPoint. Buddy will automatically recheck this "
             "action; reopen Review to see the updated result."
             if "powerpoint_worker_busy_use_dedicated_session" in action.reasons

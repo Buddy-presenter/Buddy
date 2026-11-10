@@ -86,7 +86,7 @@ def test_zoom_uses_the_shared_selection_and_never_emits_annotation_reset(control
     assert actions[-1].kind == "zoom_region"
     assert actions[-1].region.x == 120
     controls.completed(PowerPointActionResult(actions[-1], info()))
-    assert "2×" in controls.feedback.text()
+    assert "zoom applied" in controls.feedback.text().lower()
     controls.reset_zoom.click()
     assert actions[-1].kind == "reset_zoom"
     assert actions[-1].region is None

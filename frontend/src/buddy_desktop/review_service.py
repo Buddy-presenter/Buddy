@@ -299,7 +299,16 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                         ).encode()
                     ).hexdigest()
                     or validation.get("display_profile") != profile
-                    or validation.get("validator_version") != validator
+                    or (
+                        validation.get("validator_version") != validator
+                        and not (
+                            powerpoint
+                            and action.get("type") == "zoom_region"
+                            and validator == "powerpoint-executor-2"
+                            and validation.get("validator_version")
+                            in {"powerpoint-executor-3", "powerpoint-executor-4"}
+                        )
+                    )
                     or validation.get("renderer_version") != renderer
                 ):
                     raise ValueError
@@ -378,6 +387,15 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                 )
             ):
                 raise ValueError
+            if (
+                powerpoint
+                and action.get("type") == "zoom_region"
+                and usable
+                and isinstance(validation, dict)
+                and validation.get("validator_version") != "powerpoint-executor-4"
+            ):
+                usable = False
+                reasons = (*reasons, "zoom_requires_fitted_view_revalidation")
             actions.append(
                 ReviewAction(
                     _required_text(action.get("instance_id")),
@@ -392,7 +410,9 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                     tuple(evidence),
                     tuple(r for r in reasons if r is not None),
                     profile,
-                    validator,
+                    validation.get("validator_version", validator)
+                    if isinstance(validation, dict)
+                    else validator,
                     renderer,
                     validation_id,
                     action if powerpoint else None,

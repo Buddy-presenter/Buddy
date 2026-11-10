@@ -81,12 +81,24 @@ def powerpoint_payload(content=b"PK-synthetic-source", *, usable=True, kind="hig
             "reasons": [] if usable else ["powerpoint_runtime_requires_windows_office"],
             "evidence": [{"id": str(uuid4()), "kind": "report", "sha256": "b" * 64}],
             "runtime_version": "16.0.12345",
-            "validator_version": "powerpoint-executor-2",
+            "validator_version": "powerpoint-executor-4"
+            if kind == "zoom_region"
+            else "powerpoint-executor-2",
             "renderer_version": "desktop-powerpoint-2",
             "display_profile": "windows-powerpoint-2",
         },
     )
     return deck, payload
+
+
+def test_legacy_zoom_proof_does_not_authorize_the_new_fitted_view():
+    deck, payload = powerpoint_payload(kind="zoom_region")
+    payload["data"]["slides"][0]["actions"][0]["validation"]["validator_version"] = (
+        "powerpoint-executor-2"
+    )
+    action = parse_analysis(payload, deck).slides[0].actions[0]
+    assert not action.usable
+    assert "zoom_requires_fitted_view_revalidation" in action.reasons
 
 
 @pytest.mark.parametrize("kind", KINDS)

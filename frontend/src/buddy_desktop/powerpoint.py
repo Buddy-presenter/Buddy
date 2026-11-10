@@ -50,6 +50,7 @@ class PowerPointAutomation:
         self._process_probe = process_probe or self._powerpoint_process_running
         self._zoom_factory = zoom_factory
         self._zoom_window_id: int | None = None
+        self._magnifier_session: Any | None = None
         # One PowerPointAutomation instance serves a single TaskRunner, so operations are
         # serialized. The slide names themselves survive a Buddy restart while the
         # read-only PowerPoint session remains open; Reset scans by this private prefix.
@@ -805,6 +806,7 @@ class PowerPointAutomation:
                 "zoom_region",
                 "reset_zoom",
             }:
+                self.release_zoom()
                 view.GotoSlide(info.slide_index, 0)
                 self._zoom_window_id = None
             if action.kind in {"zoom_region", "reset_zoom"}:
@@ -837,6 +839,7 @@ class PowerPointAutomation:
                         info, action.region, lambda: self._target_window(application, action.target)
                     )
                 else:
+                    self.release_zoom()
                     view.GotoSlide(info.slide_index, 0)
                     self._zoom_window_id = None
             elif action.kind in {"next_slide", "previous_slide", "go_to_slide"}:
@@ -925,4 +928,14 @@ class PowerPointAutomation:
     def _zoom_driver(self) -> Any:
         from buddy_desktop.powerpoint_zoom import WindowsPowerPointZoom
 
-        return (self._zoom_factory or WindowsPowerPointZoom)()
+        driver = (self._zoom_factory or WindowsPowerPointZoom)()
+        if self._zoom_factory is None:
+            if self._magnifier_session is None:
+                self._magnifier_session = driver.magnifier
+            else:
+                driver.magnifier = self._magnifier_session
+        return driver
+
+    def release_zoom(self) -> None:
+        if self._magnifier_session is not None:
+            self._magnifier_session.release()

@@ -126,36 +126,18 @@ native slideshow class; the windowed fallback currently recognizes the English
 `PowerPoint Slide Show` frame title. Use fullscreen mode for localized Office installations
 whose windowed title is different. Native fallback modules are included in Windows bundles.
 
-## Manual native region zoom (#111)
+## Direct region zoom (#111)
 
-Select an area in the full-slide reference (or enter its slide-point coordinates), then
-choose **Zoom to selected area (2×)**. Buddy focuses the selected PowerPoint slideshow,
-invokes its native `OpticalZoomButton` through Windows UI Automation, and selects the
-region's center. PowerPoint supplies the live magnified slide, including its authored
-content; Buddy's reference stays at full-slide size. This uses PowerPoint's fixed initial
-200% magnification, not an exact fit-to-rectangle scale. Near slide edges, PowerPoint
-clamps the focus position. Use **Reset zoom** to restore the complete slide.
+Select an area in the full-slide reference and choose **Zoom to selected area**.
+Buddy uses Windows fullscreen magnification to set the scale and position in one call,
+with a margin around the selected region. The effect magnifies the entire primary display,
+including the live PowerPoint slideshow. Buddy restores the display on focus loss,
+reset, disconnect, or shutdown. Existing slide content and annotations remain intact.
 
-Reset uses `GotoSlide(currentSlide, msoFalse)`: it keeps existing animation builds and
-annotations, does not save or change the source file, and never blindly sends Escape
-(which could end a slideshow the presenter already reset). Buddy restores full-slide view
-before subsequent manual navigation or annotation commands after a Buddy zoom. Native
-arrow keys pan while magnified; use Buddy's navigation controls or reset before navigating
-directly in PowerPoint. Disconnect leaves PowerPoint's current view alone.
-
-The UIA command is selected by its automation ID, not localized labels/menu coordinates.
-The adapter checks the exact connected slide before/after input, foreground focus, window
-geometry, occlusion, and held mouse/modifier keys. UIA provider calls and selector waits
-are bounded. A rejected/uncertain command is not replayed. If a native focus selector is
-left open after interruption, cancel it in PowerPoint with Esc before retrying.
-
-Screen mapping runs with per-monitor physical pixels, includes aspect-ratio letterboxing,
-and supports negative monitor origins. Automated geometry tests cover these cases;
-physical multiple monitors, projector/screen-share output, other Office versions and
-localized Office installations still need acceptance testing. Missing native accessibility
-controls fail with a recoverable error. This Windows-only path requires the packaged
-`comtypes` UIA binding. The uploaded generation/Review path can also suggest and validate
-native zoom; see [PowerPoint analysis](powerpoint-analysis.md). PDF playback is unchanged.
+The feature currently requires a single display and a fullscreen slideshow on the primary
+screen. Window-only screen sharing and projector or multiple-monitor setups have not been
+verified and may not show the magnified output. Windows only; PDF playback is unchanged.
+Uploaded PowerPoint suggestions require fresh validation for this implementation.
 
 ## Recorded Windows acceptance and repeatable smoke
 

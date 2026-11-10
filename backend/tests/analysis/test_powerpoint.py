@@ -135,6 +135,44 @@ def test_zoom_allows_large_source_objects_for_native_central_detail_focus():
     assert {a.type for a in document.slides[1].actions} == {"zoom_region", "draw_rectangle"}
 
 
+def test_fitted_zoom_proof_is_only_accepted_for_powerpoint_zoom():
+    from types import SimpleNamespace
+
+    from buddy_api.analysis.store import Analyses
+    from buddy_api.persistence.errors import PersistenceConflict
+
+    analysis = SimpleNamespace(
+        id=uuid4(),
+        source_format="pptx",
+        content_sha256="a" * 64,
+        provenance={
+            "validator_version": "powerpoint-executor-2",
+            "renderer_version": "desktop-powerpoint-2",
+            "display_profile": "windows-powerpoint-2",
+        },
+    )
+    action = SimpleNamespace(
+        source_format="pptx",
+        action_type="zoom_region",
+        instance_id="action",
+        content_sha256="b" * 64,
+    )
+    proof = SimpleNamespace(
+        analysis_id=analysis.id,
+        source_format="pptx",
+        analysis_sha256=analysis.content_sha256,
+        instance_id=action.instance_id,
+        action_sha256=action.content_sha256,
+        validator_version="powerpoint-executor-3",
+        renderer_version="desktop-powerpoint-2",
+        display_profile="windows-powerpoint-2",
+    )
+    Analyses._check_evidence(analysis, action, proof)
+    action.action_type = "draw_rectangle"
+    with pytest.raises(PersistenceConflict):
+        Analyses._check_evidence(analysis, action, proof)
+
+
 def test_text_targets_are_grounded_and_decorative_text_frames_are_omitted():
     _, extraction = source()
     raw = output(extraction, ("highlight_region", "draw_star", "draw_diamond")).model_dump(

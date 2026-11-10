@@ -141,6 +141,8 @@ class PowerPointReviewSession:
     def close(self) -> None:
         self.cancelled.set()
         with self.lock:
+            with suppress(Exception):
+                self.automation.release_zoom()
             if self.path is not None and self.automation._process_probe():
                 # Close only this account-bound downloaded source, never unrelated shows.
                 with suppress(Exception):
