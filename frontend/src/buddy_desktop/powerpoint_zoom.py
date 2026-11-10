@@ -39,6 +39,7 @@ class WindowsPowerPointZoom:
     types: Any
     uia: Any
     user: Any
+    magnifier: MagnifierSession
 
     def __init__(self) -> None:
         if sys.platform != "win32":

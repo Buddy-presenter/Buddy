@@ -54,7 +54,7 @@ class MagnifierSession:
 
     def __init__(self, gui: Any, library: Any | None = None) -> None:
         self.gui = gui
-        self.mag = library or ctypes.WinDLL("Magnification.dll", use_last_error=True)
+        self.mag = library or getattr(ctypes, "WinDLL")("Magnification.dll", use_last_error=True)
         if library is None:
             self.mag.MagInitialize.restype = ctypes.c_int
             self.mag.MagUninitialize.restype = ctypes.c_int
