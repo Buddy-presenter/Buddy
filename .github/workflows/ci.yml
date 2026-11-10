@@ -112,7 +112,7 @@ jobs:
       - name: Install Qt runtime libraries for desktop integration tests
         run: |
           sudo apt-get update
-          sudo apt-get install --yes libegl1
+          sudo apt-get install --yes libegl1 libpulse0
       - name: Cross-component desktop, API and PostgreSQL integration
         run: python scripts/test.py integration
       - run: python -m build backend
