@@ -244,9 +244,7 @@ class Deployment:
                     "Staging worker releases require exact-image compatibility evidence."
                 )
             else:
-                prior_worker_image = self.task_image(
-                    before["worker"]["taskDefinition"], "worker"
-                )
+                prior_worker_image = self.task_image(before["worker"]["taskDefinition"], "worker")
                 worker_schema = (
                     proof["rollback_image"]
                     if proof.get("future_image")

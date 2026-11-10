@@ -116,9 +116,7 @@ def main() -> None:
             rollback_worker.get("taskDefinition", ""),
         ):
             raise DeploymentError("Invalid staging worker target.")
-        reader_worker_stays_paused = bool(
-            args.reader_only and rollback_worker["desiredCount"] == 0
-        )
+        reader_worker_stays_paused = bool(args.reader_only and rollback_worker["desiredCount"] == 0)
         if not reader_worker_stays_paused:
             worker_image = (
                 image(ecs, rollback_worker, "worker")
