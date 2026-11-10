@@ -2,6 +2,7 @@
 
 import os
 import plistlib
+from datetime import UTC
 from pathlib import Path
 from queue import Empty
 from types import SimpleNamespace
@@ -310,4 +311,49 @@ def test_present_controls_capture_and_stop_real_microphone(desktop_window, qtbot
     stopped_count = len(counts)
     qtbot.wait(400)
     assert len(counts) == stopped_count
+    assert not page.microphone.enabled
+
+
+def test_old_worker_failure_cannot_stop_new_capture(qapp):
+    mic = MicrophoneController()
+    try:
+        mic._generation = 10
+        mic._enabled = True
+        mic.accepting.set()
+        mic._worker_changed(9, "Microphone stopped. Check device and system permissions.")
+        assert mic.enabled and mic.accepting.is_set()
+        mic._worker_changed(10, "Microphone stopped. Check device and system permissions.")
+        assert not mic.enabled and not mic.accepting.is_set()
+    finally:
+        mic.shutdown()
+
+
+def test_pdf_microphone_stops_when_remote_session_ends(desktop_window, monkeypatch):
+    from datetime import datetime
+
+    from buddy_desktop.presentation_session_service import PresentationSession
+
+    monkeypatch.setattr(present_widget, "MicrophoneController", FakeMicrophone)
+    window = desktop_window()
+    page = window.present
+    monkeypatch.setattr(page, "_microphone_session_available", lambda: True)
+    page._session = SimpleNamespace(status="active")
+    page._microphone_toggle()
+    page._microphone_pdf_request_generation = page._microphone_pdf_generation
+    page._session_request = ("microphone_verify", page._session_generation, None)
+    ended = PresentationSession("s", "o", "d", "a", "ended", 1, None, datetime.now(UTC))
+    page._session_succeeded(1, ("success", ended, None))
+    assert not page.microphone.enabled
+    assert page._session is None and page._session_ended
+    assert "could not be verified" in page.microphone_status.text()
+
+
+def test_pdf_microphone_stops_when_session_verification_times_out(desktop_window, monkeypatch):
+    monkeypatch.setattr(present_widget, "MicrophoneController", FakeMicrophone)
+    window = desktop_window()
+    page = window.present
+    monkeypatch.setattr(page, "_microphone_session_available", lambda: True)
+    page._session = SimpleNamespace(status="active")
+    page._microphone_toggle()
+    page._microphone_pdf_unverified()
     assert not page.microphone.enabled

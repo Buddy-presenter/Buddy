@@ -11,6 +11,7 @@ cleared. Stop microphone releases the input device.
 
 Changing decks, leaving Present, signing out, losing account access, ending the session,
 disconnecting or changing the connected PowerPoint show, or closing Buddy stops capture.
+While PDF capture is active, Buddy periodically verifies the saved session; if it ends remotely or cannot be verified, capture stops.
 When a PowerPoint status check fails or cannot be refreshed for five seconds, capture
 stops until the presenter explicitly starts it again after verification resumes. Slideshow
 exit is normally detected by the existing half-second poll. If the selected input

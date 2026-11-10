@@ -32,7 +32,7 @@ def _clear_frames(frames: Queue[bytes]) -> None:
 
 
 class _CaptureWorker(QObject):
-    changed = Signal(str)
+    changed = Signal(int, str)
     received = Signal(int)
 
     def __init__(self, frames: Queue[bytes], accepting: Event, frame_lock: Lock) -> None:
@@ -44,10 +44,12 @@ class _CaptureWorker(QObject):
         self.stream: QIODevice | None = None
         self._com_initialized = False
         self.monitor: QTimer | None = None
+        self.generation = 0
 
-    @Slot(object)
-    def start(self, device_id: bytes) -> None:
+    @Slot(object, int)
+    def start(self, device_id: bytes, generation: int) -> None:
         self.stop()
+        self.generation = generation
         if not self.accepting.is_set():
             return
         try:
@@ -59,7 +61,7 @@ class _CaptureWorker(QObject):
                 (d for d in QMediaDevices.audioInputs() if bytes(d.id().data()) == device_id), None
             )
             if device is None:
-                self.changed.emit("Microphone unavailable. Choose an input device.")
+                self.changed.emit(generation, "Microphone unavailable. Choose an input device.")
                 return
             source = QAudioSource(device, device.preferredFormat(), self)
             source.setBufferSize(16384)
@@ -67,18 +69,22 @@ class _CaptureWorker(QObject):
             self.stream = source.start()
         except Exception:
             self.stop()
-            self.changed.emit("Microphone unavailable. Check device and system permissions.")
+            self.changed.emit(
+                generation, "Microphone unavailable. Check device and system permissions."
+            )
             return
         if self.stream is None or source.error().value != QAudio.Error.NoError.value:
             self.stop()
-            self.changed.emit("Microphone unavailable. Check device and system permissions.")
+            self.changed.emit(
+                generation, "Microphone unavailable. Check device and system permissions."
+            )
             return
         self.stream.readyRead.connect(self._drain)
         self.monitor = QTimer(self)
         self.monitor.setInterval(250)
         self.monitor.timeout.connect(self._check_error)
         self.monitor.start()
-        self.changed.emit("Microphone on")
+        self.changed.emit(generation, "Microphone on")
 
     @Slot()
     def _drain(self) -> None:
@@ -103,9 +109,10 @@ class _CaptureWorker(QObject):
     @Slot()
     def _check_error(self) -> None:
         if self.source is not None and self.source.error().value != QAudio.Error.NoError.value:
-            self.accepting.clear()
             self.stop()
-            self.changed.emit("Microphone stopped. Check device and system permissions.")
+            self.changed.emit(
+                self.generation, "Microphone stopped. Check device and system permissions."
+            )
 
     @Slot()
     def stop(self) -> None:
@@ -136,7 +143,7 @@ class MicrophoneController(QObject):
     status_changed = Signal(str)
     devices_changed = Signal()
     audio_received = Signal(int)
-    _start_worker = Signal(object)
+    _start_worker = Signal(object, int)
     _stop_worker = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
@@ -168,13 +175,16 @@ class MicrophoneController(QObject):
     def inputs(self) -> list[QAudioDevice]:
         return list(QMediaDevices.audioInputs())
 
-    @Slot(str)
-    def _worker_changed(self, message: str) -> None:
+    @Slot(int, str)
+    def _worker_changed(self, generation: int, message: str) -> None:
+        if generation != self._generation:
+            return
         if message == "Microphone on" and (not self._enabled or self._muted or self._paused):
             return
         if message.startswith(("Microphone unavailable", "Microphone stopped")):
             self.accepting.clear()
             self._enabled = False
+            self._stop_worker.emit()
         self.status_changed.emit(message)
 
     def start(self, device_id: bytes) -> None:
@@ -221,13 +231,15 @@ class MicrophoneController(QObject):
         self._enabled = True
         self._muted = self._paused = False
         self.accepting.set()
-        self._start_worker.emit(bytes(device.id().data()))
+        self._start_worker.emit(bytes(device.id().data()), self._generation)
 
     def set_muted(self, value: bool) -> None:
+        self._generation += 1
         self._muted = value
         self._sync_pause()
 
     def set_paused(self, value: bool) -> None:
+        self._generation += 1
         self._paused = value
         self._sync_pause()
 
@@ -247,7 +259,7 @@ class MicrophoneController(QObject):
             self.status_changed.emit("Microphone disconnected. Choose an input device.")
             return
         self.accepting.set()
-        self._start_worker.emit(bytes(device.id().data()))
+        self._start_worker.emit(bytes(device.id().data()), self._generation)
 
     def stop(self) -> None:
         self._generation += 1
