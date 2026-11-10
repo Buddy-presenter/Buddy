@@ -228,6 +228,9 @@ class PreparedDeployment(Deployment):
                 "schema_image": candidate,
                 "profile": worker_profile
                 or ("compatibility" if worker_image == previous_worker_image else "feature"),
+                "previous_worker_checked": bool(
+                    previous_worker_image and before["worker"].get("desiredCount", 0) > 0
+                ),
             }
 
     def deploy(self, revision, api_image, worker_image=None):
