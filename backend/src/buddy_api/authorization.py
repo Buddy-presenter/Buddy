@@ -92,7 +92,15 @@ def resource_data(record: OwnedRecord) -> dict[str, Any]:
         )
     elif isinstance(record, PresentationSession):
         data.update(
-            deck_id=str(record.deck_id), status=record.status, state_version=record.state_version
+            deck_id=str(record.deck_id),
+            analysis_version_id=str(record.analysis_version_id),
+            status=record.status,
+            state_version=record.state_version,
+            active_slide_id=record.active_slide_id,
+            focus_view=record.focus_view,
+            focus_region=record.focus_region,
+            autonomy_mode=record.autonomy_mode,
+            last_accepted_action_id=record.last_accepted_action_id,
         )
     elif isinstance(record, ProcessingJob):
         data.update(deck_id=str(record.deck_id), status=record.status, attempts=record.attempts)
@@ -127,10 +135,9 @@ async def operate(
                     and update.status is not None
                     and update.title is None
                 ):
-                    if update.state_version != record.state_version or record.status == "ended":
-                        raise HTTPException(409)
-                    record.status = update.status
-                    record.state_version += 1
+                    # Session lifecycle/state changes use /sessions/{id}/... so
+                    # ready-deck and typed-state invariants cannot be bypassed.
+                    raise HTTPException(403)
                 else:
                     raise HTTPException(403)
                 await session.flush()

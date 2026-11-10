@@ -53,6 +53,40 @@ def summary(record: AnalysisVersion | AnalysisSlide) -> Summary:
     )
 
 
+def action_is_usable(source_format: str, state: str, semantic_verified: bool) -> bool:
+    """Apply the canonical format-specific gate used by analysis and session reads."""
+    return state == "validated" and (source_format == "pptx" or semantic_verified)
+
+
+def check_validation_evidence(
+    value: AnalysisVersion, action: SlideAction, evidence: ValidationInput
+) -> None:
+    """Ensure stored evidence is bound to the immutable analysis/action/profile."""
+    provenance = value.provenance or {}
+    if (
+        evidence.analysis_id != value.id
+        or evidence.source_format != value.source_format
+        or action.source_format != value.source_format
+        or evidence.analysis_sha256 != value.content_sha256
+        or evidence.instance_id != action.instance_id
+        or evidence.action_sha256 != action.content_sha256
+        or any(
+            getattr(evidence, key) != provenance.get(key)
+            for key in ("renderer_version", "display_profile")
+        )
+        or (
+            evidence.validator_version != provenance.get("validator_version")
+            and not (
+                action.source_format == "pptx"
+                and action.action_type == "zoom_region"
+                and provenance.get("validator_version") == "powerpoint-executor-2"
+                and evidence.validator_version in {"powerpoint-executor-3", "powerpoint-executor-4"}
+            )
+        )
+    ):
+        raise PersistenceConflict("Validation does not match the analysis/action/profile revision.")
+
+
 class Analyses:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -336,7 +370,7 @@ class Analyses:
                 if digest(instance) != action.content_sha256:
                     raise ValueError("Action digest mismatch.")
                 if evidence is not None:
-                    self._check_evidence(value, action, evidence)
+                    check_validation_evidence(value, action, evidence)
                     if stored is None or stored.state != evidence.state:
                         raise ValueError("Validation state mismatch.")
                 state = evidence.state if evidence else "candidate"
@@ -345,8 +379,7 @@ class Analyses:
                     action_result_model(
                         action=instance,
                         state=state,
-                        usable=state == "validated"
-                        and (value.source_format == "pptx" or semantic_verified),
+                        usable=action_is_usable(value.source_format, state, semantic_verified),
                         **(
                             {"semantic_verified": semantic_verified}
                             if value.source_format == "pdf"
@@ -409,35 +442,6 @@ class Analyses:
             visual_qa_pending_instance_ids=visual_qa_pending,
         )
 
-    @staticmethod
-    def _check_evidence(
-        value: AnalysisVersion, action: SlideAction, evidence: ValidationInput
-    ) -> None:
-        provenance = value.provenance or {}
-        if (
-            evidence.analysis_id != value.id
-            or evidence.source_format != value.source_format
-            or action.source_format != value.source_format
-            or evidence.analysis_sha256 != value.content_sha256
-            or evidence.instance_id != action.instance_id
-            or evidence.action_sha256 != action.content_sha256
-            or evidence.renderer_version != provenance.get("renderer_version")
-            or evidence.display_profile != provenance.get("display_profile")
-            or (
-                evidence.validator_version != provenance.get("validator_version")
-                and not (
-                    action.source_format == "pptx"
-                    and action.action_type == "zoom_region"
-                    and provenance.get("validator_version") == "powerpoint-executor-2"
-                    and evidence.validator_version
-                    in {"powerpoint-executor-3", "powerpoint-executor-4"}
-                )
-            )
-        ):
-            raise PersistenceConflict(
-                "Validation does not match the analysis/action/profile revision."
-            )
-
     async def record_validation(
         self, *, owner_id: UUID, result: ValidationInput
     ) -> AnalysisResult | PowerPointAnalysisResult:
@@ -459,7 +463,7 @@ class Analyses:
         )
         if action is None:
             raise RecordNotFound("Owned action was not found.")
-        self._check_evidence(value, action, result)
+        check_validation_evidence(value, action, result)
         existing = await self.session.get(ActionValidation, result.validation_id)
         document = result.model_dump(mode="json")
         if existing is not None:

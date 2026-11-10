@@ -3,7 +3,7 @@
 from collections.abc import Callable
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
+from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QScreen
 from PySide6.QtWidgets import QMainWindow, QVBoxLayout, QWidget
 
 from buddy_desktop.slide_surface import SlideSurface
@@ -21,11 +21,13 @@ class FullscreenPresentation(QMainWindow):
         highlight: Callable[[], None],
         go_to: Callable[[], None],
         owner: QWidget,
+        screen: QScreen | None = None,
     ) -> None:
         super().__init__(owner.window())
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowTitle("Buddy presentation — Esc to exit")
         self.surface, self.original_layout = surface, layout
+        self.target_screen = screen
         self.original_index = layout.indexOf(surface)
         self.setGeometry(owner.window().geometry())
         self.setCentralWidget(surface)
@@ -51,6 +53,22 @@ class FullscreenPresentation(QMainWindow):
             action.setShortcut(QKeySequence(shortcut))
             action.triggered.connect(callback)
             self.addAction(action)
+
+    def move_to_screen(self, screen: QScreen) -> None:
+        """Move the audience surface without changing its slide or focus state."""
+        from PySide6.QtGui import QGuiApplication
+
+        if screen not in QGuiApplication.screens():
+            return
+        self.target_screen = screen
+        # Force creation before showFullScreen so Qt selects the requested display.
+        self.winId()
+        handle = self.windowHandle()
+        if handle is not None:
+            handle.setScreen(screen)
+        self.setGeometry(screen.geometry())
+        if self.isVisible():
+            self.showFullScreen()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         surface = self.takeCentralWidget()

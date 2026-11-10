@@ -138,7 +138,7 @@ def test_zoom_allows_large_source_objects_for_native_central_detail_focus():
 def test_fitted_zoom_proof_is_only_accepted_for_powerpoint_zoom():
     from types import SimpleNamespace
 
-    from buddy_api.analysis.store import Analyses
+    from buddy_api.analysis.store import check_validation_evidence
     from buddy_api.persistence.errors import PersistenceConflict
 
     analysis = SimpleNamespace(
@@ -167,10 +167,12 @@ def test_fitted_zoom_proof_is_only_accepted_for_powerpoint_zoom():
         renderer_version="desktop-powerpoint-2",
         display_profile="windows-powerpoint-2",
     )
-    Analyses._check_evidence(analysis, action, proof)
+    check_validation_evidence(analysis, action, proof)
+    proof.validator_version = "powerpoint-executor-4"
+    check_validation_evidence(analysis, action, proof)
     action.action_type = "draw_rectangle"
     with pytest.raises(PersistenceConflict):
-        Analyses._check_evidence(analysis, action, proof)
+        check_validation_evidence(analysis, action, proof)
 
 
 def test_text_targets_are_grounded_and_decorative_text_frames_are_omitted():

@@ -3,10 +3,21 @@
 import sys
 from collections.abc import Callable
 from contextlib import suppress
+from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent, QPen
+from PySide6.QtCore import QPointF, QRectF, QSettings, Qt, QTimer, Signal, Slot
+from PySide6.QtGui import (
+    QAction,
+    QColor,
+    QGuiApplication,
+    QMouseEvent,
+    QPainter,
+    QPaintEvent,
+    QPen,
+    QScreen,
+)
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -15,12 +26,15 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QMenu,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
+from buddy_desktop.config import AppConfig
 from buddy_desktop.fullscreen import FullscreenPresentation
+from buddy_desktop.library_service import LibraryAccessExpired
 from buddy_desktop.powerpoint import PowerPointAutomation, PresentationInfo
 from buddy_desktop.powerpoint_contract import (
     PowerPointAction,
@@ -29,6 +43,13 @@ from buddy_desktop.powerpoint_contract import (
     PowerPointFrame,
 )
 from buddy_desktop.powerpoint_controls import PowerPointControls
+from buddy_desktop.presentation_session_service import (
+    PresentationSession,
+    PresentationSessionService,
+    SessionConflict,
+    SessionState,
+)
+from buddy_desktop.services import ServiceError
 from buddy_desktop.slide_contract import Region
 from buddy_desktop.slide_executor import Completion, SlideExecutor
 from buddy_desktop.slide_surface import SlideSurface
@@ -120,13 +141,38 @@ class SelectionSurface(SlideSurface):
 class PresentWidget(Page):
     """Open local manifests explicitly; no fabricated library or processing integration."""
 
-    def __init__(self) -> None:
+    session_access_expired = Signal(str)
+
+    def __init__(self, config: AppConfig, settings: QSettings) -> None:
         super().__init__("Present", "")
+        self.config = config
+        self.settings = settings
         self.body.setSpacing(12)
         self._closing = False
         self.fullscreen: FullscreenPresentation | None = None
         self._instance = 0
         self._committed_key: tuple[str, str, str] | None = None
+        self._account_id: str | None = None
+        self._session_access: str | None = None
+        self._session: PresentationSession | None = None
+        self._session_deck_id: str | None = None
+        self._session_attempt: tuple[str, str] | None = None
+        self._session_error = False
+        self._session_ended = False
+        self._session_generation = 0
+        self._session_request: tuple[str, int, SessionState | None] | None = None
+        self._session_pending_state: SessionState | None = None
+        self._session_restore_state: SessionState | None = None
+        self._session_restore_action: str | None = None
+        self._session_conflict_read = False
+        self._restore_conflict = False
+        self._restore_focus_applied = False
+        self._session_followup: str | None = None
+        self.session_service = PresentationSessionService(config)
+        self.session_runner = TaskRunner(self)
+        self.session_runner.succeeded.connect(self._session_succeeded)
+        self.session_runner.failed.connect(self._session_failed)
+        self.session_runner.idle.connect(self._session_idle)
         self.powerpoint = PowerPointAutomation()
         self.powerpoint_runner = TaskRunner(self)
         self.powerpoint_runner.succeeded.connect(self._powerpoint_succeeded)
@@ -178,6 +224,18 @@ class PresentWidget(Page):
         self.fullscreen_button.setToolTip("F11: full screen. Esc: exit. Arrows or Space: navigate.")
         self.fullscreen_button.clicked.connect(self.enter_fullscreen)
         opening.addWidget(self.fullscreen_button)
+        self.display_button = QPushButton()
+        command(self.display_button, "presentation", compact=True)
+        self.display_button.setAccessibleName("Choose audience display")
+        self.display_button.setToolTip("Choose which monitor shows the presentation")
+        self.display_button.setMaximumWidth(44)
+        self.display_menu = QMenu(self.display_button)
+        self.display_button.setMenu(self.display_menu)
+        opening.addWidget(self.display_button)
+        self.display_selector = QComboBox()
+        self.display_selector.setAccessibleName("Audience display")
+        self.display_selector.currentIndexChanged.connect(self._display_changed)
+        self.display_selector.hide()
         self.body.addLayout(opening)
         self.body.addWidget(self.surface, 1)
         self.surface.setToolTip("Drag to select a region, or use Coordinates for exact values")
@@ -239,6 +297,21 @@ class PresentWidget(Page):
         commands.addWidget(self.coordinates_button)
         pdf_actions.addLayout(commands)
         pdf_actions.addWidget(self.coordinate_panel)
+        session_row = QHBoxLayout()
+        self.session_status = StatusLabel()
+        self.session_status.setObjectName("caption")
+        self.session_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.session_status.setWordWrap(True)
+        self.session_status.setAccessibleName("Saved presentation session status")
+        session_row.addWidget(self.session_status, 1)
+        self.session_retry_button = QPushButton("Retry sync")
+        self.session_retry_button.clicked.connect(self._retry_session)
+        self.session_retry_button.hide()
+        session_row.addWidget(self.session_retry_button)
+        self.session_button = QPushButton("End session")
+        self.session_button.clicked.connect(self._session_button_clicked)
+        session_row.addWidget(self.session_button)
+        pdf_actions.addLayout(session_row)
         self.body.addWidget(self.pdf_controls)
         self.powerpoint_open_button = QPushButton("Open PowerPoint…")
         command(self.powerpoint_open_button, "presentation")
@@ -297,7 +370,466 @@ class PresentWidget(Page):
         self.feedback.setText("")
         self.body.addWidget(self.feedback)
         self.surface.selection_changed.connect(self._selection_changed)
+        application = cast(QGuiApplication | None, QGuiApplication.instance())
+        if application is not None:
+            application.screenAdded.connect(self._refresh_displays)
+            application.screenRemoved.connect(self._screen_removed)
+        self._refresh_displays()
         self._refresh()
+
+    def configure(self, config: AppConfig) -> None:
+        self.config = config
+        self.session_service = PresentationSessionService(config)
+
+    def set_account_identity(self, account_id: str | None, access: str | None) -> None:
+        if account_id != self._account_id:
+            self._session_generation += 1
+            self._session = None
+            self._session_pending_state = None
+            self._session_restore_state = None
+            self._session_restore_action = None
+            self._session_attempt = None
+            self._session_error = False
+            self._session_ended = False
+            self._session_deck_id = None
+        self._account_id = account_id
+        self._session_access = access if account_id and access else None
+        if account_id and access:
+            self._ensure_session()
+        else:
+            self.session_status.setText(
+                "Sign in to sync this presentation's position."
+                if self._account_id is None
+                and self.executor.manifest is not None
+                and self.executor.manifest.account_bound
+                else ""
+            )
+        self._refresh()
+
+    def _current_screen_key(self, screen: QScreen) -> str:
+        return "|".join(
+            (screen.name(), screen.serialNumber(), screen.manufacturer(), screen.model())
+        )
+
+    @Slot(object)
+    def _refresh_displays(self, _screen: QScreen | None = None) -> None:
+        selected_key = str(self.settings.value("presentation/audience_display", ""))
+        screens = QGuiApplication.screens()
+        self.display_selector.blockSignals(True)
+        self.display_selector.clear()
+        primary = QGuiApplication.primaryScreen()
+        selected = -1
+        for index, screen in enumerate(screens):
+            label = f"Display {index + 1}: {screen.name() or 'Unnamed'}"
+            if screen == primary:
+                label += " (Primary)"
+            self.display_selector.addItem(label, screen)
+            if self._current_screen_key(screen) == selected_key:
+                selected = index
+        if selected < 0 and primary in screens:
+            selected = screens.index(primary)
+        if selected >= 0:
+            self.display_selector.setCurrentIndex(selected)
+        self.display_selector.blockSignals(False)
+        multiple = len(screens) > 1
+        self.display_button.setVisible(multiple)
+        self.display_menu.clear()
+        if selected >= 0:
+            selected_screen = screens[selected]
+            self.display_button.setToolTip(
+                f"Audience display: {selected_screen.name() or 'Unnamed display'}. "
+                "Click to choose another display."
+            )
+        for index, screen in enumerate(screens):
+            label = f"Display {index + 1}: {screen.name() or 'Unnamed'}"
+            if screen == primary:
+                label += " (Primary)"
+            action = QAction(label, self.display_menu)
+            action.setCheckable(True)
+            action.setChecked(index == selected)
+            action.triggered.connect(
+                lambda checked=False, target=screen: self._select_screen(target)
+            )
+            self.display_menu.addAction(action)
+
+    def _select_screen(self, screen: QScreen) -> None:
+        if screen not in QGuiApplication.screens():
+            return
+        index = self.display_selector.findData(screen)
+        if index >= 0:
+            self.display_selector.setCurrentIndex(index)
+
+    @Slot(int)
+    def _display_changed(self, index: int) -> None:
+        screen = self.display_selector.itemData(index)
+        if isinstance(screen, QScreen):
+            self.settings.setValue(
+                "presentation/audience_display", self._current_screen_key(screen)
+            )
+            self.display_button.setToolTip(
+                f"Audience display: {screen.name() or 'Unnamed display'}. "
+                "Click to choose another display."
+            )
+
+    @Slot(object)
+    def _screen_removed(self, removed: QScreen) -> None:
+        self._refresh_displays()
+        if self.fullscreen is not None and self.fullscreen.target_screen == removed:
+            screens = QGuiApplication.screens()
+            fallback: QScreen | None = QGuiApplication.primaryScreen()
+            if fallback not in screens:
+                fallback = screens[0] if screens else None
+            if fallback is not None:
+                self.fullscreen.move_to_screen(fallback)
+                self.session_status.setText(
+                    "The audience display disconnected. Presentation moved to an available display."
+                )
+
+    def _ensure_session(self, *, force: bool = False) -> None:
+        manifest = self.executor.manifest
+        if (
+            self._closing
+            or self._session_access is None
+            or self._account_id is None
+            or manifest is None
+            or not manifest.account_bound
+        ):
+            return
+        key = (self._account_id, manifest.deck_id)
+        if self._session_deck_id != manifest.deck_id:
+            self._session_generation += 1
+            self._session = None
+            self._session_pending_state = None
+            self._session_attempt = None
+            self._session_error = False
+            self._session_ended = False
+            self._session_deck_id = manifest.deck_id
+        if (
+            self._session is not None
+            or (self._session_ended and not force)
+            or (self._session_attempt == key and not force)
+        ):
+            return
+        if self.session_runner.busy:
+            # The runner has one slot. Defer this start until an older deck's
+            # request has completed; the old generation's response is ignored.
+            self._session_followup = "ensure"
+            return
+        self._session_error = False
+        self._session_ended = False
+        self.session_status.setText("Restoring saved presentation position…")
+        access, generation, service = (
+            self._session_access,
+            self._session_generation,
+            self.session_service,
+        )
+        submitted = self._submit_session_task(
+            "start",
+            generation,
+            None,
+            lambda: service.start(access, manifest.deck_id),
+        )
+        if submitted:
+            self._session_attempt = key
+        else:
+            self._session_followup = "ensure"
+
+    def _submit_session_task(
+        self,
+        kind: str,
+        generation: int,
+        state: SessionState | None,
+        operation: Callable[[], PresentationSession],
+    ) -> bool:
+        if self.session_runner.busy:
+            return False
+
+        def work() -> tuple[str, PresentationSession | None, str | None]:
+            try:
+                return "success", operation(), None
+            except SessionConflict:
+                return "conflict", None, None
+            except LibraryAccessExpired as exc:
+                return "expired", None, str(exc)
+            except ServiceError as exc:
+                return "error", None, str(exc)
+
+        try:
+            self._session_request = (kind, generation, state)
+            self.session_runner.submit(work)
+        except RuntimeError:
+            self._session_request = None
+            return False
+        return True
+
+    def _current_local_state(self) -> SessionState | None:
+        manifest, slide = self.executor.manifest, self.surface.slide
+        if manifest is None or slide is None:
+            return None
+        region = self.surface.highlight or (
+            self.surface.region if self.surface.region != slide.full else None
+        )
+        focus = (
+            "highlight_region" if self.surface.highlight else "zoom_region" if region else "slide"
+        )
+        return SessionState(
+            active_slide_id=slide.slide_id,
+            focus_view=focus,
+            focus_region=(
+                {name: float(getattr(region, name)) for name in ("x", "y", "width", "height")}
+                if region is not None
+                else None
+            ),
+            autonomy_mode=(
+                self._session.state.autonomy_mode
+                if self._session is not None and self._session.state is not None
+                else "manual"
+            ),
+            last_accepted_action_id=(
+                self._session.state.last_accepted_action_id
+                if self._session is not None and self._session.state is not None
+                else None
+            ),
+        )
+
+    def _queue_session_state(self) -> None:
+        state = self._current_local_state()
+        if state is None:
+            return
+        if self._session is None:
+            if self._session_attempt is not None or self._session_followup == "ensure":
+                self._session_pending_state = state
+            return
+        request = self._session_request
+        in_flight_state = (
+            request[2]
+            if request is not None
+            and request[0] == "update"
+            and request[1] == self._session_generation
+            else None
+        )
+        if state == self._session.state and in_flight_state is None:
+            self._session_pending_state = None
+            return
+        self._session_pending_state = state
+        if not self.session_runner.busy:
+            QTimer.singleShot(0, self._flush_session_state)
+
+    @Slot()
+    def _flush_session_state(self) -> None:
+        if self._closing or self.session_runner.busy or self._session_pending_state is None:
+            return
+        if self._session is None or self._session.status != "active" or not self._session_access:
+            return
+        state = self._session_pending_state
+        access, session, generation, service = (
+            self._session_access,
+            self._session,
+            self._session_generation,
+            self.session_service,
+        )
+        self.session_status.setText("Saving presentation position…")
+        self._submit_session_task(
+            "update",
+            generation,
+            state,
+            lambda: service.update(access, session, state),
+        )
+
+    def _retry_session(self) -> None:
+        if self._session is None:
+            self._ensure_session(force=True)
+        elif self._session_pending_state is not None:
+            self._flush_session_state()
+        elif self._session_access:
+            self._read_latest_session()
+
+    def _read_latest_session(self, *, conflict: bool = False) -> None:
+        if self.session_runner.busy or self._session is None or not self._session_access:
+            return
+        session, access = self._session, self._session_access
+        self._session_conflict_read = conflict
+        self._submit_session_task(
+            "read",
+            self._session_generation,
+            None,
+            lambda: self.session_service.read(access, session.id),
+        )
+
+    def _session_button_clicked(self) -> None:
+        if self._session is not None and self._session.status == "active":
+            self._end_session()
+        else:
+            self._ensure_session(force=True)
+
+    def _end_session(self) -> None:
+        if self.session_runner.busy or self._session is None or not self._session_access:
+            return
+        if self._session_pending_state is not None:
+            self.session_status.setText(
+                "The latest position is not saved yet. Retry sync before ending this session."
+            )
+            return
+        session, access = self._session, self._session_access
+        self.session_status.setText("Ending presentation session…")
+        self._submit_session_task(
+            "end",
+            self._session_generation,
+            None,
+            lambda: self.session_service.end(access, session),
+        )
+
+    @Slot(int, object)
+    def _session_succeeded(self, _identifier: int, result: object) -> None:
+        request, self._session_request = self._session_request, None
+        if request is None:
+            return
+        kind, generation, sent_state = request
+        if generation != self._session_generation or self._closing:
+            return
+        outcome, session, message = result if isinstance(result, tuple) else ("error", None, None)
+        if outcome == "conflict":
+            self._session_pending_state = None
+            self.session_status.setText(
+                "Another controller changed this presentation. Loading its saved position…"
+            )
+            self._session_followup = "read_conflict"
+            return
+        if outcome == "expired":
+            self.session_access_expired.emit(message or "Sign in again to sync this presentation.")
+            self._session_access = None
+            self._session = None
+            self.session_status.setText(message or "Sign in again to sync this presentation.")
+            self._refresh()
+            return
+        if outcome != "success" or not isinstance(session, PresentationSession):
+            self._session_error = True
+            self.session_status.setText(message or "Could not sync the presentation session.")
+            self._refresh()
+            return
+        self._session_error = False
+        self._session = session
+        if kind == "start":
+            if self._session_pending_state is None:
+                self._restore_session_state(session.state)
+            else:
+                if session.state is not None:
+                    pending_state = self._session_pending_state
+                    self._session_pending_state = replace(
+                        session.state,
+                        active_slide_id=pending_state.active_slide_id,
+                        focus_view=pending_state.focus_view,
+                        focus_region=pending_state.focus_region,
+                    )
+                self.session_status.setText("Presentation session connected.")
+                self._session_followup = "flush"
+        elif kind == "update":
+            if self._session_pending_state == sent_state:
+                self._session_pending_state = None
+            self.session_status.setText("Presentation position saved.")
+            if self._session_pending_state is not None:
+                self._session_followup = "flush"
+        elif kind == "read":
+            self._session_pending_state = None
+            if session.status == "ended":
+                self._session = None
+                self._session_attempt = None
+                self._session_ended = True
+                self.session_status.setText("This session was ended by another controller.")
+                self._refresh()
+                return
+            self._restore_session_state(session.state, conflict=self._session_conflict_read)
+            self._session_conflict_read = False
+        elif kind == "end":
+            self._session_pending_state = None
+            self._session_attempt = None
+            self._session = None
+            self._session_ended = True
+            self.session_status.setText(
+                "Presentation session ended. Your saved position is retained."
+            )
+        self._refresh()
+
+    @Slot(int, str)
+    def _session_failed(self, _identifier: int, message: str) -> None:
+        request, self._session_request = self._session_request, None
+        if request is None or request[1] != self._session_generation or self._closing:
+            return
+        self._session_error = True
+        self.session_status.setText(message)
+        self._refresh()
+
+    @Slot()
+    def _session_idle(self) -> None:
+        if self._closing:
+            return
+        followup, self._session_followup = self._session_followup, None
+        if followup == "ensure":
+            self._ensure_session()
+        elif followup == "read_conflict":
+            self._read_latest_session(conflict=True)
+        elif followup == "flush":
+            self._flush_session_state()
+        self._refresh()
+
+    def _restore_session_state(self, state: SessionState | None, *, conflict: bool = False) -> None:
+        manifest = self.executor.manifest
+        if state is None or manifest is None:
+            self.session_status.setText(
+                "Presentation session connected; starting at the first slide."
+            )
+            return
+        try:
+            target = manifest.index(state.active_slide_id)
+        except (ValueError, KeyError):
+            self._session = None
+            self._session_error = True
+            self.session_status.setText(
+                "Saved position does not match this deck. Reload the latest copy from your library."
+            )
+            return
+        self._session_restore_state = state
+        self._restore_conflict = conflict
+        self._restore_focus_applied = False
+        if target != self.executor.current_index:
+            self.send("go_to_slide", {"target_slide_id": state.active_slide_id}, restoring=True)
+        else:
+            self._apply_restored_focus()
+
+    def _apply_restored_focus(self) -> None:
+        state = self._session_restore_state
+        if state is None:
+            return
+        if state.focus_region is None:
+            if self.surface.slide is not None and (
+                self.surface.region != self.surface.slide.full or self.surface.highlight is not None
+            ):
+                self.send("reset_view", restoring=True)
+                return
+            self._finish_session_restore()
+            return
+        if self._restore_focus_applied:
+            self._finish_session_restore()
+            return
+        region = Region(**state.focus_region)
+        self.surface.selection = region
+        self._selection_changed(region)
+        self._restore_focus_applied = True
+        self.send(state.focus_view, {"region": state.focus_region}, restoring=True)
+
+    def _finish_session_restore(self) -> None:
+        conflict = getattr(self, "_restore_conflict", False)
+        self._restore_conflict = False
+        self._session_restore_state = None
+        self._session_restore_action = None
+        self._restore_focus_applied = False
+        self.session_status.setText(
+            "Synced the latest position from another controller."
+            if conflict
+            else "Saved presentation position restored."
+        )
+        if self._session_pending_state is not None:
+            QTimer.singleShot(0, self._flush_session_state)
 
     @Slot()
     def _choose_powerpoint(self) -> None:
@@ -547,15 +1079,33 @@ class PresentWidget(Page):
     def load_pdf(
         self, source: Path | bytes, *, deck_id: str | None = None, revision: str | None = None
     ) -> None:
+        self._session_generation += 1
+        self._session = None
+        self._session_deck_id = deck_id
+        self._session_attempt = None
+        self._session_pending_state = None
+        self._session_restore_state = None
+        self._session_restore_action = None
+        self._session_error = False
+        self._session_ended = False
         self.surface.clear_selection()
         self._selection_changed(None)
+        self.session_status.setText("")
         self.feedback.setText("Opening PDF…")
         self.executor.load_pdf(source, deck_id=deck_id, revision=revision)
         self._refresh()
 
     def load_manifest(self, path: Path) -> None:
+        self._session_generation += 1
+        self._session = None
+        self._session_deck_id = None
+        self._session_attempt = None
+        self._session_pending_state = None
+        self._session_restore_state = None
+        self._session_restore_action = None
         self.surface.clear_selection()
         self._selection_changed(None)
+        self.session_status.setText("")
         self.feedback.setText("Loading slides…")
         self.executor.load_manifest(path)
         self._refresh()
@@ -574,8 +1124,12 @@ class PresentWidget(Page):
             self.highlight_button.click,
             self._fullscreen_go,
             self,
+            self._selected_screen(),
         )
         self.fullscreen.exited.connect(self._fullscreen_exited)
+        selected_screen = self._selected_screen()
+        if selected_screen is not None:
+            self.fullscreen.move_to_screen(selected_screen)
         self.fullscreen.showFullScreen()
         self.fullscreen.activateWindow()
         self.surface.setFocus()
@@ -600,15 +1154,24 @@ class PresentWidget(Page):
         if accepted:
             self.send("go_to_slide", {"target_slide_id": manifest.slides[page - 1].slide_id})
 
-    def send(self, kind: str, params: dict[str, object] | None = None) -> None:
+    def send(
+        self,
+        kind: str,
+        params: dict[str, object] | None = None,
+        *,
+        restoring: bool = False,
+    ) -> None:
         manifest, slide = self.executor.manifest, self.surface.slide
         if manifest is None or slide is None or self._closing:
             return
         self._instance += 1
+        instance_id = f"manual:{self._instance}"
+        if restoring and self._session_restore_state is not None:
+            self._session_restore_action = instance_id
         self.executor.dispatch(
             {
                 "version": "1.1",
-                "instance_id": f"manual:{self._instance}",
+                "instance_id": instance_id,
                 "purpose": {
                     "next_slide": "Continue to the next slide.",
                     "previous_slide": "Revisit the previous slide.",
@@ -683,11 +1246,47 @@ class PresentWidget(Page):
             if result.status == "cancelled"
             else ""
         )
+        if (
+            result.status == "completed"
+            and result.instance_id is None
+            and manifest is not None
+            and manifest.account_bound
+        ):
+            if self._session_access:
+                self._ensure_session()
+            else:
+                self.session_status.setText("Sign in to sync this presentation's position.")
         self._refresh()
+        if result.instance_id is not None and result.instance_id == self._session_restore_action:
+            self._session_restore_action = None
+            if result.status != "completed":
+                self._session_restore_state = None
+                self._session_error = True
+                self.session_status.setText(
+                    "Saved position could not be restored. Manual controls remain available."
+                )
+            else:
+                QTimer.singleShot(0, self._apply_restored_focus)
+            return
+        if (
+            result.status == "completed"
+            and result.instance_id is not None
+            and self._session_restore_state is None
+        ):
+            self._queue_session_state()
+
+    def _selected_screen(self) -> QScreen | None:
+        screen = self.display_selector.currentData()
+        screens = QGuiApplication.screens()
+        if isinstance(screen, QScreen) and screen in screens:
+            return screen
+        primary = QGuiApplication.primaryScreen()
+        return primary if primary in screens else (screens[0] if screens else None)
 
     @Slot()
     def _refresh(self) -> None:
         loaded = self.executor.manifest is not None and not self._closing
+        account_bound = bool(self.executor.manifest and self.executor.manifest.account_bound)
         powerpoint_connected = self._powerpoint_info is not None
         show_pdf_surface = loaded or not powerpoint_connected
         self.surface.setVisible(show_pdf_surface)
@@ -727,6 +1326,25 @@ class PresentWidget(Page):
         self.zoom_button.setEnabled(selected)
         self.highlight_button.setEnabled(selected)
         self.surface.selectable = ready
+        session_controls = loaded and account_bound
+        self.session_status.setVisible(session_controls)
+        self.session_button.setVisible(session_controls and self._session_access is not None)
+        self.session_button.setEnabled(
+            session_controls and not self.session_runner.busy and self._session_access is not None
+        )
+        if self._session is not None and self._session.status == "active":
+            self.session_button.setText("End session")
+        elif self._session_ended:
+            self.session_button.setText("Start session")
+        elif self._session_error:
+            self.session_button.setText("Retry session")
+        else:
+            self.session_button.setText("Connecting…")
+        self.session_retry_button.setVisible(
+            session_controls
+            and self._session_pending_state is not None
+            and self._session is not None
+        )
 
     def shutdown(self) -> None:
         self._closing = True
@@ -738,6 +1356,22 @@ class PresentWidget(Page):
         if self.fullscreen is not None:
             self.fullscreen.close()
         self.executor.close()
+        self.session_runner.stop()
         self._powerpoint_poll.stop()
         self.powerpoint_runner.stop()
+        self._refresh()
+
+    def clear_session_binding(self) -> None:
+        self._session_generation += 1
+        self._account_id = None
+        self._session_access = None
+        self._session = None
+        self._session_deck_id = None
+        self._session_attempt = None
+        self._session_pending_state = None
+        self._session_restore_state = None
+        self._session_restore_action = None
+        self._session_error = False
+        self._session_ended = False
+        self.session_status.setText("")
         self._refresh()

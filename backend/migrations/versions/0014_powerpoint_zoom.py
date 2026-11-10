@@ -3,7 +3,7 @@
 from alembic import op
 
 revision = "0014_powerpoint_zoom"
-down_revision = "0013_powerpoint_tools"
+down_revision = "0014_session_state"
 branch_labels = None
 depends_on = None
 
