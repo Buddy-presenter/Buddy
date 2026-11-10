@@ -838,6 +838,8 @@ class PresentWidget(Page):
         outcome, session, message = result if isinstance(result, tuple) else ("error", None, None)
         if kind == "microphone_verify":
             if self._microphone_pdf_request_generation != self._microphone_pdf_generation:
+                if self._session_pending_state is not None:
+                    self._session_followup = "flush"
                 return
             if (
                 outcome == "success"
@@ -846,8 +848,12 @@ class PresentWidget(Page):
             ):
                 if self.microphone.enabled and self._powerpoint_info is None:
                     self._microphone_pdf_deadline.start()
+                if self._session_pending_state is not None:
+                    self._session_followup = "flush"
             else:
                 self._microphone_pdf_unverified()
+                if self._session_pending_state is not None:
+                    self._session_followup = "flush"
                 if (
                     outcome == "success"
                     and isinstance(session, PresentationSession)
@@ -855,6 +861,8 @@ class PresentWidget(Page):
                 ):
                     self._session = None
                     self._session_attempt = None
+                    self._session_pending_state = None
+                    self._session_followup = None
                     self._session_ended = True
                     self.session_status.setText("This session was ended by another controller.")
                     self._refresh()

@@ -357,3 +357,22 @@ def test_pdf_microphone_stops_when_session_verification_times_out(desktop_window
     page._microphone_toggle()
     page._microphone_pdf_unverified()
     assert not page.microphone.enabled
+
+
+def test_pdf_verification_flushes_slide_changes_queued_during_check(desktop_window, monkeypatch):
+    from datetime import UTC, datetime
+
+    from buddy_desktop.presentation_session_service import PresentationSession
+
+    monkeypatch.setattr(present_widget, "MicrophoneController", FakeMicrophone)
+    window = desktop_window()
+    page = window.present
+    monkeypatch.setattr(page, "_microphone_session_available", lambda: True)
+    page._session = SimpleNamespace(status="active")
+    page._microphone_toggle()
+    page._session_pending_state = object()
+    page._microphone_pdf_request_generation = page._microphone_pdf_generation
+    page._session_request = ("microphone_verify", page._session_generation, None)
+    active = PresentationSession("s", "o", "d", "a", "active", 1, None, datetime.now(UTC))
+    page._session_succeeded(1, ("success", active, None))
+    assert page.microphone.enabled and page._session_followup == "flush"
