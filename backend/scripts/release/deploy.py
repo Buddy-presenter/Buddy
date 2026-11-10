@@ -228,28 +228,74 @@ class Deployment:
             raise DeploymentError("Rollback image drifted from compatibility evidence.")
         image_digest(self.config, proof["rollback_image"], "api")
         if "worker" in rollback:
-            if not worker_image or not isinstance(worker_compatibility, dict):
+            paused_worker_target = (
+                worker_image is None
+                and rollback["worker"].get("desiredCount") == 0
+                and proof.get("rollback_revision") is not None
+            )
+            paused_reader_preparation = (
+                worker_image is None
+                and rollback["worker"].get("desiredCount") == 0
+                and proof.get("reader_only") is True
+            )
+            if paused_worker_target:
+                if worker_compatibility is not None:
+                    raise DeploymentError(
+                        "Paused rollback target must not execute a worker image during preflight."
+                    )
+                self.require_usable_task_definition(rollback["worker"]["taskDefinition"], "worker")
+            elif paused_reader_preparation:
+                if before["worker"] != rollback["worker"] or worker_compatibility is not None:
+                    raise DeploymentError(
+                        "Paused reader preparation must retain the exact worker state "
+                        "without worker proof."
+                    )
+            elif not worker_image or not isinstance(worker_compatibility, dict):
                 raise DeploymentError(
                     "Staging worker releases require exact-image compatibility evidence."
                 )
-            prior_worker_image = self.task_image(before["worker"]["taskDefinition"], "worker")
-            worker_schema = (
-                proof["rollback_image"] if proof.get("future_image") else proof.get("schema_image")
-            )
-            expected_image_explicit = expected_worker_profile == "feature"
-            if (
-                worker_compatibility.get("passed") is not True
-                or worker_compatibility.get("target_image") != worker_image
-                or worker_compatibility.get("previous_image") != prior_worker_image
-                or worker_compatibility.get("schema_image") != worker_schema
-                or worker_compatibility.get("profile") != expected_worker_profile
-                or proof.get("worker_image_explicit") is not expected_image_explicit
-            ):
-                raise DeploymentError("Worker image compatibility evidence does not match staging.")
-            image_digest(self.config, worker_image, "worker")
-            image_digest(self.config, prior_worker_image, "worker")
+            else:
+                prior_worker_image = self.task_image(before["worker"]["taskDefinition"], "worker")
+                worker_schema = (
+                    proof["rollback_image"]
+                    if proof.get("future_image")
+                    else proof.get("schema_image")
+                )
+                expected_image_explicit = expected_worker_profile == "feature"
+                if (
+                    worker_compatibility.get("passed") is not True
+                    or worker_compatibility.get("target_image") != worker_image
+                    or worker_compatibility.get("previous_image") != prior_worker_image
+                    or worker_compatibility.get("schema_image") != worker_schema
+                    or worker_compatibility.get("profile") != expected_worker_profile
+                    or worker_compatibility.get("worker_checked") is not True
+                    or worker_compatibility.get("previous_worker_checked")
+                    is not (before["worker"].get("desiredCount", 0) > 0)
+                    or proof.get("worker_image_explicit") is not expected_image_explicit
+                ):
+                    raise DeploymentError(
+                        "Worker image compatibility evidence does not match staging."
+                    )
+                image_digest(self.config, worker_image, "worker")
+                if before["worker"].get("desiredCount", 0) > 0:
+                    image_digest(self.config, prior_worker_image, "worker")
         elif worker_image is not None:
-            raise DeploymentError("Worker compatibility evidence has no matching ECS service.")
+            if (
+                expected_worker_profile != "feature"
+                or not isinstance(worker_compatibility, dict)
+                or worker_compatibility.get("passed") is not True
+                or worker_compatibility.get("target_image") != worker_image
+                or worker_compatibility.get("previous_image") is not None
+                or worker_compatibility.get("schema_image") != proof.get("schema_image")
+                or worker_compatibility.get("profile") != "feature"
+                or worker_compatibility.get("worker_checked") is not True
+                or worker_compatibility.get("previous_worker_checked") is not False
+                or proof.get("worker_image_explicit") is not True
+            ):
+                raise DeploymentError(
+                    "Worker bootstrap requires exact candidate-image compatibility evidence."
+                )
+            image_digest(self.config, worker_image, "worker")
 
     def require_stable_source(self, expected: dict[str, dict[str, Any]]) -> None:
         """Do not migrate while incompatible tasks from an earlier rollout still drain."""
@@ -316,6 +362,28 @@ class Deployment:
         if len(containers) != 1 or containers[0].get("name") != service:
             raise DeploymentError("Unexpected ECS task container layout.")
         return containers[0]["image"]
+
+    def require_usable_task_definition(self, task_definition: str, service: str) -> dict[str, Any]:
+        """Require a rollback target revision that ECS can still attach to its service."""
+        try:
+            definition = self.ecs.describe_task_definition(taskDefinition=task_definition)[
+                "taskDefinition"
+            ]
+        except Exception as error:
+            raise DeploymentError(f"Rollback {service} task definition is unavailable.") from error
+        expected_family = f"buddy-{self.config['environment']}-{service}"
+        containers = definition.get("containerDefinitions", [])
+        if (
+            definition.get("taskDefinitionArn") != task_definition
+            or definition.get("family") != expected_family
+            or definition.get("status") != "ACTIVE"
+            or len(containers) != 1
+            or containers[0].get("name") != service
+        ):
+            raise DeploymentError(
+                f"Rollback {service} task definition is not an active, usable revision."
+            )
+        return definition
 
     def task(self, service: str, image: str) -> str:
         arn = self.config["tasks"].get(service, f"buddy-{self.config['environment']}-{service}")
@@ -492,6 +560,7 @@ class Deployment:
             compatibility_worker_image = worker_image or (
                 self.task_image(previous["worker"]["taskDefinition"], "worker")
                 if "worker" in previous
+                and not (reader_only and previous["worker"]["desiredCount"] == 0)
                 else None
             )
             self.compatible(
@@ -633,6 +702,8 @@ class Deployment:
                 raise DeploymentError("The rollback target requires an unavailable worker service.")
             if set(before) != set(previous):
                 raise DeploymentError("API/worker service set changed since the rollback audit.")
+            for service, state in previous.items():
+                self.require_usable_task_definition(state["taskDefinition"], service)
             audit["target"] = previous
             audit["target_audit_key"] = value.get("audit_key")
             audit["before"] = before
@@ -645,7 +716,7 @@ class Deployment:
                 raise DeploymentError("Rollback requires traced-analysis reader proof.")
             target_worker_image = (
                 self.task_image(previous["worker"]["taskDefinition"], "worker")
-                if "worker" in previous
+                if "worker" in previous and previous["worker"].get("desiredCount", 0) > 0
                 else None
             )
             self.compatible(

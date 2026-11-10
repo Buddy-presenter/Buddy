@@ -72,6 +72,7 @@ def main() -> None:
         driver.require_stable_source(before)
     rollback = before
     candidate = args.candidate_image
+    worker_target_stays_paused = False
     schema_image = None
     if args.rollback_revision:
         if not re.fullmatch(r"[a-f0-9]{40}", args.rollback_revision):
@@ -103,6 +104,8 @@ def main() -> None:
                 "taskDefinition": before["worker"]["taskDefinition"],
                 "desiredCount": 0,
             }
+        for service, state in rollback.items():
+            driver.require_usable_task_definition(state["taskDefinition"], service)
         candidate = image(ecs, before["api"])
     if not candidate or "api" not in rollback or not set(rollback) <= {"api", "worker"}:
         raise DeploymentError("Staging release has an invalid API/worker service target.")
@@ -115,17 +118,23 @@ def main() -> None:
             rollback_worker.get("taskDefinition", ""),
         ):
             raise DeploymentError("Invalid staging worker target.")
-        worker_image = (
-            image(ecs, rollback_worker, "worker")
-            if args.rollback_revision
-            else (worker_image or image(ecs, rollback_worker, "worker"))
+        worker_target_stays_paused = bool(
+            rollback_worker["desiredCount"] == 0
+            and (args.reader_only or args.rollback_revision is not None)
+            and args.worker_image is None
         )
-        worker_image = image_digest(config, worker_image, "worker")
-    if "worker" in before:
+        if not worker_target_stays_paused:
+            worker_image = (
+                image(ecs, rollback_worker, "worker")
+                if args.rollback_revision
+                else (worker_image or image(ecs, rollback_worker, "worker"))
+            )
+            worker_image = image_digest(config, worker_image, "worker")
+    if "worker" in before and not worker_target_stays_paused:
         previous_worker_image = image_digest(
             config, image(ecs, before["worker"], "worker"), "worker"
         )
-    if "worker" in before and not worker_image:
+    if "worker" in before and not worker_image and not worker_target_stays_paused:
         raise DeploymentError("The live staging worker requires a paired worker image release.")
     if worker_image:
         worker_image = image_digest(config, worker_image, "worker")
@@ -167,10 +176,12 @@ def main() -> None:
     }
     if args.reader_only:
         compatibility_args["reader_only"] = True
-    if worker_image:
+    if worker_image or previous_worker_image:
         compatibility_args.update(
             worker_image=worker_image,
+            worker_image_will_run=bool(worker_image and not worker_target_stays_paused),
             previous_worker_image=previous_worker_image,
+            previous_worker_will_run=bool(before.get("worker", {}).get("desiredCount", 0) > 0),
         )
     report = verify_images(previous_image, candidate, **compatibility_args)
     report.update(
