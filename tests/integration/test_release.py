@@ -367,6 +367,137 @@ def test_missing_durable_intent_prevents_migration_or_registration(monkeypatch):
     assert ecs.runs == [] and ecs.registered == [] and ecs.updates == []
 
 
+def test_settle_waits_for_ecs_deployment_details_after_broad_stable_waiter(monkeypatch):
+    ecs, s3 = Ecs(), S3()
+    target = {"api": {"taskDefinition": PREFIX + "api:2", "desiredCount": 1}}
+    ecs.state["api"] = copy.deepcopy(target["api"])
+    original_describe = ecs.describe_services
+    observations = 0
+
+    def describe_with_old_deployment_draining(**kwargs):
+        nonlocal observations
+        result = original_describe(**kwargs)
+        if observations == 0:
+            result["services"][0]["deployments"] = [
+                {
+                    "status": "PRIMARY",
+                    "rolloutState": "COMPLETED",
+                    "taskDefinition": target["api"]["taskDefinition"],
+                },
+                {
+                    "status": "ACTIVE",
+                    "rolloutState": "COMPLETED",
+                    "taskDefinition": PREFIX + "api:1",
+                },
+            ]
+        observations += 1
+        return result
+
+    monkeypatch.setattr(ecs, "describe_services", describe_with_old_deployment_draining)
+    monkeypatch.setattr("backend.scripts.release.deploy.time.sleep", lambda _seconds: None)
+    driver = Deployment(CONFIG, ecs, s3, Sts(), lambda _url: None)
+
+    driver.settle(target)
+
+    assert observations == 2  # Draining deployment snapshot, then exact stable target.
+    assert ecs.waits == ["services_stable"]
+
+
+def test_settle_ignores_stale_completed_pre_update_snapshot(monkeypatch):
+    ecs, s3 = Ecs(), S3()
+    target = {"api": {"taskDefinition": PREFIX + "api:2", "desiredCount": 1}}
+    ecs.state["api"] = copy.deepcopy(target["api"])
+    original_describe = ecs.describe_services
+    observations = 0
+
+    def describe_with_stale_old_revision(**kwargs):
+        nonlocal observations
+        result = original_describe(**kwargs)
+        if observations < 2:
+            result["services"][0]["taskDefinition"] = PREFIX + "api:1"
+            result["services"][0]["deployments"] = [
+                {
+                    "status": "PRIMARY",
+                    "rolloutState": "COMPLETED",
+                    "taskDefinition": PREFIX + "api:1",
+                }
+            ]
+        observations += 1
+        return result
+
+    monkeypatch.setattr(ecs, "describe_services", describe_with_stale_old_revision)
+    monkeypatch.setattr("backend.scripts.release.deploy.time.sleep", lambda _seconds: None)
+    driver = Deployment(CONFIG, ecs, s3, Sts(), lambda _url: None)
+
+    driver.settle(target)
+
+    assert observations == 3  # Two stale snapshots, then target deployment.
+    assert ecs.waits == ["services_stable"]
+
+
+def test_settle_ignores_stale_failed_revision_while_restoring(monkeypatch):
+    ecs, s3 = Ecs(), S3()
+    target = {"api": {"taskDefinition": PREFIX + "api:1", "desiredCount": 1}}
+    original_describe = ecs.describe_services
+    observations = 0
+
+    def describe_with_stale_failed_revision(**kwargs):
+        nonlocal observations
+        result = original_describe(**kwargs)
+        if observations == 0:
+            result["services"][0]["taskDefinition"] = PREFIX + "api:2"
+            result["services"][0]["deployments"] = [
+                {
+                    "status": "PRIMARY",
+                    "rolloutState": "FAILED",
+                    "taskDefinition": PREFIX + "api:2",
+                }
+            ]
+        observations += 1
+        return result
+
+    monkeypatch.setattr(ecs, "describe_services", describe_with_stale_failed_revision)
+    monkeypatch.setattr("backend.scripts.release.deploy.time.sleep", lambda _seconds: None)
+    driver = Deployment(CONFIG, ecs, s3, Sts(), lambda _url: None)
+
+    driver.settle(target)
+
+    assert observations == 2
+    assert ecs.waits == ["services_stable"]
+
+
+def test_settle_does_not_recheck_staging_after_target_snapshot(monkeypatch):
+    ecs, s3 = Ecs(), S3()
+    target = {"api": {"taskDefinition": PREFIX + "api:2", "desiredCount": 1}}
+    ecs.state["api"] = copy.deepcopy(target["api"])
+    original_describe = ecs.describe_services
+    observations = 0
+
+    def describe_target_then_stale_old_revision(**kwargs):
+        nonlocal observations
+        result = original_describe(**kwargs)
+        if observations == 1:
+            result["services"][0]["taskDefinition"] = PREFIX + "api:1"
+            result["services"][0]["deployments"] = [
+                {
+                    "status": "PRIMARY",
+                    "rolloutState": "COMPLETED",
+                    "taskDefinition": PREFIX + "api:1",
+                }
+            ]
+        observations += 1
+        return result
+
+    monkeypatch.setattr(ecs, "describe_services", describe_target_then_stale_old_revision)
+    monkeypatch.setattr("backend.scripts.release.deploy.time.sleep", lambda _seconds: None)
+    driver = Deployment(CONFIG, ecs, s3, Sts(), lambda _url: None)
+
+    driver.settle(target)
+
+    assert observations == 1  # The successful poll is also the staging verification.
+    assert ecs.waits == ["services_stable"]
+
+
 def test_readiness_failure_restores_previous_task_and_records_outcome():
     ecs, s3, probes = Ecs(), S3(), []
 
