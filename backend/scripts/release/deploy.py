@@ -243,6 +243,7 @@ class Deployment:
                     raise DeploymentError(
                         "Paused rollback target must not execute a worker image during preflight."
                     )
+                self.require_usable_task_definition(rollback["worker"]["taskDefinition"], "worker")
             elif paused_reader_preparation:
                 if before["worker"] != rollback["worker"] or worker_compatibility is not None:
                     raise DeploymentError(
@@ -279,7 +280,22 @@ class Deployment:
                 if before["worker"].get("desiredCount", 0) > 0:
                     image_digest(self.config, prior_worker_image, "worker")
         elif worker_image is not None:
-            raise DeploymentError("Worker compatibility evidence has no matching ECS service.")
+            if (
+                expected_worker_profile != "feature"
+                or not isinstance(worker_compatibility, dict)
+                or worker_compatibility.get("passed") is not True
+                or worker_compatibility.get("target_image") != worker_image
+                or worker_compatibility.get("previous_image") is not None
+                or worker_compatibility.get("schema_image") != proof.get("schema_image")
+                or worker_compatibility.get("profile") != "feature"
+                or worker_compatibility.get("worker_checked") is not True
+                or worker_compatibility.get("previous_worker_checked") is not False
+                or proof.get("worker_image_explicit") is not True
+            ):
+                raise DeploymentError(
+                    "Worker bootstrap requires exact candidate-image compatibility evidence."
+                )
+            image_digest(self.config, worker_image, "worker")
 
     def require_stable_source(self, expected: dict[str, dict[str, Any]]) -> None:
         """Do not migrate while incompatible tasks from an earlier rollout still drain."""
@@ -346,6 +362,28 @@ class Deployment:
         if len(containers) != 1 or containers[0].get("name") != service:
             raise DeploymentError("Unexpected ECS task container layout.")
         return containers[0]["image"]
+
+    def require_usable_task_definition(self, task_definition: str, service: str) -> dict[str, Any]:
+        """Require a rollback target revision that ECS can still attach to its service."""
+        try:
+            definition = self.ecs.describe_task_definition(taskDefinition=task_definition)[
+                "taskDefinition"
+            ]
+        except Exception as error:
+            raise DeploymentError(f"Rollback {service} task definition is unavailable.") from error
+        expected_family = f"buddy-{self.config['environment']}-{service}"
+        containers = definition.get("containerDefinitions", [])
+        if (
+            definition.get("taskDefinitionArn") != task_definition
+            or definition.get("family") != expected_family
+            or definition.get("status") != "ACTIVE"
+            or len(containers) != 1
+            or containers[0].get("name") != service
+        ):
+            raise DeploymentError(
+                f"Rollback {service} task definition is not an active, usable revision."
+            )
+        return definition
 
     def task(self, service: str, image: str) -> str:
         arn = self.config["tasks"].get(service, f"buddy-{self.config['environment']}-{service}")
@@ -664,6 +702,8 @@ class Deployment:
                 raise DeploymentError("The rollback target requires an unavailable worker service.")
             if set(before) != set(previous):
                 raise DeploymentError("API/worker service set changed since the rollback audit.")
+            for service, state in previous.items():
+                self.require_usable_task_definition(state["taskDefinition"], service)
             audit["target"] = previous
             audit["target_audit_key"] = value.get("audit_key")
             audit["before"] = before

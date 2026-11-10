@@ -379,6 +379,89 @@ def test_worker_preflight_binds_candidate_and_previous_worker_images_to_live_ser
     )
 
 
+def test_worker_bootstrap_preflight_smokes_candidate_before_service_exists(monkeypatch, tmp_path):
+    import json
+    import sys
+
+    from backend.scripts.release import prepare_compatibility as preflight
+
+    ecs, s3 = Ecs(), S3()
+    observed = {}
+    monkeypatch.setattr(
+        preflight.boto3,
+        "client",
+        lambda service, **kw: {"ecs": ecs, "s3": s3, "sts": Sts()}[service],
+    )
+    monkeypatch.setattr(preflight, "image_digest", lambda _config, image, _service: image)
+
+    def verify(previous, candidate, **kwargs):
+        observed.update(previous=previous, candidate=candidate, **kwargs)
+        return {
+            "passed": True,
+            "checks": dict.fromkeys(
+                [
+                    "readiness",
+                    "analysis",
+                    "legacy_writes",
+                    "sessions",
+                    "owner_isolation",
+                    "immutability",
+                ],
+                True,
+            ),
+            "rollback_image": previous,
+            "candidate_image": candidate,
+            "schema_image": candidate,
+            "worker_compatibility": {
+                "passed": True,
+                "target_image": WORKER_IMAGE,
+                "previous_image": None,
+                "schema_image": IMAGE,
+                "profile": "feature",
+                "worker_checked": True,
+                "previous_worker_checked": False,
+            },
+        }
+
+    monkeypatch.setattr(preflight, "verify_images", verify)
+    monkeypatch.setenv("BUDDY_DEPLOYMENT_CONFIG", json.dumps(CONFIG))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "preflight",
+            "--revision",
+            "c" * 40,
+            "--candidate-image",
+            IMAGE,
+            "--worker-image",
+            WORKER_IMAGE,
+            "--output",
+            str(tmp_path / "proof.json"),
+        ],
+    )
+
+    preflight.main()
+
+    assert "worker" not in json.loads((tmp_path / "proof.json").read_text())["before"]
+    assert observed["worker_image"] == WORKER_IMAGE
+    assert observed["worker_image_will_run"] is True
+    assert observed["previous_worker_image"] is None
+    assert observed["previous_worker_will_run"] is False
+    report = json.loads((tmp_path / "proof.json").read_text())
+    driver = Deployment(CONFIG, ecs, s3, Sts(), compatibility_report=report)
+    from backend.scripts.release import deploy as deploy_module
+
+    monkeypatch.setattr(deploy_module, "image_digest", lambda _config, image, _service: image)
+    driver.compatible(
+        IMAGE,
+        ecs.state,
+        ecs.state,
+        worker_image=WORKER_IMAGE,
+        expected_worker_profile="feature",
+    )
+
+
 def test_reader_preflight_does_not_smoke_a_paused_worker_against_the_new_schema(
     monkeypatch, tmp_path
 ):

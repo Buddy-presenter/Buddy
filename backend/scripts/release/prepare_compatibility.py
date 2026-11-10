@@ -104,6 +104,8 @@ def main() -> None:
                 "taskDefinition": before["worker"]["taskDefinition"],
                 "desiredCount": 0,
             }
+        for service, state in rollback.items():
+            driver.require_usable_task_definition(state["taskDefinition"], service)
         candidate = image(ecs, before["api"])
     if not candidate or "api" not in rollback or not set(rollback) <= {"api", "worker"}:
         raise DeploymentError("Staging release has an invalid API/worker service target.")
@@ -179,7 +181,7 @@ def main() -> None:
             worker_image=worker_image,
             worker_image_will_run=bool(worker_image and not worker_target_stays_paused),
             previous_worker_image=previous_worker_image,
-            previous_worker_will_run=before["worker"]["desiredCount"] > 0,
+            previous_worker_will_run=bool(before.get("worker", {}).get("desiredCount", 0) > 0),
         )
     report = verify_images(previous_image, candidate, **compatibility_args)
     report.update(

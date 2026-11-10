@@ -88,6 +88,9 @@ application has already rolled back to the bridge. Recovery never infers the dat
 head from an old application. This conservatively forbids restoring the original
 pre-bridge image through explicit rollback, including before expansion. The original image fails this test after
 schema expansion; selecting an old healthy audit cannot bypass it.
+Before any rollback service update, the target API and worker task-definition revisions
+must still exist and be active; the workflow checks them during preflight and again before
+restoring services.
 
 Worker proof uses the exact immutable ECR digest and the same isolated PostgreSQL harness
 as CI's worker smoke. It applies the release schema with the API image, processes a

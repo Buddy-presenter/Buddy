@@ -115,7 +115,9 @@ class Ecs:
         name = family.rsplit("-", 1)[1]
         return {
             "taskDefinition": {
+                "taskDefinitionArn": kwargs["taskDefinition"],
                 "family": family,
+                "status": "ACTIVE",
                 "containerDefinitions": [
                     {
                         "name": name,
@@ -454,6 +456,36 @@ def test_worker_promotion_updates_and_rolls_back_api_and_worker_together():
     assert restored["status"] == "rolled_back"
     assert ecs.state["api"] == {"taskDefinition": PREFIX + "api:1", "desiredCount": 1}
     assert ecs.state["worker"] == {"taskDefinition": PREFIX + "worker:1", "desiredCount": 0}
+
+
+@pytest.mark.parametrize("failure", ["deleted", "inactive"])
+def test_rollback_checks_paused_worker_task_definition_before_updating_api(failure):
+    ecs, s3 = Ecs(), S3()
+    ecs.state["worker"] = {"taskDefinition": PREFIX + "worker:1", "desiredCount": 0}
+    config = copy.deepcopy(CONFIG)
+    config["tasks"]["worker"] = PREFIX + "worker:1"
+    deployment = PreparedDeployment(config, ecs, s3, Sts(), lambda _: None)
+    deployment.deploy(SHA, IMAGE, WORKER_IMAGE)
+    ecs.updates.clear()
+    describe = ecs.describe_task_definition
+
+    def missing_paused_worker(**kwargs):
+        if kwargs["taskDefinition"] == PREFIX + "worker:1":
+            if failure == "deleted":
+                raise RuntimeError("synthetic deleted task definition")
+            result = describe(**kwargs)
+            result["taskDefinition"]["status"] = "INACTIVE"
+            return result
+        return describe(**kwargs)
+
+    ecs.describe_task_definition = missing_paused_worker
+
+    with pytest.raises(DeploymentError, match="Rollback failed"):
+        deployment.rollback("c" * 40, SHA)
+
+    assert ecs.updates == []
+    assert ecs.state["api"]["taskDefinition"] == PREFIX + "api:2"
+    assert ecs.state["worker"] == {"taskDefinition": PREFIX + "worker:2", "desiredCount": 1}
 
 
 def test_worker_image_cannot_be_promoted_before_terraform_provisions_service():
