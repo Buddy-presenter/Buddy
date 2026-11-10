@@ -376,3 +376,20 @@ def test_pdf_verification_flushes_slide_changes_queued_during_check(desktop_wind
     active = PresentationSession("s", "o", "d", "a", "active", 1, None, datetime.now(UTC))
     page._session_succeeded(1, ("success", active, None))
     assert page.microphone.enabled and page._session_followup == "flush"
+
+
+def test_pdf_verification_expired_session_stops_capture_and_clears_access(
+    desktop_window, monkeypatch
+):
+    monkeypatch.setattr(present_widget, "MicrophoneController", FakeMicrophone)
+    window = desktop_window()
+    page = window.present
+    monkeypatch.setattr(page, "_microphone_session_available", lambda: True)
+    page._session = SimpleNamespace(status="active")
+    page._session_access = "expired"
+    page._microphone_toggle()
+    page._microphone_pdf_request_generation = page._microphone_pdf_generation
+    page._session_request = ("microphone_verify", page._session_generation, None)
+    page._session_succeeded(1, ("expired", None, "Sign in again"))
+    assert not page.microphone.enabled
+    assert page._session is None and page._session_access is None

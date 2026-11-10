@@ -852,6 +852,16 @@ class PresentWidget(Page):
                     self._session_followup = "flush"
             else:
                 self._microphone_pdf_unverified()
+                if outcome == "expired":
+                    self.session_access_expired.emit(
+                        message or "Sign in again to sync this presentation."
+                    )
+                    self._session_access = None
+                    self._session = None
+                    self._session_pending_state = None
+                    self._session_followup = None
+                    self._refresh()
+                    return
                 if self._session_pending_state is not None:
                     self._session_followup = "flush"
                 if (
@@ -939,6 +949,8 @@ class PresentWidget(Page):
         if request[0] == "microphone_verify":
             if self._microphone_pdf_request_generation == self._microphone_pdf_generation:
                 self._microphone_pdf_unverified()
+            if self._session_pending_state is not None:
+                self._session_followup = "flush"
             return
         self._session_error = True
         self.session_status.setText(message)
