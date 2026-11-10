@@ -403,15 +403,35 @@ def test_settle_waits_for_ecs_deployment_details_after_broad_stable_waiter(monke
     assert ecs.waits == ["services_stable"]
 
 
-def test_settle_fails_when_ecs_completes_a_different_task_definition(monkeypatch):
+def test_settle_ignores_stale_completed_pre_update_snapshot(monkeypatch):
     ecs, s3 = Ecs(), S3()
     target = {"api": {"taskDefinition": PREFIX + "api:2", "desiredCount": 1}}
+    ecs.state["api"] = copy.deepcopy(target["api"])
+    original_describe = ecs.describe_services
+    observations = 0
+
+    def describe_with_stale_old_revision(**kwargs):
+        nonlocal observations
+        result = original_describe(**kwargs)
+        if observations == 0:
+            result["services"][0]["taskDefinition"] = PREFIX + "api:1"
+            result["services"][0]["deployments"] = [
+                {
+                    "status": "PRIMARY",
+                    "rolloutState": "COMPLETED",
+                    "taskDefinition": PREFIX + "api:1",
+                }
+            ]
+        observations += 1
+        return result
+
+    monkeypatch.setattr(ecs, "describe_services", describe_with_stale_old_revision)
     monkeypatch.setattr("backend.scripts.release.deploy.time.sleep", lambda _seconds: None)
     driver = Deployment(CONFIG, ecs, s3, Sts(), lambda _url: None)
 
-    with pytest.raises(DeploymentError, match="ECS completed a different task definition"):
-        driver.settle(target)
+    driver.settle(target)
 
+    assert observations == 3  # Stale snapshot, target deployment, final state check.
     assert ecs.waits == ["services_stable"]
 
 

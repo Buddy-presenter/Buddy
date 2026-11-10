@@ -334,8 +334,11 @@ class Deployment:
         It may return while an old deployment is still draining. A single strict read
         immediately afterward can therefore mistake a normal transition for a failed
         rollout and trigger an unnecessary rollback. Poll the full deployment state
-        for a bounded period, but stop promptly if ECS has completed a different
-        revision or marked the target rollout failed.
+        for a bounded period. A completed older revision can itself satisfy the
+        broad waiter and may be an eventually consistent pre-update snapshot, so
+        it is not evidence of rollback. Only ECS explicitly marking the target
+        rollout failed is an early terminal signal; otherwise keep polling for
+        the requested revision until it settles or the bounded wait expires.
         """
         terminal_observations = 0
         last_reason = "the service deployment is still settling"
@@ -376,14 +379,6 @@ class Deployment:
                         if primary and primary.get("rolloutState") == "FAILED":
                             terminal = True
                             last_reason = "ECS marked the target deployment as failed"
-                        elif (
-                            service.get("taskDefinition") != target["taskDefinition"]
-                            and len(deployments) == 1
-                            and primary
-                            and primary.get("rolloutState") == "COMPLETED"
-                        ):
-                            terminal = True
-                            last_reason = "ECS completed a different task definition"
                 if stable:
                     return
                 terminal_observations = terminal_observations + 1 if terminal else 0
