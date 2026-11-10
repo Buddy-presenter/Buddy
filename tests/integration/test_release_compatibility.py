@@ -520,6 +520,7 @@ def test_worker_schema_proof_is_bound_to_the_actual_rollout_phase(bridge, wrong_
         "previous_image": OLD_WORKER_IMAGE,
         "schema_image": (IMAGE if bridge else OLD_IMAGE) if wrong_schema else schema,
         "profile": expected_profile,
+        "worker_checked": True,
         "previous_worker_checked": False,
     }
     driver = Deployment(CONFIG, ecs, s3, Sts(), compatibility_report=report)
@@ -540,6 +541,7 @@ def test_worker_schema_proof_rejects_a_mismatched_smoke_profile():
         "previous_image": OLD_WORKER_IMAGE,
         "schema_image": IMAGE,
         "profile": "feature",
+        "worker_checked": True,
         "previous_worker_checked": False,
     }
     driver = Deployment(CONFIG, ecs, s3, Sts(), compatibility_report=report)
@@ -558,12 +560,59 @@ def test_worker_proof_cannot_skip_the_previous_worker_if_rollback_would_resume_i
         "previous_image": OLD_WORKER_IMAGE,
         "schema_image": IMAGE,
         "profile": "compatibility",
+        "worker_checked": True,
         "previous_worker_checked": False,
     }
     driver = Deployment(CONFIG, ecs, s3, Sts(), compatibility_report=report)
 
     with pytest.raises(DeploymentError, match="Worker image compatibility"):
         driver.compatible(IMAGE, ecs.state, ecs.state, worker_image=OLD_WORKER_IMAGE)
+
+
+def test_rollback_to_paused_worker_requires_no_worker_smoke_even_if_source_is_active():
+    ecs, s3 = Ecs(), S3()
+    ecs.state["worker"] = {"taskDefinition": PREFIX + "worker:1", "desiredCount": 1}
+    target = copy.deepcopy(ecs.state)
+    target["worker"]["desiredCount"] = 0
+    report = proof(ecs)
+    report.update(
+        candidate_image=OLD_IMAGE,
+        rollback=copy.deepcopy(target),
+        rollback_revision=SHA,
+        schema_image=IMAGE,
+    )
+    driver = Deployment(CONFIG, ecs, s3, Sts(), compatibility_report=report)
+
+    driver.compatible(OLD_IMAGE, target, ecs.state, worker_image=None)
+
+
+def test_rollback_to_paused_worker_rejects_smoking_a_worker_that_will_stay_paused(monkeypatch):
+    from backend.scripts.release import deploy
+
+    ecs, s3 = Ecs(), S3()
+    ecs.state["worker"] = {"taskDefinition": PREFIX + "worker:1", "desiredCount": 0}
+    target = copy.deepcopy(ecs.state)
+    report = proof(ecs)
+    report.update(
+        candidate_image=OLD_IMAGE,
+        rollback=copy.deepcopy(target),
+        rollback_revision=SHA,
+        schema_image=IMAGE,
+    )
+    report["worker_compatibility"] = {
+        "passed": True,
+        "target_image": OLD_WORKER_IMAGE,
+        "previous_image": OLD_WORKER_IMAGE,
+        "schema_image": IMAGE,
+        "profile": "compatibility",
+        "worker_checked": True,
+        "previous_worker_checked": False,
+    }
+    monkeypatch.setattr(deploy, "image_digest", lambda _config, image, _service: image)
+    driver = Deployment(CONFIG, ecs, s3, Sts(), compatibility_report=report)
+
+    with pytest.raises(DeploymentError, match="Paused rollback target"):
+        driver.compatible(OLD_IMAGE, target, ecs.state, worker_image=None)
 
 
 def test_explicit_feature_worker_keeps_feature_profile_when_digest_matches_live_worker():
@@ -577,6 +626,7 @@ def test_explicit_feature_worker_keeps_feature_profile_when_digest_matches_live_
         "previous_image": OLD_WORKER_IMAGE,
         "schema_image": IMAGE,
         "profile": "feature",
+        "worker_checked": True,
         "previous_worker_checked": False,
     }
     driver = Deployment(CONFIG, ecs, s3, Sts(), compatibility_report=report)
@@ -600,6 +650,7 @@ def test_explicit_worker_promotion_rejects_compatibility_only_proof_with_equal_d
         "previous_image": OLD_WORKER_IMAGE,
         "schema_image": IMAGE,
         "profile": "compatibility",
+        "worker_checked": True,
         "previous_worker_checked": False,
     }
     driver = Deployment(CONFIG, ecs, s3, Sts(), compatibility_report=report)
@@ -661,6 +712,7 @@ def test_worker_images_are_smoked_against_the_phase_schema(monkeypatch, bridge):
         "previous_image": OLD_WORKER_IMAGE,
         "schema_image": schema,
         "profile": expected_profile,
+        "worker_checked": True,
         "previous_worker_checked": True,
     }
 
@@ -709,8 +761,52 @@ def test_paused_previous_worker_is_not_executed_against_feature_schema(monkeypat
         "previous_image": OLD_WORKER_IMAGE,
         "schema_image": IMAGE,
         "profile": "feature",
+        "worker_checked": True,
         "previous_worker_checked": False,
     }
+
+
+def test_paused_rollback_target_and_source_workers_are_not_smoked(monkeypatch):
+    import json
+
+    from backend.scripts.release import image_compatibility as compatibility
+
+    observed = []
+
+    def docker(*args, **kwargs):
+        if "/checks/rollback_probe.py" in args:
+            return json.dumps(
+                {
+                    "ready": True,
+                    "analysis": True,
+                    "session": True,
+                    "owner_isolation": True,
+                    "traced_analysis": True,
+                }
+            )
+        return "ok"
+
+    monkeypatch.setattr(compatibility, "docker", docker)
+    monkeypatch.setattr(
+        compatibility,
+        "verify_worker_image",
+        lambda image, schema, *, profile: observed.append((image, schema, profile)),
+    )
+    monkeypatch.setattr(compatibility.subprocess, "run", lambda *args, **kwargs: None)
+
+    report = compatibility.verify_images(
+        OLD_IMAGE,
+        IMAGE,
+        schema_image=OLD_IMAGE,
+        previous_worker_image=OLD_WORKER_IMAGE,
+        previous_worker_will_run=False,
+        worker_image_will_run=False,
+        worker_profile="compatibility",
+        pull_images=False,
+    )
+
+    assert observed == []
+    assert report["worker_compatibility"] is None
 
 
 @pytest.mark.parametrize("profile", ["compatibility", "feature"])

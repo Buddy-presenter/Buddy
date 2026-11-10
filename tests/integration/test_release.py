@@ -215,19 +215,24 @@ class PreparedDeployment(Deployment):
             "rollback_revision": rollback_revision,
             "worker_image_explicit": worker_profile == "feature",
         }
-        if worker_image:
-            previous_worker_image = None
-            if "worker" in before:
-                previous_worker_image = self.ecs.describe_task_definition(
-                    taskDefinition=before["worker"]["taskDefinition"]
-                )["taskDefinition"]["containerDefinitions"][0]["image"]
+        previous_worker_image = None
+        paused_rollback_target = bool(
+            rollback_revision
+            and "worker" in rollback
+            and rollback["worker"].get("desiredCount", 0) == 0
+        )
+        if "worker" in before and not paused_rollback_target:
+            previous_worker_image = self.ecs.describe_task_definition(
+                taskDefinition=before["worker"]["taskDefinition"]
+            )["taskDefinition"]["containerDefinitions"][0]["image"]
+        if worker_image or previous_worker_image:
             self.compatibility_report["worker_compatibility"] = {
                 "passed": True,
                 "target_image": worker_image,
                 "previous_image": previous_worker_image,
                 "schema_image": candidate,
-                "profile": worker_profile
-                or ("compatibility" if worker_image == previous_worker_image else "feature"),
+                "profile": worker_profile or ("feature" if worker_image else "compatibility"),
+                "worker_checked": bool(worker_image),
                 "previous_worker_checked": bool(
                     previous_worker_image and before["worker"].get("desiredCount", 0) > 0
                 ),
@@ -254,7 +259,11 @@ class PreparedDeployment(Deployment):
             target = self.ecs.state
         candidate = IMAGE if self.ecs.state["api"]["taskDefinition"].endswith(":2") else OLD_IMAGE
         worker_image = None
-        if isinstance(target, dict) and isinstance(target.get("worker"), dict):
+        if (
+            isinstance(target, dict)
+            and isinstance(target.get("worker"), dict)
+            and target["worker"].get("desiredCount", 0) > 0
+        ):
             worker_image = self.ecs.describe_task_definition(
                 taskDefinition=target["worker"]["taskDefinition"]
             )["taskDefinition"]["containerDefinitions"][0]["image"]

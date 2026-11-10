@@ -73,6 +73,7 @@ def verify_images(
     baseline_image: str | None = None,
     schema_image: str | None = None,
     worker_image: str | None = None,
+    worker_image_will_run: bool = True,
     previous_worker_image: str | None = None,
     previous_worker_will_run: bool = True,
     worker_profile: str | None = None,
@@ -179,7 +180,7 @@ for attempt in range(30):
                     *([baseline_image] if baseline_image else []),
                     *([future] if future else []),
                     *([schema_image] if schema_image else []),
-                    *([worker_image] if worker_image else []),
+                    *([worker_image] if worker_image and worker_image_will_run else []),
                     *(
                         [previous_worker_image]
                         if previous_worker_image and previous_worker_will_run
@@ -248,7 +249,7 @@ for attempt in range(30):
         # against the baseline's packaged migrations, not the future feature DDL.
         # Feature promotion separately proves both workers on its expanded schema.
         worker_schema = (baseline_image or initial) if future else (schema_image or candidate)
-        if worker_image:
+        if worker_image and worker_image_will_run:
             verify_worker_image(worker_image, worker_schema, profile=effective_worker_profile)
         if previous_worker_image and previous_worker_will_run:
             verify_worker_image(previous_worker_image, worker_schema, profile="compatibility")
@@ -276,11 +277,13 @@ for attempt in range(30):
                     "previous_image": previous_worker_image,
                     "schema_image": worker_schema,
                     "profile": effective_worker_profile,
+                    "worker_checked": bool(worker_image and worker_image_will_run),
                     "previous_worker_checked": bool(
                         previous_worker_image and previous_worker_will_run
                     ),
                 }
-                if worker_image
+                if (worker_image and worker_image_will_run)
+                or (previous_worker_image and previous_worker_will_run)
                 else None
             ),
         }

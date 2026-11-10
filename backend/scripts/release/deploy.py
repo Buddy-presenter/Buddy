@@ -228,12 +228,22 @@ class Deployment:
             raise DeploymentError("Rollback image drifted from compatibility evidence.")
         image_digest(self.config, proof["rollback_image"], "api")
         if "worker" in rollback:
+            paused_worker_target = (
+                worker_image is None
+                and rollback["worker"].get("desiredCount") == 0
+                and proof.get("rollback_revision") is not None
+            )
             paused_reader_preparation = (
                 worker_image is None
                 and rollback["worker"].get("desiredCount") == 0
                 and proof.get("reader_only") is True
             )
-            if paused_reader_preparation:
+            if paused_worker_target:
+                if worker_compatibility is not None:
+                    raise DeploymentError(
+                        "Paused rollback target must not execute a worker image during preflight."
+                    )
+            elif paused_reader_preparation:
                 if before["worker"] != rollback["worker"] or worker_compatibility is not None:
                     raise DeploymentError(
                         "Paused reader preparation must retain the exact worker state "
@@ -257,6 +267,7 @@ class Deployment:
                     or worker_compatibility.get("previous_image") != prior_worker_image
                     or worker_compatibility.get("schema_image") != worker_schema
                     or worker_compatibility.get("profile") != expected_worker_profile
+                    or worker_compatibility.get("worker_checked") is not True
                     or worker_compatibility.get("previous_worker_checked")
                     is not (before["worker"].get("desiredCount", 0) > 0)
                     or proof.get("worker_image_explicit") is not expected_image_explicit
@@ -665,7 +676,7 @@ class Deployment:
                 raise DeploymentError("Rollback requires traced-analysis reader proof.")
             target_worker_image = (
                 self.task_image(previous["worker"]["taskDefinition"], "worker")
-                if "worker" in previous
+                if "worker" in previous and previous["worker"].get("desiredCount", 0) > 0
                 else None
             )
             self.compatible(
