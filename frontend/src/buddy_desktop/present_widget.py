@@ -186,9 +186,14 @@ class PresentWidget(Page):
         self._queued_powerpoint_operation: tuple[str, str | None] | None = None
         self._powerpoint_path: str | None = None
         self._powerpoint_info: PresentationInfo | None = None
+        self._powerpoint_verified = False
         self._powerpoint_poll = QTimer(self)
         self._powerpoint_poll.setInterval(500)
         self._powerpoint_poll.timeout.connect(self._poll_powerpoint)
+        self._powerpoint_verification = QTimer(self)
+        self._powerpoint_verification.setSingleShot(True)
+        self._powerpoint_verification.setInterval(5000)
+        self._powerpoint_verification.timeout.connect(self._powerpoint_verification_expired)
         self.surface = SelectionSurface()
         self.executor = SlideExecutor(self.surface)
         self.executor.completed.connect(self._completed)
@@ -314,6 +319,11 @@ class PresentWidget(Page):
         self.session_button.clicked.connect(self._session_button_clicked)
         session_row.addWidget(self.session_button)
         pdf_actions.addLayout(session_row)
+        self.body.addWidget(self.pdf_controls)
+        self.microphone_panel = QWidget()
+        microphone_layout = QVBoxLayout(self.microphone_panel)
+        microphone_layout.setContentsMargins(0, 0, 0, 0)
+        microphone_layout.setSpacing(8)
         microphone_row = QHBoxLayout()
         self.microphone_device = QComboBox()
         self.microphone_device.setAccessibleName("Microphone input device")
@@ -328,7 +338,7 @@ class PresentWidget(Page):
         self.microphone_button.setToolTip("Start or stop microphone capture")
         self.microphone_button.clicked.connect(self._microphone_toggle)
         microphone_row.addWidget(self.microphone_button)
-        pdf_actions.addLayout(microphone_row)
+        microphone_layout.addLayout(microphone_row)
         microphone_controls = QHBoxLayout()
         self.microphone_mute = QPushButton("Mute")
         self.microphone_mute.setAccessibleName("Mute microphone")
@@ -343,15 +353,15 @@ class PresentWidget(Page):
         self.microphone_pause.toggled.connect(self._microphone_pause_changed)
         microphone_controls.addWidget(self.microphone_pause)
         microphone_controls.addStretch()
-        pdf_actions.addLayout(microphone_controls)
+        microphone_layout.addLayout(microphone_controls)
         self.microphone_status = StatusLabel()
         self.microphone_status.setAccessibleName("Microphone status")
         self.microphone_status.setText("Microphone off")
         self.microphone_status.setWordWrap(True)
-        pdf_actions.addWidget(self.microphone_status)
+        microphone_layout.addWidget(self.microphone_status)
         self.microphone.status_changed.connect(self._microphone_status_changed)
         self.microphone.devices_changed.connect(self._microphone_devices_changed)
-        self.body.addWidget(self.pdf_controls)
+        self.body.addWidget(self.microphone_panel)
         self.powerpoint_open_button = QPushButton("Open PowerPoint…")
         command(self.powerpoint_open_button, "presentation")
         self.powerpoint_open_button.setAccessibleName("Open a PowerPoint presentation")
@@ -471,7 +481,7 @@ class PresentWidget(Page):
     def _microphone_toggle(self) -> None:
         if self.microphone.enabled:
             self.microphone.stop()
-        elif self._session is not None and self._session.status == "active":
+        elif self._microphone_session_available():
             identifier = self.microphone_device.currentData()
             if isinstance(identifier, bytes):
                 self.microphone.start(identifier)
@@ -942,6 +952,10 @@ class PresentWidget(Page):
     def _submit_powerpoint(self, action: str, path: str | None = None) -> None:
         if sys.platform != "win32" or self._closing:
             return
+        if action in {"launch", "connect"}:
+            self._powerpoint_verified = False
+            self._powerpoint_verification.stop()
+            self.microphone.stop()
         if self.powerpoint_runner.busy:
             if action != "status" and self._queued_powerpoint_operation is None:
                 self._queued_powerpoint_operation = (action, path)
@@ -1093,6 +1107,10 @@ class PresentWidget(Page):
             return
         action, _ = pending
         if action == "status":
+            # If the show cannot be verified, stop listening until an explicit restart.
+            self._powerpoint_verified = False
+            self._powerpoint_verification.stop()
+            self.microphone.stop()
             # A transient COM failure does not mean the show disconnected. Keep the
             # last known connected line in place so retries cannot make it blink.
             if self._powerpoint_info is None:
@@ -1108,7 +1126,11 @@ class PresentWidget(Page):
 
     def _attach_powerpoint_info(self, info: PresentationInfo) -> None:
         previous = self._powerpoint_info
+        if previous is None or (previous.path, previous.window_id) != (info.path, info.window_id):
+            self.microphone.stop()
         self._powerpoint_info = info
+        self._powerpoint_verified = True
+        self._powerpoint_verification.start()
         self._powerpoint_path = info.path
         self.powerpoint_controls.set_info(info)
         if (previous is None or previous.slide_key != info.slide_key) and min(
@@ -1130,11 +1152,24 @@ class PresentWidget(Page):
         if self._powerpoint_path is not None:
             self._submit_powerpoint("status", self._powerpoint_path)
 
+    @Slot()
+    def _powerpoint_verification_expired(self) -> None:
+        if self._powerpoint_info is not None:
+            self._powerpoint_verified = False
+            self.microphone.stop()
+            self.microphone_status.setText(
+                "Microphone stopped. PowerPoint connection could not be verified."
+            )
+            self._refresh()
+
     def _powerpoint_lost(self, reason: str | None = None) -> None:
+        self.microphone.stop()
+        self._powerpoint_verification.stop()
         self._powerpoint_poll.stop()
         self._queued_powerpoint_action = None
         self._queued_powerpoint_preview = None
         self._powerpoint_info = None
+        self._powerpoint_verified = False
         self._powerpoint_path = None
         self.powerpoint_controls.set_info(None)
         self.powerpoint_status.setText(
@@ -1144,6 +1179,8 @@ class PresentWidget(Page):
 
     @Slot()
     def _disconnect_powerpoint(self) -> None:
+        self.microphone.stop()
+        self._powerpoint_verification.stop()
         self._powerpoint_poll.stop()
         # Invalidate in-flight work: neither late success nor failure may restore
         # a connection or restart polling after the user explicitly disconnects.
@@ -1152,6 +1189,7 @@ class PresentWidget(Page):
         self._queued_powerpoint_preview = None
         self._queued_powerpoint_operation = None
         self._powerpoint_info = None
+        self._powerpoint_verified = False
         self._powerpoint_path = None
         self.powerpoint_controls.set_info(None)
         self.powerpoint_status.setText(
@@ -1423,13 +1461,7 @@ class PresentWidget(Page):
         self.highlight_button.setEnabled(selected)
         self.surface.selectable = ready
         session_controls = loaded and account_bound
-        mic_available = (
-            session_controls
-            and self._session is not None
-            and self._session.status == "active"
-            and self._session_access is not None
-            and not self._closing
-        )
+        mic_available = self._microphone_session_available()
         self.microphone_device.setEnabled(bool(mic_available) and not self.microphone.enabled)
         self.microphone_button.setEnabled(
             bool(mic_available) and self.microphone_device.count() > 0
@@ -1459,6 +1491,18 @@ class PresentWidget(Page):
             and self._session is not None
         )
 
+    def _microphone_session_available(self) -> bool:
+        pdf_active = (
+            self.executor.manifest is not None
+            and self.executor.manifest.account_bound
+            and self._session is not None
+            and self._session.status == "active"
+            and self._session_access is not None
+        )
+        if self._powerpoint_info is not None:
+            return not self._closing and self._powerpoint_verified
+        return not self._closing and pdf_active
+
     def hideEvent(self, event: QHideEvent) -> None:
         # A hidden presentation must not keep a microphone running out of view.
         if hasattr(self, "microphone") and not getattr(self, "_closing", False):
@@ -1467,6 +1511,7 @@ class PresentWidget(Page):
 
     def shutdown(self) -> None:
         self._closing = True
+        self._powerpoint_verification.stop()
         self.microphone.shutdown()
         self._queued_powerpoint_action = None
         self._queued_powerpoint_preview = None

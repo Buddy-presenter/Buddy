@@ -12,6 +12,7 @@ from PySide6.QtCore import QByteArray, QObject, Qt, Signal
 
 from buddy_desktop import present_widget
 from buddy_desktop.microphone import MicrophoneController
+from buddy_desktop.powerpoint import PresentationInfo
 
 
 class Device:
@@ -71,6 +72,7 @@ def test_microphone_stops_when_identity_or_deck_changes(desktop_window, monkeypa
     monkeypatch.setattr(present_widget, "MicrophoneController", FakeMicrophone)
     window = desktop_window()
     page = window.present
+    monkeypatch.setattr(page, "_microphone_session_available", lambda: True)
     page._session = SimpleNamespace(status="active")
     page._microphone_toggle()
     assert page.microphone.enabled
@@ -155,6 +157,7 @@ def test_ending_a_session_stops_microphone_before_the_server_request(desktop_win
     monkeypatch.setattr(present_widget, "MicrophoneController", FakeMicrophone)
     window = desktop_window()
     page = window.present
+    monkeypatch.setattr(page, "_microphone_session_available", lambda: True)
     page._session = SimpleNamespace(status="active")
     page._session_access = "test-access"
     page._microphone_toggle()
@@ -171,11 +174,67 @@ def test_hiding_presenter_stops_microphone(desktop_window, monkeypatch):
     window = desktop_window()
     window.navigation.setCurrentRow(3)
     page = window.present
+    monkeypatch.setattr(page, "_microphone_session_available", lambda: True)
     page._session = SimpleNamespace(status="active")
     page._microphone_toggle()
     assert page.microphone.enabled
     window.navigation.setCurrentRow(0)
     assert not page.microphone.enabled
+
+
+@pytest.mark.parametrize("end", ["disconnect", "lost", "changed", "status_failure", "timeout"])
+def test_powerpoint_microphone_stops_when_connection_is_lost(desktop_window, monkeypatch, end):
+    monkeypatch.setattr(present_widget, "MicrophoneController", FakeMicrophone)
+    window = desktop_window()
+    window.navigation.setCurrentRow(3)
+    page = window.present
+    info = PresentationInfo("C:/slides/demo.pptx", "demo.pptx", 1, 2, 42, 256, 960, 540)
+    page._attach_powerpoint_info(info)
+    page._refresh()
+    assert page.microphone_panel.isVisible()
+    assert page.microphone_button.isEnabled()
+    page.microphone_button.click()
+    assert page.microphone.enabled
+    if end == "disconnect":
+        page._disconnect_powerpoint()
+    elif end == "lost":
+        page._powerpoint_lost()
+        page._refresh()
+    elif end == "changed":
+        page._attach_powerpoint_info(
+            PresentationInfo("C:/slides/other.pptx", "other.pptx", 1, 2, 43, 257, 960, 540)
+        )
+        page._refresh()
+    elif end == "status_failure":
+        page._powerpoint_pending[123] = ("status", info.path)
+        page._powerpoint_failed(123, "PowerPoint unavailable")
+    else:
+        page._powerpoint_verification_expired()
+    assert not page.microphone.enabled
+    if end in {"disconnect", "lost", "status_failure", "timeout"}:
+        assert not page.microphone_button.isEnabled()
+    if end in {"status_failure", "timeout"}:
+        page._attach_powerpoint_info(info)
+        page._refresh()
+        assert page.microphone_button.isEnabled()
+        assert not page.microphone.enabled
+
+
+def test_powerpoint_slide_change_keeps_microphone_running(desktop_window, monkeypatch):
+    monkeypatch.setattr(present_widget, "MicrophoneController", FakeMicrophone)
+    window = desktop_window()
+    window.navigation.setCurrentRow(3)
+    page = window.present
+    page._attach_powerpoint_info(
+        PresentationInfo("C:/slides/demo.pptx", "demo.pptx", 1, 2, 42, 256, 960, 540)
+    )
+    page._refresh()
+    page.microphone_button.click()
+    page._attach_powerpoint_info(
+        PresentationInfo("C:/slides/demo.pptx", "demo.pptx", 2, 2, 42, 257, 960, 540)
+    )
+    assert page.microphone.enabled
+    page._disconnect_powerpoint()
 
 
 def test_removing_selected_device_stops_capture(qapp, monkeypatch):
