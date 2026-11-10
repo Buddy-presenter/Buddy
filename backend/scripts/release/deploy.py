@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -18,6 +19,10 @@ from uuid import uuid4
 
 class DeploymentError(Exception):
     pass
+
+
+STAGING_STABILITY_POLL_SECONDS = 5
+STAGING_STABILITY_MAX_POLLS = 24
 
 
 def failure_details(error: Exception, stage: str) -> dict[str, Any]:
@@ -322,6 +327,78 @@ class Deployment:
             ):
                 raise DeploymentError("Staging must finish its previous rollout before migration.")
 
+    def wait_for_staging_stability(self, expected: dict[str, dict[str, Any]]) -> None:
+        """Wait for ECS's exact target deployment to finish after its broad waiter fires.
+
+        The ECS ``services_stable`` waiter only checks running and pending task counts.
+        It may return while an old deployment is still draining. A single strict read
+        immediately afterward can therefore mistake a normal transition for a failed
+        rollout and trigger an unnecessary rollback. Poll the full deployment state
+        for a bounded period, but stop promptly if ECS has completed a different
+        revision or marked the target rollout failed.
+        """
+        terminal_observations = 0
+        last_reason = "the service deployment is still settling"
+        for attempt in range(STAGING_STABILITY_MAX_POLLS):
+            response = self.ecs.describe_services(
+                cluster=self.config["cluster"], services=list(expected)
+            )
+            services = response.get("services", [])
+            if response.get("failures") or len(services) != len(expected):
+                terminal_observations = 0
+                last_reason = "the expected service state is temporarily unavailable"
+            else:
+                stable = True
+                terminal = False
+                for service in services:
+                    target = expected[service["serviceName"]]
+                    deployments = service.get("deployments", [])
+                    primary = next(
+                        (
+                            deployment
+                            for deployment in deployments
+                            if deployment.get("status") == "PRIMARY"
+                        ),
+                        None,
+                    )
+                    if (
+                        service.get("taskDefinition") != target["taskDefinition"]
+                        or service.get("desiredCount") != target["desiredCount"]
+                        or service.get("runningCount") != target["desiredCount"]
+                        or service.get("pendingCount") != 0
+                        or len(deployments) != 1
+                        or primary is None
+                        or primary.get("rolloutState") != "COMPLETED"
+                        or primary.get("taskDefinition") != target["taskDefinition"]
+                    ):
+                        stable = False
+                        last_reason = "the service deployment is still settling"
+                        if primary and primary.get("rolloutState") == "FAILED":
+                            terminal = True
+                            last_reason = "ECS marked the target deployment as failed"
+                        elif (
+                            service.get("taskDefinition") != target["taskDefinition"]
+                            and len(deployments) == 1
+                            and primary
+                            and primary.get("rolloutState") == "COMPLETED"
+                        ):
+                            terminal = True
+                            last_reason = "ECS completed a different task definition"
+                if stable:
+                    return
+                terminal_observations = terminal_observations + 1 if terminal else 0
+                if terminal_observations >= 2:
+                    raise DeploymentError(
+                        "Staging did not retain the requested ECS revision: " + last_reason + "."
+                    )
+            if attempt + 1 < STAGING_STABILITY_MAX_POLLS:
+                time.sleep(STAGING_STABILITY_POLL_SECONDS)
+        raise DeploymentError(
+            "Staging ECS services did not converge to the requested stable revision: "
+            + last_reason
+            + "."
+        )
+
     def states(self, services: list[str]) -> dict[str, dict[str, Any]]:
         response = self.ecs.describe_services(cluster=self.config["cluster"], services=services)
         if response.get("failures") or len(response.get("services", [])) != len(services):
@@ -448,7 +525,8 @@ class Deployment:
             services=list(expected),
             WaiterConfig={"Delay": 15, "MaxAttempts": 80},
         )
-        self.require_stable_source(expected)
+        if self.config["environment"] == "staging":
+            self.wait_for_staging_stability(expected)
         actual = self.states(list(expected))
         if actual != expected:
             raise DeploymentError("Service rolled back or drifted from the expected revision.")

@@ -367,6 +367,54 @@ def test_missing_durable_intent_prevents_migration_or_registration(monkeypatch):
     assert ecs.runs == [] and ecs.registered == [] and ecs.updates == []
 
 
+def test_settle_waits_for_ecs_deployment_details_after_broad_stable_waiter(monkeypatch):
+    ecs, s3 = Ecs(), S3()
+    target = {"api": {"taskDefinition": PREFIX + "api:2", "desiredCount": 1}}
+    ecs.state["api"] = copy.deepcopy(target["api"])
+    original_describe = ecs.describe_services
+    observations = 0
+
+    def describe_with_old_deployment_draining(**kwargs):
+        nonlocal observations
+        result = original_describe(**kwargs)
+        if observations == 0:
+            result["services"][0]["deployments"] = [
+                {
+                    "status": "PRIMARY",
+                    "rolloutState": "COMPLETED",
+                    "taskDefinition": target["api"]["taskDefinition"],
+                },
+                {
+                    "status": "ACTIVE",
+                    "rolloutState": "COMPLETED",
+                    "taskDefinition": PREFIX + "api:1",
+                },
+            ]
+        observations += 1
+        return result
+
+    monkeypatch.setattr(ecs, "describe_services", describe_with_old_deployment_draining)
+    monkeypatch.setattr("backend.scripts.release.deploy.time.sleep", lambda _seconds: None)
+    driver = Deployment(CONFIG, ecs, s3, Sts(), lambda _url: None)
+
+    driver.settle(target)
+
+    assert observations == 3  # Two deployment snapshots, then the final task-definition check.
+    assert ecs.waits == ["services_stable"]
+
+
+def test_settle_fails_when_ecs_completes_a_different_task_definition(monkeypatch):
+    ecs, s3 = Ecs(), S3()
+    target = {"api": {"taskDefinition": PREFIX + "api:2", "desiredCount": 1}}
+    monkeypatch.setattr("backend.scripts.release.deploy.time.sleep", lambda _seconds: None)
+    driver = Deployment(CONFIG, ecs, s3, Sts(), lambda _url: None)
+
+    with pytest.raises(DeploymentError, match="ECS completed a different task definition"):
+        driver.settle(target)
+
+    assert ecs.waits == ["services_stable"]
+
+
 def test_readiness_failure_restores_previous_task_and_records_outcome():
     ecs, s3, probes = Ecs(), S3(), []
 
