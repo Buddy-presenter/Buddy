@@ -324,7 +324,7 @@ class SlideAction(OwnedRecord):
             "(source_format = 'pptx' AND action_type IN ('highlight_region','draw_rectangle',"
             "'draw_oval','draw_underline','draw_arrow','callout','draw_line','filled_rectangle',"
             "'filled_oval','text_box','draw_rounded_rectangle','draw_diamond','draw_triangle',"
-            "'draw_hexagon','draw_star'))",
+            "'draw_hexagon','draw_star','zoom_region'))",
             name="content_type",
         ),
         CheckConstraint("position >= 0 AND position < 100", name="position"),

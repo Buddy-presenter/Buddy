@@ -37,6 +37,7 @@ def run_validation(
     cancelled: Event | None = None,
 ) -> ValidationBundle:
     powerpoint = isinstance(request, PowerPointProcessRequest)
+    memory_mb = settings.powerpoint_memory_mb if powerpoint else settings.memory_mb
 
     def failed(reason: str) -> ValidationBundle:
         if isinstance(request, PowerPointProcessRequest):
@@ -133,7 +134,7 @@ def run_validation(
             return failed("runtime_unavailable")
         reason = None
         try:
-            with windows_memory_limit(process.pid, settings.memory_mb * 1024 * 1024):
+            with windows_memory_limit(process.pid, memory_mb * 1024 * 1024):
                 monitor = psutil.Process(process.pid)
                 assert process.stdin is not None
                 process.stdin.write(b"1")
@@ -171,7 +172,7 @@ def run_validation(
                                     rss += office.memory_info().rss
                     except psutil.NoSuchProcess:
                         rss = 0  # A child finished while collecting the process-tree sample.
-                    if rss > settings.memory_mb * 1024 * 1024:
+                    if rss > memory_mb * 1024 * 1024:
                         reason = "memory_limit"
                         break
                     count = scratch_bytes = 0

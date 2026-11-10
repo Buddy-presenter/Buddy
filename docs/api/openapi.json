@@ -1098,6 +1098,39 @@
         "title": "PowerPointActionResult",
         "type": "object"
       },
+      "PowerPointActionResultV2": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/PowerPointContentActionV2"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ValidationState"
+          },
+          "usable": {
+            "title": "Usable",
+            "type": "boolean"
+          },
+          "validation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ValidationInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "action",
+          "state",
+          "usable",
+          "validation"
+        ],
+        "title": "PowerPointActionResultV2",
+        "type": "object"
+      },
       "PowerPointAnalysisInput": {
         "additionalProperties": false,
         "properties": {
@@ -1208,6 +1241,116 @@
         "title": "PowerPointAnalysisInput",
         "type": "object"
       },
+      "PowerPointAnalysisInputV2": {
+        "additionalProperties": false,
+        "properties": {
+          "catalog_version": {
+            "const": "powerpoint-2",
+            "default": "powerpoint-2",
+            "title": "Catalog Version",
+            "type": "string"
+          },
+          "display_profile": {
+            "const": "windows-powerpoint-2",
+            "default": "windows-powerpoint-2",
+            "title": "Display Profile",
+            "type": "string"
+          },
+          "extraction_id": {
+            "format": "uuid",
+            "title": "Extraction Id",
+            "type": "string"
+          },
+          "extraction_schema_version": {
+            "const": "buddy.extraction.v1",
+            "default": "buddy.extraction.v1",
+            "title": "Extraction Schema Version",
+            "type": "string"
+          },
+          "extractor_version": {
+            "const": "1",
+            "default": "1",
+            "title": "Extractor Version",
+            "type": "string"
+          },
+          "job_id": {
+            "format": "uuid",
+            "title": "Job Id",
+            "type": "string"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/PowerPointManifest"
+          },
+          "office_safe": {
+            "default": false,
+            "title": "Office Safe",
+            "type": "boolean"
+          },
+          "presentation_summary": {
+            "$ref": "#/components/schemas/Summary"
+          },
+          "renderer_version": {
+            "const": "desktop-powerpoint-2",
+            "default": "desktop-powerpoint-2",
+            "title": "Renderer Version",
+            "type": "string"
+          },
+          "representation": {
+            "const": "bounded_ooxml_extraction",
+            "default": "bounded_ooxml_extraction",
+            "title": "Representation",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "buddy.powerpoint.analysis.v2",
+            "default": "buddy.powerpoint.analysis.v2",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "slides": {
+            "items": {
+              "$ref": "#/components/schemas/PowerPointSlideOutputV2"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Slides",
+            "type": "array"
+          },
+          "source_format": {
+            "const": "pptx",
+            "default": "pptx",
+            "title": "Source Format",
+            "type": "string"
+          },
+          "source_revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "title": "Source Revision",
+            "type": "string"
+          },
+          "source_sha256": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "validator_version": {
+            "const": "powerpoint-executor-2",
+            "default": "powerpoint-executor-2",
+            "title": "Validator Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "extraction_id",
+          "source_revision",
+          "source_sha256",
+          "job_id",
+          "manifest",
+          "presentation_summary",
+          "slides"
+        ],
+        "title": "PowerPointAnalysisInputV2",
+        "type": "object"
+      },
       "PowerPointAnalysisResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1224,6 +1367,24 @@
           "request_id"
         ],
         "title": "PowerPointAnalysisResponse",
+        "type": "object"
+      },
+      "PowerPointAnalysisResponseV2": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/PowerPointAnalysisResultV2"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "request_id"
+        ],
+        "title": "PowerPointAnalysisResponseV2",
         "type": "object"
       },
       "PowerPointAnalysisResult": {
@@ -1297,6 +1458,77 @@
         "title": "PowerPointAnalysisResult",
         "type": "object"
       },
+      "PowerPointAnalysisResultV2": {
+        "additionalProperties": false,
+        "properties": {
+          "action_limit_reached": {
+            "default": false,
+            "title": "Action Limit Reached",
+            "type": "boolean"
+          },
+          "analysis_sha256": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Digest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "deck_id": {
+            "format": "uuid",
+            "title": "Deck Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "inputs": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PowerPointAnalysisInputV2"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "publication": {
+            "$ref": "#/components/schemas/Publication"
+          },
+          "slides": {
+            "items": {
+              "$ref": "#/components/schemas/PowerPointSlideResultV2"
+            },
+            "title": "Slides",
+            "type": "array"
+          },
+          "source_format": {
+            "const": "pptx",
+            "default": "pptx",
+            "title": "Source Format",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "deck_id",
+          "version",
+          "publication",
+          "analysis_sha256",
+          "inputs",
+          "slides"
+        ],
+        "title": "PowerPointAnalysisResultV2",
+        "type": "object"
+      },
       "PowerPointContentAction": {
         "additionalProperties": false,
         "properties": {
@@ -1366,6 +1598,78 @@
           "params"
         ],
         "title": "PowerPointContentAction",
+        "type": "object"
+      },
+      "PowerPointContentActionV2": {
+        "additionalProperties": false,
+        "properties": {
+          "deck_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "instance_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "params": {
+            "$ref": "#/components/schemas/PowerPointParameters"
+          },
+          "purpose": {
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Purpose",
+            "type": "string"
+          },
+          "render_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "slide_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "source_format": {
+            "const": "pptx",
+            "default": "pptx",
+            "title": "Source Format",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "highlight_region",
+              "draw_rectangle",
+              "draw_oval",
+              "draw_underline",
+              "draw_arrow",
+              "callout",
+              "draw_line",
+              "filled_rectangle",
+              "filled_oval",
+              "text_box",
+              "draw_rounded_rectangle",
+              "draw_diamond",
+              "draw_triangle",
+              "draw_hexagon",
+              "draw_star",
+              "zoom_region"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "version": {
+            "const": "powerpoint-2",
+            "default": "powerpoint-2",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "instance_id",
+          "purpose",
+          "deck_id",
+          "render_id",
+          "slide_id",
+          "type",
+          "params"
+        ],
+        "title": "PowerPointContentActionV2",
         "type": "object"
       },
       "PowerPointManifest": {
@@ -1528,6 +1832,32 @@
         "title": "PowerPointSlideOutput",
         "type": "object"
       },
+      "PowerPointSlideOutputV2": {
+        "additionalProperties": false,
+        "properties": {
+          "actions": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PowerPointContentActionV2"
+            },
+            "maxItems": 40,
+            "title": "Actions",
+            "type": "array"
+          },
+          "slide_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          }
+        },
+        "required": [
+          "slide_id",
+          "summary"
+        ],
+        "title": "PowerPointSlideOutputV2",
+        "type": "object"
+      },
       "PowerPointSlideResult": {
         "additionalProperties": false,
         "properties": {
@@ -1551,6 +1881,31 @@
           "actions"
         ],
         "title": "PowerPointSlideResult",
+        "type": "object"
+      },
+      "PowerPointSlideResultV2": {
+        "additionalProperties": false,
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/PowerPointActionResultV2"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "slide_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          }
+        },
+        "required": [
+          "slide_id",
+          "summary",
+          "actions"
+        ],
+        "title": "PowerPointSlideResultV2",
         "type": "object"
       },
       "ProcessResult": {
@@ -6077,6 +6432,105 @@
         "summary": "Version",
         "tags": [
           "operations"
+        ]
+      }
+    },
+    "/api/v2/analyses/powerpoint/by-deck/{deck_id}": {
+      "get": {
+        "operationId": "powerpoint_for_deck_v2_api_v2_analyses_powerpoint_by_deck__deck_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deck_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Deck Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PowerPointAnalysisResponseV2"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Powerpoint For Deck V2",
+        "tags": [
+          "analysis"
         ]
       }
     },

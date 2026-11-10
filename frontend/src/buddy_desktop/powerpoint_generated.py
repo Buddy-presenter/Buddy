@@ -37,6 +37,10 @@ def generated_action(
     ):
         raise PowerPointError("The connected PowerPoint slide does not match the saved analysis.")
     params = raw["params"]
+    if raw["type"] == "zoom_region" and (
+        params.get("source_shape_id") is None or params.get("target_text")
+    ):
+        raise PowerPointError("Zoom requires the complete saved source object.")
     r = Region(**params["region"])
     action = PowerPointAction(
         raw["type"],

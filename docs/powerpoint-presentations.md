@@ -4,8 +4,8 @@ Buddy's **Present** page can open a local `.pptx` in desktop Microsoft PowerPoin
 Windows and start its slideshow, or connect to a slideshow the user already started.
 PowerPoint owns rendering and playback; Buddy does not convert the source or draw slides
 in its PDF surface. The connection from #108 and controls from #116 identify the current
-deck/slide, navigate, and add or remove Buddy annotations. Region zoom remains an
-investigation in #111.
+deck/slide, navigate, and add or remove Buddy annotations. Manual native region zoom
+is available in the Present controls (#111); generated/uploaded zoom actions remain out of scope.
 
 Saved PPTX analysis, review and explicit execution of validated suggestions are described
 in [PowerPoint analysis](powerpoint-analysis.md). Those suggestions use a separate
@@ -106,7 +106,7 @@ Buddy provides selected-area erase and erase-all instead.
 
 Coordinates use the real `PageSetup` slide dimensions in points. The preview uses an
 aspect-preserving viewport mapping and Qt logical pixels. No mouse injection, screen
-position guessing, or Windows magnifier is used. This avoids dependence on slideshow
+position guessing, or Windows magnifier is used for annotations. This avoids dependence on slideshow
 placement, display scaling, or monitor pixel origin. Selections and preview images are
 invalidated when the connected window, slide ID, or dimensions change; **Refresh preview**
 reloads authored slide content, and PowerPoint remains the authoritative display.
@@ -125,6 +125,19 @@ rejected, including different decks with duplicate filenames. Fullscreen mode us
 native slideshow class; the windowed fallback currently recognizes the English
 `PowerPoint Slide Show` frame title. Use fullscreen mode for localized Office installations
 whose windowed title is different. Native fallback modules are included in Windows bundles.
+
+## Direct region zoom (#111)
+
+Select an area in the full-slide reference and choose **Zoom to selected area**.
+Buddy uses Windows fullscreen magnification to set the scale and position in one call,
+with a margin around the selected region. The effect magnifies the entire primary display,
+including the live PowerPoint slideshow. Buddy restores the display on focus loss,
+reset, disconnect, or shutdown. Existing slide content and annotations remain intact.
+
+The feature currently requires a single display and a fullscreen slideshow on the primary
+screen. Window-only screen sharing and projector or multiple-monitor setups have not been
+verified and may not show the magnified output. Windows only; PDF playback is unchanged.
+Uploaded PowerPoint suggestions require fresh validation for this implementation.
 
 ## Recorded Windows acceptance and repeatable smoke
 
