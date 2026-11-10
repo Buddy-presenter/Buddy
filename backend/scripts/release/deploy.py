@@ -327,7 +327,9 @@ class Deployment:
             ):
                 raise DeploymentError("Staging must finish its previous rollout before migration.")
 
-    def wait_for_staging_stability(self, expected: dict[str, dict[str, Any]]) -> None:
+    def wait_for_staging_stability(
+        self, expected: dict[str, dict[str, Any]]
+    ) -> dict[str, dict[str, Any]]:
         """Wait for ECS's exact target deployment to finish after its broad waiter fires.
 
         The ECS ``services_stable`` waiter only checks running and pending task counts.
@@ -376,11 +378,21 @@ class Deployment:
                     ):
                         stable = False
                         last_reason = "the service deployment is still settling"
-                        if primary and primary.get("rolloutState") == "FAILED":
+                        if (
+                            primary
+                            and primary.get("rolloutState") == "FAILED"
+                            and primary.get("taskDefinition") == target["taskDefinition"]
+                        ):
                             terminal = True
                             last_reason = "ECS marked the target deployment as failed"
                 if stable:
-                    return
+                    return {
+                        service["serviceName"]: {
+                            "taskDefinition": service["taskDefinition"],
+                            "desiredCount": service["desiredCount"],
+                        }
+                        for service in services
+                    }
                 terminal_observations = terminal_observations + 1 if terminal else 0
                 if terminal_observations >= 2:
                     raise DeploymentError(
@@ -521,8 +533,9 @@ class Deployment:
             WaiterConfig={"Delay": 15, "MaxAttempts": 80},
         )
         if self.config["environment"] == "staging":
-            self.wait_for_staging_stability(expected)
-        actual = self.states(list(expected))
+            actual = self.wait_for_staging_stability(expected)
+        else:
+            actual = self.states(list(expected))
         if actual != expected:
             raise DeploymentError("Service rolled back or drifted from the expected revision.")
         if expected["api"]["desiredCount"]:
