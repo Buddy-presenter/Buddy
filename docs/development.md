@@ -105,3 +105,6 @@ Durable PDF metadata scheduling, SQS workers, owner job controls and opt-in stag
 verification are documented in [PDF workers](pdf-workers.md).
 
 Desktop navigation and account placement are described in the [usability revision](ui-usability.md).
+
+Microphone setup, session gating, privacy, and real-device checks are documented in
+[microphone capture](microphone.md). Qt Multimedia is installed with the desktop dependencies.

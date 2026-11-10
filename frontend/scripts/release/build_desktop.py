@@ -124,8 +124,14 @@ def register_macos_callback(bundle: Path, signing_identity: str | None = None) -
             "CFBundleTypeRole": "Viewer",
         }
     ]
+    data["NSMicrophoneUsageDescription"] = (
+        "Buddy uses the microphone only when you enable it during a presentation."
+    )
     info.write_bytes(plistlib.dumps(data))
+    entitlements = bundle.parent / "buddy-entitlements.plist"
+    entitlements.write_bytes(plistlib.dumps({"com.apple.security.device.audio-input": True}))
     command = ["codesign", "--force", "--sign", signing_identity or "-"]
+    command += ["--entitlements", str(entitlements)]
     if signing_identity:
         command += ["--options", "runtime", "--timestamp"]
     subprocess.run([*command, str(bundle)], check=True)

@@ -11,6 +11,7 @@ from PySide6.QtGui import (
     QAction,
     QColor,
     QGuiApplication,
+    QHideEvent,
     QMouseEvent,
     QPainter,
     QPaintEvent,
@@ -34,6 +35,7 @@ from PySide6.QtWidgets import (
 from buddy_desktop.config import AppConfig
 from buddy_desktop.fullscreen import FullscreenPresentation
 from buddy_desktop.library_service import LibraryAccessExpired
+from buddy_desktop.microphone import MicrophoneController
 from buddy_desktop.powerpoint import PowerPointAutomation, PresentationInfo
 from buddy_desktop.powerpoint_contract import (
     PowerPointAction,
@@ -172,6 +174,7 @@ class PresentWidget(Page):
         self.session_runner.succeeded.connect(self._session_succeeded)
         self.session_runner.failed.connect(self._session_failed)
         self.session_runner.idle.connect(self._session_idle)
+        self.microphone = MicrophoneController(self)
         self.powerpoint = PowerPointAutomation()
         self.powerpoint_runner = TaskRunner(self)
         self.powerpoint_runner.succeeded.connect(self._powerpoint_succeeded)
@@ -311,6 +314,43 @@ class PresentWidget(Page):
         self.session_button.clicked.connect(self._session_button_clicked)
         session_row.addWidget(self.session_button)
         pdf_actions.addLayout(session_row)
+        microphone_row = QHBoxLayout()
+        self.microphone_device = QComboBox()
+        self.microphone_device.setAccessibleName("Microphone input device")
+        self.microphone_device.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.microphone_device.setMinimumContentsLength(8)
+        self.microphone_device.currentIndexChanged.connect(self._microphone_device_changed)
+        microphone_row.addWidget(self.microphone_device, 1)
+        self.microphone_button = QPushButton("Start microphone")
+        self.microphone_button.setAccessibleName("Start microphone")
+        self.microphone_button.setToolTip("Start or stop microphone capture")
+        self.microphone_button.clicked.connect(self._microphone_toggle)
+        microphone_row.addWidget(self.microphone_button)
+        pdf_actions.addLayout(microphone_row)
+        microphone_controls = QHBoxLayout()
+        self.microphone_mute = QPushButton("Mute")
+        self.microphone_mute.setAccessibleName("Mute microphone")
+        self.microphone_mute.setToolTip("Mute or unmute microphone capture")
+        self.microphone_mute.setCheckable(True)
+        self.microphone_mute.toggled.connect(self._microphone_mute_changed)
+        microphone_controls.addWidget(self.microphone_mute)
+        self.microphone_pause = QPushButton("Pause")
+        self.microphone_pause.setAccessibleName("Pause microphone")
+        self.microphone_pause.setToolTip("Pause or resume microphone capture")
+        self.microphone_pause.setCheckable(True)
+        self.microphone_pause.toggled.connect(self._microphone_pause_changed)
+        microphone_controls.addWidget(self.microphone_pause)
+        microphone_controls.addStretch()
+        pdf_actions.addLayout(microphone_controls)
+        self.microphone_status = StatusLabel()
+        self.microphone_status.setAccessibleName("Microphone status")
+        self.microphone_status.setText("Microphone off")
+        self.microphone_status.setWordWrap(True)
+        pdf_actions.addWidget(self.microphone_status)
+        self.microphone.status_changed.connect(self._microphone_status_changed)
+        self.microphone.devices_changed.connect(self._microphone_devices_changed)
         self.body.addWidget(self.pdf_controls)
         self.powerpoint_open_button = QPushButton("Open PowerPoint…")
         command(self.powerpoint_open_button, "presentation")
@@ -374,13 +414,17 @@ class PresentWidget(Page):
             application.screenAdded.connect(self._refresh_displays)
             application.screenRemoved.connect(self._screen_removed)
         self._refresh_displays()
+        self._microphone_devices_changed()
         self._refresh()
 
     def configure(self, config: AppConfig) -> None:
+        self.microphone.stop()
         self.config = config
         self.session_service = PresentationSessionService(config)
 
     def set_account_identity(self, account_id: str | None, access: str | None) -> None:
+        if account_id != self._account_id or not access:
+            self.microphone.stop()
         if account_id != self._account_id:
             self._session_generation += 1
             self._session = None
@@ -403,6 +447,56 @@ class PresentWidget(Page):
                 and self.executor.manifest.account_bound
                 else ""
             )
+        self._refresh()
+
+    @Slot()
+    def _microphone_devices_changed(self) -> None:
+        current = self.microphone_device.currentData()
+        self.microphone_device.blockSignals(True)
+        self.microphone_device.clear()
+        for device in self.microphone.inputs():
+            self.microphone_device.addItem(device.description(), bytes(device.id().data()))
+        index = self.microphone_device.findData(current)
+        if index >= 0:
+            self.microphone_device.setCurrentIndex(index)
+        self.microphone_device.blockSignals(False)
+        self._refresh()
+
+    @Slot(int)
+    def _microphone_device_changed(self, _index: int) -> None:
+        if self.microphone.enabled:
+            self.microphone.stop()
+
+    @Slot()
+    def _microphone_toggle(self) -> None:
+        if self.microphone.enabled:
+            self.microphone.stop()
+        elif self._session is not None and self._session.status == "active":
+            identifier = self.microphone_device.currentData()
+            if isinstance(identifier, bytes):
+                self.microphone.start(identifier)
+        self._refresh()
+
+    @Slot(bool)
+    def _microphone_mute_changed(self, muted: bool) -> None:
+        self.microphone_mute.setText("Unmute" if muted else "Mute")
+        self.microphone_mute.setAccessibleName("Unmute microphone" if muted else "Mute microphone")
+        self.microphone.set_muted(muted)
+
+    @Slot(bool)
+    def _microphone_pause_changed(self, paused: bool) -> None:
+        self.microphone_pause.setText("Resume" if paused else "Pause")
+        self.microphone_pause.setAccessibleName(
+            "Resume microphone" if paused else "Pause microphone"
+        )
+        self.microphone.set_paused(paused)
+
+    @Slot(str)
+    def _microphone_status_changed(self, message: str) -> None:
+        self.microphone_status.setText(message)
+        if not self.microphone.enabled:
+            self.microphone_mute.setChecked(False)
+            self.microphone_pause.setChecked(False)
         self._refresh()
 
     def _current_screen_key(self, screen: QScreen) -> str:
@@ -664,6 +758,7 @@ class PresentWidget(Page):
     def _end_session(self) -> None:
         if self.session_runner.busy or self._session is None or not self._session_access:
             return
+        self.microphone.stop()
         if self._session_pending_state is not None:
             self.session_status.setText(
                 "The latest position is not saved yet. Retry sync before ending this session."
@@ -695,6 +790,7 @@ class PresentWidget(Page):
             self._session_followup = "read_conflict"
             return
         if outcome == "expired":
+            self.microphone.stop()
             self.session_access_expired.emit(message or "Sign in again to sync this presentation.")
             self._session_access = None
             self._session = None
@@ -731,6 +827,7 @@ class PresentWidget(Page):
         elif kind == "read":
             self._session_pending_state = None
             if session.status == "ended":
+                self.microphone.stop()
                 self._session = None
                 self._session_attempt = None
                 self._session_ended = True
@@ -1076,6 +1173,7 @@ class PresentWidget(Page):
     def load_pdf(
         self, source: Path | bytes, *, deck_id: str | None = None, revision: str | None = None
     ) -> None:
+        self.microphone.stop()
         self._session_generation += 1
         self._session = None
         self._session_deck_id = deck_id
@@ -1093,6 +1191,7 @@ class PresentWidget(Page):
         self._refresh()
 
     def load_manifest(self, path: Path) -> None:
+        self.microphone.stop()
         self._session_generation += 1
         self._session = None
         self._session_deck_id = None
@@ -1324,6 +1423,23 @@ class PresentWidget(Page):
         self.highlight_button.setEnabled(selected)
         self.surface.selectable = ready
         session_controls = loaded and account_bound
+        mic_available = (
+            session_controls
+            and self._session is not None
+            and self._session.status == "active"
+            and self._session_access is not None
+            and not self._closing
+        )
+        self.microphone_device.setEnabled(bool(mic_available) and not self.microphone.enabled)
+        self.microphone_button.setEnabled(
+            bool(mic_available) and self.microphone_device.count() > 0
+        )
+        self.microphone_button.setText(
+            "Stop microphone" if self.microphone.enabled else "Start microphone"
+        )
+        self.microphone_button.setAccessibleName(self.microphone_button.text())
+        self.microphone_mute.setEnabled(bool(mic_available) and self.microphone.enabled)
+        self.microphone_pause.setEnabled(bool(mic_available) and self.microphone.enabled)
         self.session_status.setVisible(session_controls)
         self.session_button.setVisible(session_controls and self._session_access is not None)
         self.session_button.setEnabled(
@@ -1343,8 +1459,15 @@ class PresentWidget(Page):
             and self._session is not None
         )
 
+    def hideEvent(self, event: QHideEvent) -> None:
+        # A hidden presentation must not keep a microphone running out of view.
+        if hasattr(self, "microphone") and not getattr(self, "_closing", False):
+            self.microphone.stop()
+        super().hideEvent(event)
+
     def shutdown(self) -> None:
         self._closing = True
+        self.microphone.shutdown()
         self._queued_powerpoint_action = None
         self._queued_powerpoint_preview = None
         self._queued_powerpoint_operation = None
@@ -1357,6 +1480,7 @@ class PresentWidget(Page):
         self._refresh()
 
     def clear_session_binding(self) -> None:
+        self.microphone.stop()
         self._session_generation += 1
         self._account_id = None
         self._session_access = None
