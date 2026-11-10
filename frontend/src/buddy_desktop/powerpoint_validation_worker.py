@@ -30,7 +30,11 @@ def validate(folder: Path) -> dict[str, Any]:
         "state": "needs-review",
         "reasons": ["powerpoint_execution_unavailable"],
         "semantic_verified": False,
-        "validator_version": "powerpoint-executor-2",
+        "validator_version": (
+            "powerpoint-executor-4"
+            if request["action"].get("type") == "zoom_region"
+            else "powerpoint-executor-2"
+        ),
         "renderer_version": "desktop-powerpoint-2",
         "profile": "windows-powerpoint-2",
         "runtime_platform": sys.platform,
@@ -115,20 +119,53 @@ def validate(folder: Path) -> dict[str, Any]:
             height=request["slide_height"],
         )
         stage = "before_render"
-        before = adapter.preview(info).png
+        zoom = action.kind == "zoom_region"
+        if zoom:
+            from buddy_desktop.powerpoint_zoom_evidence import capture, png, verify_zoom
+
+            driver = adapter._zoom_driver()
+            driver.focus(info)
+            with driver._physical_pixels():
+                left, top, right, bottom = driver.gui.GetClientRect(info.window_id)
+                client_size = (right - left, bottom - top)
+            adapter.execute(PowerPointAction("reset_zoom", info))
+            before_image = capture(info, driver)
+            before = png(before_image)
+        else:
+            before = adapter.preview(info).png
         original_shapes = presentation.Slides.Item(info.slide_index).Shapes.Count
         stage = "execute"
         after_info = adapter.execute(action).info
         stage = "after_render"
-        after = adapter.preview(after_info).png
-        if (
+        if zoom:
+            after_image = capture(after_info, driver)
+            after = png(after_image)
+            stage = "reset_zoom"
+            adapter.execute(PowerPointAction("reset_zoom", after_info))
+            reset_image = capture(after_info, driver)
+            assert action.region is not None
+            stage = "zoom_viewport_proof"
+            verify_zoom(
+                before_image,
+                after_image,
+                reset_image,
+                info,
+                action.region,
+                client_size=client_size,
+            )
+            if presentation.Slides.Item(info.slide_index).Shapes.Count != original_shapes:
+                raise ValueError("Zoom changed source shapes")
+        else:
+            after = adapter.preview(after_info).png
+        if not zoom and (
             presentation.Slides.Item(info.slide_index).Shapes.Count <= original_shapes
             or before == after
         ):
             result["reasons"] = ["powerpoint_no_visible_change"]
             return result
         stage = "erase"
-        adapter.execute(PowerPointAction("erase_drawing", after_info))
+        if not zoom:
+            adapter.execute(PowerPointAction("erase_drawing", after_info))
         if presentation.Slides.Item(info.slide_index).Shapes.Count != original_shapes:
             result["reasons"] = ["powerpoint_cleanup_failed"]
             return result
@@ -143,7 +180,14 @@ def validate(folder: Path) -> dict[str, Any]:
             after_sha256=hashlib.sha256(after).hexdigest(),
         )
     except Exception as exc:
-        result["reasons"] = ["powerpoint_execution_failed", "stage_" + stage, type(exc).__name__]
+        if str(exc) == "This region is too large to fit at a magnified level.":
+            result["reasons"] = ["powerpoint_zoom_target_too_large"]
+        else:
+            result["reasons"] = [
+                "powerpoint_execution_failed",
+                "stage_" + stage,
+                type(exc).__name__,
+            ]
     finally:
         if presentation is not None:
             with suppress(Exception):

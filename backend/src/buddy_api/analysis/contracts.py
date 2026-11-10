@@ -245,7 +245,7 @@ class PowerPointParameters(Model):
     target_text: Annotated[str, Field(max_length=300)] = ""
 
 
-class PowerPointContentAction(Model):
+class PowerPointContentActionV2(Model):
     source_format: Literal["pptx"] = "pptx"
     version: Literal["powerpoint-2"] = "powerpoint-2"
     instance_id: Identifier
@@ -269,11 +269,16 @@ class PowerPointContentAction(Model):
         "draw_triangle",
         "draw_hexagon",
         "draw_star",
+        "zoom_region",
     ]
     params: PowerPointParameters
 
     @model_validator(mode="after")
     def annotation(self) -> Self:
+        if self.type == "zoom_region" and (
+            self.params.source_shape_id is None or self.params.target_text
+        ):
+            raise ValueError("Zoom requires a source object and uses its complete bounds.")
         if min(self.params.region.width, self.params.region.height) < 12:
             raise ValueError("PowerPoint annotations require a minimum 12-point region.")
         if self.type in {"callout", "text_box"}:
@@ -316,13 +321,13 @@ class PowerPointManifest(Model):
         return self
 
 
-class PowerPointSlideOutput(Model):
+class PowerPointSlideOutputV2(Model):
     slide_id: Identifier
     summary: Summary
-    actions: Annotated[tuple[PowerPointContentAction, ...], Field(max_length=40)] = ()
+    actions: Annotated[tuple[PowerPointContentActionV2, ...], Field(max_length=40)] = ()
 
 
-class PowerPointAnalysisInput(Model):
+class PowerPointAnalysisInputV2(Model):
     schema_version: Literal["buddy.powerpoint.analysis.v2"] = "buddy.powerpoint.analysis.v2"
     source_format: Literal["pptx"] = "pptx"
     extraction_id: UUID
@@ -341,7 +346,7 @@ class PowerPointAnalysisInput(Model):
     validator_version: Literal["powerpoint-executor-2"] = "powerpoint-executor-2"
     manifest: PowerPointManifest
     presentation_summary: Summary
-    slides: Annotated[tuple[PowerPointSlideOutput, ...], Field(min_length=1, max_length=100)]
+    slides: Annotated[tuple[PowerPointSlideOutputV2, ...], Field(min_length=1, max_length=100)]
 
     @property
     def visual_qa_pending_instance_ids(self) -> tuple[str, ...]:
@@ -369,9 +374,9 @@ class PowerPointAnalysisInput(Model):
         return self
 
 
-def parse_analysis_input(value: object) -> AnalysisInput | PowerPointAnalysisInput:
+def parse_analysis_input(value: object) -> AnalysisInput | PowerPointAnalysisInputV2:
     if isinstance(value, dict) and value.get("source_format") == "pptx":
-        return PowerPointAnalysisInput.model_validate(value)
+        return PowerPointAnalysisInputV2.model_validate(value)
     return AnalysisInput.model_validate(value)
 
 
@@ -465,20 +470,20 @@ class AnalysisResult(Model):
     ] = ()
 
 
-class PowerPointActionResult(Model):
-    action: PowerPointContentAction
+class PowerPointActionResultV2(Model):
+    action: PowerPointContentActionV2
     state: ValidationState
     usable: bool
     validation: ValidationInput | None
 
 
-class PowerPointSlideResult(Model):
+class PowerPointSlideResultV2(Model):
     slide_id: Identifier
     summary: Summary
-    actions: tuple[PowerPointActionResult, ...]
+    actions: tuple[PowerPointActionResultV2, ...]
 
 
-class PowerPointAnalysisResult(Model):
+class PowerPointAnalysisResultV2(Model):
     source_format: Literal["pptx"] = "pptx"
     id: UUID
     deck_id: UUID
@@ -486,8 +491,8 @@ class PowerPointAnalysisResult(Model):
     publication: Publication
     action_limit_reached: bool = False
     analysis_sha256: Digest | None
-    inputs: PowerPointAnalysisInput | None
-    slides: tuple[PowerPointSlideResult, ...]
+    inputs: PowerPointAnalysisInputV2 | None
+    slides: tuple[PowerPointSlideResultV2, ...]
 
     @property
     def visual_qa_pending_instance_ids(self) -> tuple[str, ...]:
@@ -495,10 +500,19 @@ class PowerPointAnalysisResult(Model):
 
 
 def publication(
-    summary: Summary, slides: tuple[SlideResult, ...] | tuple[PowerPointSlideResult, ...]
+    summary: Summary, slides: tuple[SlideResult, ...] | tuple[PowerPointSlideResultV2, ...]
 ) -> Publication:
     if summary.status != "available" or any(s.summary.status != "available" for s in slides):
         return "partial"
     if any(a.state == "candidate" for s in slides for a in s.actions):
         return "awaiting_validation"
     return "published"
+
+
+# Existing internal imports retain their names; only v2 HTTP responses expose zoom.
+PowerPointContentAction = PowerPointContentActionV2
+PowerPointSlideOutput = PowerPointSlideOutputV2
+PowerPointAnalysisInput = PowerPointAnalysisInputV2
+PowerPointActionResult = PowerPointActionResultV2
+PowerPointSlideResult = PowerPointSlideResultV2
+PowerPointAnalysisResult = PowerPointAnalysisResultV2

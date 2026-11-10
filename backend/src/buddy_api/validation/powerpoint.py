@@ -65,7 +65,9 @@ class PowerPointProcessResult(Model):
     state: Literal["validated", "rejected", "needs-review"]
     reasons: list[Identifier] = Field(max_length=20)
     semantic_verified: Literal[False] = False
-    validator_version: Literal["powerpoint-executor-2"] = "powerpoint-executor-2"
+    validator_version: Literal[
+        "powerpoint-executor-2", "powerpoint-executor-3", "powerpoint-executor-4"
+    ] = "powerpoint-executor-2"
     renderer_version: Literal["desktop-powerpoint-2"] = "desktop-powerpoint-2"
     profile: Literal["windows-powerpoint-2"] = "windows-powerpoint-2"
     runtime_platform: Literal["linux", "win32", "darwin"]

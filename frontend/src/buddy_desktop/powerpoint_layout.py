@@ -6,6 +6,34 @@ from buddy_desktop.powerpoint_contract import PowerPointError
 from buddy_desktop.slide_contract import Region
 
 
+def pointer_points(
+    target: Region, width: float, height: float, occupied: tuple[Region, ...]
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Point to the target edge from clear space, never diagonally through its text."""
+    x, y, w, h = target.x, target.y, target.width, target.height
+    for length in (42.0, 28.0, 18.0):
+        for start, end in (
+            ((x - length - 3, y + h / 2), (x - 3, y + h / 2)),
+            ((x + w + length + 3, y + h / 2), (x + w + 3, y + h / 2)),
+            ((x + w / 2, y - length - 3), (x + w / 2, y - 3)),
+            ((x + w / 2, y + h + length + 3), (x + w / 2, y + h + 3)),
+        ):
+            left, right = sorted((start[0], end[0]))
+            top, bottom = sorted((start[1], end[1]))
+            if left < 6 or top < 6 or right > width - 6 or bottom > height - 6:
+                continue
+            if any(
+                left < r.x + r.width + 3
+                and right + 3 > r.x
+                and top < r.y + r.height + 3
+                and bottom + 3 > r.y
+                for r in occupied
+            ):
+                continue
+            return start, end
+    raise PowerPointError("No clear space is available for an arrow pointing to this target.")
+
+
 def annotation_box(
     target: Region, width: float, height: float, text: str, occupied: tuple[Region, ...]
 ) -> Region:

@@ -72,7 +72,16 @@ def check_validation_evidence(
         or evidence.action_sha256 != action.content_sha256
         or any(
             getattr(evidence, key) != provenance.get(key)
-            for key in ("validator_version", "renderer_version", "display_profile")
+            for key in ("renderer_version", "display_profile")
+        )
+        or (
+            evidence.validator_version != provenance.get("validator_version")
+            and not (
+                action.source_format == "pptx"
+                and action.action_type == "zoom_region"
+                and provenance.get("validator_version") == "powerpoint-executor-2"
+                and evidence.validator_version in {"powerpoint-executor-3", "powerpoint-executor-4"}
+            )
         )
     ):
         raise PersistenceConflict("Validation does not match the analysis/action/profile revision.")

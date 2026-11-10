@@ -220,6 +220,11 @@ def build(
         if signing_identity:
             command += ["--codesign-identity", signing_identity]
     elif sys.platform == "win32":
+        # Generate and collect UIA interfaces at build time. Frozen apps must not
+        # need a writable site-packages directory on first native zoom.
+        import importlib
+
+        importlib.import_module("comtypes.client").GetModule("UIAutomationCore.dll")
         # COM automation modules are imported at runtime to keep the macOS build clean.
         command += [
             "--hidden-import",
@@ -229,7 +234,13 @@ def build(
             "--hidden-import",
             "win32com.client",
             "--hidden-import",
+            "win32api",
+            "--hidden-import",
+            "comtypes.gen.UIAutomationClient",
+            "--hidden-import",
             "win32gui",
+            "--hidden-import",
+            "win32ui",
             "--hidden-import",
             "win32process",
         ]

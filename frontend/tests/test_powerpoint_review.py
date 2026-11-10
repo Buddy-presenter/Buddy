@@ -32,6 +32,7 @@ KINDS = (
     "draw_triangle",
     "draw_hexagon",
     "draw_star",
+    "zoom_region",
 )
 
 
@@ -60,6 +61,8 @@ def powerpoint_payload(content=b"PK-synthetic-source", *, usable=True, kind="hig
     action = result["action"]
     action.update(source_format="pptx", version="powerpoint-2", type=kind)
     action["params"]["text"] = "Measured results" if kind in {"callout", "text_box"} else ""
+    if kind == "zoom_region":
+        action["params"]["source_shape_id"] = 2
     state = "validated" if usable else "needs-review"
     result.update(
         state=state,
@@ -78,12 +81,24 @@ def powerpoint_payload(content=b"PK-synthetic-source", *, usable=True, kind="hig
             "reasons": [] if usable else ["powerpoint_runtime_requires_windows_office"],
             "evidence": [{"id": str(uuid4()), "kind": "report", "sha256": "b" * 64}],
             "runtime_version": "16.0.12345",
-            "validator_version": "powerpoint-executor-2",
+            "validator_version": "powerpoint-executor-4"
+            if kind == "zoom_region"
+            else "powerpoint-executor-2",
             "renderer_version": "desktop-powerpoint-2",
             "display_profile": "windows-powerpoint-2",
         },
     )
     return deck, payload
+
+
+def test_legacy_zoom_proof_does_not_authorize_the_new_fitted_view():
+    deck, payload = powerpoint_payload(kind="zoom_region")
+    payload["data"]["slides"][0]["actions"][0]["validation"]["validator_version"] = (
+        "powerpoint-executor-2"
+    )
+    action = parse_analysis(payload, deck).slides[0].actions[0]
+    assert not action.usable
+    assert "zoom_requires_fitted_view_revalidation" in action.reasons
 
 
 @pytest.mark.parametrize("kind", KINDS)
@@ -159,9 +174,12 @@ def test_pdf_review_rejects_powerpoint_coordinates():
         parse_analysis(payload, deck)
 
 
-def test_pptx_review_is_explicit_and_clears_private_session(desktop_window, monkeypatch, qtbot):
+@pytest.mark.parametrize("kind", ["highlight_region", "zoom_region"])
+def test_pptx_review_is_explicit_and_clears_private_session(
+    desktop_window, monkeypatch, qtbot, kind
+):
     content = b"PK-synthetic-source"
-    deck, payload = powerpoint_payload(content)
+    deck, payload = powerpoint_payload(content, kind=kind)
     analysis = parse_analysis(payload, deck)
     monkeypatch.setattr(
         ReviewService,
@@ -198,6 +216,10 @@ def test_pptx_review_is_explicit_and_clears_private_session(desktop_window, monk
             calls.append("apply")
             return self.open(content, saved, index)
 
+        def reset_zoom(self, index, slide):
+            calls.append("reset_zoom")
+            return self.open(content, analysis, index)
+
         def close(self):
             calls.append("close")
 
@@ -223,6 +245,10 @@ def test_pptx_review_is_explicit_and_clears_private_session(desktop_window, monk
     qtbot.waitUntil(lambda: not review.runner.busy)
     assert calls[:2] == ["open", "apply"]
     assert "action completed" in review.notice.text()
+    assert review.reset_powerpoint_zoom.isEnabled()
+    review.reset_powerpoint_zoom.click()
+    qtbot.waitUntil(lambda: not review.runner.busy)
+    assert calls[-2:] == ["reset_zoom", "open"]
     window.account.session.tokens = None
     window.account.session_changed.emit()
     assert review.pdf_content is None and review.analysis is None and review._pptx_session is None
@@ -386,6 +412,10 @@ def test_private_review_reopens_an_ended_show_and_rechecks_source(monkeypatch):
 
         def preview(self, target):
             return PowerPointFrame(target, b"preview")
+
+        def execute(self, action):
+            assert action.kind == "reset_zoom"
+            return SimpleNamespace(info=info)
 
         def _process_probe(self):
             return False

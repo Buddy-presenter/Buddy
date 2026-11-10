@@ -2,6 +2,7 @@
 
 import sys
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -1181,6 +1182,8 @@ class PresentWidget(Page):
     def _disconnect_powerpoint(self) -> None:
         self.microphone.stop()
         self._powerpoint_verification.stop()
+        with suppress(Exception):
+            self.powerpoint.release_zoom()
         self._powerpoint_poll.stop()
         # Invalidate in-flight work: neither late success nor failure may restore
         # a connection or restart polling after the user explicitly disconnects.
@@ -1513,6 +1516,8 @@ class PresentWidget(Page):
         self._closing = True
         self._powerpoint_verification.stop()
         self.microphone.shutdown()
+        with suppress(Exception):
+            self.powerpoint.release_zoom()
         self._queued_powerpoint_action = None
         self._queued_powerpoint_preview = None
         self._queued_powerpoint_operation = None

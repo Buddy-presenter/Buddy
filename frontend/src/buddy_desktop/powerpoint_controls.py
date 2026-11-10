@@ -200,6 +200,23 @@ class PowerPointControls(QWidget):
         self.hint.setWordWrap(True)
         layout.addWidget(self.hint)
 
+        zoom_row = QHBoxLayout()
+        self.zoom = QPushButton("Zoom to selected area")
+        command(self.zoom, "search")
+        self.zoom.clicked.connect(lambda: self.request("zoom_region"))
+        self.reset_zoom = QPushButton("Reset zoom")
+        command(self.reset_zoom, "rotate-ccw")
+        self.reset_zoom.clicked.connect(lambda: self.request("reset_zoom"))
+        zoom_row.addWidget(self.zoom)
+        zoom_row.addWidget(self.reset_zoom)
+        layout.addLayout(zoom_row)
+        zoom_hint = QLabel(
+            "Select an area on the reference, then zoom in PowerPoint. "
+            "The reference stays at full-slide size. Reset zoom does not erase annotations."
+        )
+        zoom_hint.setWordWrap(True)
+        layout.addWidget(zoom_hint)
+
         row = QHBoxLayout()
         self.mode = QComboBox()
         self.mode.setAccessibleName("PowerPoint annotation tool")
@@ -407,6 +424,7 @@ class PowerPointControls(QWidget):
             region=region
             if kind
             in {
+                "zoom_region",
                 "draw_rectangle",
                 "draw_oval",
                 "draw_rounded_rectangle",
@@ -453,7 +471,13 @@ class PowerPointControls(QWidget):
             self.preview.path = ()
             self._selection_changed(None)
         self.preview.update()
-        self.feedback.setText("PowerPoint action completed.")
+        self.feedback.setText(
+            "Screen zoom applied. Switch away or use Reset zoom to restore the display."
+            if result.action.kind == "zoom_region"
+            else "Full slide restored. Annotations were kept."
+            if result.action.kind == "reset_zoom"
+            else "PowerPoint action completed."
+        )
         self.refresh()
 
     def refresh(self) -> None:
@@ -468,6 +492,7 @@ class PowerPointControls(QWidget):
             self.reset,
             self.undo,
             self.refresh_preview,
+            self.reset_zoom,
             self.mode,
             self.color,
             self.transparency,
@@ -486,3 +511,9 @@ class PowerPointControls(QWidget):
         except PowerPointError:
             selected = False
         self.apply.setEnabled(selected)
+        zoom_ready = self.preview.interactive
+        try:
+            self._action("zoom_region").validate()
+        except PowerPointError:
+            zoom_ready = False
+        self.zoom.setEnabled(zoom_ready)
