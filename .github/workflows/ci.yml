@@ -120,11 +120,11 @@ jobs:
           if ((${#missing_packages[@]})); then
             installed=false
             for attempt in 1 2 3; do
-              if timeout 180s sudo apt-get \
+              if sudo timeout --signal=TERM --kill-after=10s 120s apt-get \
                 -o Acquire::Retries=1 \
                 -o Acquire::http::Timeout=20 \
                 -o Acquire::https::Timeout=20 \
-                update && timeout 180s sudo apt-get install --yes --no-install-recommends "${missing_packages[@]}"; then
+                update && sudo timeout --signal=TERM --kill-after=10s 120s apt-get install --yes --no-install-recommends "${missing_packages[@]}"; then
                 installed=true
                 break
               fi
