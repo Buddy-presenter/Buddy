@@ -94,7 +94,11 @@ class Analyses:
     async def get(self, identifier: UUID, *, owner_id: UUID) -> AnalysisVersion:
         value = await self.session.scalar(
             select(AnalysisVersion).where(
-                AnalysisVersion.id == identifier, AnalysisVersion.owner_id == owner_id
+                AnalysisVersion.id == identifier,
+                AnalysisVersion.owner_id == owner_id,
+                AnalysisVersion.deck_id.in_(
+                    select(Deck.id).where(Deck.deletion_requested_at.is_(None))
+                ),
             )
         )
         if value is None:
@@ -105,7 +109,13 @@ class Analyses:
         """Return the newest immutable analysis revision for one owned deck."""
         value = await self.session.scalar(
             select(AnalysisVersion)
-            .where(AnalysisVersion.deck_id == deck_id, AnalysisVersion.owner_id == owner_id)
+            .where(
+                AnalysisVersion.deck_id == deck_id,
+                AnalysisVersion.owner_id == owner_id,
+                AnalysisVersion.deck_id.in_(
+                    select(Deck.id).where(Deck.deletion_requested_at.is_(None))
+                ),
+            )
             .order_by(AnalysisVersion.version.desc(), AnalysisVersion.id.desc())
             .limit(1)
         )
@@ -120,6 +130,11 @@ class Analyses:
             await self.session.scalars(
                 select(AnalysisVersion)
                 .where(AnalysisVersion.owner_id == owner_id)
+                .where(
+                    AnalysisVersion.deck_id.in_(
+                        select(Deck.id).where(Deck.deletion_requested_at.is_(None))
+                    )
+                )
                 .order_by(AnalysisVersion.created_at, AnalysisVersion.id)
                 .limit(limit)
             )
@@ -146,7 +161,7 @@ class Analyses:
         deck = await self.session.scalar(
             select(Deck).where(Deck.id == deck_id, Deck.owner_id == owner_id).with_for_update()
         )
-        if deck is None:
+        if deck is None or deck.deletion_requested_at is not None:
             raise RecordNotFound("Owned deck was not found.")
         extraction = await self.session.scalar(
             select(DeckExtraction).where(
@@ -449,7 +464,13 @@ class Analyses:
         result = ValidationInput.model_validate(result.model_dump(mode="json"))
         value = await self.session.scalar(
             select(AnalysisVersion)
-            .where(AnalysisVersion.id == result.analysis_id, AnalysisVersion.owner_id == owner_id)
+            .where(
+                AnalysisVersion.id == result.analysis_id,
+                AnalysisVersion.owner_id == owner_id,
+                AnalysisVersion.deck_id.in_(
+                    select(Deck.id).where(Deck.deletion_requested_at.is_(None))
+                ),
+            )
             .with_for_update()
         )
         if value is None:

@@ -82,12 +82,22 @@ class LibraryResponse(BaseModel):
     request_id: str
 
 
+class DeckDeletionData(BaseModel):
+    id: UUID
+    status: Literal["deleting"]
+
+
+class DeckDeletionResponse(BaseModel):
+    data: DeckDeletionData
+    request_id: str
+
+
 def library_router() -> APIRouter:
     router = APIRouter(
         prefix="/api/v1/decks",
         tags=["library"],
         responses={
-            **{code: {"model": ErrorResponse} for code in (401, 429, 503)},
+            **{code: {"model": ErrorResponse} for code in (401, 403, 404, 429, 503)},
             422: {"model": ErrorResponse, "description": "Request validation failed."},
         },
     )
@@ -103,7 +113,10 @@ def library_router() -> APIRouter:
         page_size: Annotated[int, Query(ge=1, le=50)] = 20,
     ) -> LibraryResponse:
         response.headers["Cache-Control"] = "no-store"
-        filters = [Deck.owner_id == principal.id]
+        filters = [
+            Deck.owner_id == principal.id,
+            Deck.deletion_requested_at.is_(None),
+        ]
         if search.strip():
             # Escape LIKE metacharacters: user searches are literal substrings, not patterns.
             term = search.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -311,6 +324,18 @@ def library_router() -> APIRouter:
             request_id=request.state.request_id,
         )
 
+    @router.delete("/{identifier}", status_code=202, response_model=DeckDeletionResponse)
+    async def delete_deck(
+        identifier: UUID,
+        request: Request,
+        principal: Annotated[Principal, Depends(authenticated)],
+    ) -> DeckDeletionResponse:
+        await service(request).request_deck_deletion(principal.id, identifier)
+        return DeckDeletionResponse(
+            data=DeckDeletionData(id=identifier, status="deleting"),
+            request_id=request.state.request_id,
+        )
+
     async def download_source(
         identifier: UUID,
         request: Request,
@@ -320,7 +345,11 @@ def library_router() -> APIRouter:
         uploads = service(request)
         async with uploads.transaction() as session:
             deck = await session.scalar(
-                select(Deck).where(Deck.id == identifier, Deck.owner_id == principal.id)
+                select(Deck).where(
+                    Deck.id == identifier,
+                    Deck.owner_id == principal.id,
+                    Deck.deletion_requested_at.is_(None),
+                )
             )
             if deck is None:
                 raise HTTPException(404)

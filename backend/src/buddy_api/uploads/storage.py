@@ -15,6 +15,7 @@ class S3Client(Protocol):
     def put_object(self, **kwargs: Any) -> dict[str, Any]: ...
     def list_object_versions(self, **kwargs: Any) -> dict[str, Any]: ...
     def delete_object(self, **kwargs: Any) -> dict[str, Any]: ...
+    def delete_objects(self, **kwargs: Any) -> dict[str, Any]: ...
     def head_bucket(self, **kwargs: Any) -> dict[str, Any]: ...
     def close(self) -> None: ...
     def get_object(self, **kwargs: Any) -> dict[str, Any]: ...
@@ -119,6 +120,43 @@ class SourceStorage:
                         VersionId=version["VersionId"],
                     )
             raise ValueError("Cleanup budget exceeded; reconciliation will retry")
+        except Exception:
+            raise UploadError(
+                503, "cleanup_pending", "File cleanup is pending; retry later.", 30
+            ) from None
+
+    def remove_prefix(self, prefix: str) -> None:
+        """Permanently remove every version under one UUID-scoped deck prefix.
+
+        Restart from the prefix after each batch: deleting versions changes the
+        listing, and this avoids skipping objects while paginating a versioned
+        bucket. The bounded pass can be retried safely by the durable reconciler.
+        """
+        if not prefix.startswith("sources/") or not prefix.endswith("/"):
+            raise UploadError(503, "cleanup_pending", "Invalid cleanup scope.", 30)
+        try:
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                listing = self.client().list_object_versions(
+                    **self.bucket_arguments, Prefix=prefix, MaxKeys=1000
+                )
+                versions = [
+                    {"Key": item["Key"], "VersionId": item["VersionId"]}
+                    for kind in ("Versions", "DeleteMarkers")
+                    for item in listing.get(kind, [])
+                    if item.get("Key", "").startswith(prefix)
+                ]
+                if not versions:
+                    if listing.get("IsTruncated"):
+                        raise ValueError("Ambiguous cleanup listing")
+                    return
+                result = self.client().delete_objects(
+                    **self.bucket_arguments,
+                    Delete={"Objects": versions, "Quiet": True},
+                )
+                if result.get("Errors"):
+                    raise ValueError("Some object versions were not deleted")
+            raise TimeoutError("Cleanup budget exceeded")
         except Exception:
             raise UploadError(
                 503, "cleanup_pending", "File cleanup is pending; retry later.", 30

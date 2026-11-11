@@ -10,13 +10,27 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import ClientDisconnect, Request
 
 from buddy_api.persistence.database import Database
-from buddy_api.persistence.models import ActionCheck, Deck, DeckUpload
+from buddy_api.persistence.models import (
+    ActionCheck,
+    ActionValidation,
+    AnalysisSlide,
+    AnalysisVersion,
+    Deck,
+    DeckExtraction,
+    DeckUpload,
+    JobOutbox,
+    LegacyAnalysisPayload,
+    PresentationSession,
+    ProcessingJob,
+    RenderedAsset,
+    SlideAction,
+)
 from buddy_api.uploads.config import UploadSettings
 from buddy_api.uploads.contracts import (
     SOURCE_TYPES,
@@ -101,10 +115,12 @@ class UploadService:
         deck_data = None
         if record.status == "complete":
             deck = await session.get(Deck, record.deck_id)
-            if deck is None or deck.owner_id != record.owner_id:
-                raise UploadError(
-                    503, "service_unavailable", "Upload records are temporarily unavailable."
-                )
+            if (
+                deck is None
+                or deck.owner_id != record.owner_id
+                or deck.deletion_requested_at is not None
+            ):
+                raise UploadError(404, "not_found", "Presentation not found.")
             deck_data = UploadedDeck.model_validate(
                 {
                     "id": deck.id,
@@ -304,6 +320,128 @@ class UploadService:
             await blocking(lambda: self.storage.remove(current.storage_key))
             current.status = "failed"
 
+    async def request_deck_deletion(self, owner: UUID, identifier: UUID) -> bool:
+        """Tombstone an owned deck and fence any queued or running work."""
+        async with self.transaction() as session:
+            deck_owner = await session.scalar(select(Deck.owner_id).where(Deck.id == identifier))
+            if deck_owner is None:
+                raise UploadError(404, "not_found", "Presentation not found.")
+            if deck_owner != owner:
+                raise UploadError(403, "forbidden", "Access denied.")
+            # Workers lock job then deck when committing output. Use the same order
+            # here so deletion cannot deadlock with a final worker transaction.
+            jobs = list(
+                await session.scalars(
+                    select(ProcessingJob)
+                    .where(ProcessingJob.deck_id == identifier)
+                    .with_for_update()
+                )
+            )
+            deck = await session.scalar(select(Deck).where(Deck.id == identifier).with_for_update())
+            if deck is None:
+                raise UploadError(404, "not_found", "Presentation not found.")
+            if deck.owner_id != owner:
+                raise UploadError(403, "forbidden", "Access denied.")
+            if deck.deletion_requested_at is not None:
+                return False
+            deck.deletion_requested_at = datetime.now(UTC)
+            from buddy_api.processing.store import cancel
+
+            for job in jobs:
+                if job.source_revision is not None:
+                    await cancel(session, job)
+                await session.execute(delete(JobOutbox).where(JobOutbox.job_id == job.id))
+            await session.flush()
+            return True
+
+    async def cleanup_deleted_decks(self) -> None:
+        """Retry tombstoned deck cleanup; interruption leaves the tombstone durable."""
+        async with self.transaction() as session:
+            identifiers = list(
+                await session.scalars(
+                    select(Deck.id)
+                    .where(
+                        Deck.deletion_requested_at.is_not(None),
+                        ~select(ActionCheck.id)
+                        .where(
+                            ActionCheck.deck_id == Deck.id,
+                            ActionCheck.status.in_(("pending", "cleanup")),
+                        )
+                        .exists(),
+                    )
+                    .order_by(Deck.deletion_requested_at, Deck.id)
+                    .limit(4)
+                )
+            )
+        for identifier in identifiers:
+            try:
+                await self.cleanup_deleted_deck(identifier)
+            except UploadError:
+                # One broken or unavailable S3 prefix must not starve other deletions.
+                logger.warning("Deck deletion cleanup deferred; tombstone retained")
+
+    async def cleanup_deleted_deck(self, identifier: UUID) -> None:
+        async with self.transaction() as session:
+            # Match worker commit order (job, then deck) to avoid deadlocks while
+            # removing records from a deck whose active lease was just fenced.
+            list(
+                await session.scalars(
+                    select(ProcessingJob.id)
+                    .where(ProcessingJob.deck_id == identifier)
+                    .with_for_update()
+                )
+            )
+            deck = await session.scalar(
+                select(Deck)
+                .where(Deck.id == identifier, Deck.deletion_requested_at.is_not(None))
+                .with_for_update(skip_locked=True)
+            )
+            if deck is None:
+                return
+            pending_check = await session.scalar(
+                select(ActionCheck.id)
+                .where(
+                    ActionCheck.deck_id == deck.id,
+                    ActionCheck.status.in_(("pending", "cleanup")),
+                )
+                .limit(1)
+            )
+            if pending_check is not None:
+                return
+            owner = deck.owner_id
+            prefix = f"sources/{owner}/{identifier}/"
+            assets = list(
+                await session.scalars(
+                    select(RenderedAsset.storage_key).where(RenderedAsset.deck_id == identifier)
+                )
+            )
+            # Keep the tombstoned row locked while removing private bytes. A retry
+            # repeats idempotent version cleanup if the process exits at any point.
+            await blocking(lambda: self.storage.remove_prefix(prefix))
+            for key in assets:
+                if not key.startswith(prefix):
+                    await blocking(lambda key=key: self.storage.remove(key))
+
+            job_ids = select(ProcessingJob.id).where(ProcessingJob.deck_id == identifier)
+            analysis_ids = select(AnalysisVersion.id).where(AnalysisVersion.deck_id == identifier)
+            for model, condition in (
+                (PresentationSession, PresentationSession.deck_id == identifier),
+                (ActionValidation, ActionValidation.deck_id == identifier),
+                (SlideAction, SlideAction.deck_id == identifier),
+                (AnalysisSlide, AnalysisSlide.deck_id == identifier),
+                (LegacyAnalysisPayload, LegacyAnalysisPayload.analysis_id.in_(analysis_ids)),
+                (AnalysisVersion, AnalysisVersion.deck_id == identifier),
+                (JobOutbox, JobOutbox.job_id.in_(job_ids)),
+                (ProcessingJob, ProcessingJob.deck_id == identifier),
+                (DeckExtraction, DeckExtraction.deck_id == identifier),
+                (ActionCheck, ActionCheck.deck_id == identifier),
+                (RenderedAsset, RenderedAsset.deck_id == identifier),
+                (DeckUpload, DeckUpload.deck_id == identifier),
+            ):
+                await session.execute(delete(model).where(condition))
+            await session.delete(deck)
+            await session.flush()
+
     async def reconcile(self) -> None:
         async with self.transaction() as session:
             identifiers = list(
@@ -327,6 +465,7 @@ class UploadService:
                 await self.cleanup(identifier)
             except UploadError:
                 logger.warning("Upload cleanup deferred; durable reservation retained")
+        await self.cleanup_deleted_decks()
 
     async def run_reconciliation(self) -> None:
         while True:

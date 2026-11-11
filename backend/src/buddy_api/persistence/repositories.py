@@ -71,6 +71,29 @@ class Users:
 
 
 class Decks(OwnedRepository[Deck]):
+    async def get(self, identifier: UUID, *, owner_id: UUID) -> Deck:
+        value = await self.session.scalar(
+            select(Deck).where(
+                Deck.id == identifier,
+                Deck.owner_id == owner_id,
+                Deck.deletion_requested_at.is_(None),
+            )
+        )
+        if value is None:
+            raise RecordNotFound("Owned record was not found.")
+        return value
+
+    async def list(self, *, owner_id: UUID, limit: int = 100) -> list[Deck]:
+        if not 1 <= limit <= 100:
+            raise ValueError("Repository limit must be from 1 to 100.")
+        result = await self.session.scalars(
+            select(Deck)
+            .where(Deck.owner_id == owner_id, Deck.deletion_requested_at.is_(None))
+            .order_by(Deck.created_at, Deck.id)
+            .limit(limit)
+        )
+        return list(result)
+
     async def create(
         self,
         *,
@@ -101,7 +124,13 @@ class Extractions(OwnedRepository[DeckExtraction]):
 
         # Lock against concurrent owner changes/deletion; retries never overwrite a revision.
         deck = await self.session.scalar(
-            select(Deck).where(Deck.id == deck_id, Deck.owner_id == owner_id).with_for_update()
+            select(Deck)
+            .where(
+                Deck.id == deck_id,
+                Deck.owner_id == owner_id,
+                Deck.deletion_requested_at.is_(None),
+            )
+            .with_for_update()
         )
         if deck is None:
             raise RecordNotFound("Owned record was not found.")

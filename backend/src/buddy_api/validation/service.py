@@ -82,8 +82,12 @@ class ValidationService:
     async def owned(self, owner: UUID, identifier: UUID) -> ActionCheck:
         async with self.uploads.transaction() as session:
             row = await session.scalar(
-                select(ActionCheck).where(
-                    ActionCheck.id == identifier, ActionCheck.owner_id == owner
+                select(ActionCheck)
+                .join(Deck, Deck.id == ActionCheck.deck_id)
+                .where(
+                    ActionCheck.id == identifier,
+                    ActionCheck.owner_id == owner,
+                    Deck.deletion_requested_at.is_(None),
                 )
             )
             if row is None:
@@ -136,7 +140,11 @@ class ValidationService:
         async with self.uploads.parser_slot:
             async with self.uploads.transaction() as session:
                 deck = await session.scalar(
-                    select(Deck).where(Deck.id == deck_id, Deck.owner_id == owner)
+                    select(Deck).where(
+                        Deck.id == deck_id,
+                        Deck.owner_id == owner,
+                        Deck.deletion_requested_at.is_(None),
+                    )
                 )
                 if deck is None:
                     raise UploadError(404, "not_found", "Presentation not found.")

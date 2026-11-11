@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
@@ -30,6 +31,7 @@ from PySide6.QtWidgets import (
 from buddy_desktop.account_widget import AccountWidget
 from buddy_desktop.config import AppConfig
 from buddy_desktop.library_service import (
+    DeckDeletionResult,
     DeckSummary,
     LibraryAccessExpired,
     LibraryPage,
@@ -79,6 +81,7 @@ class LibraryWidget(QWidget):
     present_requested = Signal(object)
     review_requested = Signal(object, str, str, str)
     private_invalidated = Signal()
+    deck_deleted = Signal(object)
     upload_progress = Signal(object, str, int, int)
     signin_requested = Signal()
 
@@ -167,6 +170,11 @@ class LibraryWidget(QWidget):
         self.review_button.setToolTip("Review saved summaries and validation evidence")
         self.review_button.setEnabled(False)
         self.review_button.clicked.connect(self.review_selected)
+        self.delete_button = QPushButton("Delete")
+        self.delete_button.setAccessibleName("Delete selected presentation")
+        self.delete_button.setToolTip("Permanently delete the selected presentation and saved data")
+        self.delete_button.clicked.connect(self.delete_selected)
+        self.delete_button.hide()
         self.cancel_job_button: QPushButton = QPushButton("Cancel processing")
         self.cancel_job_button.setAccessibleName("Cancel processing job")
         command(self.cancel_job_button, "x")
@@ -262,6 +270,7 @@ class LibraryWidget(QWidget):
         actions.addWidget(self.retry_job_button, alignment=Qt.AlignmentFlag.AlignTop)
         actions.addWidget(self.review_button, alignment=Qt.AlignmentFlag.AlignTop)
         actions.addWidget(self.open_button, alignment=Qt.AlignmentFlag.AlignTop)
+        actions.addWidget(self.delete_button, alignment=Qt.AlignmentFlag.AlignTop)
         layout.addWidget(self.selection_actions)
         self.empty_space = QWidget()
         layout.addWidget(self.empty_space, 1)
@@ -326,6 +335,8 @@ class LibraryWidget(QWidget):
         self.next.setEnabled(False)
         self.open_button.setEnabled(False)
         self.review_button.setEnabled(False)
+        self.delete_button.setEnabled(False)
+        self.delete_button.hide()
         self.cancel_job_button.hide()
         self.retry_job_button.hide()
 
@@ -471,6 +482,16 @@ class LibraryWidget(QWidget):
                 self.upload_bar.setValue(100)
                 self.retry_path = None
                 self.retry_upload_button.hide()
+        if isinstance(result, DeckDeletionResult):
+            self.deck_deleted.emit(result.deck_id)
+            if self.current():
+                self.pending = True
+                self.state.show_state(
+                    "Deletion started",
+                    "The deck is removed from your library. Buddy will finish permanently "
+                    "removing its files and saved data automatically.",
+                )
+            return
         if not self.current():
             return
         if isinstance(result, LibraryAccessExpired):
@@ -586,12 +607,53 @@ class LibraryWidget(QWidget):
                 else "Present this PDF in Buddy."
             )
             self.review_button.setEnabled(self.token() is not None and not self.runner.busy)
+            self.delete_button.setVisible(self.token() is not None)
+            self.delete_button.setEnabled(self.token() is not None and not self.runner.busy)
             attempts = f" Processing attempts: {deck.attempts}." if deck.attempts else ""
             if processing is not None and processing.stage:
                 guidance += f" Current stage: {processing.stage.replace('_', ' ')}."
             if processing is not None and processing.progress:
                 guidance += f" Progress: {processing.progress}%."
             self.detail.setPlainText(deck.title + "\n" + guidance + attempts)
+        else:
+            self.open_button.setEnabled(False)
+            self.review_button.setEnabled(False)
+            self.delete_button.setEnabled(False)
+            self.delete_button.hide()
+            self.cancel_job_button.hide()
+            self.retry_job_button.hide()
+
+    def delete_selected(self) -> None:
+        row = self.table.currentRow()
+        if not self.last_page or not 0 <= row < len(self.last_page.items):
+            return
+        deck = self.last_page.items[row]
+        access = self.token()
+        if access is None or self.runner.busy or self.closing:
+            return
+        answer = QMessageBox.warning(
+            self,
+            "Delete presentation permanently?",
+            f'"{deck.title}" and its saved analysis, review data, and source file will be '
+            "permanently deleted. This cannot be undone.",
+            QMessageBox.StandardButton.Delete | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Delete:
+            return
+        self.poll.stop()
+        self.request_generation = self.generation
+        self.pending = True
+        self.activity_changed.emit(True)
+        service = LibraryService(self.config)
+
+        def work() -> object:
+            try:
+                return service.delete_deck(access, deck.id)
+            except LibraryAccessExpired as exc:
+                return exc
+
+        self.runner.submit(work)
 
     @staticmethod
     def deck_status_text(deck: DeckSummary) -> tuple[str, str]:
