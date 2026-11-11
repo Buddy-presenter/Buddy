@@ -65,7 +65,9 @@ jobs:
 
   backend:
     name: Backend (Python ${{ matrix.python }})
-    runs-on: ubuntu-latest
+    # Keep the PostgreSQL/Qt test environment on the stable LTS while
+    # ubuntu-latest moves to the newly released 26.04 runner image.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -111,8 +113,14 @@ jobs:
           python scripts/test.py worker
       - name: Install Qt runtime libraries for desktop integration tests
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes libegl1 libpulse0
+          missing_packages=()
+          ldconfig -p | grep -q 'libEGL.so.1' || missing_packages+=(libegl1)
+          ldconfig -p | grep -q 'libpulse.so.0' || missing_packages+=(libpulse0)
+          if ((${#missing_packages[@]})); then
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 \
+              -o Acquire::https::Timeout=20 update
+            sudo apt-get install --yes --no-install-recommends "${missing_packages[@]}"
+          fi
       - name: Cross-component desktop, API and PostgreSQL integration
         run: python scripts/test.py integration
       - run: python -m build backend
