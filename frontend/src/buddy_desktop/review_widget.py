@@ -466,15 +466,14 @@ class ReviewWidget(Page):
 
     def account_activity(self, busy: bool) -> None:
         self.account_busy = busy
-        if busy:
-            # A routine account check temporarily makes the token unavailable, but
-            # it does not change which deck the user opened. Keep that selection so
-            # the review can be loaded again when account access is available.
-            self.clear_private(keep_deck=True)
+        if busy and self.account.operation not in {"check", "profile"}:
+            # Session checks and profile reads do not change the signed-in identity.
+            # Keep the current review visible; only identity-changing operations
+            # clear private review data.
+            self.clear_private()
             self.state.show_state("Checking account", "Private review data is being cleared.")
 
     def account_changed(self) -> None:
-        self.generation += 1
         key = (
             (id(self.account.session), self.account.account_id, self.config.api_url)
             if self.token()
@@ -495,8 +494,6 @@ class ReviewWidget(Page):
                 "Choose a presentation", "Open Review from a PDF in your library."
             )
             self.signin.hide()
-        elif self.active and self.pdf_content is None:
-            self.load()
 
     def clear_private(self, *, keep_deck: bool = False) -> None:
         self._close_evidence()
