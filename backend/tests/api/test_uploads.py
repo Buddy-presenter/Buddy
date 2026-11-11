@@ -4,9 +4,11 @@ import asyncio
 import hashlib
 import io
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event
 from uuid import UUID, uuid4
 
 import pytest
@@ -21,7 +23,17 @@ from starlette.requests import Request
 from buddy_api.app import create_app
 from buddy_api.auth import CognitoVerifier, VerifiedIdentity
 from buddy_api.config import Environment, Settings
-from buddy_api.persistence.models import Deck, DeckUpload, ProcessingJob
+from buddy_api.persistence.models import (
+    ActionCheck,
+    ActionValidation,
+    AnalysisSlide,
+    AnalysisVersion,
+    Deck,
+    DeckUpload,
+    LegacyAnalysisPayload,
+    ProcessingJob,
+    SlideAction,
+)
 from buddy_api.uploads.config import UploadSettings
 from buddy_api.uploads.contracts import PDF_TYPE, PPTX_TYPE, UploadError, UploadMetadata
 from buddy_api.uploads.storage import SourceStorage
@@ -183,6 +195,168 @@ def test_source_download_releases_its_database_connection_before_storage(upload_
         monkeypatch.setattr(service.storage, "read", checked_read)
         response = client.get(f"/api/v1/decks/{identifier}/powerpoint-source")
         assert response.status_code == 200 and response.content == SOURCE
+
+
+def test_queued_source_download_is_denied_after_deletion_is_accepted(upload_app):
+    with upload_app() as (client, _cloud, service):
+        identifier = initialize(client).json()["data"]["id"]
+        assert transfer(client, identifier).status_code == 200
+        semaphore = service.parser_slot
+        client.portal.call(semaphore.acquire)
+        waiting = Event()
+
+        class QueuedParserSlot:
+            async def __aenter__(self):
+                waiting.set()
+                await semaphore.acquire()
+
+            async def __aexit__(self, *_args):
+                semaphore.release()
+
+        service.parser_slot = QueuedParserSlot()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            download = executor.submit(client.get, f"/api/v1/decks/{identifier}/powerpoint-source")
+            assert waiting.wait(5), "source request did not reach the held parser slot"
+            deletion = client.delete(f"/api/v1/decks/{identifier}")
+            assert deletion.status_code == 202
+
+            async def release_slot():
+                semaphore.release()
+
+            client.portal.call(release_slot)
+            response = download.result(timeout=10)
+        assert response.status_code == 404
+
+
+def test_queued_validation_evidence_read_is_denied_after_deletion_is_accepted(
+    upload_app, monkeypatch
+):
+    with upload_app() as (client, _cloud, service):
+        identifier = initialize(client).json()["data"]["id"]
+        assert transfer(client, identifier).status_code == 200
+        artifact = uuid4()
+        validation_id = uuid4()
+
+        async def add_evidence():
+            async with service.database.sessions() as session, session.begin():
+                deck = await session.get(Deck, identifier)
+                session.add(
+                    ActionCheck(
+                        id=validation_id,
+                        owner_id=deck.owner_id,
+                        deck_id=deck.id,
+                        retry_key=uuid4(),
+                        request_sha256="a" * 64,
+                        storage_bytes=1,
+                        status="complete",
+                        expires_at=datetime.now(UTC) + timedelta(hours=1),
+                        result={},
+                        artifacts=[
+                            {
+                                "id": str(artifact),
+                                "kind": "report",
+                                "version": "evidence-version",
+                                "size_bytes": 1,
+                                "sha256": "b" * 64,
+                            }
+                        ],
+                    )
+                )
+
+        client.portal.call(add_evidence)
+        reads = []
+        monkeypatch.setattr(
+            service.storage,
+            "read",
+            lambda *args, **kwargs: reads.append((args, kwargs)) or b"private evidence",
+        )
+        semaphore = service.parser_slot
+        client.portal.call(semaphore.acquire)
+        waiting = Event()
+
+        class QueuedParserSlot:
+            async def __aenter__(self):
+                waiting.set()
+                await semaphore.acquire()
+
+            async def __aexit__(self, *_args):
+                semaphore.release()
+
+        service.parser_slot = QueuedParserSlot()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            evidence = executor.submit(
+                client.get,
+                f"/api/v1/action-validations/{validation_id}/evidence/{artifact}",
+            )
+            assert waiting.wait(5), "evidence request did not reach the held parser slot"
+            deletion = client.delete(f"/api/v1/decks/{identifier}")
+            assert deletion.status_code == 202
+
+            async def release_slot():
+                semaphore.release()
+
+            client.portal.call(release_slot)
+            response = evidence.result(timeout=10)
+        assert response.status_code == 404
+        assert reads == []
+
+
+def test_analyzed_deck_cleanup_removes_immutable_revision_tree(upload_app, monkeypatch):
+    with upload_app() as (client, _cloud, service):
+        identifier = initialize(client).json()["data"]["id"]
+        assert transfer(client, identifier).status_code == 200
+
+        # The test identity is resolved by the API; fetch its owner from the saved deck
+        # before creating a fully typed analysis and its immutable child records.
+        async def seed_analysis():
+            from backend.tests.support.analysis import create
+
+            from buddy_api.persistence.repositories import Repositories
+
+            async with service.database.sessions() as session, session.begin():
+                deck = await session.get(Deck, UUID(identifier))
+                deck_id, owner_id = deck.id, deck.owner_id
+                job_id = await session.scalar(
+                    select(ProcessingJob.id).where(ProcessingJob.deck_id == deck.id)
+                )
+                deck.source_format = "pdf"
+                repos = Repositories.for_session(session)
+                analysis = await create(
+                    repos,
+                    owner_id=owner_id,
+                    deck_id=deck_id,
+                    job_id=job_id,
+                    actions=True,
+                )
+                session.add(
+                    LegacyAnalysisPayload(analysis_id=analysis.id, payload={"legacy": True})
+                )
+                await session.flush()
+                return deck_id, owner_id, analysis.id
+
+        deck_id, owner_id, analysis_id = client.portal.call(seed_analysis)
+        monkeypatch.setattr(service.storage, "remove_prefix", lambda _prefix: None)
+        assert client.portal.call(service.request_deck_deletion, owner_id, deck_id)
+        client.portal.call(service.cleanup_deleted_deck, deck_id)
+
+        async def assert_removed():
+            async with service.database.sessions() as session:
+                assert await session.get(Deck, deck_id) is None
+                for model in (
+                    ActionValidation,
+                    SlideAction,
+                    AnalysisSlide,
+                    AnalysisVersion,
+                ):
+                    assert (
+                        await session.scalar(
+                            select(func.count()).select_from(model).where(model.deck_id == deck_id)
+                        )
+                        == 0
+                    )
+                assert await session.get(LegacyAnalysisPayload, analysis_id) is None
+
+        client.portal.call(assert_removed)
 
 
 def test_pdf_upload_storage_database_private_download_and_pptx_preservation(upload_app):

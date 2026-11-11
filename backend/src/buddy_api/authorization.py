@@ -60,6 +60,19 @@ async def owned_resource(
         raise HTTPException(404)
     if record.owner_id != principal.id:
         raise HTTPException(403)
+    if isinstance(record, Deck):
+        if record.deletion_requested_at is not None:
+            raise HTTPException(404)
+    elif isinstance(record, (AnalysisVersion, RenderedAsset, PresentationSession, ProcessingJob)):
+        deck = await session.scalar(
+            select(Deck.id).where(
+                Deck.id == record.deck_id,
+                Deck.owner_id == principal.id,
+                Deck.deletion_requested_at.is_(None),
+            )
+        )
+        if deck is None:
+            raise HTTPException(404)
     return record
 
 

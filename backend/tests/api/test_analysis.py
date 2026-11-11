@@ -2,13 +2,14 @@
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
 from alembic import command
 from backend.tests.support.analysis import FIXTURE, create, prepare
 from pydantic import ValidationError
-from sqlalchemy import select, text
+from sqlalchemy import delete, func, select, text
 
 from buddy_api.analysis.catalog import CATALOG, general_controls, generation_schema
 from buddy_api.analysis.contracts import AnalysisInput, ValidationInput, digest
@@ -21,6 +22,7 @@ from buddy_api.persistence.models import (
     ActionValidation,
     AnalysisSlide,
     AnalysisVersion,
+    Deck,
     LegacyAnalysisPayload,
     SlideAction,
 )
@@ -471,6 +473,58 @@ def test_owner_lineage_stale_evidence_and_immutable_database_rows(migrated_datab
                             update={"source_revision": "invalid / revision"}
                         ),
                     )
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.postgres
+def test_tombstoned_deck_allows_immutable_analysis_cleanup(migrated_database):
+    """The real migrated triggers allow deck cleanup, but still reject ordinary deletes."""
+
+    async def scenario():
+        db = Database(migrated_database)
+        try:
+            async with db.transaction() as repos:
+                owner = await repos.users.create("deletion-owner")
+                deck = await repos.decks.create(owner_id=owner.id, title="Analyzed deck")
+                inputs = await prepare(repos, owner_id=owner.id, deck_id=deck.id, actions=True)
+                analysis = await repos.analyses.create(
+                    owner_id=owner.id, deck_id=deck.id, version=1, document=inputs
+                )
+                # Exercise the legacy child table as well as the typed revision tree.
+                repos.analyses.session.add(
+                    LegacyAnalysisPayload(analysis_id=analysis.id, payload={"legacy": True})
+                )
+                await repos.analyses.session.flush()
+                deck_id, analysis_id = deck.id, analysis.id
+
+            async with db.sessions() as session, session.begin():
+                deck = await session.get(Deck, deck_id)
+                deck.deletion_requested_at = datetime.now(UTC)
+                await session.flush()
+                await session.execute(
+                    delete(ActionValidation).where(ActionValidation.deck_id == deck_id)
+                )
+                await session.execute(delete(SlideAction).where(SlideAction.deck_id == deck_id))
+                await session.execute(delete(AnalysisSlide).where(AnalysisSlide.deck_id == deck_id))
+                await session.execute(
+                    delete(LegacyAnalysisPayload).where(
+                        LegacyAnalysisPayload.analysis_id == analysis_id
+                    )
+                )
+                await session.execute(
+                    delete(AnalysisVersion).where(AnalysisVersion.deck_id == deck_id)
+                )
+
+            async with db.sessions() as session:
+                for model in (ActionValidation, SlideAction, AnalysisSlide, AnalysisVersion):
+                    count = await session.scalar(
+                        select(func.count()).select_from(model).where(model.deck_id == deck_id)
+                    )
+                    assert count == 0
+                assert await session.get(LegacyAnalysisPayload, analysis_id) is None
         finally:
             await db.close()
 

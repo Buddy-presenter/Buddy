@@ -124,11 +124,22 @@ def snapshot(record: PresentationSession) -> SessionSnapshot:
 async def owned_session(
     db: AsyncSession, principal: Principal, identifier: UUID, *, lock: bool = False
 ) -> PresentationSession:
-    query = select(PresentationSession).where(PresentationSession.id == identifier)
+    query = (
+        select(PresentationSession)
+        .join(Deck, Deck.id == PresentationSession.deck_id)
+        .where(
+            PresentationSession.id == identifier,
+            Deck.deletion_requested_at.is_(None),
+        )
+    )
     if lock:
         # Refresh a session previously read into this AsyncSession's identity map.
         # A concurrent end may commit while resume waits for this row lock.
-        query = query.with_for_update().execution_options(populate_existing=True)
+        # Only lock the session row: locking the joined deck reverses the lock order
+        # used by session creation/deletion and can deadlock with concurrent end.
+        query = query.with_for_update(of=PresentationSession).execution_options(
+            populate_existing=True
+        )
     record = await db.scalar(query)
     if record is None:
         raise HTTPException(404)
@@ -272,7 +283,11 @@ def apply_state(record: PresentationSession, state: SessionState) -> None:
 
 
 async def find_deck(db: AsyncSession, principal: Principal, identifier: UUID) -> Deck:
-    deck = await db.scalar(select(Deck).where(Deck.id == identifier).with_for_update())
+    deck = await db.scalar(
+        select(Deck)
+        .where(Deck.id == identifier, Deck.deletion_requested_at.is_(None))
+        .with_for_update()
+    )
     if deck is None:
         raise HTTPException(404)
     if deck.owner_id != principal.id:

@@ -111,6 +111,7 @@ class MainWindow(QMainWindow):
         self.review.back_requested.connect(lambda: self.navigation.setCurrentRow(1))
         self.review.signin_requested.connect(self._show_account_controls)
         self.library.private_invalidated.connect(self._clear_private_pdf)
+        self.library.deck_deleted.connect(self._deck_deleted)
         self.present.executor.completed.connect(self._presentation_completed)
         self.present.executor.idle.connect(self._present_idle)
         self.present.powerpoint_runner.idle.connect(self._powerpoint_idle)
@@ -270,6 +271,25 @@ class MainWindow(QMainWindow):
 
     def _clear_private_pdf(self) -> None:
         if self._private_presentation:
+            self._private_presentation = False
+            self.present.clear_session_binding()
+            if self.present.fullscreen is not None:
+                self.present.fullscreen.close()
+            self.present.executor.clear()
+            self.present.counter.setText("No slides loaded")
+            self.home.workspace_state.hide()
+            self.present._refresh()
+
+    def _deck_deleted(self, identifier: object) -> None:
+        if not isinstance(identifier, UUID):
+            return
+        if self.review.deck_id == identifier:
+            self.review.clear_private()
+            self.review.state.show_state(
+                "Presentation removed",
+                "Its saved review is no longer available. Buddy is finishing permanent cleanup.",
+            )
+        if self.present._session_deck_id == str(identifier):
             self._private_presentation = False
             self.present.clear_session_binding()
             if self.present.fullscreen is not None:

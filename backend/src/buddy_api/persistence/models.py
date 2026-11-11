@@ -62,6 +62,9 @@ class Deck(OwnedRecord):
     source_version_id: Mapped[str | None] = mapped_column(String(1024))
     source_slide_count: Mapped[int | None] = mapped_column()
     source_format: Mapped[str] = mapped_column(String(8), server_default="pptx")
+    deletion_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
 
 
 class DeckUpload(OwnedRecord):

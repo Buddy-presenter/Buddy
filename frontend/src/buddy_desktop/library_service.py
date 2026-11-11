@@ -52,6 +52,11 @@ class ProcessingResult:
 
 
 @dataclass(frozen=True)
+class DeckDeletionResult:
+    deck_id: UUID
+
+
+@dataclass(frozen=True)
 class LibraryPage:
     items: tuple[DeckSummary, ...]
     total: int
@@ -254,3 +259,50 @@ class LibraryService:
             return result
         except (ValueError, TypeError, KeyError, AttributeError):
             raise ServiceError("The backend returned an invalid processing response.") from None
+
+    def delete_deck(self, access: str, deck_id: UUID) -> DeckDeletionResult:
+        if not access or len(access) > 16300:
+            raise ServiceError("Invalid library request.")
+        request = Request(
+            self.config.api_url + f"/api/v1/decks/{deck_id}",
+            headers={"Authorization": "Bearer " + access, "Accept": "application/json"},
+            method="DELETE",
+        )
+        try:
+            with build_opener(NoRedirects()).open(
+                request, timeout=self.config.request_timeout
+            ) as response:
+                content = response.read(65537)
+                if (
+                    response.status != 202
+                    or len(content) > 65536
+                    or response.headers.get_content_type() != "application/json"
+                ):
+                    raise ValueError
+        except HTTPError as exc:
+            status = exc.code
+            exc.close()
+            if status in {401, 403}:
+                raise LibraryAccessExpired(
+                    "Library access expired. Sign in or resume your session."
+                ) from None
+            if status == 404:
+                raise ServiceError("This presentation is no longer in your library.") from None
+            if status == 429:
+                raise ServiceError("Too many requests. Wait a minute, then try again.") from None
+            raise ServiceError(
+                "Could not delete this presentation. Refresh the library and try again."
+            ) from None
+        except (URLError, OSError, http.client.HTTPException):
+            raise ServiceError(
+                "Could not reach the library. Check your connection and try again."
+            ) from None
+        except ValueError:
+            raise ServiceError("The backend returned an invalid deletion response.") from None
+        try:
+            data = json.loads(content)["data"]
+            if UUID(data["id"]) != deck_id or data["status"] != "deleting":
+                raise ValueError
+        except (ValueError, TypeError, KeyError, AttributeError):
+            raise ServiceError("The backend returned an invalid deletion response.") from None
+        return DeckDeletionResult(deck_id)

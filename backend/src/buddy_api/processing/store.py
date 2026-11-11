@@ -51,7 +51,7 @@ async def quota(session: AsyncSession, owner: UUID, limit: int) -> None:
 
 
 async def schedule(session: AsyncSession, deck: Deck, owner_quota: int = 4) -> ProcessingJob | None:
-    if deck.source_format not in {"pdf", "pptx"}:
+    if deck.deletion_requested_at is not None or deck.source_format not in {"pdf", "pptx"}:
         return None
     if not all(
         (
@@ -99,6 +99,15 @@ async def owned(session: AsyncSession, owner: UUID, identifier: UUID) -> Process
     )
     if job is None:
         raise UploadError(404, "not_found", "Job not found.")
+    deck = await session.scalar(
+        select(Deck.id).where(
+            Deck.id == job.deck_id,
+            Deck.owner_id == owner,
+            Deck.deletion_requested_at.is_(None),
+        )
+    )
+    if deck is None:
+        raise UploadError(404, "not_found", "Job not found.")
     return job
 
 
@@ -133,6 +142,8 @@ async def retry(session: AsyncSession, job: ProcessingJob, settings: WorkerSetti
     job.generation += 1
     job.status, job.stage_state, job.progress = "queued", "pending", 0
     deck = await session.get(Deck, job.deck_id)
+    if deck is None or deck.deletion_requested_at is not None:
+        raise UploadError(404, "not_found", "Job not found.")
     prefix = "pptx" if deck is not None and deck.source_format == "pptx" else "pdf"
     job.stage = prefix + ("_analysis.v1" if job.extraction_id else "_metadata.v1")
     job.error_code = None
@@ -166,6 +177,15 @@ async def claim(
         }
         or job.not_before > now()
     ):
+        return None
+    deck_exists = await session.scalar(
+        select(Deck.id).where(
+            Deck.id == job.deck_id,
+            Deck.owner_id == job.owner_id,
+            Deck.deletion_requested_at.is_(None),
+        )
+    )
+    if deck_exists is None:
         return None
     outbox = await session.get(JobOutbox, job.id)
     if outbox is None:
@@ -286,6 +306,7 @@ async def save_metadata(
     if (
         deck is None
         or deck.owner_id != job.owner_id
+        or deck.deletion_requested_at is not None
         or deck.source_format != metadata.source_format
         or deck.source_revision != job.source_revision
         or metadata.source_revision != job.source_revision
@@ -325,6 +346,7 @@ async def complete(session: AsyncSession, identifier: UUID, token: UUID, analysi
     if (
         deck is None
         or deck.owner_id != job.owner_id
+        or deck.deletion_requested_at is not None
         or deck.source_format not in {"pdf", "pptx"}
         or deck.source_revision != job.source_revision
         or analysis is None

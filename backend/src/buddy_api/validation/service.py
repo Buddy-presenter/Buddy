@@ -82,8 +82,12 @@ class ValidationService:
     async def owned(self, owner: UUID, identifier: UUID) -> ActionCheck:
         async with self.uploads.transaction() as session:
             row = await session.scalar(
-                select(ActionCheck).where(
-                    ActionCheck.id == identifier, ActionCheck.owner_id == owner
+                select(ActionCheck)
+                .join(Deck, Deck.id == ActionCheck.deck_id)
+                .where(
+                    ActionCheck.id == identifier,
+                    ActionCheck.owner_id == owner,
+                    Deck.deletion_requested_at.is_(None),
                 )
             )
             if row is None:
@@ -102,6 +106,28 @@ class ValidationService:
             raise UploadError(404, "not_found", "Evidence not found.")
         mime = KINDS[value["kind"]][1]
         async with self.uploads.parser_slot:
+            # The first lookup provides a fast failure, but this request may have
+            # waited behind another parser/validator operation. A deck can be
+            # tombstoned during that wait, so reauthorize against current state
+            # before allowing any private evidence bytes to be read.
+            async with self.uploads.transaction() as session:
+                current = await session.scalar(
+                    select(ActionCheck)
+                    .join(Deck, Deck.id == ActionCheck.deck_id)
+                    .where(
+                        ActionCheck.id == identifier,
+                        ActionCheck.owner_id == owner,
+                        Deck.deletion_requested_at.is_(None),
+                    )
+                )
+                if current is None or current.status != "complete":
+                    raise UploadError(404, "not_found", "Evidence not found.")
+                current_value = next(
+                    (item for item in current.artifacts if item["id"] == str(artifact)), None
+                )
+                if current_value is None:
+                    raise UploadError(404, "not_found", "Evidence not found.")
+                row, value = current, current_value
             content = await blocking(
                 lambda: self.uploads.storage.read(
                     self.key(row, value["kind"]),
@@ -136,7 +162,11 @@ class ValidationService:
         async with self.uploads.parser_slot:
             async with self.uploads.transaction() as session:
                 deck = await session.scalar(
-                    select(Deck).where(Deck.id == deck_id, Deck.owner_id == owner)
+                    select(Deck).where(
+                        Deck.id == deck_id,
+                        Deck.owner_id == owner,
+                        Deck.deletion_requested_at.is_(None),
+                    )
                 )
                 if deck is None:
                     raise UploadError(404, "not_found", "Presentation not found.")
