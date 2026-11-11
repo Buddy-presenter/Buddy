@@ -7,6 +7,7 @@ import tempfile
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -420,7 +421,7 @@ class UploadService:
             await blocking(lambda: self.storage.remove_prefix(prefix))
             for key in assets:
                 if not key.startswith(prefix):
-                    remove_asset: Callable[[], None] = lambda: self.storage.remove(key)
+                    remove_asset: Callable[[], None] = partial(self.storage.remove, key)
                     await blocking(remove_asset)
 
             job_ids = select(ProcessingJob.id).where(ProcessingJob.deck_id == identifier)
