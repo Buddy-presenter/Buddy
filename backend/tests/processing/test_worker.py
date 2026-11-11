@@ -17,7 +17,7 @@ import httpx
 import pytest
 from backend.tests.analysis.test_provider import Session, response_for
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from buddy_api.analysis import provider as provider_module
 from buddy_api.analysis.provider import (
@@ -32,7 +32,14 @@ from buddy_api.app import create_app
 from buddy_api.auth import Principal, authenticated
 from buddy_api.config import Environment, Settings
 from buddy_api.persistence.database import Database
-from buddy_api.persistence.models import ActionCheck, DeckExtraction, JobOutbox, ProcessingJob
+from buddy_api.persistence.models import (
+    ActionCheck,
+    Deck,
+    DeckExtraction,
+    JobOutbox,
+    ProcessingJob,
+    User,
+)
 from buddy_api.processing import store
 from buddy_api.processing.config import WorkerSettings
 from buddy_api.processing.contracts import Message, PDFSource
@@ -1013,33 +1020,92 @@ def test_preupgrade_metadata_ready_pdf_is_resumed_into_analysis(database_setting
         await migrate_to("0009_pdf_workers")
         db = Database(database_settings)
         storage = SourceStorage(UPLOADS, S3(PDF.read_bytes()))
-        owner, deck, job = await seed(db)
+        content = PDF.read_bytes()
+        owner_id, deck_id, job_id, extraction_id = (uuid4() for _ in range(4))
+        source_revision = str(uuid4())
+        source_key = f"sources/{owner_id}/original.pdf"
+        source_hash = hashlib.sha256(content).hexdigest()
+        owner = User(id=owner_id, subject="preupgrade-worker-owner")
+        deck = Deck(
+            id=deck_id,
+            owner_id=owner_id,
+            title="PDF worker",
+            source_key=source_key,
+            source_revision=source_revision,
+            source_sha256=source_hash,
+            source_size_bytes=len(content),
+            source_version_id="pinned-version",
+            source_format="pdf",
+        )
+        job = ProcessingJob(id=job_id, owner_id=owner_id, deck_id=deck_id)
         metadata = inspect_source(
             PDFSource(
-                key=deck.source_key,
-                version=deck.source_version_id,
-                size=deck.source_size_bytes,
-                sha256=deck.source_sha256,
-                revision=deck.source_revision,
-                deck_id=deck.id,
+                key=source_key,
+                version="pinned-version",
+                size=len(content),
+                sha256=source_hash,
+                revision=source_revision,
+                deck_id=deck_id,
             ),
             storage,
         )
-        async with db.transaction() as repos:
-            extraction = await repos.extractions.save(
-                owner_id=owner.id, deck_id=deck.id, extraction=metadata.metadata
+        async with db.engine.begin() as connection:
+            # Model a real 0009 database: current ORM mappings include columns introduced
+            # by later migrations, so seed the historical rows using only 0009 columns.
+            await connection.execute(
+                text("INSERT INTO users(id, subject) VALUES (:id, :subject)"),
+                {"id": owner_id, "subject": owner.subject},
             )
-        async with db.sessions() as session, session.begin():
-            old_job = await session.get(ProcessingJob, job.id)
-            old_job.status = "metadata_ready"
-            old_job.stage, old_job.stage_state, old_job.progress = (
-                "pdf_metadata.v1",
-                "succeeded",
-                100,
+            await connection.execute(
+                text(
+                    "INSERT INTO decks(id, owner_id, title, source_key, source_revision, "
+                    "source_sha256, source_size_bytes, source_version_id, source_format) "
+                    "VALUES (:id, :owner_id, :title, :source_key, :source_revision, "
+                    ":source_sha256, :source_size_bytes, :source_version_id, :source_format)"
+                ),
+                {
+                    "id": deck_id,
+                    "owner_id": owner_id,
+                    "title": deck.title,
+                    "source_key": source_key,
+                    "source_revision": source_revision,
+                    "source_sha256": source_hash,
+                    "source_size_bytes": len(content),
+                    "source_version_id": "pinned-version",
+                    "source_format": "pdf",
+                },
             )
-            old_job.attempts = 1
-            old_job.extraction_id = extraction.id
-            old_generation = old_job.generation
+            await connection.execute(
+                text(
+                    "INSERT INTO deck_extractions(id, owner_id, deck_id, source_revision, "
+                    "source_sha256, extractor_version, document) VALUES (:id, :owner_id, "
+                    ":deck_id, :source_revision, :source_sha256, '1', CAST(:document AS jsonb))"
+                ),
+                {
+                    "id": extraction_id,
+                    "owner_id": owner_id,
+                    "deck_id": deck_id,
+                    "source_revision": source_revision,
+                    "source_sha256": source_hash,
+                    "document": json.dumps(metadata.metadata.model_dump(mode="json")),
+                },
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO processing_jobs(id, owner_id, deck_id, status, attempts, "
+                    "source_revision, stage, stage_state, progress, extraction_id) VALUES "
+                    "(:id, :owner_id, :deck_id, 'metadata_ready', 1, :source_revision, "
+                    "'pdf_metadata.v1', 'succeeded', 100, :extraction_id)"
+                ),
+                {
+                    "id": job_id,
+                    "owner_id": owner_id,
+                    "deck_id": deck_id,
+                    "source_revision": source_revision,
+                    "extraction_id": extraction_id,
+                },
+            )
+            old_generation = 0
         await db.close()
 
         # This simulates deploying the analysis worker over a real 0009-completed PDF.
@@ -1061,7 +1127,7 @@ def test_preupgrade_metadata_ready_pdf_is_resumed_into_analysis(database_setting
             assert (migrated.status, migrated.stage, migrated.extraction_id) == (
                 "queued",
                 "pdf_analysis.v1",
-                extraction.id,
+                extraction_id,
             )
             assert migrated.generation == old_generation + 1
             assert migrated.attempts == 0
@@ -1071,14 +1137,14 @@ def test_preupgrade_metadata_ready_pdf_is_resumed_into_analysis(database_setting
             assert (finished.status, finished.attempts, finished.extraction_id) == (
                 "analysis_ready",
                 1,
-                extraction.id,
+                extraction_id,
             )
             assert provider.calls == 1
             async with db.transaction() as repos:
                 analyses = await repos.analyses.list(owner_id=owner.id)
                 assert len(analyses) == 1
                 assert analyses[0].job_id == job.id
-                assert analyses[0].extraction_id == extraction.id
+                assert analyses[0].extraction_id == extraction_id
                 result = await repos.analyses.read(analyses[0].id, owner_id=owner.id)
                 assert result.publication == "published"
         finally:

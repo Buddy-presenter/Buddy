@@ -135,7 +135,11 @@ async def owned_session(
     if lock:
         # Refresh a session previously read into this AsyncSession's identity map.
         # A concurrent end may commit while resume waits for this row lock.
-        query = query.with_for_update().execution_options(populate_existing=True)
+        # Only lock the session row: locking the joined deck reverses the lock order
+        # used by session creation/deletion and can deadlock with concurrent end.
+        query = query.with_for_update(of=PresentationSession).execution_options(
+            populate_existing=True
+        )
     record = await db.scalar(query)
     if record is None:
         raise HTTPException(404)
