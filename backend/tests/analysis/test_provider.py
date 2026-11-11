@@ -152,6 +152,7 @@ def test_bedrock_request_submits_exact_pdf_with_native_claude_api(monkeypatch):
     assert "distinct meaningful details" in prompt
     assert "Build a broad candidate library" in prompt
     assert "not applied all at once" in prompt
+    assert "Do not stop at the first useful target" in prompt
     assert "Do not fill a quota" in prompt
     assert "one visible line or a short phrase only" in prompt
     assert "exact visible words in target_text" in prompt
