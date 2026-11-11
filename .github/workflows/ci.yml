@@ -118,6 +118,12 @@ jobs:
           ldconfig -p | grep -q 'libEGL.so.1' || missing_packages+=(libegl1)
           ldconfig -p | grep -q 'libpulse.so.0' || missing_packages+=(libpulse0)
           if ((${#missing_packages[@]})); then
+            # GitHub's Azure/Canonical mirrors can be unavailable independently of the runner.
+            # Put a separately hosted Ubuntu mirror first; apt still verifies Ubuntu signatures.
+            if ! grep -qFx 'https://mirrors.kernel.org/ubuntu/' /etc/apt/apt-mirrors.txt; then
+              sudo sed -i '1i https://mirrors.kernel.org/ubuntu/' /etc/apt/apt-mirrors.txt
+            fi
+            cat /etc/apt/apt-mirrors.txt
             installed=false
             for attempt in 1 2 3; do
               if sudo timeout --signal=TERM --kill-after=10s 120s apt-get \
