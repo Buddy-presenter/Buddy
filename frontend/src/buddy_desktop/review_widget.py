@@ -466,12 +466,14 @@ class ReviewWidget(Page):
 
     def account_activity(self, busy: bool) -> None:
         self.account_busy = busy
-        if busy:
+        if busy and self.account.operation not in {"check", "profile"}:
+            # Session checks and profile reads do not change the signed-in identity.
+            # Keep the current review visible; only identity-changing operations
+            # clear private review data.
             self.clear_private()
             self.state.show_state("Checking account", "Private review data is being cleared.")
 
     def account_changed(self) -> None:
-        self.generation += 1
         key = (
             (id(self.account.session), self.account.account_id, self.config.api_url)
             if self.token()
