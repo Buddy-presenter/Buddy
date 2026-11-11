@@ -372,6 +372,28 @@ def library_router() -> APIRouter:
         # the connection before waiting on storage or the bounded parser slot;
         # concurrent slow downloads must not exhaust the API database pool.
         async with uploads.parser_slot:
+            # The first authorization check is deliberately before the bounded wait so
+            # obviously missing decks fail quickly. Recheck after waiting: a deletion
+            # may have been accepted while this request was queued for parser capacity.
+            # Release the DB connection before the potentially slow object-store read.
+            async with uploads.transaction() as session:
+                current = await session.scalar(
+                    select(Deck).where(
+                        Deck.id == identifier,
+                        Deck.owner_id == principal.id,
+                        Deck.deletion_requested_at.is_(None),
+                    )
+                )
+                if (
+                    current is None
+                    or current.source_format != source_format
+                    or current.source_key != key
+                    or current.source_version_id != version
+                    or current.source_size_bytes != size
+                    or current.source_sha256 != digest
+                    or current.source_revision != revision
+                ):
+                    raise HTTPException(404)
             content = await blocking(
                 lambda: uploads.storage.read(
                     key,
