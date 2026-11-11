@@ -355,6 +355,13 @@ class LibraryWidget(QWidget):
         return session.tokens.access
 
     def account_activity(self, busy: bool) -> None:
+        if (
+            busy
+            and self.account.operation in {"check", "profile"}
+            and self.account.account_id
+            and self.token()
+        ):
+            return
         self.account_busy = busy
         if busy:
             self.clear_upload(clear_keys=False)
@@ -367,12 +374,15 @@ class LibraryWidget(QWidget):
             )
 
     def account_changed(self) -> None:
-        self.invalidate()
         key = (
             (id(self.account.session), self.account.account_id, self.config.api_url)
             if self.token()
             else None
         )
+        if key is not None and key == self.account_key and self.account.account_id:
+            self._access_layout()
+            return
+        self.invalidate()
         if key is None or key != self.account_key:
             self.private_invalidated.emit()
         if key != self.account_key:

@@ -465,6 +465,13 @@ class ReviewWidget(Page):
                 self.load()
 
     def account_activity(self, busy: bool) -> None:
+        if (
+            busy
+            and self.account.operation in {"check", "profile"}
+            and self.account.account_id
+            and self.token()
+        ):
+            return
         self.account_busy = busy
         if busy and self.account.operation not in {"check", "profile"}:
             # Session checks and profile reads do not change the signed-in identity.

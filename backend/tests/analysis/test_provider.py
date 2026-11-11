@@ -149,6 +149,8 @@ def test_bedrock_request_submits_exact_pdf_with_native_claude_api(monkeypatch):
     action_schema = schema["properties"]["slides"]["items"]["properties"]["actions"]
     prompt = next(part["text"] for part in content if part["type"] == "text")
     assert "multiple actions on a page" in prompt
+    assert "distinct meaningful details" in prompt
+    assert "Do not fill a quota" in prompt
     assert "one visible line or a short phrase only" in prompt
     assert "exact visible words in target_text" in prompt
     assert "paragraph or section selection" in prompt

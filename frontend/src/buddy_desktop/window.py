@@ -488,7 +488,7 @@ class MainWindow(QMainWindow):
         self.cancel_auth_button.setVisible(
             busy and self.account.operation in {"signin", "signup", "recovery"}
         )
-        if busy and self.account.operation != "profile":
+        if busy and self.account.operation not in {"check", "profile"}:
             self._verified_profile = None
             self.account_button.setToolTip("Account operation in progress")
             self.account_title.setText("Checking account…")
