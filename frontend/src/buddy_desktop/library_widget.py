@@ -631,15 +631,18 @@ class LibraryWidget(QWidget):
         access = self.token()
         if access is None or self.runner.busy or self.closing:
             return
-        answer = QMessageBox.warning(
-            self,
+        dialog = QMessageBox(
+            QMessageBox.Icon.Warning,
             "Delete presentation permanently?",
             f'"{deck.title}" and its saved analysis, review data, and source file will be '
             "permanently deleted. This cannot be undone.",
-            QMessageBox.StandardButton.Delete | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
+            parent=self,
         )
-        if answer != QMessageBox.StandardButton.Delete:
+        delete_button = dialog.addButton("Delete", QMessageBox.ButtonRole.DestructiveRole)
+        dialog.addButton(QMessageBox.StandardButton.Cancel)
+        dialog.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        dialog.exec()
+        if dialog.clickedButton() is not delete_button:
             return
         self.poll.stop()
         self.request_generation = self.generation
