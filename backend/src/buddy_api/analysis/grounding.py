@@ -16,6 +16,7 @@ import unicodedata
 from collections.abc import Iterable
 from contextlib import closing
 from dataclasses import dataclass
+from itertools import islice
 
 import pypdfium2 as pdfium  # type: ignore[import-untyped]
 import pypdfium2.raw as raw  # type: ignore[import-untyped]
@@ -867,7 +868,10 @@ def ground_actions(
                             raise ExtractionError("page_geometry_mismatch")
                         converter = bitmap.get_posconv(page)
                         objects, tagged_objects = _object_rects(page, converter, width, height)
-                        if len(page.get_objects()) >= MAX_PAGE_OBJECTS:
+                        if (
+                            sum(1 for _ in islice(page.get_objects(), MAX_PAGE_OBJECTS))
+                            >= MAX_PAGE_OBJECTS
+                        ):
                             coverage_limited = True
                         inventory_actions, inventory_limited = _source_inventory_actions(
                             page,

@@ -115,6 +115,15 @@ def test_highlight_is_rebuilt_from_pdfium_glyph_positions_not_model_box():
     assert action.y + action.height <= page.height
 
 
+def test_source_inventory_accepts_pdfium_page_object_iterator():
+    content, extraction, manifest = _load(GEOMETRY_PDF)
+
+    result = ground_actions(content, extraction, manifest, _output(extraction, {}))
+
+    assert result.slides[0].actions
+    assert any(action.grounding_trace for action in result.slides[0].actions)
+
+
 def test_text_grounding_declines_suffixes_inside_longer_words():
     from contextlib import closing
 
