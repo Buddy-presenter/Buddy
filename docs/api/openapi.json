@@ -3032,7 +3032,9 @@
             "type": "integer"
           },
           "segment_id": {
-            "format": "uuid",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^\\S+$",
             "title": "Segment Id",
             "type": "string"
           },

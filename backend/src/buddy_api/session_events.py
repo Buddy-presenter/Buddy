@@ -50,7 +50,7 @@ class PlayerStateEvent(SessionContract):
 class SpeechEvent(SessionContract):
     kind: Literal["speech.transcript"] = "speech.transcript"
     stream_id: UUID
-    segment_id: UUID
+    segment_id: str = Field(min_length=1, max_length=128, pattern=r"^\S+$")
     revision: int = Field(ge=0, le=1000000, strict=True)
     text: str = Field(min_length=1, max_length=4096)
     final: bool

@@ -75,9 +75,11 @@ def parse_event(raw: object, session_id: str) -> SessionEvent:
         }:
             raise ValueError
         UUID(payload["stream_id"])
-        UUID(payload["segment_id"])
         if (
-            not isinstance(payload["text"], str)
+            not isinstance(payload["segment_id"], str)
+            or not 1 <= len(payload["segment_id"]) <= 128
+            or any(character.isspace() for character in payload["segment_id"])
+            or not isinstance(payload["text"], str)
             or not 1 <= len(payload["text"]) <= 4096
             or type(payload["final"]) is not bool
             or not isinstance(payload["language"], str)

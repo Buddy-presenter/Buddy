@@ -64,7 +64,7 @@ def test_typed_events_reject_unbounded_or_forged_commands():
     with pytest.raises(ValidationError):
         SpeechEvent(
             stream_id=uuid4(),
-            segment_id=uuid4(),
+            segment_id=f"{uuid4()}:1000000",
             revision=0,
             text="s" * 4097,
             final=True,
@@ -75,7 +75,7 @@ def test_typed_events_reject_unbounded_or_forged_commands():
     with pytest.raises(ValidationError):
         SpeechEvent(
             stream_id=uuid4(),
-            segment_id=uuid4(),
+            segment_id=f"{uuid4()}:1000000",
             revision=0,
             text="speech",
             final=True,
@@ -230,7 +230,7 @@ def test_internal_speech_events_are_bound_to_current_session_and_not_logged(
     path = f"/api/v1/sessions/{ids['sessions']}"
     speech = SpeechEvent(
         stream_id=uuid4(),
-        segment_id=uuid4(),
+        segment_id=f"{uuid4()}:1000000",
         revision=0,
         text="private spoken material",
         final=True,
