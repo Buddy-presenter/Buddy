@@ -203,6 +203,12 @@ def test_timeline_rejects_replay_and_audio_flood():
             timeline.accept(packet(101 + index))
 
 
+def test_provider_timestamp_rounding_at_audio_boundary():
+    timeline = speech.AudioTimeline(16000)
+    timeline.accept(struct.pack(">Q", 1_000_000_000) + b"\0" * 9600)
+    assert timeline.capture_at(0.1 + 0.2) == 1_000_000_000
+
+
 @pytest.mark.parametrize(
     "raw",
     ["not json", "[]", result(duration=float("nan")), result(text="x" * 4097), result(duration=2)],

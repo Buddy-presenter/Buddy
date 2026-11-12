@@ -25,8 +25,53 @@ run "speech_disabled_by_default" {
   }
 }
 run "speech_secret_is_api_only" {
-  command = apply
+  command = plan
   variables { enable_speech = true }
+  override_resource {
+    target          = aws_lb.api
+    values          = { dns_name = "buddy-staging.eu-central-1.elb.amazonaws.com" }
+    override_during = plan
+  }
+  override_resource {
+    target          = aws_cognito_user_pool.main
+    values          = { id = "eu-central-1_Example" }
+    override_during = plan
+  }
+  override_resource {
+    target          = aws_cognito_user_pool_client.desktop
+    values          = { id = "client123" }
+    override_during = plan
+  }
+  override_resource {
+    target          = aws_s3_bucket.private["data"]
+    values          = { id = "buddy-staging-123456789012-data" }
+    override_during = plan
+  }
+  override_resource {
+    target          = aws_kms_key.data
+    values          = { arn = "arn:aws:kms:eu-central-1:123456789012:key/11111111-1111-1111-1111-111111111111" }
+    override_during = plan
+  }
+  override_resource {
+    target          = aws_sqs_queue.processing
+    values          = { url = "https://sqs.eu-central-1.amazonaws.com/123456789012/buddy-staging-processing" }
+    override_during = plan
+  }
+  override_resource {
+    target          = aws_secretsmanager_secret.database["api"]
+    values          = { arn = "arn:aws:secretsmanager:eu-central-1:123456789012:secret:api-database-ABC123" }
+    override_during = plan
+  }
+  override_resource {
+    target          = aws_secretsmanager_secret.database["worker"]
+    values          = { arn = "arn:aws:secretsmanager:eu-central-1:123456789012:secret:worker-database-ABC123" }
+    override_during = plan
+  }
+  override_resource {
+    target          = aws_secretsmanager_secret.database["migration"]
+    values          = { arn = "arn:aws:secretsmanager:eu-central-1:123456789012:secret:migration-database-ABC123" }
+    override_during = plan
+  }
   override_resource {
     target          = aws_secretsmanager_secret.speech[0]
     values          = { arn = "arn:aws:secretsmanager:eu-central-1:123456789012:secret:buddy-staging/speech/deepgram-ABC123" }

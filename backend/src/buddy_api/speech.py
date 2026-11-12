@@ -167,8 +167,8 @@ class AudioTimeline:
 
     def capture_at(self, end: float) -> int:
         for audio_end, stamp in self.points:
-            if audio_end >= end:
-                return max(1, stamp - round((audio_end - end) * 1_000_000_000))
+            if audio_end + 1 / self.sample_rate >= end:
+                return max(1, stamp - round(max(0, audio_end - end) * 1_000_000_000))
         raise SpeechFailure("invalid_provider_result")
 
 
