@@ -22,7 +22,7 @@ from buddy_desktop.presentation_session_service import (
     SessionState,
 )
 from buddy_desktop.services import ServiceError
-from buddy_desktop.session_events import SessionEventStream
+from buddy_desktop.session_events import SessionEvent, SessionEventStream
 from buddy_desktop.slide_contract import Manifest, Slide
 from buddy_desktop.slide_surface import SlideSurface
 
@@ -55,6 +55,65 @@ def _session(deck_id: str, state: SessionState, version: int = 1) -> Presentatio
         state=state,
         created_at=datetime.now(UTC),
     )
+
+
+def test_remote_state_restores_absolute_position_without_republishing(qtbot, tmp_path):
+    widget = PresentWidget(
+        AppConfig("http://127.0.0.1:8000"),
+        QSettings(str(tmp_path / "events.ini"), QSettings.Format.IniFormat),
+    )
+    qtbot.addWidget(widget)
+    manifest = replace(_manifest(), account_bound=True)
+    widget.executor.manifest = manifest
+    widget.executor.current_index = 0
+    widget.surface.commit(
+        manifest.slides[0], QImage(str(manifest.root / "wide.png")), manifest.slides[0].full
+    )
+    first = _session(manifest.deck_id, SessionState(manifest.slides[0].slide_id))
+    remote = replace(first, state_version=2, state=SessionState(manifest.slides[1].slide_id))
+    widget._session = first
+    generation = widget.session_events.generation
+    event = SessionEvent(first.id, 1, 2, {}, remote)
+    try:
+        widget._session_event_received(generation, event)
+        qtbot.waitUntil(lambda: widget.executor.current_index == 1 and not widget.executor.busy)
+        qtbot.waitUntil(lambda: widget._session_restore_state is None)
+        assert widget._session.state_version == 2
+        assert widget._session_pending_state is None
+        assert not widget.session_runner.busy
+        # Replayed state and callbacks queued before sign-out cannot move the player.
+        widget._session_event_received(generation, event)
+        widget.session_events.stop()
+        old = SessionEvent(first.id, 2, 3, {}, replace(first, state_version=3))
+        widget._session_event_received(generation, old)
+        assert widget.executor.current_index == 1
+    finally:
+        widget.shutdown()
+
+
+def test_unsent_manual_position_takes_priority_over_remote_state(qtbot, tmp_path):
+    widget = PresentWidget(
+        AppConfig("http://127.0.0.1:8000"),
+        QSettings(str(tmp_path / "manual.ini"), QSettings.Format.IniFormat),
+    )
+    qtbot.addWidget(widget)
+    manifest = _manifest()
+    widget.executor.manifest = manifest
+    widget.executor.current_index = 1
+    first = _session(manifest.deck_id, SessionState(manifest.slides[0].slide_id))
+    widget._session = first
+    pending = SessionState(manifest.slides[1].slide_id)
+    widget._session_pending_state = pending
+    try:
+        widget._session_event_received(
+            widget.session_events.generation,
+            SessionEvent(first.id, 1, 2, {}, replace(first, state_version=2)),
+        )
+        assert widget.executor.current_index == 1
+        assert widget._session_pending_state == pending
+        assert widget._session.state_version == 2
+    finally:
+        widget.shutdown()
 
 
 def test_manual_navigation_remains_responsive_while_session_request_is_pending(

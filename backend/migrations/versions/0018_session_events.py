@@ -34,8 +34,8 @@ def upgrade() -> None:
             ["presentation_sessions.id"],
             ondelete="CASCADE",
         ),
-        sa.UniqueConstraint("session_id", "sequence"),
-        sa.UniqueConstraint("session_id", "command_id"),
+        sa.UniqueConstraint("session_id", "sequence", name="uq_session_events_sequence"),
+        sa.UniqueConstraint("session_id", "command_id", name="uq_session_events_command"),
         sa.CheckConstraint("sequence > 0", name=op.f("ck_session_events_sequence_positive")),
     )
     op.create_index("ix_session_events_session_id", "session_events", ["session_id"])

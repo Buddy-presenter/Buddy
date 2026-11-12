@@ -443,8 +443,8 @@ class SessionEvent(Base):
 
     __tablename__ = "session_events"
     __table_args__ = (
-        UniqueConstraint("session_id", "sequence"),
-        UniqueConstraint("session_id", "command_id"),
+        UniqueConstraint("session_id", "sequence", name="uq_session_events_sequence"),
+        UniqueConstraint("session_id", "command_id", name="uq_session_events_command"),
         CheckConstraint("sequence > 0", name="sequence_positive"),
     )
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
