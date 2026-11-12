@@ -706,7 +706,7 @@ def test_typed_api_auth_restart_no_public_validation_writes(
 def test_expanded_pdf_actions_persist_with_versioned_contract(
     migrated_database, monkeypatch, api_client_factory
 ):
-    from buddy_api.analysis.contracts import PDFAnalysisInputV2, PDFAnalysisResultV2
+    from buddy_api.analysis.contracts import ContentAction, PDFAnalysisInputV2, PDFAnalysisResultV2
 
     async def scenario():
         db = Database(migrated_database)
@@ -723,6 +723,22 @@ def test_expanded_pdf_actions_persist_with_versioned_contract(
                 data["slides"][0]["actions"] = [
                     dict(template, instance_id=f"action-{i}") for i in range(41)
                 ]
+                data["grounding"] = [
+                    {
+                        "instance_id": action["instance_id"],
+                        "action_sha256": digest(ContentAction.model_validate(action)),
+                        "trace": {
+                            "method": "pdf_glyphs",
+                            "target_text": "Synthetic target",
+                            "model_region": action["params"]["region"],
+                            "resolved_region": action["params"]["region"],
+                        },
+                    }
+                    for action in data["slides"][0]["actions"]
+                ]
+                data["visual_qa_pending_instance_ids"] = [
+                    action["instance_id"] for action in data["slides"][0]["actions"]
+                ]
                 expanded = PDFAnalysisInputV2.model_validate(data)
                 saved = await repos.analyses.create(
                     owner_id=owner.id, deck_id=deck.id, version=1, document=expanded
@@ -730,6 +746,8 @@ def test_expanded_pdf_actions_persist_with_versioned_contract(
                 result = await repos.analyses.read(saved.id, owner_id=owner.id)
                 assert isinstance(result, PDFAnalysisResultV2)
                 assert len(result.slides[0].actions) == 41
+                assert len(result.inputs.grounding) == 41
+                assert len(result.visual_qa_pending_instance_ids) == 41
                 assert all(not action.usable for action in result.slides[0].actions)
                 return deck.id
         finally:
