@@ -4,7 +4,7 @@ import os
 import plistlib
 from datetime import UTC
 from pathlib import Path
-from queue import Empty
+from queue import Empty, Queue
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -27,12 +27,16 @@ class Device:
 class FakeMicrophone(QObject):
     status_changed = Signal(str)
     devices_changed = Signal()
+    format_ready = Signal(int)
+    audio_received = Signal(int)
+    audio_gap = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.enabled = False
         self.starts = 0
         self.stops = 0
+        self.frames = Queue(maxsize=8)
 
     def inputs(self):
         return [Device()]

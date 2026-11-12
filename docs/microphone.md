@@ -20,11 +20,14 @@ chosen explicitly. Reconnecting a device never starts listening automatically. A
 operating-system permission requires the user to enable access in the system's privacy
 settings before retrying.
 
-Capture uses Qt Multimedia in a separate thread. It is not connected to speech recognition
-or an agent. Audio is not written to disk or sent to a server. A bounded in-memory queue
-holds at most eight 4096-byte chunks and is cleared when capture stops or is muted/paused;
-older chunks are dropped when the queue is full. The input's native preferred format is
-used. macOS bundles declare microphone usage and an audio-input entitlement.
+Capture uses Qt Multimedia in a separate thread. Saved PDF sessions connect it to
+[streaming speech recognition](speech-recognition.md), sending audio through the
+authenticated backend to Deepgram (EU). The provider key remains server-side. Local
+PowerPoint capture is not transmitted. Audio is not written to disk. A bounded in-memory
+queue holds at most eight PCM16 packets and is cleared when capture stops or is
+muted/paused. Overflow invalidates the speech stream rather than silently joining speech
+across a gap. The native sample rate is preserved; supported sample formats are downmixed
+to mono PCM16. macOS bundles declare microphone usage and an audio-input entitlement.
 
 For a real-device test, sign in, open a saved, ready PDF from Library, and wait for its
 presentation session to connect. Select the USB microphone and start capture. Verify the

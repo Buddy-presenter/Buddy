@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib
+import struct
 import sys
+import time
 from contextlib import suppress
 from queue import Empty, Full, Queue
 from threading import Event, Lock
@@ -22,6 +24,8 @@ from PySide6.QtCore import (
 )
 from PySide6.QtMultimedia import QAudio, QAudioDevice, QAudioSource, QMediaDevices
 
+from buddy_desktop.speech_audio import PCM16Encoder
+
 
 def _clear_frames(frames: Queue[bytes]) -> None:
     while True:
@@ -34,6 +38,8 @@ def _clear_frames(frames: Queue[bytes]) -> None:
 class _CaptureWorker(QObject):
     changed = Signal(int, str)
     received = Signal(int)
+    formatted = Signal(int, int)
+    gap = Signal(int)
 
     def __init__(self, frames: Queue[bytes], accepting: Event, frame_lock: Lock) -> None:
         super().__init__()
@@ -45,6 +51,7 @@ class _CaptureWorker(QObject):
         self._com_initialized = False
         self.monitor: QTimer | None = None
         self.generation = 0
+        self.encoder: PCM16Encoder | None = None
 
     @Slot(object, int)
     def start(self, device_id: bytes, generation: int) -> None:
@@ -63,7 +70,13 @@ class _CaptureWorker(QObject):
             if device is None:
                 self.changed.emit(generation, "Microphone unavailable. Choose an input device.")
                 return
-            source = QAudioSource(device, device.preferredFormat(), self)
+            audio_format = device.preferredFormat()
+            self.encoder = PCM16Encoder(
+                audio_format.sampleFormat().name, audio_format.channelCount()
+            )
+            if not 8000 <= audio_format.sampleRate() <= 96000:
+                raise ValueError("Unsupported microphone sample rate.")
+            source = QAudioSource(device, audio_format, self)
             source.setBufferSize(16384)
             self.source = source
             self.stream = source.start()
@@ -84,6 +97,7 @@ class _CaptureWorker(QObject):
         self.monitor.setInterval(250)
         self.monitor.timeout.connect(self._check_error)
         self.monitor.start()
+        self.formatted.emit(generation, audio_format.sampleRate())
         self.changed.emit(generation, "Microphone on")
 
     @Slot()
@@ -94,17 +108,27 @@ class _CaptureWorker(QObject):
             frame = bytes(self.stream.read(4096).data())
             if not frame:
                 break
+            if self.encoder is None:
+                return
+            pcm = self.encoder.encode(frame)
+            if not pcm:
+                continue
+            packet = struct.pack(">Q", time.monotonic_ns()) + pcm
+            dropped = False
             with self.frame_lock:
                 if not self.accepting.is_set():
                     continue
                 try:
-                    self.frames.put_nowait(frame)
+                    self.frames.put_nowait(packet)
                 except Full:
+                    dropped = True
                     with suppress(Empty):
                         self.frames.get_nowait()
                     with suppress(Full):
-                        self.frames.put_nowait(frame)
-            self.received.emit(len(frame))
+                        self.frames.put_nowait(packet)
+            if dropped:
+                self.gap.emit(self.generation)
+            self.received.emit(len(pcm))
 
     @Slot()
     def _check_error(self) -> None:
@@ -121,6 +145,7 @@ class _CaptureWorker(QObject):
             self.monitor.deleteLater()
             self.monitor = None
         self.stream = None
+        self.encoder = None
         source, self.source = self.source, None
         if source is not None:
             source.stop()
@@ -143,6 +168,8 @@ class MicrophoneController(QObject):
     status_changed = Signal(str)
     devices_changed = Signal()
     audio_received = Signal(int)
+    format_ready = Signal(int)
+    audio_gap = Signal()
     _start_worker = Signal(object, int)
     _stop_worker = Signal()
 
@@ -158,6 +185,8 @@ class MicrophoneController(QObject):
         self._stop_worker.connect(self.worker.stop)
         self.worker.changed.connect(self._worker_changed)
         self.worker.received.connect(self.audio_received)
+        self.worker.formatted.connect(self._format_ready)
+        self.worker.gap.connect(self._audio_gap)
         self._capture_thread.finished.connect(self.worker.deleteLater)
         self._capture_thread.start()
         self.devices = QMediaDevices(self)
@@ -167,6 +196,16 @@ class MicrophoneController(QObject):
         self._enabled = False
         self._muted = False
         self._paused = False
+
+    @Slot(int, int)
+    def _format_ready(self, generation: int, sample_rate: int) -> None:
+        if generation == self._generation and self.accepting.is_set():
+            self.format_ready.emit(sample_rate)
+
+    @Slot(int)
+    def _audio_gap(self, generation: int) -> None:
+        if generation == self._generation and self.accepting.is_set():
+            self.audio_gap.emit()
 
     @property
     def enabled(self) -> bool:

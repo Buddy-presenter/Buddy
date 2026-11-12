@@ -38,6 +38,10 @@ variable "start_services" {
   type    = bool
   default = false
 }
+variable "enable_speech" {
+  type    = bool
+  default = false
+}
 variable "worker_start_services" {
   type    = bool
   default = false
@@ -71,6 +75,7 @@ module "environment" {
   worker_image             = var.worker_image
   worker_text_targeting    = var.worker_text_targeting
   start_services           = var.start_services
+  enable_speech            = var.enable_speech
   worker_start_services    = var.worker_start_services
   github_oidc_provider_arn = var.github_oidc_provider_arn
   vpc_cidr                 = "10.50.0.0/16"
