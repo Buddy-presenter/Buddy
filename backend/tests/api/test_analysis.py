@@ -703,6 +703,7 @@ def test_typed_api_auth_restart_no_public_validation_writes(
     )
 
 
+@pytest.mark.postgres
 def test_expanded_pdf_actions_persist_with_versioned_contract(
     migrated_database, monkeypatch, api_client_factory
 ):
@@ -720,8 +721,10 @@ def test_expanded_pdf_actions_persist_with_versioned_contract(
                 data = original.model_dump(mode="json")
                 data["schema_version"] = "buddy.analysis.v2"
                 template = data["slides"][0]["actions"][0]
+                # Position is zero-based; 101 actions exercise the first position
+                # previously rejected by the database constraint (position == 100).
                 data["slides"][0]["actions"] = [
-                    dict(template, instance_id=f"action-{i}") for i in range(41)
+                    dict(template, instance_id=f"action-{i}") for i in range(101)
                 ]
                 data["grounding"] = [
                     {
@@ -745,9 +748,9 @@ def test_expanded_pdf_actions_persist_with_versioned_contract(
                 )
                 result = await repos.analyses.read(saved.id, owner_id=owner.id)
                 assert isinstance(result, PDFAnalysisResultV2)
-                assert len(result.slides[0].actions) == 41
-                assert len(result.inputs.grounding) == 41
-                assert len(result.visual_qa_pending_instance_ids) == 41
+                assert len(result.slides[0].actions) == 101
+                assert len(result.inputs.grounding) == 101
+                assert len(result.visual_qa_pending_instance_ids) == 101
                 assert all(not action.usable for action in result.slides[0].actions)
                 return deck.id
         finally:
@@ -768,7 +771,7 @@ def test_expanded_pdf_actions_persist_with_versioned_contract(
     assert client.get(f"/api/v1/analyses/by-deck/{deck_id}", headers=headers).status_code == 409
     response = client.get(f"/api/v2/analyses/pdf/by-deck/{deck_id}", headers=headers)
     assert response.status_code == 200
-    assert len(response.json()["data"]["slides"][0]["actions"]) == 41
+    assert len(response.json()["data"]["slides"][0]["actions"]) == 101
     assert (
         client.get(
             f"/api/v2/analyses/pdf/by-deck/{deck_id}", headers={"Authorization": "Bearer other"}
