@@ -667,7 +667,7 @@ class Processor:
                         )
                         if current is None or not store.valid_lease(current, token):
                             logger.warning(
-                                "Worker stopped before persisting validation after lease loss for job %s",
+                                "Worker stopped before validation persistence after lease loss: %s",
                                 job.id,
                             )
                             return
