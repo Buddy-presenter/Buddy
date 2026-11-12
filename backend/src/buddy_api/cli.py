@@ -21,5 +21,7 @@ def main() -> int:
         access_log=False,
         log_level="warning",
         proxy_headers=False,
+        ws_max_size=8200,
+        ws_max_queue=4,
     )
     return 0

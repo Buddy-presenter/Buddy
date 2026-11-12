@@ -5,6 +5,7 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
+from queue import Empty
 from typing import cast
 
 from PySide6.QtCore import QPointF, QRectF, QSettings, Qt, QTimer, Signal, Slot
@@ -20,6 +21,7 @@ from PySide6.QtGui import (
     QScreen,
 )
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -28,6 +30,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QMenu,
+    QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -55,6 +58,7 @@ from buddy_desktop.services import ServiceError
 from buddy_desktop.slide_contract import Region
 from buddy_desktop.slide_executor import Completion, SlideExecutor
 from buddy_desktop.slide_surface import SlideSurface
+from buddy_desktop.speech import SpeechController
 from buddy_desktop.tasks import TaskRunner
 from buddy_desktop.views import Page, StatusLabel
 from buddy_desktop.visuals import BuddyMark, command
@@ -176,6 +180,10 @@ class PresentWidget(Page):
         self.session_runner.failed.connect(self._session_failed)
         self.session_runner.idle.connect(self._session_idle)
         self.microphone = MicrophoneController(self)
+        self.speech = SpeechController(self)
+        self.microphone.format_ready.connect(self._speech_start)
+        self.microphone.audio_received.connect(self._speech_audio)
+        self.microphone.audio_gap.connect(self.speech.audio_gap)
         self._microphone_pdf_generation = 0
         self._microphone_pdf_request_generation = 0
         self._microphone_pdf_poll = QTimer(self)
@@ -349,6 +357,20 @@ class PresentWidget(Page):
         self.microphone_button.clicked.connect(self._microphone_toggle)
         microphone_row.addWidget(self.microphone_button)
         microphone_layout.addLayout(microphone_row)
+        self.microphone_compatibility = QCheckBox("Use microphone compatibility mode")
+        self.microphone_compatibility.setAccessibleName("Windows microphone compatibility mode")
+        self.microphone_compatibility.setToolTip(
+            "Use this if normal recording fails. While listening, "
+            "Buddy may need the selected microphone to itself."
+        )
+        self.microphone_compatibility.setVisible(sys.platform == "win32")
+        self.microphone_compatibility.setChecked(
+            sys.platform == "win32"
+            and bool(settings.value("microphone/compatibility", False, type=bool))
+        )
+        self.microphone.set_compatibility(self.microphone_compatibility.isChecked())
+        self.microphone_compatibility.toggled.connect(self._microphone_compatibility_changed)
+        microphone_layout.addWidget(self.microphone_compatibility)
         microphone_controls = QHBoxLayout()
         self.microphone_mute = QPushButton("Mute")
         self.microphone_mute.setAccessibleName("Mute microphone")
@@ -369,6 +391,35 @@ class PresentWidget(Page):
         self.microphone_status.setText("Microphone off")
         self.microphone_status.setWordWrap(True)
         microphone_layout.addWidget(self.microphone_status)
+        self.speech_language = QComboBox()
+        self.speech_language.setAccessibleName("Speech recognition language")
+        for label, code in (
+            ("English (US)", "en-US"),
+            ("English (UK)", "en-GB"),
+            ("Arabic", "ar"),
+            ("French", "fr"),
+            ("German", "de"),
+            ("Spanish", "es"),
+        ):
+            self.speech_language.addItem(label, code)
+        self.speech_language.currentIndexChanged.connect(lambda _index: self.microphone.stop())
+        microphone_layout.addWidget(self.speech_language)
+        self.speech_status = QLabel(
+            "Saved PDF sessions: microphone audio is sent to Deepgram (EU) for transcription."
+        )
+        self.speech_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.speech_status.setWordWrap(True)
+        self.speech_status.setAccessibleName("Speech recognition status and privacy")
+        microphone_layout.addWidget(self.speech_status)
+        self.speech_text = QPlainTextEdit()
+        self.speech_text.setReadOnly(True)
+        self.speech_text.setMaximumHeight(88)
+        self.speech_text.setPlaceholderText("The latest partial or final transcript appears here.")
+        self.speech_text.setAccessibleName("Latest speech transcript")
+        microphone_layout.addWidget(self.speech_text)
+        self.speech.status_changed.connect(self.speech_status.setText)
+        self.speech.transcript_received.connect(self._speech_transcript)
+        self.speech.cleared.connect(self.speech_text.clear)
         self.microphone.status_changed.connect(self._microphone_status_changed)
         self.microphone.devices_changed.connect(self._microphone_devices_changed)
         self.body.addWidget(self.microphone_panel)
@@ -498,6 +549,12 @@ class PresentWidget(Page):
         self._refresh()
 
     @Slot(bool)
+    def _microphone_compatibility_changed(self, enabled: bool) -> None:
+        self.microphone.set_compatibility(enabled)
+        self.settings.setValue("microphone/compatibility", enabled)
+        self._refresh()
+
+    @Slot(bool)
     def _microphone_mute_changed(self, muted: bool) -> None:
         self.microphone_mute.setText("Unmute" if muted else "Mute")
         self.microphone_mute.setAccessibleName("Unmute microphone" if muted else "Mute microphone")
@@ -514,6 +571,11 @@ class PresentWidget(Page):
     @Slot(str)
     def _microphone_status_changed(self, message: str) -> None:
         self.microphone_status.setText(message)
+        if message != "Microphone on":
+            self.speech.stop()
+            self.speech_status.setText(
+                "Transcription off. Audio is sent only during an active saved PDF session."
+            )
         if message == "Microphone on" and self._powerpoint_info is None:
             self._microphone_pdf_generation += 1
             self._microphone_pdf_poll.start()
@@ -526,6 +588,49 @@ class PresentWidget(Page):
             self.microphone_mute.setChecked(False)
             self.microphone_pause.setChecked(False)
         self._refresh()
+
+    @Slot(int)
+    def _speech_start(self, sample_rate: int) -> None:
+        if (
+            not self._closing
+            and self.microphone.enabled
+            and self._powerpoint_info is None
+            and self._session is not None
+            and self._session.status == "active"
+            and self._session_access
+        ):
+            self.speech.start(
+                self.config,
+                self._session_access,
+                self._session.id,
+                sample_rate,
+                str(self.speech_language.currentData()),
+            )
+        elif self._powerpoint_info is not None:
+            self.speech_status.setText(
+                "PowerPoint microphone capture is local; "
+                "transcription requires a saved PDF session."
+            )
+
+    @Slot(int)
+    def _speech_audio(self, _size: int) -> None:
+        # Drain even when speech is unavailable: never accumulate/replay local capture.
+        while True:
+            try:
+                packet = self.microphone.frames.get_nowait()
+            except Empty:
+                return
+            if self.microphone.enabled:
+                self.speech.send(packet)
+
+    @Slot(object)
+    def _speech_transcript(self, event: dict[str, object]) -> None:
+        kind = "Final" if event["final"] else "Partial"
+        start = float(cast(float, event["start_seconds"]))
+        end = float(cast(float, event["end_seconds"]))
+        self.speech_text.setPlainText(
+            f"{kind} • {start:.2f}–{end:.2f} s • {event['latency_ms']} ms\n{event['text']}"
+        )
 
     @Slot()
     def _verify_microphone_pdf_session(self) -> None:
@@ -1606,6 +1711,7 @@ class PresentWidget(Page):
     def shutdown(self) -> None:
         self._closing = True
         self._powerpoint_verification.stop()
+        self.speech.stop()
         self.microphone.shutdown()
         with suppress(Exception):
             self.powerpoint.release_zoom()

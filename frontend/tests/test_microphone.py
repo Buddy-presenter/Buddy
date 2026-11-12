@@ -4,7 +4,7 @@ import os
 import plistlib
 from datetime import UTC
 from pathlib import Path
-from queue import Empty
+from queue import Empty, Queue
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -27,12 +27,17 @@ class Device:
 class FakeMicrophone(QObject):
     status_changed = Signal(str)
     devices_changed = Signal()
+    format_ready = Signal(int)
+    audio_received = Signal(int)
+    audio_gap = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.enabled = False
         self.starts = 0
         self.stops = 0
+        self.compatibility = False
+        self.frames = Queue(maxsize=8)
 
     def inputs(self):
         return [Device()]
@@ -50,11 +55,30 @@ class FakeMicrophone(QObject):
     def set_muted(self, _value):
         pass
 
+    def set_compatibility(self, value):
+        self.stop()
+        self.compatibility = value
+
     def set_paused(self, _value):
         pass
 
     def shutdown(self):
         self.stop()
+
+
+def test_compatibility_mode_is_optional_saved_and_stops_capture(desktop_window, monkeypatch):
+    monkeypatch.setattr(present_widget, "MicrophoneController", FakeMicrophone)
+    window = desktop_window()
+    page = window.present
+    assert not page.microphone_compatibility.isChecked()
+    monkeypatch.setattr(page, "_microphone_session_available", lambda: True)
+    page._session = SimpleNamespace(status="active")
+    page._microphone_toggle()
+    assert page.microphone.enabled
+    page.microphone_compatibility.setChecked(True)
+    assert not page.microphone.enabled
+    assert page.microphone.compatibility
+    assert window.settings.value("microphone/compatibility", type=bool)
 
 
 def test_microphone_never_starts_without_active_session(desktop_window, monkeypatch):
@@ -272,7 +296,7 @@ def test_macos_bundle_declares_microphone_usage_and_signing_entitlement(tmp_path
 
 
 @pytest.mark.skipif(not os.environ.get("BUDDY_TEST_MICROPHONE"), reason="Opt-in real microphone")
-def test_present_controls_capture_and_stop_real_microphone(desktop_window, qtbot):
+def test_present_controls_capture_and_stop_real_microphone(desktop_window, qtbot, monkeypatch):
     window = desktop_window()
     page = window.present
     window.navigation.setCurrentRow(3)
@@ -280,8 +304,9 @@ def test_present_controls_capture_and_stop_real_microphone(desktop_window, qtbot
     page.load_pdf(pdf, deck_id=str(uuid4()), revision="hardware-test")
     qtbot.waitUntil(lambda: not page.executor.busy, timeout=15000)
     assert page.executor.manifest is not None
-    # Only the session boundary is substituted; Qt input and the actual widgets are real.
-    page._session = SimpleNamespace(status="active")
+    # Session/network boundaries are substituted; native input and widgets are real.
+    page._session = SimpleNamespace(status="active", id=str(uuid4()))
+    monkeypatch.setattr(page.speech, "start", lambda *_args: None)
     page._session_access = "test-access"
     page._refresh()
     index = page.microphone_device.findText(
@@ -289,6 +314,7 @@ def test_present_controls_capture_and_stop_real_microphone(desktop_window, qtbot
     )
     assert index >= 0
     page.microphone_device.setCurrentIndex(index)
+    page.microphone_compatibility.setChecked(os.environ.get("BUDDY_SPEECH_COMPATIBILITY") == "1")
     counts = []
     page.microphone.audio_received.connect(counts.append)
     page.microphone_button.click()
@@ -306,6 +332,13 @@ def test_present_controls_capture_and_stop_real_microphone(desktop_window, qtbot
     assert len(counts) == muted_count
     page.microphone_mute.click()
     qtbot.waitUntil(lambda: len(counts) > muted_count, timeout=5000)
+    page.microphone_pause.click()
+    qtbot.wait(300)
+    paused_count = len(counts)
+    qtbot.wait(400)
+    assert len(counts) == paused_count
+    page.microphone_pause.click()
+    qtbot.waitUntil(lambda: len(counts) > paused_count, timeout=5000)
     page.clear_session_binding()
     qtbot.wait(300)
     stopped_count = len(counts)

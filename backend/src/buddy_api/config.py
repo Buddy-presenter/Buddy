@@ -10,6 +10,7 @@ from enum import StrEnum
 
 from buddy_api.persistence.settings import DatabaseConfigurationError, DatabaseSettings
 from buddy_api.processing.config import WorkerSettings
+from buddy_api.speech import SpeechSettings
 from buddy_api.uploads.config import UploadSettings
 from buddy_api.validation.config import ValidatorSettings
 from buddy_identity.config import IdentityConfig, IdentityError
@@ -53,6 +54,7 @@ class Settings:
     uploads: UploadSettings | None = None
     validator: ValidatorSettings | None = None
     worker: WorkerSettings | None = None
+    speech: SpeechSettings | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.environment, Environment):
@@ -125,6 +127,10 @@ class Settings:
             )
         except ValueError:
             raise ConfigurationError("Invalid BUDDY_VALIDATOR_PYTHON executable.") from None
+        try:
+            speech = SpeechSettings.from_environment(values)
+        except ValueError as exc:
+            raise ConfigurationError(str(exc)) from None
         return cls(
             environment,
             hosts,
@@ -136,4 +142,5 @@ class Settings:
             uploads,
             validator,
             WorkerSettings.from_environment(values),
+            speech,
         )

@@ -37,6 +37,7 @@ from buddy_api.processing.api import processing_router
 from buddy_api.processing.queue import Queue
 from buddy_api.processing.service import Processor
 from buddy_api.readiness import DependencyProbe, check_dependencies, validate_probes
+from buddy_api.speech import DeepgramProvider, speech_router
 from buddy_api.uploads.contracts import UploadError
 from buddy_api.uploads.router import UploadMetadataLimitMiddleware, upload_router
 from buddy_api.uploads.service import UploadService
@@ -153,6 +154,7 @@ def create_app(
     app.add_middleware(RequestContextMiddleware, allowed_hosts=config.allowed_hosts)
     app.state.database = database
     app.state.authentication = Authentication(config.identity)
+    app.state.speech_provider = DeepgramProvider(config.speech) if config.speech else None
     app.state.uploads = uploads
     app.state.validator = validator
     app.state.worker_settings = config.worker
@@ -163,6 +165,7 @@ def create_app(
     app.include_router(library_router())
     app.include_router(analysis_router())
     app.include_router(session_router())
+    app.include_router(speech_router(config.allowed_hosts))
     app.include_router(upload_router())
     app.include_router(validation_router())
     app.include_router(processing_router())
