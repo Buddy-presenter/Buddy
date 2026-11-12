@@ -7,6 +7,7 @@ from pathlib import Path
 from threading import Event
 from typing import cast
 
+import pytest
 from PySide6.QtCore import QSettings
 from PySide6.QtGui import QGuiApplication, QImage
 from PySide6.QtWidgets import QVBoxLayout, QWidget
@@ -21,8 +22,16 @@ from buddy_desktop.presentation_session_service import (
     SessionState,
 )
 from buddy_desktop.services import ServiceError
+from buddy_desktop.session_events import SessionEventStream
 from buddy_desktop.slide_contract import Manifest, Slide
 from buddy_desktop.slide_surface import SlideSurface
+
+
+@pytest.fixture(autouse=True)
+def external_event_transport(monkeypatch):
+    # These state-machine tests substitute the session service. Live SSE is
+    # covered separately against an actual HTTP server and the real parser.
+    monkeypatch.setattr(SessionEventStream, "bind", lambda *args: None)
 
 
 def _manifest(deck_id: str = "local-deck") -> Manifest:

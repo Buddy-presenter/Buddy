@@ -295,7 +295,36 @@ async def find_deck(db: AsyncSession, principal: Principal, identifier: UUID) ->
     return deck
 
 
+async def update_session_state(
+    db: AsyncSession, principal: Principal, record: PresentationSession, values: UpdateSessionState
+) -> None:
+    """Apply a checked state replacement while the caller holds the session row lock."""
+    if record.status != "active":
+        raise HTTPException(409, "Only an active session can be updated.")
+    if values.expected_state_version != record.state_version:
+        raise HTTPException(409, "Session state changed elsewhere. Fetch it before retrying.")
+    slide = await db.scalar(
+        select(AnalysisSlide.id).where(
+            AnalysisSlide.analysis_id == record.analysis_version_id,
+            AnalysisSlide.slide_id == values.active_slide_id,
+        )
+    )
+    if slide is None:
+        raise HTTPException(422, "The slide does not belong to this session analysis.")
+    analysis = await db.get(AnalysisVersion, record.analysis_version_id)
+    if analysis is None:
+        raise HTTPException(503)
+    await validate_focus_region(
+        db, record.analysis_version_id, values.active_slide_id, values.focus_region
+    )
+    await validate_action(db, analysis, principal.id, values.last_accepted_action_id)
+    apply_state(record, values)
+    record.state_version += 1
+
+
 def session_router() -> APIRouter:
+    from buddy_api.session_events import record_state_event
+
     router = APIRouter(
         prefix="/api/v1/sessions",
         tags=["presentation sessions"],
@@ -331,6 +360,7 @@ def session_router() -> APIRouter:
                         )
                     ).all()
                 )
+                previous_versions = {item.id: item.state_version for item in records}
                 current = next(
                     (
                         item
@@ -376,6 +406,11 @@ def session_router() -> APIRouter:
                         )
                         db.add(record)
                         await db.flush()
+                for changed in records:
+                    if changed.state_version != previous_versions[changed.id]:
+                        await record_state_event(db, changed)
+                if record.id not in previous_versions:
+                    await record_state_event(db, record)
                 return SessionResponse(data=snapshot(record), request_id=request.state.request_id)
         except HTTPException:
             raise
@@ -421,6 +456,7 @@ def session_router() -> APIRouter:
                     raise HTTPException(
                         409, "Ended sessions cannot be resumed; start a new session."
                     )
+                previous_version = record.state_version
                 analysis, slides = await current_ready_analysis(db, deck, principal.id)
                 if analysis.id != record.analysis_version_id:
                     raise HTTPException(409, "The deck analysis changed; start a new session.")
@@ -430,6 +466,8 @@ def session_router() -> APIRouter:
                 if record.active_slide_id is None:
                     record.active_slide_id = slides[0].slide_id
                     record.state_version += 1
+                if record.state_version != previous_version:
+                    await record_state_event(db, record)
                 return SessionResponse(data=snapshot(record), request_id=request.state.request_id)
         except HTTPException:
             raise
@@ -450,29 +488,8 @@ def session_router() -> APIRouter:
         try:
             async with request.app.state.database.sessions() as db, db.begin():
                 record = await owned_session(db, principal, identifier, lock=True)
-                if record.status != "active":
-                    raise HTTPException(409, "Only an active session can be updated.")
-                if values.expected_state_version != record.state_version:
-                    raise HTTPException(
-                        409, "Session state changed elsewhere. Fetch it before retrying."
-                    )
-                slide = await db.scalar(
-                    select(AnalysisSlide.id).where(
-                        AnalysisSlide.analysis_id == record.analysis_version_id,
-                        AnalysisSlide.slide_id == values.active_slide_id,
-                    )
-                )
-                if slide is None:
-                    raise HTTPException(422, "The slide does not belong to this session analysis.")
-                analysis = await db.get(AnalysisVersion, record.analysis_version_id)
-                if analysis is None:
-                    raise HTTPException(503) from None
-                await validate_focus_region(
-                    db, record.analysis_version_id, values.active_slide_id, values.focus_region
-                )
-                await validate_action(db, analysis, principal.id, values.last_accepted_action_id)
-                apply_state(record, values)
-                record.state_version += 1
+                await update_session_state(db, principal, record, values)
+                await record_state_event(db, record)
                 return SessionResponse(data=snapshot(record), request_id=request.state.request_id)
         except HTTPException:
             raise
@@ -503,6 +520,7 @@ def session_router() -> APIRouter:
                     )
                 record.status = "ended"
                 record.state_version += 1
+                await record_state_event(db, record)
                 return SessionResponse(data=snapshot(record), request_id=request.state.request_id)
         except HTTPException:
             raise

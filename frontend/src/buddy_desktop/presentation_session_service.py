@@ -4,10 +4,10 @@ import http.client
 import json
 import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, build_opener
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from buddy_desktop.config import AppConfig
 from buddy_desktop.library_service import LibraryAccessExpired
@@ -146,6 +146,20 @@ class PresentationSessionService:
         method: str = "GET",
         body: dict[str, object] | None = None,
     ) -> PresentationSession:
+        document = self._request_document(access, path, method=method, body=body)
+        try:
+            return parse_snapshot(document)
+        except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
+            raise ServiceError("The server returned an invalid session response.") from None
+
+    def _request_document(
+        self,
+        access: str,
+        path: str,
+        *,
+        method: str = "GET",
+        body: dict[str, object] | None = None,
+    ) -> object:
         if not access or len(access) > 16300 or not path.startswith("/api/v1/sessions"):
             raise ServiceError("Invalid presentation session request.")
         content = (
@@ -180,7 +194,7 @@ class PresentationSessionService:
                     "Sign in again to access the presentation session."
                 ) from None
             if status == 409:
-                if method == "PATCH" or path.endswith("/end"):
+                if method == "PATCH" or path.endswith(("/end", "/sync/commands")):
                     raise SessionConflict(
                         "Another controller changed this presentation. Syncing its latest state."
                     ) from None
@@ -206,7 +220,7 @@ class PresentationSessionService:
         except (ValueError, TypeError):
             raise ServiceError("The server returned an invalid session response.") from None
         try:
-            return parse_snapshot(json.loads(content))
+            return json.loads(content)
         except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
             raise ServiceError("The server returned an invalid session response.") from None
 
@@ -245,19 +259,40 @@ class PresentationSessionService:
         session: PresentationSession,
         state: SessionState,
     ) -> PresentationSession:
-        updated = self.request(
+        command_id = str(uuid4())
+        acknowledgment = self._request_document(
             access,
-            f"/api/v1/sessions/{UUID(session.id)}/state",
-            method="PATCH",
+            f"/api/v1/sessions/{UUID(session.id)}/sync/commands",
+            method="POST",
             body={
-                "expected_state_version": session.state_version,
-                "active_slide_id": state.active_slide_id,
-                "focus_view": state.focus_view,
-                "focus_region": state.focus_region,
-                "autonomy_mode": state.autonomy_mode,
-                "last_accepted_action_id": state.last_accepted_action_id,
+                "kind": "player.state",
+                "command_id": command_id,
+                "sent_at": datetime.now(UTC).isoformat(),
+                "state": {
+                    "expected_state_version": session.state_version,
+                    "active_slide_id": state.active_slide_id,
+                    "focus_view": state.focus_view,
+                    "focus_region": state.focus_region,
+                    "autonomy_mode": state.autonomy_mode,
+                    "last_accepted_action_id": state.last_accepted_action_id,
+                },
             },
         )
+        try:
+            if (
+                not isinstance(acknowledgment, dict)
+                or set(acknowledgment) != {"command_id", "sequence", "duplicate", "snapshot"}
+                or acknowledgment["command_id"] != command_id
+                or type(acknowledgment["sequence"]) is not int
+                or not 0 < acknowledgment["sequence"] < 2**63
+                or type(acknowledgment["duplicate"]) is not bool
+            ):
+                raise ValueError
+            updated = parse_snapshot(
+                {"data": acknowledgment["snapshot"], "request_id": "session-command"}
+            )
+        except (ValueError, TypeError, KeyError, AttributeError):
+            raise ServiceError("The server returned an invalid command acknowledgment.") from None
         if (
             updated.id != session.id
             or updated.status != "active"
