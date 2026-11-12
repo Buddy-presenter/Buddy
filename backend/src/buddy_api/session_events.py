@@ -109,13 +109,16 @@ async def append_event(
     payload: PlayerStateEvent | SpeechEvent | DecisionEvent,
     *,
     command: PlayerCommand | None = None,
+    purge_history: bool = False,
 ) -> EventEnvelope:
     """Call inside the session's row-lock transaction, including for server producers.
 
     Speech and decision producers supply the state version they observed to
     publish_server_event; public clients can publish only PlayerCommand.
     """
-    await db.flush()
+    # Allocate before the first flush of a state change. A second UPDATE of the
+    # same session in one transaction can make PostgreSQL recheck its deck FK,
+    # reversing the deck -> session lock order of a concurrent resume/start.
     record.event_sequence += 1
     now = datetime.now(UTC)
     event = EventEnvelope(
@@ -138,7 +141,12 @@ async def append_event(
     await db.execute(
         delete(SessionEvent).where(
             SessionEvent.session_id == record.id,
-            SessionEvent.sequence <= record.event_sequence - RETAIN_EVENTS,
+            SessionEvent.sequence
+            <= (
+                record.event_sequence - 1
+                if purge_history
+                else record.event_sequence - RETAIN_EVENTS
+            ),
         )
     )
     return event
@@ -149,10 +157,12 @@ def command_digest(command: PlayerCommand) -> str:
 
 
 async def record_state_event(db: AsyncSession, record: PresentationSession) -> None:
-    await db.flush()
-    if record.status == "ended":
-        await db.execute(delete(SessionEvent).where(SessionEvent.session_id == record.id))
-    await append_event(db, record, PlayerStateEvent(snapshot=snapshot(record)))
+    await append_event(
+        db,
+        record,
+        PlayerStateEvent(snapshot=snapshot(record)),
+        purge_history=record.status == "ended",
+    )
 
 
 async def publish_server_event(
