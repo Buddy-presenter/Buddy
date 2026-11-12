@@ -15,6 +15,8 @@ from frontend.tests.test_library import signed_in
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QFileDialog
 
+from buddy_identity.config import IdentityError
+
 from buddy_desktop.config import AppConfig
 from buddy_desktop.auth import Tokens
 from buddy_desktop.library_service import (
@@ -31,7 +33,6 @@ from buddy_desktop.presentation_service import (
 )
 from buddy_desktop.services import ServiceError
 from buddy_desktop.visuals import apply_theme
-from buddy_identity.config import IdentityError
 
 
 @pytest.fixture
