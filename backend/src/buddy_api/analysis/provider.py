@@ -101,6 +101,9 @@ class ModelOutput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
     presentation: ModelSummary
     slides: tuple[ModelSlide, ...] = Field(min_length=1, max_length=MAX_PAGES)
+    # Set by Buddy only after a real PDF provider response is validated. Deterministic
+    # providers and compatibility callers keep their original action set by default.
+    source_inventory_enabled: bool = False
     # Set only by Buddy after deterministic inventory exceeds the published cap.
     action_limit_reached: bool = False
 
@@ -431,6 +434,8 @@ class BedrockProvider:
                 raise ValueError("Invalid analysis structure")
             if "action_limit_reached" in payload:
                 raise ValueError("Provider cannot set Buddy-owned coverage state")
+            if "source_inventory_enabled" in payload:
+                raise ValueError("Provider cannot set Buddy-owned inventory state")
             if any(
                 (
                     "visual_qa_pending" in action
@@ -536,6 +541,7 @@ class BedrockProvider:
                 environment, deck_id, extraction.source_revision, started_at, None, "failed"
             )
             raise
+        output = output.model_copy(update={"source_inventory_enabled": True})
         try:
             usage = json.loads(bytes(raw)).get("usage")
         except (ValueError, TypeError, AttributeError):

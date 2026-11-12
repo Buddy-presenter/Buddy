@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import ValidationError
 
-from buddy_api.analysis.contracts import AnalysisInput, ValidationInput, digest
+from buddy_api.analysis.contracts import AnalysisInput, PDFAnalysisInputV2, ValidationInput, digest
 from buddy_api.analysis.provider import (
     ModelAction,
     ModelOutput,
@@ -72,10 +72,10 @@ def test_grounding_trace_survives_binding_and_rejects_changed_geometry():
     assert record.action_sha256 == digest(document.slides[0].actions[0])
     assert record.trace.target_text == "Buddy PDF presentation"
     dumped = document.model_dump(mode="json")
-    assert AnalysisInput.model_validate(dumped) == document
+    assert PDFAnalysisInputV2.model_validate(dumped) == document
     dumped["grounding"][0]["trace"]["resolved_region"]["y"] += 10
     with pytest.raises(ValidationError, match="Grounding does not match"):
-        AnalysisInput.model_validate(dumped)
+        PDFAnalysisInputV2.model_validate(dumped)
 
 
 def test_model_output_is_bound_to_verified_manifest_and_stable_action_ids():

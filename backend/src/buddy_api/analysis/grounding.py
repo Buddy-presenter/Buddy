@@ -873,22 +873,26 @@ def ground_actions(
                             >= MAX_PAGE_OBJECTS
                         ):
                             coverage_limited = True
-                        inventory_actions, inventory_limited = _source_inventory_actions(
-                            page,
-                            page_index + 1,
-                            extraction.source_sha256,
-                            objects,
-                            width,
-                            height,
-                            max_actions=max(
-                                1,
-                                min(
-                                    MAX_AUTO_ACTIONS_PER_PAGE,
-                                    math.ceil(MAX_AUTO_ACTIONS_PER_DECK / len(extraction.slides)),
+                        inventory_actions: list[ModelAction] = []
+                        if output.source_inventory_enabled:
+                            inventory_actions, inventory_limited = _source_inventory_actions(
+                                page,
+                                page_index + 1,
+                                extraction.source_sha256,
+                                objects,
+                                width,
+                                height,
+                                max_actions=max(
+                                    1,
+                                    min(
+                                        MAX_AUTO_ACTIONS_PER_PAGE,
+                                        math.ceil(
+                                            MAX_AUTO_ACTIONS_PER_DECK / len(extraction.slides)
+                                        ),
+                                    ),
                                 ),
-                            ),
-                        )
-                        coverage_limited = coverage_limited or inventory_limited
+                            )
+                            coverage_limited = coverage_limited or inventory_limited
                         proposed_actions = (*generated.actions, *inventory_actions)
                         source_text_targets = {
                             action.target_id: action

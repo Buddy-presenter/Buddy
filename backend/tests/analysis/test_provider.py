@@ -380,6 +380,21 @@ def test_provider_access_denial_is_permanent_and_sanitized(monkeypatch):
     assert str(failure.value) == "provider_access_denied"
 
 
+def test_provider_cannot_enable_buddy_source_inventory():
+    extraction, _ = inputs()
+    payload = {
+        "presentation": {"text": "Summary.", "reason": None},
+        "slides": [{"number": 1, "text": "Page.", "reason": None, "actions": []}],
+        "source_inventory_enabled": True,
+    }
+
+    with pytest.raises(ProviderFailure, match="provider_malformed_output"):
+        BedrockProvider._decode_response(
+            json.dumps(response_for(output_text=json.dumps(payload))).encode(),
+            [(extraction.slides[0].width // 6350, extraction.slides[0].height // 6350)],
+        )
+
+
 def test_async_provider_uses_signed_request_and_returns_validated_output(monkeypatch):
     extraction, manifest = inputs()
     monkeypatch.setattr(provider, "Session", Session)
@@ -400,6 +415,7 @@ def test_async_provider_uses_signed_request_and_returns_validated_output(monkeyp
             PDF, extraction, str(DECK_ID), manifest
         )
         assert result.slides[0].number == 1
+        assert result.source_inventory_enabled
 
     asyncio.run(scenario())
     assert captured["authorization"].startswith("AWS4-HMAC-SHA256 ")

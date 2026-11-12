@@ -118,7 +118,8 @@ def test_highlight_is_rebuilt_from_pdfium_glyph_positions_not_model_box():
 def test_source_inventory_accepts_pdfium_page_object_iterator():
     content, extraction, manifest = _load(GEOMETRY_PDF)
 
-    result = ground_actions(content, extraction, manifest, _output(extraction, {}))
+    generated = _output(extraction, {}).model_copy(update={"source_inventory_enabled": True})
+    result = ground_actions(content, extraction, manifest, generated)
 
     assert result.slides[0].actions
     assert any(action.grounding_trace for action in result.slides[0].actions)
@@ -182,7 +183,10 @@ def test_repeated_quote_with_equally_plausible_hint_is_declined():
         hint=(manifest.slides[0].source.width * 0.45, 0, 100, 100),
     )
 
-    result = ground_actions(content, extraction, manifest, _output(extraction, {0: (action,)}))
+    generated = _output(extraction, {0: (action,)}).model_copy(
+        update={"source_inventory_enabled": True}
+    )
+    result = ground_actions(content, extraction, manifest, generated)
 
     repeated = [item for item in result.slides[0].actions if item.target_text == "café results"]
     assert len(repeated) == 2
