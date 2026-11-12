@@ -483,9 +483,11 @@ class ReviewWidget(Page):
             self.state.show_state("Checking account", "Private review data is being cleared.")
 
     def account_changed(self) -> None:
+        session = self.account.session
+        tokens = session.tokens if session else None
         key = (
-            (id(self.account.session), self.account.account_id, self.config.api_url)
-            if self.account.session and self.account.session.tokens
+            (id(session), self.account.account_id, self.config.api_url)
+            if tokens is not None and time.monotonic() < tokens.expires
             else None
         )
         if key != self.account_key:

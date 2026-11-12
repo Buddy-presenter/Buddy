@@ -188,11 +188,13 @@ class AccountWidget(QWidget):
                     self.account_id = None
                     if self.session:
                         self.session.tokens = None
+                    self.session_changed.emit()
                 self.message.setText(result.message)
             else:
                 self.account_id = None
                 if self.session:
                     self.session.tokens = None
+                self.session_changed.emit()
                 self.message.setText("Account could not be verified. Please sign in again.")
             if self.session and self.session.tokens:
                 self.timer.start()
