@@ -951,7 +951,14 @@ class ReviewWidget(Page):
             f"/ {len(self.action_rows)} total"
         )
         self.action_table.fit_rows()
-        self.preview.set_page(self.image, None)
+        # Selecting the first row can emit itemSelectionChanged and set its region,
+        # but the old unconditional clear here erased that overlay immediately. When
+        # there was only one action, clicking the already-selected row emitted no new
+        # selection event, so its bounding box appeared impossible to show.
+        if self.action_rows:
+            self.action_selected()
+        else:
+            self.preview.set_page(self.image, None)
         self.action_table.setAccessibleDescription(
             f"{len(self.action_rows)} actions on slide {self.page_index + 1}"
         )
