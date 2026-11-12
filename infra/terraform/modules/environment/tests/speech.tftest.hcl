@@ -28,13 +28,19 @@ run "speech_secret_is_api_only" {
   command = plan
   variables { enable_speech = true }
   override_resource {
-    target          = aws_lb.api
-    values          = { dns_name = "buddy-staging.eu-central-1.elb.amazonaws.com" }
+    target = aws_lb.api
+    values = {
+      dns_name = "buddy-staging.eu-central-1.elb.amazonaws.com"
+      arn      = "arn:aws:elasticloadbalancing:eu-central-1:123456789012:loadbalancer/app/buddy-staging/0123456789abcdef"
+    }
     override_during = plan
   }
   override_resource {
-    target          = aws_cognito_user_pool.main
-    values          = { id = "eu-central-1_Example" }
+    target = aws_cognito_user_pool.main
+    values = {
+      id  = "eu-central-1_Example"
+      arn = "arn:aws:cognito-idp:eu-central-1:123456789012:userpool/eu-central-1_Example"
+    }
     override_during = plan
   }
   override_resource {
