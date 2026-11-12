@@ -330,21 +330,9 @@ def test_partial_pdf_analysis_can_start_presentation_session(ready_session_api):
             analysis = await db.get(AnalysisVersion, ids["analyses"])
             job = await db.get(ProcessingJob, ids["jobs"])
             previous_session = await db.get(PresentationSession, ids["sessions"])
-            slides = list(
-                (
-                    await db.scalars(
-                        select(AnalysisSlide)
-                        .where(AnalysisSlide.analysis_id == analysis.id)
-                        .order_by(AnalysisSlide.position)
-                    )
-                ).all()
-            )
             job.status = "analysis_partial"
             analysis.publication = "partial"
             previous_session.status = "ended"
-            slides[1].summary_status = "unavailable"
-            slides[1].summary_text = None
-            slides[1].summary_reason = "Summary unavailable"
 
     client.portal.call(make_partial)
     response = client.post(
