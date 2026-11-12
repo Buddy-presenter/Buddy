@@ -116,6 +116,49 @@ def test_transient_refresh_failure_preserves_saved_session(session, monkeypatch)
     assert client.store.read() == expired.refresh
 
 
+def test_transient_account_failure_after_refresh_rotation_keeps_new_session(session, monkeypatch):
+    client, _, identifier = session
+    client.sign_in("signin")
+    assert client.tokens is not None
+    client.tokens.expires = time.monotonic() - 1
+    requests = []
+    verification_attempts = 0
+
+    def rotate_then_temporarily_fail_account(request, **_kwargs):
+        nonlocal verification_attempts
+        requests.append(request)
+        if request.full_url.endswith("/token"):
+            assert request.data is not None
+            assert parse_qs(request.data.decode())["refresh_token"] == ["refresh-private"]
+            return {
+                "access_token": "refreshed-access",
+                "refresh_token": "rotated-refresh",
+                "token_type": "Bearer",
+                "expires_in": 300,
+            }
+        if request.full_url.endswith("/me"):
+            verification_attempts += 1
+            if verification_attempts == 1:
+                raise IdentityError("Account service unavailable. Please try again later.")
+            assert request.get_header("Authorization") == "Bearer refreshed-access"
+            return {"data": {"id": identifier}}
+        return {}
+
+    monkeypatch.setattr(auth, "request_json", rotate_then_temporarily_fail_account)
+    with pytest.raises(IdentityError, match="unavailable"):
+        client.account()
+
+    assert client.tokens is not None
+    assert client.tokens.access == "refreshed-access"
+    assert client.tokens.refresh == "rotated-refresh"
+    assert client.store.read() == "rotated-refresh"
+    assert not client.store.blocked
+
+    assert client.account() == identifier
+    assert verification_attempts == 2
+    assert all(not request.full_url.endswith("/revoke") for request in requests)
+
+
 def test_restart_and_expiration_rotate_saved_token(session):
     client, requests, identifier = session
     client.sign_in()
