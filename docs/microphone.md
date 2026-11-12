@@ -20,7 +20,17 @@ chosen explicitly. Reconnecting a device never starts listening automatically. A
 operating-system permission requires the user to enable access in the system's privacy
 settings before retrying.
 
-Capture uses Qt Multimedia in a separate thread. Saved PDF sessions connect it to
+Capture normally uses Qt Multimedia in a separate thread. On Windows, if starting the
+microphone fails, enable **Use microphone compatibility mode** in Present and choose
+Start microphone again. This saved, optional setting uses WASAPI exclusive capture;
+it works with supported built-in microphones as well as headsets. While Buddy listens,
+other applications may be unable to use that microphone. Mute, Pause, Stop, and leaving
+the session release it. Changing this setting stops capture; it never starts listening.
+The selected Windows endpoint is matched by its exact device identifier, with no
+automatic substitution. Native device discovery runs again before each start, including
+after reconnecting a device. macOS keeps the normal Qt capture path.
+
+Saved PDF sessions connect capture to
 [streaming speech recognition](speech-recognition.md), sending audio through the
 authenticated backend to Deepgram (EU). The provider key remains server-side. Local
 PowerPoint capture is not transmitted. Audio is not written to disk. A bounded in-memory

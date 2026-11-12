@@ -114,8 +114,33 @@ def test_qt_to_persisted_session_and_provider(database_settings, monkeypatch, qt
     thread = threading.Thread(target=lambda: server.run(sockets=[listener]), daemon=True)
     thread.start()
     control = SpeechController()
+    rejected_timing = []
+    receive = control._message
+
+    def inspect_timing(raw):
+        # Diagnose real-provider boundary rounding without logging speech content.
+        data = json.loads(raw)
+        before = control._active
+        previous_end = control._final_end
+        previous_sequence = control._sequence
+        receive(raw)
+        if before and not control._active and data.get("type") == "transcript":
+            rejected_timing.append(
+                {
+                    "start": data.get("start_seconds"),
+                    "end": data.get("end_seconds"),
+                    "previous_end": previous_end,
+                    "sequence": data.get("sequence"),
+                    "previous_sequence": previous_sequence,
+                    "capture_age_ms": (time.monotonic_ns() - data.get("capture_end_ns", 0))
+                    / 1_000_000,
+                }
+            )
+
+    monkeypatch.setattr(control, "_message", inspect_timing)
     microphone = None
     updates, statuses = [], []
+    captured_bytes, peak_sample = 0, 0
     control.transcript_received.connect(updates.append)
     control.status_changed.connect(statuses.append)
     timer = QTimer()
@@ -136,6 +161,7 @@ def test_qt_to_persisted_session_and_provider(database_settings, monkeypatch, qt
             from queue import Empty
 
             microphone = MicrophoneController()
+            microphone.set_compatibility(os.environ.get("BUDDY_SPEECH_COMPATIBILITY") == "1")
             microphone.format_ready.connect(
                 lambda rate: control.start(config, "speech-test-access", session_id, rate, "en-US")
             )
@@ -143,14 +169,31 @@ def test_qt_to_persisted_session_and_provider(database_settings, monkeypatch, qt
             microphone.audio_gap.connect(control.audio_gap)
 
             def send_microphone(_size):
+                nonlocal captured_bytes, peak_sample
+                from array import array
+
                 while True:
                     try:
-                        control.send(microphone.frames.get_nowait())
+                        packet = microphone.frames.get_nowait()
                     except Empty:
                         return
+                    captured_bytes += len(packet) - 8
+                    samples = array("h", packet[8:])
+                    peak_sample = max(peak_sample, max(map(abs, samples), default=0))
+                    control.send(packet)
 
             microphone.audio_received.connect(send_microphone)
-            device = QMediaDevices.defaultAudioInput()
+            hint = os.environ.get("BUDDY_SPEECH_MICROPHONE_NAME", "").casefold()
+            candidates = [
+                d
+                for d in QMediaDevices.audioInputs()
+                if not hint or hint in d.description().casefold()
+            ]
+            if hint:
+                assert len(candidates) == 1, "Choose one exact microphone for live acceptance."
+                device = candidates[0]
+            else:
+                device = QMediaDevices.defaultAudioInput()
             assert not device.isNull(), "No real microphone is available."
             microphone.start(bytes(device.id().data()))
         else:
@@ -176,13 +219,15 @@ def test_qt_to_persisted_session_and_provider(database_settings, monkeypatch, qt
                 control.send(struct.pack(">Q", time.monotonic_ns()) + chunk)
 
         if microphone_test:
+            duration = 30
             print(
                 "MICROPHONE READY: say 'Please go to the next slide' now. "
-                "Listening for 15 seconds.",
+                f"Listening for {duration} seconds.",
                 flush=True,
             )
-            qtbot.wait(15000)
+            qtbot.wait(duration * 1000)
             microphone.stop()
+            qtbot.wait(1000)
         else:
             timer.timeout.connect(send)
             timer.start(50)
@@ -190,9 +235,6 @@ def test_qt_to_persisted_session_and_provider(database_settings, monkeypatch, qt
                 lambda: not timer.isActive() and any(e["final"] for e in updates), timeout=30000
             )
         finals = [e for e in updates if e["final"]]
-        assert "next slide" in " ".join(e["text"] for e in finals).lower()
-        assert any(not e["final"] for e in updates)
-        assert all(e["session_id"] == session_id and e["latency_ms"] >= 0 for e in updates)
         if live:
             # No credentials or transcripts: only sanitized measured evidence.
             print(
@@ -205,9 +247,17 @@ def test_qt_to_persisted_session_and_provider(database_settings, monkeypatch, qt
                         "partials": sum(not e["final"] for e in updates),
                         "finals": len(finals),
                         "final_latency_ms": [e["latency_ms"] for e in finals],
+                        "captured_bytes": captured_bytes,
+                        "peak_sample": peak_sample,
+                        "statuses": statuses,
+                        "rejected_timing": rejected_timing,
                     }
                 )
             )
+        assert "next slide" in " ".join(e["text"] for e in finals).lower()
+        assert any(not e["final"] for e in updates)
+        assert all(e["session_id"] == session_id and e["latency_ms"] >= 0 for e in updates)
+        assert control._active, statuses
         control.stop()
         assert not control._active and not control._retry.isActive()
     finally:

@@ -106,6 +106,9 @@ Provider-independent transcript messages contain `type: transcript`, `version: 1
 same segment share a segment ID; a final segment is immutable to the desktop. Provider
 text is limited to 4096 characters. Malformed, nonfinite, cross-session, duplicate,
 out-of-order, future, or stale results cause safe failure without presentation actions.
+Adjacent segment boundaries tolerate provider float32 rounding (one microsecond or
+one float32 relative precision step, whichever is larger); finalized segment starts
+must still strictly increase, including for zero-duration finals.
 The JSON Schema is [speech-transcript-v1.schema.json](speech-transcript-v1.schema.json).
 
 The capture timestamp corresponding to the segment end is echoed, not compared against
@@ -164,13 +167,25 @@ opt-out, and the real Qt/API/database/provider path. It returned four partial up
 and two final segments; final segment-end-to-client delays were 182 ms and 237 ms in
 that single run. These are observations, not latency/accuracy guarantees.
 
-The subsequent consented real-device attempt stopped at Windows/Qt `OpenError` while
-opening the Intel microphone array, before transmission or provider recognition. This
-does not establish human microphone acceptance; check Windows microphone privacy/device
-availability and repeat the test after that local condition is resolved. The opt-in test
-can use the actual device instead of a WAV with `BUDDY_SPEECH_TEST_MICROPHONE=1` and
-listens for 15 seconds after recognition is ready. It requires a person saying the test
-phrase; never enable it unattended.
+Normal Qt/shared capture subsequently failed with Windows `OpenError` on both the built-in
+Intel array and AirPods. The optional Windows compatibility mode opens the built-in
+microphone successfully. Its real-widget hardware test passed capture, fullscreen,
+mute/unmute, pause/resume, and session cleanup. A consented real microphone run through
+Qt/API/PostgreSQL/EU Deepgram returned 16 partials and three finals (observed delays
+115/141/797 ms), then exposed adjacent provider boundaries of 4.5500003 vs 4.55 seconds.
+After fixing this rounding rejection, a generated-speech regression returned seven
+partials and four finals (161/429/336/205 ms), with recognition still active and no
+rejected updates. These local observations do not establish deployed acceptance.
+
+The opt-in test can use the actual device instead of a WAV with
+`BUDDY_SPEECH_TEST_MICROPHONE=1` and listens for 30 seconds after recognition is ready.
+It requires a person saying the test phrase; never enable it unattended.
+
+On Windows, `BUDDY_SPEECH_COMPATIBILITY=1` selects the same optional exclusive capture
+mode available in Present. `BUDDY_SPEECH_MICROPHONE_NAME` can select a unique device
+description substring (for example, `Microphone Array`); an ambiguous selection fails.
+Without a selection, the test uses the system default input. See the
+[microphone guide](microphone.md) for device-sharing limits and controls.
 
 Before claiming staging acceptance, repeat with the deployed backend and a signed-in
 human speaker using the real microphone. Verify text/timing, mute/pause/resume/stop,

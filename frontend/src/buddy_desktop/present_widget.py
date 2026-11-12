@@ -21,6 +21,7 @@ from PySide6.QtGui import (
     QScreen,
 )
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -356,6 +357,20 @@ class PresentWidget(Page):
         self.microphone_button.clicked.connect(self._microphone_toggle)
         microphone_row.addWidget(self.microphone_button)
         microphone_layout.addLayout(microphone_row)
+        self.microphone_compatibility = QCheckBox("Use microphone compatibility mode")
+        self.microphone_compatibility.setAccessibleName("Windows microphone compatibility mode")
+        self.microphone_compatibility.setToolTip(
+            "Use this if normal recording fails. While listening, "
+            "Buddy may need the selected microphone to itself."
+        )
+        self.microphone_compatibility.setVisible(sys.platform == "win32")
+        self.microphone_compatibility.setChecked(
+            sys.platform == "win32"
+            and bool(settings.value("microphone/compatibility", False, type=bool))
+        )
+        self.microphone.set_compatibility(self.microphone_compatibility.isChecked())
+        self.microphone_compatibility.toggled.connect(self._microphone_compatibility_changed)
+        microphone_layout.addWidget(self.microphone_compatibility)
         microphone_controls = QHBoxLayout()
         self.microphone_mute = QPushButton("Mute")
         self.microphone_mute.setAccessibleName("Mute microphone")
@@ -531,6 +546,12 @@ class PresentWidget(Page):
             identifier = self.microphone_device.currentData()
             if isinstance(identifier, bytes):
                 self.microphone.start(identifier)
+        self._refresh()
+
+    @Slot(bool)
+    def _microphone_compatibility_changed(self, enabled: bool) -> None:
+        self.microphone.set_compatibility(enabled)
+        self.settings.setValue("microphone/compatibility", enabled)
         self._refresh()
 
     @Slot(bool)

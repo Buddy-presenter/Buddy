@@ -101,6 +101,47 @@ def test_duplicate_final_never_emits_twice(controller):
     assert len(updates) == 1 and not controller._active
 
 
+@pytest.mark.parametrize("boundary,rounded", [(4.5500003, 4.55), (1790.0001, 1790.0)])
+def test_adjacent_float32_provider_boundaries_do_not_end_recognition(controller, boundary, rounded):
+    updates = []
+    controller.transcript_received.connect(updates.append)
+    controller._message(json.dumps(event(controller, end_seconds=boundary)))
+    controller._message(
+        json.dumps(
+            event(
+                controller,
+                sequence=2,
+                start_seconds=rounded,
+                end_seconds=rounded + 1,
+                segment_id=f"{controller._stream}:{round(rounded * 1_000_000)}",
+            )
+        )
+    )
+    assert len(updates) == 2 and controller._active
+
+
+def test_actual_overlap_remains_invalid(controller):
+    controller._message(json.dumps(event(controller, end_seconds=4.55)))
+    controller._message(
+        json.dumps(
+            event(
+                controller,
+                sequence=2,
+                start_seconds=4.54,
+                end_seconds=5,
+                segment_id=f"{controller._stream}:4540000",
+            )
+        )
+    )
+    assert not controller._active
+
+
+def test_duplicate_zero_duration_final_is_rejected(controller):
+    controller._message(json.dumps(event(controller, end_seconds=0)))
+    controller._message(json.dumps(event(controller, sequence=2, end_seconds=0)))
+    assert not controller._active
+
+
 def test_retry_budget_and_stop_cancel_reconnect(controller):
     for _ in range(3):
         controller._fail("Temporary failure.", True)

@@ -46,6 +46,7 @@ class SpeechController(QObject):
         self._stream = ""
         self._sequence = 0
         self._final_end = 0.0
+        self._final_start = -1.0
         self._deadline = QTimer(self)
         self._deadline.setSingleShot(True)
         self._deadline.timeout.connect(lambda: self._fail("Speech connection timed out.", True))
@@ -126,6 +127,7 @@ class SpeechController(QObject):
                     raise ValueError
                 self._stream = str(UUID(data["stream_id"]))
                 self._sequence, self._final_end = 0, 0.0
+                self._final_start = -1.0
                 self._ready = True
                 self._deadline.stop()
                 self.status_changed.emit("Transcribing • audio sent to Deepgram (EU)")
@@ -140,7 +142,18 @@ class SpeechController(QObject):
             start, end = data["start_seconds"], data["end_seconds"]
             if any(type(v) not in {int, float} or not math.isfinite(v) for v in (start, end)):
                 raise ValueError
-            if not self._final_end <= start <= end <= 1801 or type(data["final"]) is not bool:
+            # Adjacent provider boundaries can differ by float32 rounding (e.g.
+            # 4.5500003 vs 4.55). Permit that precision only; finalized segment
+            # starts remain strictly increasing so duplicates cannot be replayed.
+            adjacent = start >= self._final_end or math.isclose(
+                start, self._final_end, rel_tol=2**-23, abs_tol=0.000001
+            )
+            if (
+                not 0 <= start <= end <= 1801
+                or not adjacent
+                or start <= self._final_start
+                or type(data["final"]) is not bool
+            ):
                 raise ValueError
             if data.get("segment_id") != f"{self._stream}:{round(start * 1_000_000)}":
                 raise ValueError
@@ -153,6 +166,7 @@ class SpeechController(QObject):
             self._sequence = sequence
             if data["final"]:
                 self._final_end = end
+                self._final_start = start
             data["latency_ms"] = round((now - stamp) / 1_000_000)
             self.transcript_received.emit(data)
         except (ValueError, TypeError, KeyError, OverflowError):
