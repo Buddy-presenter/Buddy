@@ -455,7 +455,7 @@ class Analyses:
             version=value.version,
             publication=publication(inputs.presentation_summary, tuple(results)),
             action_limit_reached=(
-                inputs.action_limit_reached
+                bool(getattr(inputs, "action_limit_reached", False))
                 or sum(len(slide.actions) for slide in results)
                 == (
                     MAX_GENERATED_ACTIONS_PER_DECK if isinstance(inputs, PDFAnalysisInputV2) else 40

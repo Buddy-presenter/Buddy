@@ -867,7 +867,7 @@ def ground_actions(
                             raise ExtractionError("page_geometry_mismatch")
                         converter = bitmap.get_posconv(page)
                         objects, tagged_objects = _object_rects(page, converter, width, height)
-                        if len(page.get_objects()) >= MAX_PAGE_OBJECTS:  # type: ignore[attr-defined]
+                        if len(page.get_objects()) >= MAX_PAGE_OBJECTS:
                             coverage_limited = True
                         inventory_actions, inventory_limited = _source_inventory_actions(
                             page,
