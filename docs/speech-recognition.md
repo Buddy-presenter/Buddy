@@ -162,20 +162,19 @@ Set `BUDDY_LIVE_SPEECH_TEST=1`, the backend-only key, the disposable database UR
 .\.venv\Scripts\python.exe -m pytest tests/integration/test_speech_stream.py -k live-deepgram -q -s --tb=short
 ```
 
-Local live evidence on 2026-11-12 used generated English speech, EU Nova-3, training
-opt-out, and the real Qt/API/database/provider path. It returned four partial updates
-and two final segments; final segment-end-to-client delays were 182 ms and 237 ms in
-that single run. These are observations, not latency/accuracy guarantees.
+Local live evidence on 2026-11-12 used the built-in Intel microphone array in Windows
+compatibility mode, English, EU Nova-3, training opt-out, and the production
+Qt/API/PostgreSQL/provider path. In the final consented 30-second run, the requested
+phrase was recognized with 25 partials and seven finals. Measured final segment-end-to-client
+delays were 124/151/1254/720/156/269/239 ms. Recognition remained active without retries
+or rejected updates until explicitly stopped. These observations do not guarantee future
+latency/accuracy or establish deployed staging acceptance.
 
-Normal Qt/shared capture subsequently failed with Windows `OpenError` on both the built-in
-Intel array and AirPods. The optional Windows compatibility mode opens the built-in
-microphone successfully. Its real-widget hardware test passed capture, fullscreen,
-mute/unmute, pause/resume, and session cleanup. A consented real microphone run through
-Qt/API/PostgreSQL/EU Deepgram returned 16 partials and three finals (observed delays
-115/141/797 ms), then exposed adjacent provider boundaries of 4.5500003 vs 4.55 seconds.
-After fixing this rounding rejection, a generated-speech regression returned seven
-partials and four finals (161/429/336/205 ms), with recognition still active and no
-rejected updates. These local observations do not establish deployed acceptance.
+Normal Qt/shared capture failed with Windows `OpenError` on both the built-in array and
+AirPods. Compatibility mode's real-widget hardware test passed capture, fullscreen,
+mute/unmute, pause/resume, and session cleanup. The microphone work also exposed adjacent
+provider boundaries of 4.5500003 vs 4.55 seconds; a generated-speech regression after the
+rounding fix returned seven partials and four finals without rejected updates.
 
 The opt-in test can use the actual device instead of a WAV with
 `BUDDY_SPEECH_TEST_MICROPHONE=1` and listens for 30 seconds after recognition is ready.
