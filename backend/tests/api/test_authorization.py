@@ -38,6 +38,55 @@ CONFIG = IdentityConfig(
 )
 
 
+@pytest.mark.parametrize("publication", ["partial", "awaiting_validation"])
+def test_partial_pdf_session_analysis_requires_current_complete_source_map(publication):
+    deck_id, owner_id, job_id, analysis_id = uuid4(), uuid4(), uuid4(), uuid4()
+    deck = SimpleNamespace(
+        id=deck_id,
+        source_key="source-key",
+        source_revision="revision-1",
+        source_sha256="a" * 64,
+        source_version_id="version-1",
+        source_slide_count=2,
+        source_format="pdf",
+    )
+    job = SimpleNamespace(status="analysis_partial", source_revision="revision-1", id=job_id)
+    slide_ids = ["slide-a", "slide-b"]
+    analysis = SimpleNamespace(
+        id=analysis_id,
+        publication=publication,
+        job_id=job_id,
+        source_format="pdf",
+        extraction_id=uuid4(),
+        provenance={
+            "source_revision": "revision-1",
+            "source_sha256": "a" * 64,
+            "manifest": {
+                "deck_id": str(deck_id),
+                "slides": [{"slide_id": slide_id} for slide_id in slide_ids],
+            },
+        },
+    )
+    slides = [SimpleNamespace(slide_id=slide_id) for slide_id in slide_ids]
+
+    class Database:
+        def __init__(self):
+            self.records = iter((job, analysis))
+
+        async def scalar(self, _query):
+            return next(self.records)
+
+        async def scalars(self, _query):
+            return SimpleNamespace(all=lambda: slides)
+
+    async def presentable():
+        return await current_ready_analysis(Database(), deck, owner_id)
+
+    result, returned_slides = asyncio.run(presentable())
+    assert result is analysis
+    assert returned_slides == slides
+
+
 @pytest.fixture
 def private_api(database_settings, monkeypatch):
     asyncio.run(migrate(database_settings))
@@ -269,6 +318,34 @@ def test_session_lifecycle_is_durable_owner_scoped_and_versioned(ready_session_a
     assert restarted.json()["data"]["id"] != first["id"]
     assert restarted.json()["data"]["state"]["focus_region"] is None
     client.portal.call(client.app.state.database.close)
+
+
+@pytest.mark.postgres
+def test_partial_pdf_analysis_can_start_presentation_session(ready_session_api):
+    client, ids, _, _, _ = ready_session_api
+    database = client.app.state.database
+
+    async def make_partial():
+        async with database.sessions() as db, db.begin():
+            analysis = await db.get(AnalysisVersion, ids["analyses"])
+            job = await db.get(ProcessingJob, ids["jobs"])
+            previous_session = await db.get(PresentationSession, ids["sessions"])
+            job.status = "analysis_partial"
+            analysis.publication = "partial"
+            previous_session.status = "ended"
+
+    client.portal.call(make_partial)
+    response = client.post(
+        "/api/v1/sessions",
+        headers={"Authorization": "Bearer owner"},
+        json={"deck_id": str(ids["decks"])},
+    )
+    assert response.status_code == 200, response.text
+    session = response.json()["data"]
+    assert session["status"] == "active"
+    assert session["id"] != str(ids["sessions"])
+    assert session["analysis_version_id"] == str(ids["analyses"])
+    assert session["state"]["active_slide_id"]
 
 
 @pytest.mark.postgres

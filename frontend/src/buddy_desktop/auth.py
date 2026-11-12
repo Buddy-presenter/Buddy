@@ -264,20 +264,40 @@ class AccountSession:
             empty=True,
         )
 
-    def accept(self, tokens: Tokens, *, fresh: bool) -> str:
+    def accept(
+        self,
+        tokens: Tokens,
+        *,
+        fresh: bool,
+        preserve_on_transient_verification_failure: bool = False,
+    ) -> str:
         self.tokens = tokens
+        if self.cancelled.is_set():
+            with suppress(IdentityError):
+                self.discard()
+            raise IdentityError("Sign-in was cancelled.")
         try:
-            if self.cancelled.is_set():
-                raise IdentityError("Sign-in was cancelled.")
             self.store.save(tokens.refresh, fresh=fresh)
-            account = self.account()
-            if self.cancelled.is_set():
-                raise IdentityError("Sign-in was cancelled.")
-            return account
         except IdentityError:
             with suppress(IdentityError):
                 self.discard()
             raise
+        try:
+            account = self.account()
+        except SessionExpired:
+            with suppress(IdentityError):
+                self.discard()
+            raise
+        except IdentityError:
+            if not preserve_on_transient_verification_failure:
+                with suppress(IdentityError):
+                    self.discard()
+            raise
+        if self.cancelled.is_set():
+            with suppress(IdentityError):
+                self.discard()
+            raise IdentityError("Sign-in was cancelled.")
+        return account
 
     def discard(self) -> str:
         """Invalidate an abandoned session without opening another browser flow."""
@@ -349,6 +369,7 @@ class AccountSession:
             return self.accept(
                 self.token_request({"grant_type": "refresh_token", "refresh_token": refresh}),
                 fresh=False,
+                preserve_on_transient_verification_failure=True,
             )
         except SessionExpired:
             self.tokens = None
@@ -363,8 +384,10 @@ class AccountSession:
         if self.tokens is None:
             raise SessionExpired("Please sign in.")
         if time.monotonic() >= self.tokens.expires - 30:
-            self.tokens = None
-            self.resume()
+            try:
+                self.resume()
+            except SessionExpired:
+                raise
         if self.tokens is None:
             raise SessionExpired("Please sign in again.")
         result = request_json(

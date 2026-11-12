@@ -39,8 +39,10 @@ muted/paused. Overflow invalidates the speech stream rather than silently joinin
 across a gap. The native sample rate is preserved; supported sample formats are downmixed
 to mono PCM16. macOS bundles declare microphone usage and an audio-input entitlement.
 
-For a real-device test, sign in, open a saved, ready PDF from Library, and wait for its
-presentation session to connect. Select the USB microphone and start capture. Verify the
+For a real-device test, sign in, open a saved PDF from Library, and wait for its
+presentation session to connect. A current PDF with partial analysis can start a session
+when its source and complete slide map are intact; actions still require their own usable
+validation before they can be accepted. Select the USB microphone and start capture. Verify the
 status changes to Microphone on. Mute, unmute, pause, resume, and stop should update the
 status; disconnecting the device should stop capture. End the session or sign out and
 confirm that microphone access is no longer active. Saved session support must be deployed
