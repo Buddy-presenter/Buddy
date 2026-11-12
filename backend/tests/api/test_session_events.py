@@ -10,11 +10,11 @@ from pydantic import ValidationError
 from sqlalchemy import func, select, update
 
 from buddy_api import session_events
-from buddy_api.auth import CognitoVerifier
+from buddy_api.auth import CognitoVerifier, VerifiedIdentity
 from buddy_api.persistence.database import Database
 from buddy_api.persistence.models import SessionEvent
 from buddy_api.session_events import PlayerCommand, SpeechEvent
-from buddy_identity.config import SessionExpired
+from buddy_identity.config import IdentityError, SessionExpired
 from tests.api.test_authorization import (
     private_api as private_api,
 )
@@ -280,3 +280,30 @@ def test_command_size_limit_precedes_json_parsing():
             headers={"Content-Type": "application/json"},
         )
     assert response.status_code == 413
+
+
+@pytest.mark.postgres
+@pytest.mark.parametrize(
+    "failure,expected", [(SessionExpired, "access_closed"), (IdentityError, "unavailable")]
+)
+def test_midstream_revocation_and_provider_failure_have_different_recovery(
+    ready_session_api, monkeypatch, failure, expected
+):
+    client, ids, *_ = ready_session_api
+    calls = 0
+
+    def verify(self, token):
+        nonlocal calls
+        calls += 1
+        if calls >= 4:
+            raise failure("private upstream details")
+        return VerifiedIdentity("owner", "owner@example.test")
+
+    monkeypatch.setattr(CognitoVerifier, "verify", verify)
+    monkeypatch.setattr(session_events, "STREAM_SECONDS", 1)
+    monkeypatch.setattr(session_events, "POLL_SECONDS", 0.001)
+    response = client.get(f"/api/v1/sessions/{ids['sessions']}/sync/events", headers=HEADERS)
+    assert response.status_code == 200
+    assert "event: session_event" in response.text
+    assert f"event: {expected}" in response.text
+    assert "private upstream details" not in response.text

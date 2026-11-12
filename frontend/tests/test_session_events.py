@@ -167,3 +167,25 @@ def test_stream_access_failure_is_terminal_and_sanitized(qtbot, event_server, co
     finally:
         stream.stop()
         stream._thread.join(timeout=3)
+
+
+def test_repeated_unavailable_frames_exhaust_reconnect_budget(qtbot, event_server, monkeypatch):
+    from buddy_desktop import session_events
+
+    monkeypatch.setattr(session_events, "RETRY_DELAYS", (0,) * 8)
+    event_server.respond = lambda _: b'event: unavailable\ndata: {"retry_ms":1000}\n\n'
+    stream = SessionEventStream()
+    errors = []
+    stream.failed.connect(lambda *args: errors.append(args))
+    stream.bind(
+        AppConfig(f"http://127.0.0.1:{event_server.server_port}"),
+        "test-token",
+        parse_snapshot(snapshot()),
+    )
+    try:
+        qtbot.waitUntil(lambda: len(errors) == 1)
+        assert len(event_server.requests) == 9
+        assert errors[0][2] is False  # Transient provider failure must not sign the account out.
+    finally:
+        stream.stop()
+        stream._thread.join(timeout=3)

@@ -19,6 +19,7 @@ from buddy_desktop.presentation_session_service import PresentationSession, pars
 from buddy_desktop.services import NoRedirects, ServiceError
 
 MAX_FRAME = 32768
+RETRY_DELAYS = (1, 2, 4, 8, 8, 8, 8, 8)
 
 
 @dataclass(frozen=True)
@@ -203,7 +204,6 @@ class SessionEventStream(QObject):
                     if not stopped.is_set():
                         self.connection_changed.emit(generation, "connected")
                     for frame in read_frames(cast(BinaryIO, response), stopped):
-                        failures = 0
                         event_type = next((s[7:] for s in frame if s.startswith("event: ")), "")
                         if event_type == "access_closed":
                             raise LibraryAccessExpired(
@@ -212,6 +212,8 @@ class SessionEventStream(QObject):
                         if event_type == "unavailable":
                             raise ServiceError("Session updates are reconnecting.")
                         if event_type != "session_event":
+                            if all(line.startswith(":") for line in frame):
+                                failures = 0
                             continue
                         data = [s[6:] for s in frame if s.startswith("data: ")]
                         ids = [s[4:] for s in frame if s.startswith("id: ")]
@@ -269,7 +271,7 @@ class SessionEventStream(QObject):
             except (ServiceError, URLError, OSError, http.client.HTTPException):
                 pass
             failures += 1
-            if failures > 8:
+            if failures > len(RETRY_DELAYS):
                 if not stopped.is_set():
                     self.failed.emit(
                         generation, "Session updates disconnected. Retry session sync.", False
@@ -277,4 +279,4 @@ class SessionEventStream(QObject):
                 return
             if not stopped.is_set():
                 self.connection_changed.emit(generation, "reconnecting")
-            stopped.wait(min(2 ** (failures - 1), 8))
+            stopped.wait(RETRY_DELAYS[failures - 1])

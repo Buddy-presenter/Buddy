@@ -244,7 +244,10 @@ async def stream_events(
             try:
                 events, ended = await event_batch(request, identifier, cursor)
             except HTTPException as exc:
-                yield f'event: access_closed\ndata: {{"status":{exc.status_code}}}\n\n'
+                if exc.status_code in {401, 403, 404}:
+                    yield f'event: access_closed\ndata: {{"status":{exc.status_code}}}\n\n'
+                else:
+                    yield 'event: unavailable\ndata: {"retry_ms":1000}\n\n'
                 return
             except (SQLAlchemyError, OSError, TimeoutError):
                 yield 'event: unavailable\ndata: {"retry_ms":1000}\n\n'
