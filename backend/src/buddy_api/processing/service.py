@@ -347,6 +347,36 @@ class Processor:
                 )
             )
 
+        lease_lost = asyncio.Event()
+
+        async def maintain_lease() -> None:
+            # Keep the lease alive across the whole job, including batches of short
+            # validations. A heartbeat inside `fenced` alone is insufficient because
+            # it only runs when one individual operation lasts longer than its poll.
+            interval = min(10.0, self.settings.lease_seconds / 3)
+            while True:
+                await asyncio.sleep(interval)
+                try:
+                    async with self.database.sessions() as session, session.begin():
+                        alive = await store.heartbeat(session, job.id, token, self.settings)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    # Keep retrying transient database errors; do not log raw exception
+                    # text, which can include connection details.
+                    logger.warning(
+                        "Worker lease heartbeat failed for job %s (%s)",
+                        job.id,
+                        type(exc).__name__,
+                    )
+                    continue
+                if not alive:
+                    lease_lost.set()
+                    logger.warning("Worker lost its lease for job %s", job.id)
+                    return
+
+        heartbeat_task = asyncio.create_task(maintain_lease())
+
         async def fenced(awaitable: Any) -> tuple[bool, Any]:
             task = asyncio.ensure_future(awaitable)
             try:
@@ -354,19 +384,21 @@ class Processor:
                     done, _ = await asyncio.wait({task}, timeout=10)
                     if done:
                         break
-                    async with self.database.sessions() as session, session.begin():
-                        alive = await store.heartbeat(session, job.id, token, self.settings)
-                    if not alive:
+                    if lease_lost.is_set():
                         logger.warning(
-                            "Worker lost its lease during %s for job %s",
-                            active_stage,
-                            job.id,
+                            "Worker lost its lease during %s for job %s", active_stage, job.id
                         )
                         if not task.done():
                             task.cancel()
                         with suppress(Exception, asyncio.CancelledError):
                             await task
                         return False, None
+                if lease_lost.is_set():
+                    if not task.done():
+                        task.cancel()
+                    with suppress(Exception, asyncio.CancelledError):
+                        await task
+                    return False, None
                 return True, await task
             except asyncio.CancelledError:
                 if not task.done():
@@ -634,6 +666,10 @@ class Processor:
                             .with_for_update()
                         )
                         if current is None or not store.valid_lease(current, token):
+                            logger.warning(
+                                "Worker stopped before persisting validation after lease loss for job %s",
+                                job.id,
+                            )
                             return
                         await Analyses(session).record_validation(
                             owner_id=owner_id, result=validation_input
@@ -641,6 +677,7 @@ class Processor:
             async with self.database.sessions() as session, session.begin():
                 completed = await store.complete(session, job.id, token, analysis_id)
             if not completed:
+                logger.warning("Worker could not complete job after losing its lease: %s", job.id)
                 return
             emit_metric(
                 environment=environment,
@@ -769,6 +806,10 @@ class Processor:
                     correlation_ids=correlation_context(),
                     analysis_version=analysis_version,
                 )
+        finally:
+            heartbeat_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat_task
         await blocking(lambda: self.queue.acknowledge(raw["ReceiptHandle"]))
 
     @staticmethod
