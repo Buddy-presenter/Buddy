@@ -273,10 +273,10 @@ def test_review_exactly_40_actions_reports_capacity_without_claiming_truncation(
     review.activate(True)
     qtbot.waitUntil(lambda: not review.content.isHidden())
 
-    assert review.notice.text() == "All 40 available action slots were used in this analysis."
-    assert "omitted" not in review.notice.text().lower()
-    assert "missing" not in review.notice.text().lower()
-    assert "gap" not in review.notice.text().lower()
+    assert review.notice.text() == (
+        "The PDF action inventory reached a processing limit; some targets may be missing. "
+        "Review every slide before presenting."
+    )
 
 
 def test_review_queues_new_deck_while_stale_load_is_finishing(desktop_window, monkeypatch, qtbot):

@@ -28,8 +28,8 @@ MAX_FILE_BYTES = 18 * 1024 * 1024
 MAX_PAGES = 100
 MAX_ACTIONS_PER_DECK = MAX_GENERATED_ACTIONS_PER_DECK
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-MAX_OUTPUT_TOKENS = 16_000
-TIMEOUT_SECONDS = 90
+MAX_OUTPUT_TOKENS = 64_000
+TIMEOUT_SECONDS = 240
 MAX_REQUEST_BYTES = 25 * 1024 * 1024
 
 
@@ -101,6 +101,8 @@ class ModelOutput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
     presentation: ModelSummary
     slides: tuple[ModelSlide, ...] = Field(min_length=1, max_length=MAX_PAGES)
+    # Set only by Buddy after deterministic inventory exceeds the published cap.
+    action_limit_reached: bool = False
 
 
 def _json_schema(page_count: int) -> dict[str, object]:
@@ -218,10 +220,14 @@ def _prompt(extraction: Extraction, deck_id: str, manifest: Manifest) -> str:
         "support a useful action, return no action for that page. For every summary (overall "
         "and per-page), return exactly one of these forms: available means non-empty text and "
         "reason=null; unavailable means text=null and a concise non-empty reason. Never return "
-        "both text and reason. The entire deck is limited "
-        f"to {MAX_ACTIONS_PER_DECK} distinct actions across the deck. Prioritize the most useful "
-        "actions across all pages within this explicit processing budget; there is no one-action-"
-        "per-page rule.\n"
+        "both text and reason. Buddy will also add source-measured text-line and visual-object "
+        "candidates after this semantic pass. Return every distinct useful semantic target you "
+        "can identify, including separate charts, tables, images, diagrams, meaningful subparts, "
+        "headings, claims and bullets. Do not rank targets into a short best-of list and do not "
+        "omit one object because another object on the page already has an action. The total "
+        f"action capacity is {MAX_ACTIONS_PER_DECK} for bounded processing; preserve page order "
+        "and cover every page before alternate views of a target. If the source is dense, return "
+        "as many distinct targets as fit without duplicating deterministic text-line candidates.\n"
         f"Deck ID: {deck_id}\nRender ID: {manifest.render_id}\n"
         f"Ordered pages: {json.dumps(pages, separators=(',', ':'))}"
     )
@@ -423,6 +429,8 @@ class BedrockProvider:
             payload = json.loads(_response_text(decoded), object_pairs_hook=_unique_object)
             if not isinstance(payload, dict) or not isinstance(payload.get("slides"), list):
                 raise ValueError("Invalid analysis structure")
+            if "action_limit_reached" in payload:
+                raise ValueError("Provider cannot set Buddy-owned coverage state")
             if any(
                 (
                     "visual_qa_pending" in action

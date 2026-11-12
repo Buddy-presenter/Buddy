@@ -175,7 +175,9 @@ def test_repeated_quote_with_equally_plausible_hint_is_declined():
 
     result = ground_actions(content, extraction, manifest, _output(extraction, {0: (action,)}))
 
-    assert result.slides[0].actions == ()
+    repeated = [item for item in result.slides[0].actions if item.target_text == "café results"]
+    assert len(repeated) == 2
+    assert all(item.grounding_trace and item.grounding_trace.target_id for item in repeated)
 
 
 def test_ligature_quote_maps_back_to_the_original_source_glyph():
@@ -207,7 +209,7 @@ def test_missing_text_target_is_dropped_instead_of_using_model_rectangle():
 
     result = ground_actions(content, extraction, manifest, _output(extraction, {0: (action,)}))
 
-    assert result.slides[0].actions == ()
+    assert all(item.target_text != action.target_text for item in result.slides[0].actions)
 
 
 def test_highlight_quote_spanning_adjacent_lines_is_not_bounded_as_one_box():
@@ -219,7 +221,7 @@ def test_highlight_quote_spanning_adjacent_lines_is_not_bounded_as_one_box():
 
     result = ground_actions(content, extraction, manifest, _output(extraction, {0: (action,)}))
 
-    assert result.slides[0].actions == ()
+    assert all(item.target_text != action.target_text for item in result.slides[0].actions)
 
 
 def test_scanned_page_without_ocr_confident_match_is_dropped(monkeypatch):
@@ -401,13 +403,14 @@ def test_grounding_runs_inside_the_bounded_child_process():
 
     result = execute_grounding(content, extraction, manifest, generated, seconds=30)
 
-    assert len(result.slides[0].actions) == 1
-    assert result.slides[0].actions[0].height < manifest.slides[0].source.height / 8
-    trace = result.slides[0].actions[0].grounding_trace
+    grounded = result.slides[0].actions[0]
+    assert grounded.target_text == action.target_text
+    assert grounded.height < manifest.slides[0].source.height / 8
+    trace = grounded.grounding_trace
     assert trace is not None and trace.method == "pdf_glyphs"
     assert trace.target_text == action.target_text
     assert trace.model_region.width == action.width
-    assert trace.resolved_region.width == result.slides[0].actions[0].width
+    assert trace.resolved_region.width == grounded.width
 
 
 def test_unix_child_does_not_use_data_limit_when_address_space_limit_is_unavailable(monkeypatch):

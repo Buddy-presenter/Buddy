@@ -18,7 +18,7 @@ from buddy_desktop.library_service import LibraryAccessExpired
 from buddy_desktop.presentation_service import DownloadedPDF, PresentationService
 from buddy_desktop.services import NoRedirects, ServiceError
 
-MAX_ANALYSIS_BYTES = 8 * 1024 * 1024 + 65536
+MAX_ANALYSIS_BYTES = 16 * 1024 * 1024 + 65536
 MAX_EVIDENCE_BYTES = 16 * 1024 * 1024
 
 
@@ -208,7 +208,7 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
         if slide_id not in widths:
             raise ValueError
         raw_actions = row.get("actions")
-        if not isinstance(raw_actions, list) or len(raw_actions) > 100:
+        if not isinstance(raw_actions, list) or len(raw_actions) > 1000:
             raise ValueError
         actions: list[ReviewAction] = []
         for item in raw_actions:

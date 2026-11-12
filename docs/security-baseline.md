@@ -55,11 +55,11 @@ API's `store` option; this does not promise a particular provider-side retention
 
 - Original provider input: at most 18 MiB and 100 PDF pages. Oversized documents fail with
   a safe, explicit error; Buddy does not switch representations or silently truncate.
-- The InvokeModel call has a 90-second timeout and a 25 MiB encoded request bound, plus a
-  12,000-token output cap. The input-size bound accounts for base64 expansion. Each job has
+- The InvokeModel call has a 240-second timeout and a 25 MiB encoded request bound, plus a
+  64,000-token output cap. The input-size bound accounts for base64 expansion. Each job has
   at most three lifetime attempts.
-- The generated result is bounded by the existing #11 record limits and at most 100 actions
-  per deck. Every action is independently run by the isolated #49 validator with a
+- The generated PDF result is bounded by the #11 record's 8 MiB serialized limit and at most
+  1,000 actions per deck. Every action is independently run by the isolated #49 validator with a
   15-second execution limit. The whole job has a 900-second deadline, a bounded SQS
   visibility period, worker concurrency, and per-owner active-job quota.
 - These hard request/context/output/attempt bounds constrain token consumption and cost.

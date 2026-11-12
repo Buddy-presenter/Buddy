@@ -27,10 +27,12 @@ from buddy_api.analysis.contracts import (
     Manifest,
     Region,
 )
-from buddy_api.analysis.provider import ModelAction, ModelOutput
+from buddy_api.analysis.provider import ModelAction, ModelOutput, ModelSlide
 from buddy_api.extraction.contracts import Extraction, ExtractionError
 
 MAX_PAGE_OBJECTS = 5000
+MAX_AUTO_ACTIONS_PER_PAGE = 1000
+MAX_AUTO_ACTIONS_PER_DECK = 10_000
 MAX_TAG_NODES = 5000
 MAX_TAG_DEPTH = 32
 MAX_TEXT_CHARACTERS = 2_000_000
@@ -521,10 +523,164 @@ def _object_rects(
     return output, tagged
 
 
+def _source_inventory_actions(
+    page: object,
+    page_number: int,
+    source_sha256: str,
+    objects: list[tuple[int, Rect]],
+    width: int,
+    height: int,
+    max_actions: int,
+) -> tuple[list[ModelAction], bool]:
+    """Make one measured highlight candidate per extracted text line and focus target.
+
+    This deliberately inventories source elements independently of the model's
+    semantic shortlist. It does not infer semantic importance or split flattened
+    images into subregions.
+    """
+    from buddy_api.analysis.text_candidates import candidate_page
+
+    coverage = [False]
+    try:
+        text_targets = candidate_page(page, page_number, source_sha256, omitted=coverage)
+    except ValueError:
+        text_targets = []
+        coverage[0] = True
+    limited = coverage[0]
+    text_actions: list[ModelAction] = []
+    if len(text_targets) > max_actions:
+        limited = True
+    for target in text_targets[:max_actions]:
+        region = target.region
+        text_actions.append(
+            ModelAction(
+                type="highlight_region",
+                purpose=f"Highlight text: {target.text}",
+                target_text=target.text,
+                target_id=target.id,
+                x=region.x,
+                y=region.y,
+                width=region.width,
+                height=region.height,
+            )
+        )
+
+    # Every embedded raster object is independently focusable. Vector artwork is
+    # grouped by a bounded spatial index, independently of the semantic model.
+    actions: list[ModelAction] = []
+    has_flattened_page = False
+    for kind, rect in objects:
+        if kind == raw.FPDF_PAGEOBJ_IMAGE:
+            if rect.area > width * height * 0.78:
+                has_flattened_page = True
+            else:
+                actions.append(
+                    ModelAction(
+                        type="zoom_region",
+                        purpose="Show embedded visual",
+                        target_text=None,
+                        x=rect.x,
+                        y=rect.y,
+                        width=rect.width,
+                        height=rect.height,
+                    )
+                )
+    if has_flattened_page:
+        # A single raster covering most of the page hides its internal elements from
+        # PDF object geometry. The model may propose crops, but they need visual QA.
+        limited = True
+    paths = [
+        rect for kind, rect in objects if kind in {raw.FPDF_PAGEOBJ_PATH, raw.FPDF_PAGEOBJ_SHADING}
+    ]
+    diagonal = math.hypot(width, height)
+    tolerance = max(2.0, diagonal * 0.004)
+    cell_size = max(16.0, tolerance * 4)
+    page_area = width * height
+    parents = list(range(len(paths)))
+
+    def root(index: int) -> int:
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    spatial: dict[tuple[int, int], list[int]] = {}
+    for index, rect in enumerate(paths):
+        # Large full-page paths are usually backgrounds or clipping shapes. Avoid
+        # merging them with every nearby object into an unusable page-sized target.
+        if rect.area > page_area * 0.20:
+            continue
+        left = math.floor((rect.x - tolerance) / cell_size)
+        right = math.floor((rect.right + tolerance) / cell_size)
+        top = math.floor((rect.y - tolerance) / cell_size)
+        bottom = math.floor((rect.bottom + tolerance) / cell_size)
+        cells = [
+            (cell_x, cell_y)
+            for cell_x in range(left, right + 1)
+            for cell_y in range(top, bottom + 1)
+        ]
+        if len(cells) > 64:
+            limited = True
+            continue
+        adjacent: set[int] = set()
+        for cell in cells:
+            adjacent.update(spatial.get(cell, ()))
+        for other_index in adjacent:
+            other = paths[other_index]
+            dx = max(0.0, max(rect.x - other.right, other.x - rect.right))
+            dy = max(0.0, max(rect.y - other.bottom, other.y - rect.bottom))
+            if math.hypot(dx, dy) <= tolerance:
+                first, second = root(index), root(other_index)
+                if first != second:
+                    parents[second] = first
+        for cell in cells:
+            spatial.setdefault(cell, []).append(index)
+
+    groups: dict[int, list[Rect]] = {}
+    for index, rect in enumerate(paths):
+        groups.setdefault(root(index), []).append(rect)
+    for group in groups.values():
+        if len(group) < 3:
+            continue
+        cluster_rect = _union(group)
+        if cluster_rect is None:
+            limited = True
+            continue
+        if not page_area * 0.00002 <= cluster_rect.area <= page_area * 0.65:
+            continue
+        actions.append(
+            ModelAction(
+                type="zoom_region",
+                purpose="Show grouped vector graphic",
+                target_text=None,
+                x=cluster_rect.x,
+                y=cluster_rect.y,
+                width=cluster_rect.width,
+                height=cluster_rect.height,
+            )
+        )
+        if len(actions) >= max_actions:
+            limited = True
+            break
+    # Put object targets before line-level cues so a dense text page cannot crowd
+    # charts, tables, and images out of the bounded deck inventory.
+    actions.extend(text_actions)
+    if len(actions) > max_actions:
+        actions = actions[:max_actions]
+        limited = True
+    return actions, limited
+
+
 def _intersects(a: Rect, b: Rect) -> float:
     width = max(0.0, min(a.right, b.right) - max(a.x, b.x))
     height = max(0.0, min(a.bottom, b.bottom) - max(a.y, b.y))
     return width * height
+
+
+def _rect_iou(a: Rect, b: Rect) -> float:
+    overlap = _intersects(a, b)
+    union = a.area + b.area - overlap
+    return overlap / union if union > 0 else 0.0
 
 
 def _snap_object(
@@ -668,10 +824,10 @@ def ground_actions(
         or len(output.slides) != len(extraction.slides)
         or len(manifest.slides) != len(extraction.slides)
         or [slide.number for slide in output.slides] != list(range(1, len(extraction.slides) + 1))
-        or sum(len(slide.actions) for slide in output.slides) > MAX_GENERATED_ACTIONS_PER_DECK
     ):
         raise ExtractionError("grounding_page_limit")
-    grounded: list[object] = []
+    grounded: list[ModelSlide] = []
+    coverage_limited = output.action_limit_reached
     ocr_cache: dict[int, list[OcrWord]] = {}
     ocr_pages = 0
     total_chars = 0
@@ -683,10 +839,7 @@ def ground_actions(
             for page_index, (_slide, generated) in enumerate(
                 zip(extraction.slides, output.slides, strict=True)
             ):
-                page_actions = []
-                if not generated.actions:
-                    grounded.append(generated)
-                    continue
+                page_actions: list[ModelAction] = []
                 width, height = (
                     manifest.slides[page_index].source.width,
                     manifest.slides[page_index].source.height,
@@ -714,6 +867,30 @@ def ground_actions(
                             raise ExtractionError("page_geometry_mismatch")
                         converter = bitmap.get_posconv(page)
                         objects, tagged_objects = _object_rects(page, converter, width, height)
+                        if len(page.get_objects()) >= MAX_PAGE_OBJECTS:  # type: ignore[attr-defined]
+                            coverage_limited = True
+                        inventory_actions, inventory_limited = _source_inventory_actions(
+                            page,
+                            page_index + 1,
+                            extraction.source_sha256,
+                            objects,
+                            width,
+                            height,
+                            max_actions=max(
+                                1,
+                                min(
+                                    MAX_AUTO_ACTIONS_PER_PAGE,
+                                    math.ceil(MAX_AUTO_ACTIONS_PER_DECK / len(extraction.slides)),
+                                ),
+                            ),
+                        )
+                        coverage_limited = coverage_limited or inventory_limited
+                        proposed_actions = (*generated.actions, *inventory_actions)
+                        source_text_targets = {
+                            action.target_id: action
+                            for action in inventory_actions
+                            if action.target_id is not None
+                        }
                         candidate_targets = {}
                         if any(action.target_id is not None for action in generated.actions):
                             from buddy_api.analysis.text_candidates import candidate_page
@@ -724,24 +901,37 @@ def ground_actions(
                                     page, page_index + 1, extraction.source_sha256
                                 )
                             }
-                        for action in generated.actions:
+                        for action in proposed_actions:
                             hint = _hint(action, width, height)
                             if hint is None:
                                 continue
                             rect: Rect | None = None
                             method: GroundingMethod = "pdf_glyphs"
                             if action.target_id is not None:
-                                target = candidate_targets.get(action.target_id)
-                                if (
-                                    target is None
-                                    or action.type != "highlight_region"
-                                    or action.target_text != target.text
-                                ):
-                                    continue
+                                source_target = source_text_targets.get(action.target_id)
+                                if source_target is not None:
+                                    if (
+                                        action.type != "highlight_region"
+                                        or action.target_text != source_target.target_text
+                                    ):
+                                        continue
+                                    target_rect = Rect(
+                                        source_target.x,
+                                        source_target.y,
+                                        source_target.width,
+                                        source_target.height,
+                                    )
+                                else:
+                                    target = candidate_targets.get(action.target_id)
+                                    if (
+                                        target is None
+                                        or action.type != "highlight_region"
+                                        or action.target_text != target.text
+                                    ):
+                                        continue
+                                    target_rect = Rect(**target.region.model_dump())
                                 method = "pdf_candidate_line"
-                                rect = _padded(
-                                    Rect(**target.region.model_dump()), width, height, zoom=False
-                                )
+                                rect = _padded(target_rect, width, height, zoom=False)
                             elif action.target_text:
                                 matches = _matches_text(
                                     page, textpage, action.target_text, width, height, converter
@@ -783,6 +973,21 @@ def ground_actions(
                                         action = action.model_copy(
                                             update={"visual_qa_pending": True}
                                         )
+                            if rect is not None and any(
+                                existing.type == action.type
+                                and _rect_iou(
+                                    Rect(
+                                        existing.x,
+                                        existing.y,
+                                        existing.width,
+                                        existing.height,
+                                    ),
+                                    rect,
+                                )
+                                >= 0.90
+                                for existing in page_actions
+                            ):
+                                continue
                             if rect is not None:
                                 page_actions.append(
                                     action.model_copy(
@@ -816,4 +1021,25 @@ def ground_actions(
         raise
     except Exception:
         raise ExtractionError("pdf_action_grounding_failed") from None
-    return output.model_copy(update={"slides": tuple(grounded)})
+    total_actions = sum(len(slide.actions) for slide in grounded)
+    if total_actions > MAX_GENERATED_ACTIONS_PER_DECK:
+        coverage_limited = True
+        # Fairly retain candidates across pages instead of letting an early dense page
+        # consume the complete deck budget.
+        retained: list[list[ModelAction]] = [[] for _ in grounded]
+        retained_count = 0
+        for action_index in range(max(len(slide.actions) for slide in grounded)):
+            for slide_index, slide in enumerate(grounded):
+                if (
+                    action_index < len(slide.actions)
+                    and retained_count < MAX_GENERATED_ACTIONS_PER_DECK
+                ):
+                    retained[slide_index].append(slide.actions[action_index])
+                    retained_count += 1
+        grounded = [
+            slide.model_copy(update={"actions": tuple(actions)})
+            for slide, actions in zip(grounded, retained, strict=True)
+        ]
+    return output.model_copy(
+        update={"slides": tuple(grounded), "action_limit_reached": coverage_limited}
+    )

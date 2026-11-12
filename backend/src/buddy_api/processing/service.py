@@ -21,11 +21,11 @@ from buddy_api.analysis.contracts import (
     EvidenceReference,
     Manifest,
     PDFAnalysisInputV2,
+    PDFSlideOutputV2,
     PowerPointAnalysisInput,
     PowerPointManifest,
     Region,
     RegionParameters,
-    SlideOutput,
     Summary,
     ValidationInput,
     digest,
@@ -799,7 +799,7 @@ class Processor:
             extraction.slides
         ):
             raise ProviderFailure("provider_slide_order")
-        rendered: list[SlideOutput] = []
+        rendered: list[PDFSlideOutputV2] = []
         grounding: list[ActionGrounding] = []
         visual_qa_pending_instance_ids: list[str] = []
         for index, (model_slide, source_slide) in enumerate(
@@ -853,18 +853,16 @@ class Processor:
                 except ValueError:
                     raise ProviderFailure("provider_invalid_action") from None
             rendered.append(
-                SlideOutput(
+                PDFSlideOutputV2(
                     slide_id=source_slide.id,
                     summary=cls._summary(model_slide.text, model_slide.reason),
                     actions=tuple(actions),
                 )
             )
         try:
-            input_model = (
-                PDFAnalysisInputV2
-                if len(grounding) >= 40 or sum(len(s.actions) for s in rendered) >= 40
-                else AnalysisInput
-            )
+            # New PDF records always use v2 so exhaustive source inventory provenance
+            # and any explicit coverage-cap warning survive storage and typed reads.
+            input_model = PDFAnalysisInputV2
             return input_model(
                 extraction_id=extraction_id,
                 source_revision=extraction.source_revision,
@@ -874,6 +872,7 @@ class Processor:
                 display_profile="wide-1x",
                 validator_version="qt-executor-1",
                 manifest=manifest,
+                action_limit_reached=generated.action_limit_reached,
                 grounding=tuple(grounding),
                 visual_qa_pending_instance_ids=tuple(visual_qa_pending_instance_ids),
                 presentation_summary=cls._summary(

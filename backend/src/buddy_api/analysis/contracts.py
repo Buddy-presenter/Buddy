@@ -23,7 +23,7 @@ type GroundingMethod = Literal[
     "pdf_candidate_line",
 ]
 type Publication = Literal["legacy", "partial", "awaiting_validation", "published"]
-MAX_GENERATED_ACTIONS_PER_DECK = 100
+MAX_GENERATED_ACTIONS_PER_DECK = 1000
 
 
 class Model(BaseModel):
@@ -161,6 +161,12 @@ class SlideOutput(Model):
     actions: Annotated[tuple[ContentAction, ...], Field(max_length=100)] = ()
 
 
+class PDFSlideOutputV2(SlideOutput):
+    actions: Annotated[
+        tuple[ContentAction, ...], Field(max_length=MAX_GENERATED_ACTIONS_PER_DECK)
+    ] = ()
+
+
 class AnalysisInput(Model):
     source_format: Literal["pdf"] = Field(default="pdf", exclude=True)
     schema_version: Literal["buddy.analysis.v1"] = "buddy.analysis.v1"
@@ -242,12 +248,16 @@ class PDFAnalysisInputV2(AnalysisInput):
     """Expanded PDF action provenance; v1 remains bounded at 40 for old clients."""
 
     schema_version: Literal["buddy.analysis.v2"] = "buddy.analysis.v2"  # type: ignore[assignment]
+    slides: Annotated[tuple[PDFSlideOutputV2, ...], Field(min_length=1, max_length=500)]
     grounding: Annotated[
-        tuple[ActionGrounding, ...], Field(max_length=100, exclude_if=lambda value: not value)
+        tuple[ActionGrounding, ...],
+        Field(max_length=MAX_GENERATED_ACTIONS_PER_DECK, exclude_if=lambda value: not value),
     ] = ()
     visual_qa_pending_instance_ids: Annotated[
-        tuple[Identifier, ...], Field(max_length=100, exclude=True)
+        tuple[Identifier, ...], Field(max_length=MAX_GENERATED_ACTIONS_PER_DECK, exclude=True)
     ] = ()
+    # Omit false to keep hashes stable for v2 records created before this field existed.
+    action_limit_reached: bool = Field(default=False, exclude_if=lambda value: not value)
 
 
 class PowerPointParameters(Model):
@@ -500,7 +510,7 @@ class PowerPointSlideResultV2(Model):
 class PDFAnalysisResultV2(AnalysisResult):
     inputs: PDFAnalysisInputV2 | None
     visual_qa_pending_instance_ids: Annotated[
-        tuple[Identifier, ...], Field(max_length=100, exclude=True)
+        tuple[Identifier, ...], Field(max_length=MAX_GENERATED_ACTIONS_PER_DECK, exclude=True)
     ] = ()
 
 

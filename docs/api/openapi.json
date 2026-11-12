@@ -1106,6 +1106,11 @@
         "additionalProperties": false,
         "description": "Expanded PDF action provenance; v1 remains bounded at 40 for old clients.",
         "properties": {
+          "action_limit_reached": {
+            "default": false,
+            "title": "Action Limit Reached",
+            "type": "boolean"
+          },
           "catalog_version": {
             "const": "1.1",
             "default": "1.1",
@@ -1137,7 +1142,7 @@
             "items": {
               "$ref": "#/components/schemas/ActionGrounding"
             },
-            "maxItems": 100,
+            "maxItems": 1000,
             "title": "Grounding",
             "type": "array"
           },
@@ -1163,7 +1168,7 @@
           },
           "slides": {
             "items": {
-              "$ref": "#/components/schemas/SlideOutput"
+              "$ref": "#/components/schemas/PDFSlideOutputV2"
             },
             "maxItems": 500,
             "minItems": 1,
@@ -1294,6 +1299,32 @@
           "slides"
         ],
         "title": "PDFAnalysisResultV2",
+        "type": "object"
+      },
+      "PDFSlideOutputV2": {
+        "additionalProperties": false,
+        "properties": {
+          "actions": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ContentAction"
+            },
+            "maxItems": 1000,
+            "title": "Actions",
+            "type": "array"
+          },
+          "slide_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          }
+        },
+        "required": [
+          "slide_id",
+          "summary"
+        ],
+        "title": "PDFSlideOutputV2",
         "type": "object"
       },
       "PowerPointActionResult": {

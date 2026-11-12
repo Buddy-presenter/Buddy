@@ -671,8 +671,15 @@ class ReviewWidget(Page):
             # This account-bound PDF is cleared when the account or backend changes.
             notices = [result.notice] if result.notice else []
             if result.analysis is not None and result.analysis.action_limit_reached:
-                limit = 100 if self.source_format == "pptx" else 40
-                notices.append(f"All {limit} available action slots were used in this analysis.")
+                if self.source_format == "pptx":
+                    notices.append(
+                        "The action capacity was reached; some possible targets may be missing."
+                    )
+                else:
+                    notices.append(
+                        "The PDF action inventory reached a processing limit; some targets may be "
+                        "missing. Review every slide before presenting."
+                    )
             self.notice.setText("\n\n".join(notices))
             self.sizes = result.sizes
             self.image = result.first_image
