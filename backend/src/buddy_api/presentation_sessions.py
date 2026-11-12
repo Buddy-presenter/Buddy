@@ -151,7 +151,7 @@ async def owned_session(
 async def current_ready_analysis(
     db: AsyncSession, deck: Deck, owner_id: UUID
 ) -> tuple[AnalysisVersion, list[AnalysisSlide]]:
-    """Require a current, successful processing result and immutable published analysis."""
+    """Require a current analysis with a complete slide map for presentation control."""
     if not all(
         (
             deck.source_key,
@@ -174,17 +174,24 @@ async def current_ready_analysis(
         .order_by(AnalysisVersion.version.desc(), AnalysisVersion.id.desc())
         .limit(1)
     )
+    if job is None or analysis is None:
+        raise HTTPException(409, "The deck does not have a current analysis for presentation.")
+    published = (
+        job.status in {"analysis_ready", "succeeded"} and analysis.publication == "published"
+    )
+    partial_pdf = (
+        deck.source_format == "pdf"
+        and job.status == "analysis_partial"
+        and analysis.publication in {"partial", "awaiting_validation"}
+    )
     if (
-        job is None
-        or job.status not in {"analysis_ready", "succeeded"}
+        not (published or partial_pdf)
         or job.source_revision != deck.source_revision
-        or analysis is None
-        or analysis.publication != "published"
         or analysis.job_id != job.id
         or analysis.source_format != deck.source_format
         or analysis.extraction_id is None
     ):
-        raise HTTPException(409, "The deck does not have a current published analysis yet.")
+        raise HTTPException(409, "The deck does not have a current analysis for presentation.")
     slides = list(
         (
             await db.scalars(
@@ -198,8 +205,24 @@ async def current_ready_analysis(
             )
         ).all()
     )
-    if not slides or len(slides) != deck.source_slide_count:
-        raise HTTPException(409, "The published analysis does not match the ready deck.")
+    provenance = analysis.provenance or {}
+    manifest = provenance.get("manifest")
+    manifest_slides = manifest.get("slides") if isinstance(manifest, dict) else None
+    slide_ids = [slide.slide_id for slide in slides]
+    manifest_ids = [
+        item.get("slide_id") for item in manifest_slides or () if isinstance(item, dict)
+    ]
+    if (
+        not slides
+        or len(slides) != deck.source_slide_count
+        or provenance.get("source_revision") != deck.source_revision
+        or provenance.get("source_sha256") != deck.source_sha256
+        or not isinstance(manifest, dict)
+        or manifest.get("deck_id") != str(deck.id)
+        or len(manifest_ids) != len(manifest_slides or ())
+        or slide_ids != manifest_ids
+    ):
+        raise HTTPException(409, "The analysis does not match the current deck source.")
     return analysis, slides
 
 

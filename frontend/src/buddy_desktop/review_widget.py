@@ -468,9 +468,11 @@ class ReviewWidget(Page):
         if (
             busy
             and self.account.operation in {"check", "profile"}
-            and self.account.account_id
-            and self.token()
+            and self.account.session
+            and self.account.session.tokens
         ):
+            # Routine checks do not change identity. Preserve cached private review
+            # data while a near-expiry token refresh is being verified.
             return
         self.account_busy = busy
         if busy and self.account.operation not in {"check", "profile"}:
@@ -483,7 +485,7 @@ class ReviewWidget(Page):
     def account_changed(self) -> None:
         key = (
             (id(self.account.session), self.account.account_id, self.config.api_url)
-            if self.token()
+            if self.account.session and self.account.session.tokens
             else None
         )
         if key != self.account_key:
@@ -491,7 +493,7 @@ class ReviewWidget(Page):
             self.deck_id = None
             self.deck_title = ""
         self.account_key = key
-        if not self.token():
+        if key is None:
             self.state.show_state(
                 "Sign in to review", "Saved presentations are private to your account."
             )
@@ -501,6 +503,10 @@ class ReviewWidget(Page):
                 "Choose a presentation", "Open Review from a PDF in your library."
             )
             self.signin.hide()
+        else:
+            self.signin.hide()
+            if self.token() and self.active and self.pdf_content is None:
+                self.load()
 
     def clear_private(self, *, keep_deck: bool = False) -> None:
         self._close_evidence()

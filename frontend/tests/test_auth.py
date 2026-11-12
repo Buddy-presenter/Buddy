@@ -98,6 +98,24 @@ def test_supported_browser_flows_use_pkce_and_no_tokens_in_urls(session, monkeyp
     assert "private" not in repr(client.tokens)
 
 
+def test_transient_refresh_failure_preserves_saved_session(session, monkeypatch):
+    client, _, _ = session
+    client.sign_in("signin")
+    expired = client.tokens
+    assert expired is not None
+    expired.expires = time.monotonic() - 1
+
+    def unavailable(_request, **_kwargs):
+        raise IdentityError("Account service unavailable. Please try again later.")
+
+    monkeypatch.setattr(auth, "request_json", unavailable)
+    with pytest.raises(IdentityError, match="unavailable"):
+        client.account()
+
+    assert client.tokens is expired
+    assert client.store.read() == expired.refresh
+
+
 def test_restart_and_expiration_rotate_saved_token(session):
     client, requests, identifier = session
     client.sign_in()

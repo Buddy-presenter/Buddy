@@ -3,7 +3,9 @@
 import hashlib
 import json
 import socket
+import time
 from contextlib import suppress
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Event, Thread
 from uuid import uuid4
@@ -14,7 +16,13 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QFileDialog
 
 from buddy_desktop.config import AppConfig
-from buddy_desktop.library_service import LibraryAccessExpired, LibraryPage, LibraryService
+from buddy_desktop.auth import Tokens
+from buddy_desktop.library_service import (
+    DeckSummary,
+    LibraryAccessExpired,
+    LibraryPage,
+    LibraryService,
+)
 from buddy_desktop.presentation_service import (
     MAX_BYTES,
     PresentationService,
@@ -23,6 +31,7 @@ from buddy_desktop.presentation_service import (
 )
 from buddy_desktop.services import ServiceError
 from buddy_desktop.visuals import apply_theme
+from buddy_identity.config import IdentityError
 
 
 @pytest.fixture
@@ -278,6 +287,38 @@ def test_routine_account_check_does_not_cancel_inflight_upload(
     upload_http.release.set()
     qtbot.waitUntil(lambda: not library.runner.busy)
     assert len(upload_http.bodies) == 1
+
+
+def test_transient_account_check_failure_keeps_signed_in_library(
+    upload_http, desktop_window, monkeypatch, qtbot
+):
+    deck = DeckSummary(uuid4(), "Keep this deck", datetime.now(UTC), "ready", 0)
+    monkeypatch.setattr(
+        LibraryService,
+        "list",
+        lambda *a, **kw: LibraryPage((deck,), 1, 1, 20),
+    )
+    window = desktop_window(f"http://127.0.0.1:{upload_http.server_port}")
+    library = signed_in(window)
+    window.account.account_id = "same-account"
+    window.account.session_changed.emit()
+    qtbot.waitUntil(lambda: not library.runner.busy)
+    assert library.table.rowCount() == 1
+
+    window.account.session.tokens = Tokens("near-expiry", "refresh", time.monotonic() + 10)
+
+    def unavailable():
+        raise IdentityError("Account service unavailable. Please try again later.")
+
+    window.account.session.account = unavailable
+    window.account.check_session()
+    qtbot.waitUntil(lambda: not window.account.runner.busy)
+
+    assert window.account.account_id == "same-account"
+    assert window.account.session.tokens is not None
+    assert library.table.rowCount() == 1
+    assert library.last_page is not None
+    assert not library.state.isVisible()
 
 
 def test_account_check_identity_change_cancels_inflight_upload(

@@ -10,8 +10,12 @@ and full transcripts are not session data.
 
 - `POST /api/v1/sessions` with `{ "deck_id": "…" }` starts a session or idempotently
   resumes the active session for that owner and deck. The API checks ownership, persisted
-  source, latest processing result, published analysis, and slide count. A deck that is
-  still processing, partial, stale, or missing its source is rejected with `409`.
+  source, latest processing result, analysis provenance, and a complete ordered slide map.
+  A current PDF analysis with partial summaries or actions awaiting validation may still
+  start a session so the presenter can use microphone and slide controls. Incomplete
+  analysis does not make an action usable: state updates continue to accept only actions
+  with current validated, usable evidence. Stale sources, incomplete slide maps, legacy
+  analyses, and decks still processing are rejected with `409`.
 - `GET /api/v1/sessions/{id}` reads an owner's session state.
 - `POST /api/v1/sessions/{id}/resume` resumes a created session when its pinned analysis is
   still current. An ended session is terminal; start a new session to present again.

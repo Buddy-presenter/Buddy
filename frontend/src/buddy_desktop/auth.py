@@ -363,8 +363,18 @@ class AccountSession:
         if self.tokens is None:
             raise SessionExpired("Please sign in.")
         if time.monotonic() >= self.tokens.expires - 30:
+            previous = self.tokens
             self.tokens = None
-            self.resume()
+            try:
+                self.resume()
+            except SessionExpired:
+                raise
+            except IdentityError:
+                # A transient network/provider failure during refresh must not
+                # discard the still-stored session. The access token remains
+                # unusable until its expiry, but a later check can retry refresh.
+                self.tokens = previous
+                raise
         if self.tokens is None:
             raise SessionExpired("Please sign in again.")
         result = request_json(
