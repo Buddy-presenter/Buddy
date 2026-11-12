@@ -124,6 +124,8 @@ def test_reconnect_uses_last_acknowledged_cursor_and_ends(qtbot, event_server):
     event_server.respond = lambda number: wire(first if number == 1 else final)
     stream = SessionEventStream()
     received = []
+    connections = []
+    stream.connection_changed.connect(lambda generation, state: connections.append(state))
 
     def acknowledge(generation, event):
         received.append(event)
@@ -137,6 +139,8 @@ def test_reconnect_uses_last_acknowledged_cursor_and_ends(qtbot, event_server):
         qtbot.waitUntil(lambda: len(received) == 2, timeout=5000)
         assert event_server.requests[1][2] == "0"
         assert received[-1].snapshot.status == "ended"
+        assert connections.count("connected") == 2
+        assert "reconnecting" in connections
         qtbot.waitUntil(lambda: not stream._thread.is_alive())
     finally:
         stream.stop()

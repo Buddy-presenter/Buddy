@@ -127,6 +127,7 @@ def read_frames(stream: BinaryIO, stopped: Event) -> Iterator[list[str]]:
 class SessionEventStream(QObject):
     received = Signal(int, object)
     failed = Signal(int, str, bool)
+    connection_changed = Signal(int, str)
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
@@ -153,6 +154,7 @@ class SessionEventStream(QObject):
         if key is None:
             return
         self._stopped, self._ack = Event(), Event()
+        self.connection_changed.emit(self._generation, "connecting")
         self._thread = Thread(
             target=self._run,
             args=(config, key, self._generation, self._stopped, self._ack),
@@ -196,6 +198,8 @@ class SessionEventStream(QObject):
                 ) as response:
                     if response.headers.get_content_type() != "text/event-stream":
                         raise ValueError
+                    if not stopped.is_set():
+                        self.connection_changed.emit(generation, "connected")
                     for frame in read_frames(cast(BinaryIO, response), stopped):
                         failures = 0
                         event_type = next((s[7:] for s in frame if s.startswith("event: ")), "")
@@ -269,4 +273,6 @@ class SessionEventStream(QObject):
                         generation, "Session updates disconnected. Retry session sync.", False
                     )
                 return
+            if not stopped.is_set():
+                self.connection_changed.emit(generation, "reconnecting")
             stopped.wait(min(2 ** (failures - 1), 8))

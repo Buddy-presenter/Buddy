@@ -60,6 +60,8 @@ Sign-out, account/deck changes, session end and shutdown cancel subscriptions; o
 callbacks cannot update the player. Access failure or exhausted reconnects stop microphone
 capture. Manual controls remain responsive; unsent manual navigation takes priority over
 remote state observations.
+The subscriber also emits generation-tagged connecting/connected/reconnecting signals so
+rolling-context consumers can invalidate speech across a transport gap.
 
 At most 256 events remain per session. Events expire from replay after 5 minutes; the API
 cleanup task deletes expired rows every 30 seconds while running. Ending a session clears
