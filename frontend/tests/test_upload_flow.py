@@ -255,3 +255,48 @@ def test_qt_cancel_waiting_response_and_private_invalidation(
         assert not library.upload_panel.isVisible()
         assert not library.upload_keys and library.retry_path is None
     upload_http.release.set()
+
+
+def test_routine_account_check_does_not_cancel_inflight_upload(
+    upload_http, desktop_window, monkeypatch, qtbot, tmp_path
+):
+    monkeypatch.setattr(LibraryService, "list", lambda *a, **kw: LibraryPage((), 0, 1, 20))
+    window = desktop_window(f"http://127.0.0.1:{upload_http.server_port}")
+    library = signed_in(window)
+    window.account.account_id = "same-account"
+    window.account.session.account = lambda: "same-account"
+    window.account.session_changed.emit()
+    qtbot.waitUntil(lambda: not library.runner.busy)
+    upload_http.release.clear()
+    library.start_upload(source(tmp_path))
+    qtbot.waitUntil(upload_http.entered.is_set)
+    cancellation = library.upload_cancelled
+    window.account.check_session()
+    qtbot.waitUntil(lambda: not window.account.runner.busy)
+    assert cancellation is not None and not cancellation.is_set()
+    assert library.runner.busy and library.upload_panel.isVisible()
+    upload_http.release.set()
+    qtbot.waitUntil(lambda: not library.runner.busy)
+    assert len(upload_http.bodies) == 1
+
+
+def test_account_check_identity_change_cancels_inflight_upload(
+    upload_http, desktop_window, monkeypatch, qtbot, tmp_path
+):
+    monkeypatch.setattr(LibraryService, "list", lambda *a, **kw: LibraryPage((), 0, 1, 20))
+    window = desktop_window(f"http://127.0.0.1:{upload_http.server_port}")
+    library = signed_in(window)
+    window.account.account_id = "old-account"
+    window.account.session.account = lambda: "new-account"
+    window.account.session_changed.emit()
+    qtbot.waitUntil(lambda: not library.runner.busy)
+    upload_http.release.clear()
+    library.start_upload(source(tmp_path))
+    qtbot.waitUntil(upload_http.entered.is_set)
+    cancelled = library.upload_cancelled
+    window.account.check_session()
+    qtbot.waitUntil(lambda: not window.account.runner.busy)
+    qtbot.waitUntil(lambda: not library.runner.busy, timeout=3000)
+    assert cancelled is not None and cancelled.is_set()
+    assert not library.upload_panel.isVisible()
+    upload_http.release.set()

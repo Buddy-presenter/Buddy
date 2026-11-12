@@ -20,6 +20,7 @@ POWERPOINT_ZOOM_HEAD = "0014_powerpoint_zoom"
 SESSION_STATE_HEAD = "0014_session_state"
 DECK_DELETION_HEAD = "0015_deck_deletion"
 TOMBSTONE_ANALYSIS_CLEANUP_HEAD = "0016_tombstone_analysis_cleanup"
+PDF_ACTION_POSITION_HEAD = "0017_pdf_action_position_limit"
 
 
 async def check_ready(self):
@@ -43,6 +44,7 @@ async def check_ready(self):
                 {SESSION_STATE_HEAD},
                 {DECK_DELETION_HEAD},
                 {TOMBSTONE_ANALYSIS_CLEANUP_HEAD},
+                {PDF_ACTION_POSITION_HEAD},
             ):
                 raise PersistenceUnavailable("Database is outside the tested compatibility window.")
             for table in Base.metadata.sorted_tables:

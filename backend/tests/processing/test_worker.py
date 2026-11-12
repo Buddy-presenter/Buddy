@@ -1151,3 +1151,113 @@ def test_preupgrade_metadata_ready_pdf_is_resumed_into_analysis(database_setting
             await db.close()
 
     asyncio.run(scenario())
+
+
+def test_pdf_validation_resumes_before_deadline_without_regeneration(
+    migrated_database, monkeypatch
+):
+    from types import SimpleNamespace
+
+    import buddy_api.processing.service as service_module
+
+    elapsed = [0.0]
+    monkeypatch.setattr(service_module, "time", SimpleNamespace(perf_counter=lambda: elapsed[0]))
+
+    class Provider:
+        calls = 0
+
+        def analyze(self, content, extraction, deck_id, manifest):
+            self.calls += 1
+            return ModelOutput(
+                presentation=ModelSummary(text="Presentation.", reason=None),
+                slides=tuple(
+                    ModelSlide(
+                        number=i + 1,
+                        text="Page.",
+                        reason=None,
+                        actions=(
+                            ModelAction(
+                                type="zoom_region",
+                                purpose="Focus on the source.",
+                                target_text="Buddy PDF presentation",
+                                x=1,
+                                y=1,
+                                width=1280,
+                                height=720,
+                            ),
+                            ModelAction(
+                                type="highlight_region",
+                                purpose="Mark the source.",
+                                target_text="Buddy PDF presentation",
+                                x=1,
+                                y=1,
+                                width=1280,
+                                height=720,
+                            ),
+                        )
+                        if i == 0
+                        else (),
+                    )
+                    for i, _ in enumerate(extraction.slides)
+                ),
+            )
+
+    class Validator:
+        def __init__(self, deck):
+            self.deck = deck
+            self.calls = []
+
+        async def reconcile(self):
+            pass
+
+        async def validate(self, owner_id, deck_id, key, request, **kwargs):
+            self.calls.append(key)
+            elapsed[0] += 250
+            return StoredResult(
+                id=uuid4(),
+                deck_id=deck_id,
+                evidence=[],
+                result=ProcessResult(
+                    state="rejected",
+                    reasons=["invalid_action_parameters"],
+                    profile=request.profile,
+                    runtime_platform=sys.platform,
+                    source_revision=self.deck.source_revision,
+                    source_sha256=self.deck.source_sha256,
+                    action_sha256=action_digest(request.action),
+                ),
+            )
+
+    async def scenario():
+        db = Database(migrated_database)
+        try:
+            owner, deck, job = await seed(db)
+            queue = SQS()
+            provider = Provider()
+            validator = Validator(deck)
+            worker = make_processor(
+                db,
+                SourceStorage(UPLOADS, S3(PDF.read_bytes())),
+                WORKER.model_copy(update={"runtime_seconds": 300}),
+                queue,
+                provider=provider,
+                validation=validator,
+            )
+            await worker.maintain()
+            await worker.run_message(queue.messages[-1])
+            current = await row(db, job.id)
+            assert current.status == "retry_wait" and current.attempts == 0
+            async with db.sessions() as session, session.begin():
+                current = await session.get(ProcessingJob, job.id)
+                current.not_before = store.now()
+                outbox = await session.get(JobOutbox, job.id)
+                outbox.available_at = store.now()
+            await worker.maintain()
+            await worker.run_message(queue.messages[-1])
+            current = await row(db, job.id)
+            assert current.status == "analysis_ready" and provider.calls == 1
+            assert len(validator.calls) == len(set(validator.calls)) == 2
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())

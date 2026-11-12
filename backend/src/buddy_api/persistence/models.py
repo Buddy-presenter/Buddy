@@ -330,7 +330,11 @@ class SlideAction(OwnedRecord):
             "'draw_hexagon','draw_star','zoom_region'))",
             name="content_type",
         ),
-        CheckConstraint("position >= 0 AND position < 100", name="position"),
+        CheckConstraint(
+            "position >= 0 AND ((source_format = 'pdf' AND position < 1000) OR "
+            "(source_format = 'pptx' AND position < 100))",
+            name="position",
+        ),
     )
     slide_record_id: Mapped[UUID] = mapped_column()
     analysis_id: Mapped[UUID] = mapped_column(index=True)

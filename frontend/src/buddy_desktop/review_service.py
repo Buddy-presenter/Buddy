@@ -18,7 +18,7 @@ from buddy_desktop.library_service import LibraryAccessExpired
 from buddy_desktop.presentation_service import DownloadedPDF, PresentationService
 from buddy_desktop.services import NoRedirects, ServiceError
 
-MAX_ANALYSIS_BYTES = 8 * 1024 * 1024 + 65536
+MAX_ANALYSIS_BYTES = 16 * 1024 * 1024 + 65536
 MAX_EVIDENCE_BYTES = 16 * 1024 * 1024
 
 
@@ -208,7 +208,7 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
         if slide_id not in widths:
             raise ValueError
         raw_actions = row.get("actions")
-        if not isinstance(raw_actions, list) or len(raw_actions) > 100:
+        if not isinstance(raw_actions, list) or len(raw_actions) > 1000:
             raise ValueError
         actions: list[ReviewAction] = []
         for item in raw_actions:
@@ -459,6 +459,10 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
     )
 
 
+class PDFAnalysisUpgradeRequired(ServiceError):
+    """The server requires the versioned PDF analysis endpoint."""
+
+
 class ReviewService:
     def __init__(self, config: AppConfig, access: str):
         self.config, self.access = config, access
@@ -492,6 +496,10 @@ class ReviewService:
                 raise ServiceError(
                     "No saved analysis is available for this presentation yet."
                 ) from None
+            if status == 409:
+                raise PDFAnalysisUpgradeRequired(
+                    "The saved review requires a newer contract."
+                ) from None
             if status == 429:
                 raise ServiceError("Too many requests. Wait a minute, then retry.") from None
             raise ServiceError(
@@ -509,13 +517,21 @@ class ReviewService:
     def analysis(self, deck_id: UUID, source_format: str = "pdf") -> ReviewAnalysis:
         if source_format not in {"pdf", "pptx"}:
             raise ServiceError("Unsupported saved analysis format.")
-        content, _ = self._get(
+        path = (
             f"/api/v2/analyses/powerpoint/by-deck/{deck_id}"
             if source_format == "pptx"
-            else f"/api/v1/analyses/by-deck/{deck_id}",
-            accept="application/json",
-            limit=MAX_ANALYSIS_BYTES,
+            else f"/api/v1/analyses/by-deck/{deck_id}"
         )
+        try:
+            content, _ = self._get(path, accept="application/json", limit=MAX_ANALYSIS_BYTES)
+        except PDFAnalysisUpgradeRequired:
+            if source_format != "pdf":
+                raise
+            content, _ = self._get(
+                f"/api/v2/analyses/pdf/by-deck/{deck_id}",
+                accept="application/json",
+                limit=MAX_ANALYSIS_BYTES,
+            )
         try:
             result = parse_analysis(json.loads(content), deck_id)
             if result.source_format != source_format:

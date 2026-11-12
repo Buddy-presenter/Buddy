@@ -33,7 +33,13 @@ class TextCandidates(Model):
     candidates: tuple[TextCandidate, ...]
 
 
-def candidate_page(page: Any, page_number: int, source_sha256: str) -> list[TextCandidate]:
+def candidate_page(
+    page: Any,
+    page_number: int,
+    source_sha256: str,
+    *,
+    omitted: list[bool] | None = None,
+) -> list[TextCandidate]:
     """Group horizontal glyphs by baseline and spacing, splitting distant columns.
 
     Vertical or strongly rotated text is deliberately omitted in this first version.
@@ -41,6 +47,8 @@ def candidate_page(page: Any, page_number: int, source_sha256: str) -> list[Text
     """
     width, height = (math.ceil(value * 2) for value in page.get_size())
     if page.get_rotation() != 0:
+        if omitted is not None:
+            omitted[0] = True
         return []
     if max(width, height) > 8192 or width * height > 16_777_216:
         raise ValueError("candidate_page_size_limit")
@@ -62,6 +70,8 @@ def candidate_page(page: Any, page_number: int, source_sha256: str) -> list[Text
             # Accept horizontal source baselines only; no guessing for rotated text.
             angle = raw.FPDFText_GetCharAngle(textpage, index)
             if min(abs(angle), abs(angle - math.tau)) > 0.05:
+                if omitted is not None:
+                    omitted[0] = True
                 continue
             left, bottom, right, top = textpage.get_charbox(index)
             points = [converter.to_bitmap(x, y) for x, y in ((left, top), (right, bottom))]
@@ -113,6 +123,8 @@ def candidate_page(page: Any, page_number: int, source_sha256: str) -> list[Text
             words.append(glyph[4])
             previous = glyph
         text = "".join(words).strip()
+        if len(text) > 256 and omitted is not None:
+            omitted[0] = True
         if not text or not any(char.isalnum() for char in text) or len(text) > 256:
             continue
         left, top = min(g[0] for g in line), min(g[1] for g in line)
