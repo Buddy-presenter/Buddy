@@ -465,6 +465,13 @@ class ReviewWidget(Page):
                 self.load()
 
     def account_activity(self, busy: bool) -> None:
+        if (
+            busy
+            and self.account.operation in {"check", "profile"}
+            and self.account.account_id
+            and self.token()
+        ):
+            return
         self.account_busy = busy
         if busy and self.account.operation not in {"check", "profile"}:
             # Session checks and profile reads do not change the signed-in identity.
@@ -664,8 +671,15 @@ class ReviewWidget(Page):
             # This account-bound PDF is cleared when the account or backend changes.
             notices = [result.notice] if result.notice else []
             if result.analysis is not None and result.analysis.action_limit_reached:
-                limit = 100 if self.source_format == "pptx" else 40
-                notices.append(f"All {limit} available action slots were used in this analysis.")
+                if self.source_format == "pptx":
+                    notices.append(
+                        "The action capacity was reached; some possible targets may be missing."
+                    )
+                else:
+                    notices.append(
+                        "The PDF action inventory reached a processing limit; some targets may be "
+                        "missing. Review every slide before presenting."
+                    )
             self.notice.setText("\n\n".join(notices))
             self.sizes = result.sizes
             self.image = result.first_image
@@ -944,7 +958,14 @@ class ReviewWidget(Page):
             f"/ {len(self.action_rows)} total"
         )
         self.action_table.fit_rows()
-        self.preview.set_page(self.image, None)
+        # Selecting the first row can emit itemSelectionChanged and set its region,
+        # but the old unconditional clear here erased that overlay immediately. When
+        # there was only one action, clicking the already-selected row emitted no new
+        # selection event, so its bounding box appeared impossible to show.
+        if self.action_rows:
+            self.action_selected()
+        else:
+            self.preview.set_page(self.image, None)
         self.action_table.setAccessibleDescription(
             f"{len(self.action_rows)} actions on slide {self.page_index + 1}"
         )
