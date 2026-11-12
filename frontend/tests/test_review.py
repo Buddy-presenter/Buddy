@@ -344,3 +344,26 @@ def test_review_queues_new_deck_while_stale_load_is_finishing(desktop_window, mo
     finally:
         release_first.set()
         release_second.set()
+
+
+def test_pdf_review_retries_versioned_contract_on_upgrade(monkeypatch):
+    from buddy_desktop.config import AppConfig
+    from buddy_desktop.review_service import PDFAnalysisUpgradeRequired, ReviewService
+
+    service = ReviewService(AppConfig("http://127.0.0.1:8000"), "token")
+    calls = []
+
+    def get(path, **kwargs):
+        calls.append(path)
+        if len(calls) == 1:
+            raise PDFAnalysisUpgradeRequired("upgrade")
+        return b"{}", None
+
+    monkeypatch.setattr(service, "_get", get)
+    monkeypatch.setattr(
+        "buddy_desktop.review_service.parse_analysis",
+        lambda *_: SimpleNamespace(source_format="pdf"),
+    )
+    deck = uuid4()
+    assert service.analysis(deck).source_format == "pdf"
+    assert calls == [f"/api/v1/analyses/by-deck/{deck}", f"/api/v2/analyses/pdf/by-deck/{deck}"]

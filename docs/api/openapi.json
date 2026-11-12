@@ -1102,6 +1102,200 @@
         "title": "ManifestSlide",
         "type": "object"
       },
+      "PDFAnalysisInputV2": {
+        "additionalProperties": false,
+        "description": "Expanded PDF action provenance; v1 remains bounded at 40 for old clients.",
+        "properties": {
+          "catalog_version": {
+            "const": "1.1",
+            "default": "1.1",
+            "title": "Catalog Version",
+            "type": "string"
+          },
+          "display_profile": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "extraction_id": {
+            "format": "uuid",
+            "title": "Extraction Id",
+            "type": "string"
+          },
+          "extraction_schema_version": {
+            "const": "buddy.extraction.v1",
+            "default": "buddy.extraction.v1",
+            "title": "Extraction Schema Version",
+            "type": "string"
+          },
+          "extractor_version": {
+            "const": "1",
+            "default": "1",
+            "title": "Extractor Version",
+            "type": "string"
+          },
+          "grounding": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ActionGrounding"
+            },
+            "maxItems": 100,
+            "title": "Grounding",
+            "type": "array"
+          },
+          "job_id": {
+            "format": "uuid",
+            "title": "Job Id",
+            "type": "string"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/Manifest"
+          },
+          "presentation_summary": {
+            "$ref": "#/components/schemas/Summary"
+          },
+          "renderer_version": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "schema_version": {
+            "const": "buddy.analysis.v2",
+            "default": "buddy.analysis.v2",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "slides": {
+            "items": {
+              "$ref": "#/components/schemas/SlideOutput"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Slides",
+            "type": "array"
+          },
+          "source_revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "title": "Source Revision",
+            "type": "string"
+          },
+          "source_sha256": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "validator_version": {
+            "$ref": "#/components/schemas/Identifier"
+          }
+        },
+        "required": [
+          "extraction_id",
+          "source_revision",
+          "source_sha256",
+          "job_id",
+          "renderer_version",
+          "display_profile",
+          "validator_version",
+          "manifest",
+          "presentation_summary",
+          "slides"
+        ],
+        "title": "PDFAnalysisInputV2",
+        "type": "object"
+      },
+      "PDFAnalysisResponseV2": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PDFAnalysisResultV2"
+              },
+              {
+                "$ref": "#/components/schemas/AnalysisResult"
+              }
+            ],
+            "title": "Data"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "request_id"
+        ],
+        "title": "PDFAnalysisResponseV2",
+        "type": "object"
+      },
+      "PDFAnalysisResultV2": {
+        "additionalProperties": false,
+        "properties": {
+          "action_limit_reached": {
+            "default": false,
+            "title": "Action Limit Reached",
+            "type": "boolean"
+          },
+          "analysis_sha256": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Digest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "deck_id": {
+            "format": "uuid",
+            "title": "Deck Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "inputs": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PDFAnalysisInputV2"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "publication": {
+            "$ref": "#/components/schemas/Publication"
+          },
+          "slides": {
+            "items": {
+              "$ref": "#/components/schemas/SlideResult"
+            },
+            "title": "Slides",
+            "type": "array"
+          },
+          "source_format": {
+            "const": "pdf",
+            "default": "pdf",
+            "title": "Source Format",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "deck_id",
+          "version",
+          "publication",
+          "analysis_sha256",
+          "inputs",
+          "slides"
+        ],
+        "title": "PDFAnalysisResultV2",
+        "type": "object"
+      },
       "PowerPointActionResult": {
         "additionalProperties": false,
         "properties": {
@@ -6638,6 +6832,105 @@
         "summary": "Version",
         "tags": [
           "operations"
+        ]
+      }
+    },
+    "/api/v2/analyses/pdf/by-deck/{deck_id}": {
+      "get": {
+        "operationId": "pdf_for_deck_v2_api_v2_analyses_pdf_by_deck__deck_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deck_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Deck Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PDFAnalysisResponseV2"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Pdf For Deck V2",
+        "tags": [
+          "analysis"
         ]
       }
     },

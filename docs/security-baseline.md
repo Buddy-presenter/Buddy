@@ -58,7 +58,7 @@ API's `store` option; this does not promise a particular provider-side retention
 - The InvokeModel call has a 90-second timeout and a 25 MiB encoded request bound, plus a
   12,000-token output cap. The input-size bound accounts for base64 expansion. Each job has
   at most three lifetime attempts.
-- The generated result is bounded by the existing #11 record limits and at most 40 actions
+- The generated result is bounded by the existing #11 record limits and at most 100 actions
   per deck. Every action is independently run by the isolated #49 validator with a
   15-second execution limit. The whole job has a 900-second deadline, a bounded SQS
   visibility period, worker concurrency, and per-owner active-job quota.

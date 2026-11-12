@@ -459,6 +459,10 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
     )
 
 
+class PDFAnalysisUpgradeRequired(ServiceError):
+    """The server requires the versioned PDF analysis endpoint."""
+
+
 class ReviewService:
     def __init__(self, config: AppConfig, access: str):
         self.config, self.access = config, access
@@ -492,6 +496,10 @@ class ReviewService:
                 raise ServiceError(
                     "No saved analysis is available for this presentation yet."
                 ) from None
+            if status == 409:
+                raise PDFAnalysisUpgradeRequired(
+                    "The saved review requires a newer contract."
+                ) from None
             if status == 429:
                 raise ServiceError("Too many requests. Wait a minute, then retry.") from None
             raise ServiceError(
@@ -509,13 +517,21 @@ class ReviewService:
     def analysis(self, deck_id: UUID, source_format: str = "pdf") -> ReviewAnalysis:
         if source_format not in {"pdf", "pptx"}:
             raise ServiceError("Unsupported saved analysis format.")
-        content, _ = self._get(
+        path = (
             f"/api/v2/analyses/powerpoint/by-deck/{deck_id}"
             if source_format == "pptx"
-            else f"/api/v1/analyses/by-deck/{deck_id}",
-            accept="application/json",
-            limit=MAX_ANALYSIS_BYTES,
+            else f"/api/v1/analyses/by-deck/{deck_id}"
         )
+        try:
+            content, _ = self._get(path, accept="application/json", limit=MAX_ANALYSIS_BYTES)
+        except PDFAnalysisUpgradeRequired:
+            if source_format != "pdf":
+                raise
+            content, _ = self._get(
+                f"/api/v2/analyses/pdf/by-deck/{deck_id}",
+                accept="application/json",
+                limit=MAX_ANALYSIS_BYTES,
+            )
         try:
             result = parse_analysis(json.loads(content), deck_id)
             if result.source_format != source_format:

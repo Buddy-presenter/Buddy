@@ -15,6 +15,8 @@ from buddy_api.analysis.contracts import (
     AnalysisResult,
     ContentAction,
     ManifestSlide,
+    PDFAnalysisInputV2,
+    PDFAnalysisResultV2,
     PowerPointActionResult,
     PowerPointAnalysisInput,
     PowerPointAnalysisResult,
@@ -444,13 +446,16 @@ class Analyses:
                 inputs=inputs,
                 slides=tuple(results),
             )
-        return AnalysisResult(
+        result_model: type[AnalysisResult] = (
+            PDFAnalysisResultV2 if isinstance(inputs, PDFAnalysisInputV2) else AnalysisResult
+        )
+        return result_model(
             id=value.id,
             deck_id=value.deck_id,
             version=value.version,
             publication=publication(inputs.presentation_summary, tuple(results)),
             action_limit_reached=sum(len(slide.actions) for slide in results)
-            == MAX_GENERATED_ACTIONS_PER_DECK,
+            == (MAX_GENERATED_ACTIONS_PER_DECK if isinstance(inputs, PDFAnalysisInputV2) else 40),
             analysis_sha256=value.content_sha256,
             inputs=inputs,
             slides=tuple(results),

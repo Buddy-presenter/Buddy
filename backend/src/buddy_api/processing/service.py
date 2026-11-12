@@ -20,6 +20,7 @@ from buddy_api.analysis.contracts import (
     ContentAction,
     EvidenceReference,
     Manifest,
+    PDFAnalysisInputV2,
     PowerPointAnalysisInput,
     PowerPointManifest,
     Region,
@@ -570,12 +571,8 @@ class Processor:
                         # Geometry inside a flattened image is deliberately kept as a
                         # candidate for #50/#51. Executor success cannot promote it.
                         continue
-                    if (
-                        _format == "pptx"
-                        and time.perf_counter() - job_started_at
-                        >= self.settings.runtime_seconds - 105
-                    ):
-                        # Preserve completed Office checks and resume the remaining
+                    if time.perf_counter() - job_started_at >= self.settings.runtime_seconds - 105:
+                        # Preserve completed checks and resume the remaining
                         # candidates before this delivery's deadline can interrupt one.
                         async with self.database.sessions() as session, session.begin():
                             await store.defer(session, job.id, token, 1)
@@ -863,7 +860,12 @@ class Processor:
                 )
             )
         try:
-            return AnalysisInput(
+            input_model = (
+                PDFAnalysisInputV2
+                if len(grounding) >= 40 or sum(len(s.actions) for s in rendered) >= 40
+                else AnalysisInput
+            )
+            return input_model(
                 extraction_id=extraction_id,
                 source_revision=extraction.source_revision,
                 source_sha256=extraction.source_sha256,

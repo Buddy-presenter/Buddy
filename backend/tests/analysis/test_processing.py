@@ -201,3 +201,20 @@ def test_unsafe_model_action_is_preserved_for_isolated_validation(action_type, x
         manifest.slides[0].source.width + 1 if width == "page_width" else width
     )
     assert all(not slide.actions for slide in document.slides[1:])
+
+
+def test_expanded_pdf_candidate_library_uses_versioned_contract():
+    from backend.tests.analysis.test_grounding import _action, _load, _output
+
+    from buddy_api.analysis.contracts import PDFAnalysisInputV2, parse_analysis_input
+
+    _, extraction, manifest = _load(PDF)
+    generated = _output(extraction, {0: tuple(_action() for _ in range(41))})
+    document = Processor._analysis_document(
+        generated, extraction, manifest, UUID(manifest.deck_id), uuid4(), uuid4()
+    )
+    assert isinstance(document, PDFAnalysisInputV2)
+    assert len(document.slides[0].actions) == 41
+    assert isinstance(parse_analysis_input(document.model_dump(mode="json")), PDFAnalysisInputV2)
+    with pytest.raises(ValidationError):
+        AnalysisInput.model_validate(document.model_dump(mode="json"))

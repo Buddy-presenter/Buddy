@@ -98,13 +98,18 @@ every 10 seconds, but never beyond the 900-second attempt deadline. PDF inspecti
 ephemeral PDFium manifest hashing run in an isolated process with a 120-second deadline,
 1 GiB address-space ceiling, 30-second metadata parser limit and no persisted page images.
 Provider calls time out after 90 seconds. The provider boundary accepts at most an 18 MiB,
-100-page PDF, returns at most 12,000 tokens, and is attempted at most three times for a job.
+100-page PDF, returns at most 16,000 tokens, and is attempted at most three times for a job.
 The 18 MiB source limit leaves room for base64 expansion and request metadata under Bedrock's
 25 MiB InvokeModel body quota.
 The model context window and request/output limits bound token spend; generation can produce
-multiple distinct actions per slide, with validation capped at 40 actions per deck and 15 seconds
-per isolated action run. Review warns when all 40 slots are used because additional useful
-actions may have been left out. Generated highlights must quote a visible target phrase and are
+multiple distinct actions per slide, with validation capped at 100 actions per deck and 15 seconds
+per isolated action run. Review warns when all 100 slots are used because additional useful
+actions may have been left out. Newly produced analyses with 40 or more retained actions use
+`buddy.analysis.v2`; old clients receive a 409 upgrade response, while compatible clients read
+`/api/v2/analyses/pdf/by-deck/{deck_id}`. Deploy the compatible API and desktop before enabling
+the updated worker; an older API cannot read the expanded stored contract. If validation nears
+the worker deadline, it releases the delivery and resumes already-persisted work rather than
+regenerating the analysis. The PDF semantic visual-QA gate remains separate and unfinished. Generated highlights must quote a visible target phrase and are
 rejected if their rectangle exceeds 6% of page height; this catches paragraph-sized regions but
 does not establish semantic correctness. Fargate independently bounds
 worker CPU/memory to 1 vCPU/2 GiB. SIGTERM drains bounded work, releases the lease and exits;

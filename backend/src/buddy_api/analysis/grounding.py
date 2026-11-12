@@ -20,7 +20,13 @@ from dataclasses import dataclass
 import pypdfium2 as pdfium  # type: ignore[import-untyped]
 import pypdfium2.raw as raw  # type: ignore[import-untyped]
 
-from buddy_api.analysis.contracts import GroundingMethod, GroundingTrace, Manifest, Region
+from buddy_api.analysis.contracts import (
+    MAX_GENERATED_ACTIONS_PER_DECK,
+    GroundingMethod,
+    GroundingTrace,
+    Manifest,
+    Region,
+)
 from buddy_api.analysis.provider import ModelAction, ModelOutput
 from buddy_api.extraction.contracts import Extraction, ExtractionError
 
@@ -662,7 +668,7 @@ def ground_actions(
         or len(output.slides) != len(extraction.slides)
         or len(manifest.slides) != len(extraction.slides)
         or [slide.number for slide in output.slides] != list(range(1, len(extraction.slides) + 1))
-        or sum(len(slide.actions) for slide in output.slides) > 40
+        or sum(len(slide.actions) for slide in output.slides) > MAX_GENERATED_ACTIONS_PER_DECK
     ):
         raise ExtractionError("grounding_page_limit")
     grounded: list[object] = []

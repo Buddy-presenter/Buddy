@@ -23,7 +23,7 @@ type GroundingMethod = Literal[
     "pdf_candidate_line",
 ]
 type Publication = Literal["legacy", "partial", "awaiting_validation", "published"]
-MAX_GENERATED_ACTIONS_PER_DECK = 40
+MAX_GENERATED_ACTIONS_PER_DECK = 100
 
 
 class Model(BaseModel):
@@ -238,6 +238,18 @@ class AnalysisInput(Model):
         return self
 
 
+class PDFAnalysisInputV2(AnalysisInput):
+    """Expanded PDF action provenance; v1 remains bounded at 40 for old clients."""
+
+    schema_version: Literal["buddy.analysis.v2"] = "buddy.analysis.v2"  # type: ignore[assignment]
+    grounding: Annotated[
+        tuple[ActionGrounding, ...], Field(max_length=100, exclude_if=lambda value: not value)
+    ] = ()
+    visual_qa_pending_instance_ids: Annotated[
+        tuple[Identifier, ...], Field(max_length=100, exclude=True)
+    ] = ()
+
+
 class PowerPointParameters(Model):
     region: Region
     text: Annotated[str, Field(max_length=300)] = ""
@@ -377,6 +389,8 @@ class PowerPointAnalysisInputV2(Model):
 def parse_analysis_input(value: object) -> AnalysisInput | PowerPointAnalysisInputV2:
     if isinstance(value, dict) and value.get("source_format") == "pptx":
         return PowerPointAnalysisInputV2.model_validate(value)
+    if isinstance(value, dict) and value.get("schema_version") == "buddy.analysis.v2":
+        return PDFAnalysisInputV2.model_validate(value)
     return AnalysisInput.model_validate(value)
 
 
@@ -481,6 +495,13 @@ class PowerPointSlideResultV2(Model):
     slide_id: Identifier
     summary: Summary
     actions: tuple[PowerPointActionResultV2, ...]
+
+
+class PDFAnalysisResultV2(AnalysisResult):
+    inputs: PDFAnalysisInputV2 | None
+    visual_qa_pending_instance_ids: Annotated[
+        tuple[Identifier, ...], Field(max_length=100, exclude=True)
+    ] = ()
 
 
 class PowerPointAnalysisResultV2(Model):
