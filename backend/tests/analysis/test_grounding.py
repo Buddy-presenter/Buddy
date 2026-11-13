@@ -66,8 +66,7 @@ def _load(path: Path):
 def _two_column_pdf(phrase=b"caf\xe9 results", *, with_visual=False) -> bytes:
     """Build a deterministic WinAnsi source PDF with repeated text in two columns."""
     visual = (
-        b"q 1 0 0 rg 100 500 30 30 re f 0 1 0 rg 131 500 30 30 re f "
-        b"0 0 1 rg 162 500 30 30 re f Q "
+        b"q 1 0 0 rg 100 500 30 30 re f 0 1 0 rg 131 500 30 30 re f 0 0 1 rg 162 500 30 30 re f Q "
         if with_visual
         else b""
     )
