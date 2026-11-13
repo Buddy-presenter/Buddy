@@ -121,9 +121,10 @@ def test_source_inventory_adds_visuals_but_not_every_text_line():
     generated = _output(extraction, {}).model_copy(update={"source_inventory_enabled": True})
     result = ground_actions(content, extraction, manifest, generated)
 
-    assert result.slides[0].actions
-    assert any(action.grounding_trace for action in result.slides[0].actions)
-    assert all(action.type == "zoom_region" for action in result.slides[0].actions)
+    actions = [action for slide in result.slides for action in slide.actions]
+    assert actions
+    assert any(action.grounding_trace for action in actions)
+    assert all(action.type == "zoom_region" for action in actions)
 
 
 def test_source_inventory_does_not_turn_text_only_page_lines_into_actions():
