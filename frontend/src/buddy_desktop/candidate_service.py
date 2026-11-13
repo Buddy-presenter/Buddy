@@ -134,7 +134,16 @@ class CandidateService:
                         raise ValueError
                 elif action is not None:
                     raise ValueError
-            if time.monotonic_ns() - context.segments[-1].capture_end_ns > 5_000_000_000:
+            received_ns = time.monotonic_ns()
+            if not 0 <= received_ns - context.segments[-1].capture_end_ns <= 5_000_000_000 or any(
+                received_ns
+                - (
+                    segment.capture_end_ns
+                    - round((segment.end_seconds - segment.start_seconds) * 1_000_000_000)
+                )
+                > 30_000_000_000
+                for segment in context.segments
+            ):
                 raise ValueError
             return result
         except HTTPError as exc:

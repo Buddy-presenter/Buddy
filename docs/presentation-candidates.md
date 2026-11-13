@@ -25,7 +25,8 @@ must keep wall clocks synchronized. This timestamp bounds request transit, not p
 of audio capture; the live desktop capture clock owns capture freshness.
 
 `CandidateService.resolve` accepts #18's actual ContextSnapshot and saved session,
-checks capture freshness/window and session/version before network access, sends the
+checks capture freshness/window and session/version before network access, rechecks
+capture age/window before returning a response, sends the
 bearer token only as a header and validates the bounded response. Call it outside the
 GUI thread. The caller must recheck the live session/version/epoch against the result
 before using it; a frozen snapshot or returned candidate cannot authorize an action.

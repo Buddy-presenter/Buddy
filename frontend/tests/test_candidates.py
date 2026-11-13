@@ -43,10 +43,12 @@ def inputs():
 
 
 @pytest.mark.parametrize(
-    "corrupt", [None, "state_version", "tool", "action", "oversize", "expired"]
+    "corrupt", [None, "state_version", "tool", "action", "oversize", "expired", "window_expired"]
 )
 def test_response_is_bound_to_context_and_only_typed_candidates(corrupt, monkeypatch):
     session, context = inputs()
+    if corrupt == "window_expired":
+        context = replace(context, segments=(replace(context.segments[0], end_seconds=29),))
     clock = [context.observed_ns]
     monkeypatch.setattr("buddy_desktop.candidate_service.time.monotonic_ns", lambda: clock[0])
     seen = []
@@ -87,6 +89,8 @@ def test_response_is_bound_to_context_and_only_typed_candidates(corrupt, monkeyp
             raw = b"x" * 32769 if corrupt == "oversize" else json.dumps(result).encode()
             if corrupt == "expired":
                 clock[0] += 6_000_000_000
+            elif corrupt == "window_expired":
+                clock[0] += 2_000_000_000
             self.send_response(200)
             self.end_headers()
             self.wfile.write(raw)
