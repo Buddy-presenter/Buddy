@@ -270,6 +270,59 @@ def test_multi_column_table_becomes_one_complete_target_per_row():
     ]
 
 
+def test_parallel_wrapped_prose_columns_remain_separate_paragraphs():
+    left_lines = (
+        "The left column explains the launch goals and market context.",
+        "It continues with the product strategy and expected customer value.",
+        "The final line describes the planned rollout across new regions.",
+    )
+    right_lines = (
+        "The right column describes the research method and sample selection.",
+        "It continues with the results gathered from customer interviews.",
+        "The final line summarizes risks and recommendations for the team.",
+    )
+    commands = [b"BT /F1 8 Tf "]
+    for row_index, (left, right) in enumerate(zip(left_lines, right_lines, strict=True)):
+        baseline = 700 - row_index * 12
+        for x, text in ((70, left), (350, right)):
+            escaped = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+            commands.append(f"1 0 0 1 {x} {baseline} Tm ({escaped}) Tj ".encode())
+    commands.append(b"ET")
+
+    catalog = extract_candidates(_pdf_with_content(b"".join(commands)))
+    paragraphs = [item.text for item in catalog.candidates if item.kind == "paragraph"]
+
+    assert paragraphs == [" ".join(left_lines), " ".join(right_lines)]
+    assert not any(item.kind == "table_row" for item in catalog.candidates)
+
+
+def test_paragraph_before_table_does_not_consume_table_header_cells():
+    rows = (
+        ("Name", "Revenue"),
+        ("North", "$10M"),
+        ("South", "$12M"),
+        ("West", "$8M"),
+    )
+    commands = [b"BT /F1 12 Tf 1 0 0 1 90 740 Tm (Overview) Tj "]
+    for row_index, row in enumerate(rows):
+        baseline = 726 - row_index * 30
+        for x, text in zip((90, 420), row, strict=True):
+            escaped = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+            commands.append(f"1 0 0 1 {x} {baseline} Tm ({escaped}) Tj ".encode())
+    commands.append(b"ET")
+
+    catalog = extract_candidates(_pdf_with_content(b"".join(commands)))
+
+    assert any(item.kind == "paragraph" and item.text == "Overview" for item in catalog.candidates)
+    rows_found = [item.text for item in catalog.candidates if item.kind == "table_row"]
+    assert rows_found == [
+        "Name | Revenue",
+        "North | $10M",
+        "South | $12M",
+        "West | $8M",
+    ]
+
+
 @pytest.mark.parametrize("malformation", ["missing_actions", "coordinates", "unknown_id"])
 def test_candidate_provider_sanitizes_invalid_selection_responses(malformation):
     catalog = extract_candidates(_two_column_pdf())

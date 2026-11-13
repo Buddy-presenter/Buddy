@@ -75,6 +75,36 @@ def _table_row_groups(lines: list[Line]) -> dict[int, tuple[int, ...]]:
     if len(qualified) < 3:
         return {}
 
+    # Two columns are common in ordinary slide prose. Parallel baselines alone
+    # are not enough to call them table rows. Require compact, cell-like content
+    # (or an explicit numeric value column) before combining two-column text.
+    # Three or more stable columns already provide substantially stronger table
+    # structure and continue to use the general rule below.
+    qualified_columns = {
+        column_for(index) for band in qualified for index in band if column_for(index) >= 0
+    }
+    if len(qualified_columns) == 2:
+        compact_cells = all(
+            len(lines[index][0]) <= 48 and len(lines[index][0].split()) <= 7
+            for band in qualified
+            for index in band
+        )
+        numeric_column = any(
+            sum(
+                bool(re.fullmatch(r"[\s$€£¥+−-]?\d[\d,.%$€£¥\s()−/+-]*", lines[index][0]))
+                for band in qualified
+                for index in band
+                if column_for(index) == column
+            )
+            >= max(
+                2,
+                (sum(column_for(index) == column for band in qualified for index in band) + 1) // 2,
+            )
+            for column in qualified_columns
+        )
+        if not compact_cells and not numeric_column:
+            return {}
+
     # Require two stable columns across at least three neighboring rows. A few
     # aligned labels in a page header therefore cannot turn into a table.
     output: dict[int, tuple[int, ...]] = {}
@@ -123,6 +153,60 @@ def _commit_table_run(
         )
         if len(cells) >= 2:
             output[cells[0]] = cells
+
+
+def _parallel_text_columns(lines: list[Line], excluded: set[int]) -> list[tuple[int, ...]]:
+    """Find repeated, spatially separate text tracks for column prose grouping."""
+    available = [index for index in range(len(lines)) if index not in excluded]
+    if len(available) < 6:
+        return []
+    median_height = sorted(lines[index][3] for index in available)[len(available) // 2]
+    row_tolerance = max(3.0, median_height * 0.75)
+    bands: list[list[int]] = []
+    for index in available:
+        center = lines[index][1].y + lines[index][1].height / 2
+        if bands:
+            last = bands[-1]
+            last_center = sum(lines[item][1].y + lines[item][1].height / 2 for item in last) / len(
+                last
+            )
+            if abs(center - last_center) <= row_tolerance:
+                last.append(index)
+                continue
+        bands.append([index])
+    paired_bands = [band for band in bands if len(band) >= 2]
+    if len(paired_bands) < 3:
+        return []
+
+    tolerance = max(4.0, median_height * 2.5)
+    anchors: list[float] = []
+    for start in sorted(lines[index][1].x for band in paired_bands for index in band):
+        if not anchors or start - anchors[-1] > tolerance:
+            anchors.append(start)
+        else:
+            anchors[-1] = (anchors[-1] + start) / 2
+
+    def column_for(index: int) -> int:
+        x = lines[index][1].x
+        matches = [
+            (abs(x - anchor), column)
+            for column, anchor in enumerate(anchors)
+            if abs(x - anchor) <= tolerance
+        ]
+        return min(matches)[1] if matches else -1
+
+    stable = {
+        column
+        for column in range(len(anchors))
+        if sum(any(column_for(index) == column for index in band) for band in paired_bands) >= 3
+    }
+    if len(stable) < 2:
+        return []
+    tracks = [
+        tuple(index for index in available if column_for(index) == column)
+        for column in sorted(stable)
+    ]
+    return [track for track in tracks if len(track) >= 3]
 
 
 class TextCandidate(Model):
@@ -434,65 +518,79 @@ def candidate_page(
     table_rows = _table_row_groups(physical_lines)
     table_cell_indices = {item for cells in table_rows.values() for item in cells}
 
-    # Join wrapped physical lines into semantic entities. Lists start a new entity
-    # at each marker; unmarked continuation lines remain attached to that bullet.
+    # Repeated, separate text tracks mean physical reading order interleaves
+    # columns. Group each stable track independently; otherwise retain the
+    # original top-to-bottom flow for ordinary single-column content.
+    column_tracks = _parallel_text_columns(physical_lines, table_cell_indices)
+    column_indices = {index for track in column_tracks for index in track}
+    streams = [
+        tuple(index for index in range(len(physical_lines)) if index not in column_indices),
+        *column_tracks,
+    ]
     entities: list[tuple[str, str, list[Line]]] = []
-    index = 0
-    while index < len(physical_lines):
-        if index in table_rows:
-            group = sorted(
-                (physical_lines[item] for item in table_rows[index]),
-                key=lambda item: item[1].x,
-            )
-            text = " | ".join(item[0] for item in group)
-            entities.append(("table_row", text, group))
-            index += 1
-            continue
-        if index in table_cell_indices:
-            index += 1
-            continue
-        line = physical_lines[index]
-        kind = kinds[index]
-        group = [line]
-        next_index = index + 1
-        while next_index < len(physical_lines):
-            candidate = physical_lines[next_index]
-            candidate_kind = kinds[next_index]
-            previous = group[-1]
-            gap = candidate[1].y - (previous[1].y + previous[1].height)
-            scale = max(previous[3], candidate[3])
-            left_aligned = abs(candidate[1].x - line[1].x) <= scale * (
-                3.5 if kind == "bullet" else 2.5
-            )
-            centered_headings = (
-                kind in {"title", "heading"}
-                and abs(candidate[1].x + candidate[1].width / 2 - line[1].x - line[1].width / 2)
-                <= scale * 2.5
-            )
-            aligned = left_aligned or centered_headings
-            same_style = 0.72 <= candidate[4] / max(line[4], 1.0) <= 1.4
-            close = -scale * 0.15 <= gap <= scale * 1.55
-            if not (aligned and same_style and close):
-                break
+    for stream in streams:
+        cursor = 0
+        while cursor < len(stream):
+            index = stream[cursor]
+            if index in table_rows:
+                group = sorted(
+                    (physical_lines[item] for item in table_rows[index]),
+                    key=lambda item: item[1].x,
+                )
+                entities.append(("table_row", " | ".join(item[0] for item in group), group))
+                cursor += 1
+                continue
+            if index in table_cell_indices:
+                cursor += 1
+                continue
+            line = physical_lines[index]
+            kind = kinds[index]
+            group = [line]
+            next_cursor = cursor + 1
+            while next_cursor < len(stream):
+                candidate_index = stream[next_cursor]
+                # Table cells are owned by the table row emitted by the outer loop.
+                # Do not let a preceding prose entity consume one as a wrapped line.
+                if candidate_index in table_cell_indices:
+                    break
+                candidate = physical_lines[candidate_index]
+                candidate_kind = kinds[candidate_index]
+                previous = group[-1]
+                gap = candidate[1].y - (previous[1].y + previous[1].height)
+                scale = max(previous[3], candidate[3])
+                left_aligned = abs(candidate[1].x - line[1].x) <= scale * (
+                    3.5 if kind == "bullet" else 2.5
+                )
+                centered_headings = (
+                    kind in {"title", "heading"}
+                    and abs(candidate[1].x + candidate[1].width / 2 - line[1].x - line[1].width / 2)
+                    <= scale * 2.5
+                )
+                aligned = left_aligned or centered_headings
+                same_style = 0.72 <= candidate[4] / max(line[4], 1.0) <= 1.4
+                close = -scale * 0.15 <= gap <= scale * 1.55
+                if not (aligned and same_style and close):
+                    break
+                if kind == "bullet":
+                    if candidate_kind != "paragraph" or _BULLET.match(candidate[0]):
+                        break
+                    # A continuation line can align with the bullet body after its marker.
+                    if candidate[1].x < line[1].x - scale * 0.25:
+                        break
+                elif kind in {"title", "heading"}:
+                    if candidate_kind not in {"title", "heading"}:
+                        break
+                elif candidate_kind != "paragraph":
+                    break
+                group.append(candidate)
+                next_cursor += 1
+            text = _SPACE.sub(" ", " ".join(item[0] for item in group)).strip()
             if kind == "bullet":
-                if candidate_kind != "paragraph" or _BULLET.match(candidate[0]):
-                    break
-                # A continuation line can align with the bullet body after its marker.
-                if candidate[1].x < line[1].x - scale * 0.25:
-                    break
-            elif kind in {"title", "heading"}:
-                if candidate_kind not in {"title", "heading"}:
-                    break
-            elif candidate_kind != "paragraph":
-                break
-            group.append(candidate)
-            next_index += 1
-        text = _SPACE.sub(" ", " ".join(item[0] for item in group)).strip()
-        if kind == "bullet":
-            text = _BULLET.sub("", text, count=1).strip()
-        if text:
-            entities.append((kind, text, group))
-        index += len(group)
+                text = _BULLET.sub("", text, count=1).strip()
+            if text:
+                entities.append((kind, text, group))
+            cursor += len(group)
+    entities.sort(key=lambda entity: (entity[2][0][1].y, entity[2][0][1].x))
 
     output: list[TextCandidate] = []
     for kind, text, group in entities:
