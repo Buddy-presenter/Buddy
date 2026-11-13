@@ -61,6 +61,7 @@ from buddy_desktop.slide_executor import Completion, SlideExecutor
 from buddy_desktop.slide_surface import SlideSurface
 from buddy_desktop.speech import SpeechController
 from buddy_desktop.tasks import TaskRunner
+from buddy_desktop.transcript_context import TranscriptContext
 from buddy_desktop.views import Page, StatusLabel
 from buddy_desktop.visuals import BuddyMark, command
 
@@ -187,6 +188,14 @@ class PresentWidget(Page):
         self._stream_snapshot: PresentationSession | None = None
         self.microphone = MicrophoneController(self)
         self.speech = SpeechController(self)
+        self.transcript_context = TranscriptContext()
+        self._context_connected = False
+        self._context_expiry = QTimer(self)
+        self._context_expiry.setInterval(1000)
+        self._context_expiry.timeout.connect(self.transcript_context.snapshot)
+        self._context_expiry.start()
+        self.speech.cleared.connect(self.transcript_context.invalidate)
+        self.session_events.connection_changed.connect(self._context_connection_changed)
         self.microphone.format_ready.connect(self._speech_start)
         self.microphone.audio_received.connect(self._speech_audio)
         self.microphone.audio_gap.connect(self.speech.audio_gap)
@@ -631,8 +640,26 @@ class PresentWidget(Page):
             if self.microphone.enabled:
                 self.speech.send(packet)
 
+    @Slot(int, str)
+    def _context_connection_changed(self, generation: int, state: str) -> None:
+        if generation == self.session_events.generation:
+            self._context_connected = state == "connected"
+            self.transcript_context.invalidate()
+
     @Slot(object)
     def _speech_transcript(self, event: dict[str, object]) -> None:
+        if (
+            self._session is not None
+            and self._context_connected
+            and self._session_pending_state is None
+            and self._session_restore_state is None
+        ):
+            self.transcript_context.bind(
+                self._session.id,
+                self._session.state_version,
+                str(self.speech_language.currentData()),
+            )
+            self.transcript_context.accept(event)
         kind = "Final" if event["final"] else "Partial"
         start = float(cast(float, event["start_seconds"]))
         end = float(cast(float, event["end_seconds"]))
@@ -871,6 +898,7 @@ class PresentWidget(Page):
         if state == self._session.state and in_flight_state is None:
             self._session_pending_state = None
             return
+        self.transcript_context.invalidate()
         self._session_pending_state = state
         if not self.session_runner.busy:
             QTimer.singleShot(0, self._flush_session_state)
@@ -1134,6 +1162,7 @@ class PresentWidget(Page):
             or incoming.state_version <= self._session.state_version
         ):
             return
+        self.transcript_context.invalidate()
         self._session = incoming
         if incoming.status == "ended":
             self.microphone.stop()
@@ -1706,6 +1735,11 @@ class PresentWidget(Page):
 
     @Slot()
     def _refresh(self) -> None:
+        self.transcript_context.bind(
+            self._session.id if isinstance(self._session, PresentationSession) else "",
+            self._session.state_version if isinstance(self._session, PresentationSession) else 0,
+            str(self.speech_language.currentData()),
+        )
         active_session = (
             self._session
             if not self._closing
@@ -1716,6 +1750,7 @@ class PresentWidget(Page):
         generation = self.session_events.generation
         self.session_events.bind(self.config, self._session_access, active_session)
         if generation != self.session_events.generation:
+            self.transcript_context.invalidate()
             self._stream_snapshot = None
         elif self._stream_snapshot is not None:
             QTimer.singleShot(0, self._apply_stream_snapshot)
