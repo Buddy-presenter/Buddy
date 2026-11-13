@@ -409,6 +409,7 @@ class PresentationSession(OwnedRecord):
         ),
         CheckConstraint("status IN ('created','active','ended')", name="status"),
         CheckConstraint("state_version >= 0", name="state_version_nonnegative"),
+        CheckConstraint("event_sequence >= 0", name="event_sequence_nonnegative"),
         CheckConstraint(
             "focus_view IN ('slide','zoom_region','highlight_region')", name="focus_view"
         ),
@@ -425,6 +426,7 @@ class PresentationSession(OwnedRecord):
     analysis_version_id: Mapped[UUID] = mapped_column(index=True)
     status: Mapped[str] = mapped_column(String(16), server_default="created")
     state_version: Mapped[int] = mapped_column(server_default="0")
+    event_sequence: Mapped[int] = mapped_column(BigInteger, server_default="0")
     active_slide_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     focus_view: Mapped[str] = mapped_column(String(24), server_default="slide")
     # None represents the absence of a focused region, so persist it as SQL NULL
@@ -434,3 +436,23 @@ class PresentationSession(OwnedRecord):
     )
     autonomy_mode: Mapped[str] = mapped_column(String(16), server_default="manual")
     last_accepted_action_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+
+class SessionEvent(Base):
+    """Short-lived ordered notifications; never an executable action queue."""
+
+    __tablename__ = "session_events"
+    __table_args__ = (
+        UniqueConstraint("session_id", "sequence", name="uq_session_events_sequence"),
+        UniqueConstraint("session_id", "command_id", name="uq_session_events_command"),
+        CheckConstraint("sequence > 0", name="sequence_positive"),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    session_id: Mapped[UUID] = mapped_column(
+        ForeignKey("presentation_sessions.id", ondelete="CASCADE"), index=True
+    )
+    sequence: Mapped[int] = mapped_column(BigInteger)
+    command_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    command_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    document: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

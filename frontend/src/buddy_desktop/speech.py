@@ -18,6 +18,7 @@ ERRORS = {
     "provider_unavailable": "The speech provider is temporarily unavailable.",
     "speech_unavailable": "The speech service encountered an internal error.",
     "connection_lost": "The speech service connection was lost.",
+    "event_journal_unavailable": "Speech synchronization is temporarily unavailable.",
     "invalid_configuration": "The speech service rejected its session configuration.",
     "session_503": "The presentation session service is temporarily unavailable.",
     "unsupported_language": "This recognition language is not supported.",
@@ -146,7 +147,10 @@ class SpeechController(QObject):
                 self._final_start = -1.0
                 self._ready = True
                 self._deadline.stop()
-                self.status_changed.emit("Transcribing • audio sent to Deepgram (EU)")
+                self.status_changed.emit(
+                    "Transcribing • audio sent to Deepgram (EU); "
+                    "transcript available for session sync for five minutes"
+                )
                 return
             if not self._ready or data.get("type") != "transcript" or data.get("version") != 1:
                 raise ValueError

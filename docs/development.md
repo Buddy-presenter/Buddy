@@ -1,5 +1,7 @@
 # Development
 
+Ordered live updates and reconnect contracts are documented in [session events](session-events.md).
+
 Buddy has three installable projects: the PySide6 desktop client, the API/backend, and the
 small shared identity package. Use Python 3.12, 3.13, or 3.14. Create one virtual
 environment at the repository root; install only the component(s) you are working on.

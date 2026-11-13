@@ -1,5 +1,7 @@
 # Presentation session API
 
+See [session events](session-events.md) for ordered notifications, acknowledgments and reconnect.
+
 Presentation sessions are durable, account-owned server records. A session pins the
 published analysis version used by the presentation and stores only bounded control state:
 the active stable slide ID, full-slide or region focus, autonomy mode, last accepted

@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from backend.tests.api.test_authorization import private_api as private_api
+from backend.tests.api.test_authorization import ready_session_api as ready_session_api
 from backend.tests.support.database import database_settings as database_settings
 from fastapi.testclient import TestClient
 from sqlalchemy import update
@@ -22,7 +23,7 @@ from buddy_api import speech
 from buddy_api.app import create_app
 from buddy_api.auth import Principal
 from buddy_api.config import Environment, Settings
-from buddy_api.persistence.models import Deck, PresentationSession
+from buddy_api.persistence.models import Deck, PresentationSession, SessionEvent
 
 
 def result(text="Next slide", final=True, start=0, duration=0.1):
@@ -82,6 +83,11 @@ def speech_client(monkeypatch):
         return Principal(owner, "owner@example.test")
 
     monkeypatch.setattr(speech, "verify_session", verify)
+
+    async def journal(*_args):
+        return None
+
+    monkeypatch.setattr(speech, "journal_transcript", journal)
     app = create_app(Settings(Environment.TEST, ("testserver",)))
     provider = Provider()
     app.state.speech_provider = provider
@@ -113,6 +119,70 @@ def test_stream_normalizes_provider_results_and_releases_connection(speech_clien
         assert final["capture_end_ns"] > 0
     assert provider.closed == 1
     assert provider.audio == [b"\x00" * 3200]
+
+
+def test_journal_failure_reports_retryable_error_without_sending_transcript(
+    speech_client, monkeypatch, caplog
+):
+    client, provider = speech_client
+
+    async def fail(*_args):
+        raise speech.SpeechFailure("event_journal_unavailable", True)
+
+    monkeypatch.setattr(speech, "journal_transcript", fail)
+    with client.websocket_connect(
+        f"/api/v1/sessions/{uuid4()}/speech", headers={"Authorization": "Bearer owner"}
+    ) as socket:
+        assert start(socket)["type"] == "ready"
+        socket.send_bytes(packet())
+        error = socket.receive_json()
+        assert error["type"] == "error"
+        assert error["code"] == "event_journal_unavailable" and error["retryable"]
+    assert provider.closed == 1
+    assert "Next slide" not in caplog.text
+
+
+@pytest.mark.postgres
+def test_recognized_speech_is_journaled_and_removed_when_session_ends(ready_session_api, caplog):
+    from sqlalchemy import select
+
+    client, ids, *_ = ready_session_api
+    identifier = ids["sessions"]
+    provider = Provider()
+    client.app.state.speech_provider = provider
+    path = f"/api/v1/sessions/{identifier}"
+    with client.websocket_connect(
+        path + "/speech", headers={"Authorization": "Bearer owner"}
+    ) as socket:
+        ready = start(socket)
+        socket.send_bytes(packet())
+        partial, final = socket.receive_json(), socket.receive_json()
+        assert not partial["final"] and final["final"]
+
+    async def journal():
+        async with client.app.state.database.sessions() as db:
+            rows = (await db.scalars(select(SessionEvent).order_by(SessionEvent.sequence))).all()
+            return [row.document for row in rows]
+
+    entries = client.portal.call(journal)
+    speech_events = [entry for entry in entries if entry["payload"]["kind"] == "speech.transcript"]
+    assert len(speech_events) == 2
+    assert [event["payload"]["revision"] for event in speech_events] == [1, 2]
+    assert [event["payload"]["final"] for event in speech_events] == [False, True]
+    assert all(event["payload"]["stream_id"] == ready["stream_id"] for event in speech_events)
+    assert all(event["payload"]["text"] == "Next slide" for event in speech_events)
+    assert "Next slide" not in caplog.text
+    assert (
+        client.post(
+            path + "/end",
+            headers={"Authorization": "Bearer owner"},
+            json={"expected_state_version": 4},
+        ).status_code
+        == 200
+    )
+    assert all(
+        entry["payload"]["kind"] != "speech.transcript" for entry in client.portal.call(journal)
+    )
 
 
 def test_isolated_invalid_provider_updates_are_dropped_and_stream_continues(speech_client):

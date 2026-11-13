@@ -37,6 +37,11 @@ from buddy_api.processing.api import processing_router
 from buddy_api.processing.queue import Queue
 from buddy_api.processing.service import Processor
 from buddy_api.readiness import DependencyProbe, check_dependencies, validate_probes
+from buddy_api.session_events import (
+    SessionCommandLimitMiddleware,
+    cleanup_events,
+    session_event_router,
+)
 from buddy_api.speech import DeepgramProvider, speech_router
 from buddy_api.uploads.contracts import UploadError
 from buddy_api.uploads.router import UploadMetadataLimitMiddleware, upload_router
@@ -113,10 +118,15 @@ def create_app(
 
         validation_cleanup = asyncio.create_task(reconcile_validation()) if validator else None
         dispatch = asyncio.create_task(processor.dispatch()) if processor else None
+        event_cleanup = asyncio.create_task(cleanup_events(database)) if database else None
         try:
             yield
         finally:
             started = False
+            if event_cleanup:
+                event_cleanup.cancel()
+                with suppress(asyncio.CancelledError):
+                    await event_cleanup
             if dispatch:
                 dispatch.cancel()
                 with suppress(asyncio.CancelledError):
@@ -150,6 +160,7 @@ def create_app(
         else None,
     )
     app.add_middleware(UploadMetadataLimitMiddleware)
+    app.add_middleware(SessionCommandLimitMiddleware)
     app.add_middleware(HandoffLimitMiddleware)
     app.add_middleware(RequestContextMiddleware, allowed_hosts=config.allowed_hosts)
     app.state.database = database
@@ -159,6 +170,7 @@ def create_app(
     app.state.validator = validator
     app.state.worker_settings = config.worker
     app.include_router(auth_router(config.identity))
+    app.include_router(session_event_router())
     app.include_router(browser_return_router())
     app.include_router(handoff_router(storage))
     app.include_router(private_router())

@@ -82,7 +82,7 @@ def test_session_start_uses_bearer_and_strict_response(backend):
     assert json.loads(backend.request_body) == {"deck_id": deck_id}
 
 
-def test_session_state_update_uses_compare_and_set(backend):
+def test_session_state_update_uses_compare_and_set(backend, monkeypatch):
     raw = snapshot(version=4)
     session = parse_snapshot(raw)
     state = SessionState(active_slide_id=session.state.active_slide_id)
@@ -97,15 +97,27 @@ def test_session_state_update_uses_compare_and_set(backend):
         "autonomy_mode": state.autonomy_mode,
         "last_accepted_action_id": None,
     }  # type: ignore[index]
-    backend.body = json.dumps(response).encode()
+    command_id = uuid4()
+    monkeypatch.setattr("buddy_desktop.presentation_session_service.uuid4", lambda: command_id)
+    backend.body = json.dumps(
+        {
+            "command_id": str(command_id),
+            "sequence": 9,
+            "duplicate": False,
+            "snapshot": response["data"],
+        }
+    ).encode()
     service = PresentationSessionService(AppConfig(f"http://127.0.0.1:{backend.server_port}"))
     updated = service.update("test-access", session, state)
     assert updated.state_version == session.state_version + 1
-    assert backend.method == "PATCH"
-    assert backend.path == f"/api/v1/sessions/{session.id}/state"
+    assert backend.method == "POST"
+    assert backend.path == f"/api/v1/sessions/{session.id}/sync/commands"
     payload = json.loads(backend.request_body)
-    assert payload["expected_state_version"] == session.state_version
-    assert payload["active_slide_id"] == state.active_slide_id
+    assert payload["kind"] == "player.state"
+    assert payload["command_id"] == str(command_id)
+    assert datetime.fromisoformat(payload["sent_at"]).tzinfo is not None
+    assert payload["state"]["expected_state_version"] == session.state_version
+    assert payload["state"]["active_slide_id"] == state.active_slide_id
 
 
 def test_session_service_distinguishes_expiration_and_state_conflict(backend):

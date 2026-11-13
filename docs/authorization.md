@@ -35,7 +35,8 @@ tokens must be in headers, including on reconnect. Both identity/revocation and 
 ownership are checked for every snapshot. Revocation, deleted records, ownership changes
 or provider/DB failure close the stream without more private snapshots. Snapshots are
 polled every five seconds for at most 150 seconds; full presentation event transport is
-owned by #33. No transcript data is sent. Clients reconnect with their current token.
+provided by the [ordered session transport](session-events.md). This older endpoint sends
+no transcript data. Clients reconnect with their current token.
 
 Run migrations explicitly before deployment. The new table is additive; the old API can
 run against it during rollout. Downgrading removes rendered asset metadata and must never

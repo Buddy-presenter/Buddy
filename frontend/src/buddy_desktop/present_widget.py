@@ -55,6 +55,7 @@ from buddy_desktop.presentation_session_service import (
     SessionState,
 )
 from buddy_desktop.services import ServiceError
+from buddy_desktop.session_events import SessionEvent, SessionEventStream
 from buddy_desktop.slide_contract import Region
 from buddy_desktop.slide_executor import Completion, SlideExecutor
 from buddy_desktop.slide_surface import SlideSurface
@@ -148,6 +149,7 @@ class PresentWidget(Page):
     """Open local manifests explicitly; no fabricated library or processing integration."""
 
     session_access_expired = Signal(str)
+    session_event_received = Signal(object)
 
     def __init__(self, config: AppConfig, settings: QSettings) -> None:
         super().__init__("Present", "")
@@ -179,6 +181,10 @@ class PresentWidget(Page):
         self.session_runner.succeeded.connect(self._session_succeeded)
         self.session_runner.failed.connect(self._session_failed)
         self.session_runner.idle.connect(self._session_idle)
+        self.session_events = SessionEventStream(self)
+        self.session_events.received.connect(self._session_event_received)
+        self.session_events.failed.connect(self._session_stream_failed)
+        self._stream_snapshot: PresentationSession | None = None
         self.microphone = MicrophoneController(self)
         self.speech = SpeechController(self)
         self.microphone.format_ready.connect(self._speech_start)
@@ -405,7 +411,8 @@ class PresentWidget(Page):
         self.speech_language.currentIndexChanged.connect(lambda _index: self.microphone.stop())
         microphone_layout.addWidget(self.speech_language)
         self.speech_status = QLabel(
-            "Saved PDF sessions: microphone audio is sent to Deepgram (EU) for transcription."
+            "Saved PDF sessions: audio is sent to Deepgram (EU). "
+            "Transcript text is available for session sync for five minutes."
         )
         self.speech_status.setTextFormat(Qt.TextFormat.PlainText)
         self.speech_status.setWordWrap(True)
@@ -574,7 +581,8 @@ class PresentWidget(Page):
         if message != "Microphone on":
             self.speech.stop()
             self.speech_status.setText(
-                "Transcription off. Audio is sent only during an active saved PDF session."
+                "Transcription off. During a saved PDF session, audio is sent to Deepgram (EU) "
+                "and transcript text is available for session sync for five minutes."
             )
         if message == "Microphone on" and self._powerpoint_info is None:
             self._microphone_pdf_generation += 1
@@ -889,6 +897,7 @@ class PresentWidget(Page):
         )
 
     def _retry_session(self) -> None:
+        self.session_events.stop()
         if self._session is None:
             self._ensure_session(force=True)
         elif self._session_pending_state is not None:
@@ -1065,6 +1074,7 @@ class PresentWidget(Page):
     def _session_idle(self) -> None:
         if self._closing:
             return
+        self._apply_stream_snapshot()
         followup, self._session_followup = self._session_followup, None
         if followup == "ensure":
             self._ensure_session()
@@ -1072,6 +1082,84 @@ class PresentWidget(Page):
             self._read_latest_session(conflict=True)
         elif followup == "flush":
             self._flush_session_state()
+        self._refresh()
+
+    @Slot(int, object)
+    def _session_event_received(self, generation: int, event: object) -> None:
+        if generation != self.session_events.generation:
+            return
+        try:
+            session = self._session
+            if (
+                self._closing
+                or not isinstance(event, SessionEvent)
+                or session is None
+                or event.session_id != session.id
+                or event.state_version < session.state_version
+            ):
+                return
+            if event.snapshot is not None:
+                incoming = event.snapshot
+                if (
+                    incoming.owner_id != session.owner_id
+                    or incoming.deck_id != session.deck_id
+                    or incoming.analysis_version_id != session.analysis_version_id
+                ):
+                    return
+                if incoming.state_version > session.state_version or incoming.status == "ended":
+                    if incoming.status == "ended":
+                        self.microphone.stop()
+                    self._stream_snapshot = incoming
+                    self._apply_stream_snapshot()
+            else:
+                # Consumers of speech/decision notifications must check freshness;
+                # this signal never executes a slide action.
+                self.session_event_received.emit(event)
+        finally:
+            self.session_events.acknowledge(generation)
+
+    def _apply_stream_snapshot(self) -> None:
+        incoming = self._stream_snapshot
+        if (
+            incoming is None
+            or self.session_runner.busy
+            or self.executor.busy
+            or self._session_restore_state is not None
+        ):
+            return
+        self._stream_snapshot = None
+        if (
+            self._session is None
+            or incoming.id != self._session.id
+            or incoming.state_version <= self._session.state_version
+        ):
+            return
+        self._session = incoming
+        if incoming.status == "ended":
+            self.microphone.stop()
+            self._session = None
+            self._session_ended = True
+            self._session_pending_state = None
+            self._session_followup = None
+            self.session_status.setText("This session was ended by another controller.")
+        elif self._session_pending_state is None:
+            self._restore_session_state(incoming.state, conflict=True)
+        # An unsent manual change takes precedence over remote observations. Its
+        # replacement still uses the newest saved version and server validation.
+        self._refresh()
+
+    @Slot(int, str, bool)
+    def _session_stream_failed(self, generation: int, message: str, access_ended: bool) -> None:
+        if generation != self.session_events.generation or self._closing:
+            return
+        self.microphone.stop()
+        self._session_error = True
+        if access_ended:
+            self._session_access = None
+            self._session = None
+            self._session_pending_state = None
+            self.session_access_expired.emit(message)
+        self.session_status.setText(message)
         self._refresh()
 
     def _restore_session_state(self, state: SessionState | None, *, conflict: bool = False) -> None:
@@ -1618,6 +1706,19 @@ class PresentWidget(Page):
 
     @Slot()
     def _refresh(self) -> None:
+        active_session = (
+            self._session
+            if not self._closing
+            and isinstance(self._session, PresentationSession)
+            and self._session.status == "active"
+            else None
+        )
+        generation = self.session_events.generation
+        self.session_events.bind(self.config, self._session_access, active_session)
+        if generation != self.session_events.generation:
+            self._stream_snapshot = None
+        elif self._stream_snapshot is not None:
+            QTimer.singleShot(0, self._apply_stream_snapshot)
         loaded = self.executor.manifest is not None and not self._closing
         account_bound = bool(self.executor.manifest and self.executor.manifest.account_bound)
         powerpoint_connected = self._powerpoint_info is not None
@@ -1686,7 +1787,7 @@ class PresentWidget(Page):
             self.session_button.setText("Connecting…")
         self.session_retry_button.setVisible(
             session_controls
-            and self._session_pending_state is not None
+            and (self._session_pending_state is not None or self._session_error)
             and self._session is not None
         )
 
@@ -1710,6 +1811,7 @@ class PresentWidget(Page):
 
     def shutdown(self) -> None:
         self._closing = True
+        self.session_events.stop()
         self._powerpoint_verification.stop()
         self.speech.stop()
         self.microphone.shutdown()

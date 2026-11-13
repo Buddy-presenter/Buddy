@@ -8,6 +8,9 @@ import struct
 import threading
 import time
 import wave
+from datetime import UTC, datetime
+from urllib.request import Request, urlopen
+from uuid import uuid4
 
 import pytest
 import uvicorn
@@ -16,14 +19,19 @@ from backend.tests.support.database import database_settings as database_setting
 from backend.tests.support.database import migrate
 from PySide6.QtCore import QTimer
 from PySide6.QtMultimedia import QMediaDevices
+from sqlalchemy import select
 
+from buddy_api import session_events
 from buddy_api.app import create_app
 from buddy_api.auth import CognitoVerifier, VerifiedIdentity
 from buddy_api.config import Environment, Settings
 from buddy_api.persistence.database import Database
+from buddy_api.persistence.models import AnalysisSlide, ProcessingJob, SessionEvent
 from buddy_api.speech import SpeechSettings
 from buddy_desktop.config import AppConfig
 from buddy_desktop.microphone import MicrophoneController
+from buddy_desktop.presentation_session_service import parse_snapshot
+from buddy_desktop.session_events import SessionEventStream
 from buddy_desktop.speech import SpeechController
 from buddy_identity.config import IdentityConfig, SessionExpired
 
@@ -82,12 +90,33 @@ def test_qt_to_persisted_session_and_provider(database_settings, monkeypatch, qt
                 session = await repos.sessions.create(
                     owner_id=owner.id, deck_id=deck.id, analysis_version_id=analysis.id
                 )
+                db = repos.users.session
+                slides = list(
+                    (
+                        await db.scalars(
+                            select(AnalysisSlide)
+                            .where(AnalysisSlide.analysis_id == analysis.id)
+                            .order_by(AnalysisSlide.position)
+                        )
+                    ).all()
+                )
+                job = await db.get(ProcessingJob, analysis.job_id)
+                deck.source_key = "synthetic-source"
+                deck.source_revision = analysis.provenance["source_revision"]
+                deck.source_sha256 = analysis.provenance["source_sha256"]
+                deck.source_size_bytes = 1024
+                deck.source_version_id = "synthetic-version"
+                deck.source_slide_count = len(slides)
+                job.status = "succeeded"
+                job.source_revision = deck.source_revision
+                analysis.publication = "published"
                 session.status = "active"
-                return str(session.id)
+                session.active_slide_id = slides[0].slide_id
+                return str(session.id), slides[1].slide_id
         finally:
             await database.close()
 
-    session_id = asyncio.run(seed())
+    session_id, second_slide_id = asyncio.run(seed())
 
     def verify(self, token):
         if token != "speech-test-access":
@@ -104,6 +133,9 @@ def test_qt_to_persisted_session_and_provider(database_settings, monkeypatch, qt
         speech=SpeechSettings.from_environment(os.environ) if live else None,
     )
     app = create_app(settings)
+    if not live:
+        # Exercise the production client's reconnect against the real SSE route.
+        monkeypatch.setattr(session_events, "STREAM_SECONDS", 1)
     provider = DeterministicProvider()
     if not live:
         app.state.speech_provider = provider
@@ -114,6 +146,9 @@ def test_qt_to_persisted_session_and_provider(database_settings, monkeypatch, qt
     thread = threading.Thread(target=lambda: server.run(sockets=[listener]), daemon=True)
     thread.start()
     control = SpeechController()
+    observers = []
+    observed = [[], []]
+    connections = [[], []]
     rejected_timing = []
     receive = control._message
 
@@ -157,6 +192,24 @@ def test_qt_to_persisted_session_and_provider(database_settings, monkeypatch, qt
                 )
                 audio = source.readframes(source.getnframes()) + b"\0" * 64000
         config = AppConfig(f"http://127.0.0.1:{port}")
+        endpoint = config.api_url + f"/api/v1/sessions/{session_id}"
+        headers = {"Authorization": "Bearer speech-test-access"}
+        with urlopen(Request(endpoint, headers=headers), timeout=5) as response:
+            initial = parse_snapshot(json.load(response))
+        for index in range(2):
+            observer = SessionEventStream()
+            observers.append(observer)
+
+            def receive_event(generation, event, *, position=index, stream=observer):
+                observed[position].append(event)
+                stream.acknowledge(generation)
+
+            observer.received.connect(receive_event)
+            observer.connection_changed.connect(
+                lambda _generation, state, position=index: connections[position].append(state)
+            )
+            observer.bind(config, "speech-test-access", initial)
+        qtbot.waitUntil(lambda: all(items for items in observed), timeout=10000)
         if microphone_test:
             from queue import Empty
 
@@ -258,10 +311,97 @@ def test_qt_to_persisted_session_and_provider(database_settings, monkeypatch, qt
         assert any(not e["final"] for e in updates)
         assert all(e["session_id"] == session_id and e["latency_ms"] >= 0 for e in updates)
         assert control._active, statuses
+
+        async def journal():
+            database = Database(database_settings)
+            try:
+                async with database.sessions() as db:
+                    rows = (
+                        await db.scalars(select(SessionEvent).order_by(SessionEvent.sequence))
+                    ).all()
+                    return [row.document for row in rows]
+            finally:
+                await database.close()
+
+        speech_events = [
+            event["payload"]
+            for event in asyncio.run(journal())
+            if event["payload"]["kind"] == "speech.transcript"
+        ]
+        assert len(speech_events) == len(updates)
+        assert [event["text"] for event in speech_events] == [event["text"] for event in updates]
+        assert any(event["final"] for event in speech_events)
+        qtbot.waitUntil(
+            lambda: all(
+                len([event for event in items if event.payload["kind"] == "speech.transcript"])
+                >= len(speech_events)
+                for items in observed
+            ),
+            timeout=10000,
+        )
+        for items in observed:
+            speech = [event for event in items if event.payload["kind"] == "speech.transcript"]
+            assert [event.payload["text"] for event in speech] == [
+                event["text"] for event in speech_events
+            ]
+            assert any(event.payload["final"] for event in speech)
+        if not live:
+            command = {
+                "kind": "player.state",
+                "command_id": str(uuid4()),
+                "sent_at": datetime.now(UTC).isoformat(),
+                "state": {
+                    "expected_state_version": initial.state_version,
+                    "active_slide_id": second_slide_id,
+                    "focus_view": "slide",
+                    "focus_region": None,
+                    "autonomy_mode": "manual",
+                    "last_accepted_action_id": None,
+                },
+            }
+            body = json.dumps(command).encode()
+            for duplicate in (False, True):
+                request = Request(
+                    endpoint + "/sync/commands",
+                    data=body,
+                    method="POST",
+                    headers={**headers, "Content-Type": "application/json"},
+                )
+                with urlopen(request, timeout=5) as response:
+                    assert json.load(response)["duplicate"] is duplicate
+            qtbot.waitUntil(
+                lambda: all(
+                    any(event.snapshot and event.snapshot.state_version == 1 for event in items)
+                    for items in observed
+                ),
+                timeout=10000,
+            )
+            for items in observed:
+                positions = [
+                    event.snapshot
+                    for event in items
+                    if event.snapshot and event.snapshot.state_version == 1
+                ]
+                assert len(positions) == 1
+                assert positions[0].state.active_slide_id == second_slide_id
+            qtbot.waitUntil(
+                lambda: all(states.count("connected") >= 2 for states in connections), timeout=12000
+            )
+            qtbot.wait(600)
+            for items in observed:
+                positions = [
+                    event for event in items if event.snapshot and event.snapshot.state_version == 1
+                ]
+                assert len(positions) == 1
         control.stop()
         assert not control._active and not control._retry.isActive()
     finally:
         timer.stop()
+        for observer in observers:
+            observer.stop()
+            if observer._thread is not None:
+                observer._thread.join(timeout=3)
+                assert not observer._thread.is_alive()
         if microphone is not None:
             microphone.shutdown()
         control.stop()

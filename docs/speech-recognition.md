@@ -4,7 +4,7 @@ Saved PDF presentation sessions can stream microphone audio through the authenti
 Buddy API to Deepgram Nova-3. Present displays the latest partial or final transcript,
 its audio-relative time range, and measured recognition delay. Recognition does not
 execute slide commands; rolling transcript context and presentation decisions remain
-in #18–#21, and general session event synchronization remains in #33.
+in #18–#21. Recognized speech is also published to the session event channel.
 
 ## Presenter behavior
 
@@ -156,9 +156,17 @@ not a fixed country. Consult [Deepgram's data policy](https://developers.deepgra
 and the account's actual terms before deployment. Opt-out can affect pricing; do not
 assume advertised base prices apply unchanged.
 
-Buddy does not persist audio or transcripts in session records, files, or ordinary logs.
-Only the current transcript is displayed, and cleanup clears it. Session control state
-remains persisted through #17. Operational speech logs contain only bounded outcome
+Buddy does not persist audio or place transcripts in session records, files, or ordinary
+logs. Transcript events are available for reconnect for up to five minutes in the session
+journal and are cleared from the active journal on session end. Expired rows are removed
+by a cleanup task that runs every 30 seconds. Staging and production
+databases are encrypted; database backups may retain deleted events longer under the
+environment's backup policy. An API outage can delay physical deletion, but expired
+events cannot be replayed. Only the current transcript is displayed, and cleanup clears
+it. The journal's state version describes the state when the event was published; it is
+not proof of which slide was visible when speech was captured. Downstream decision
+consumers must independently enforce capture freshness and context boundaries.
+Operational speech logs contain only bounded outcome
 codes and stream duration, never provider error bodies, text, audio, or credentials.
 Do not enable third-party WebSocket frame/debug logging with private speech.
 
