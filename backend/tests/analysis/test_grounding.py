@@ -10,6 +10,7 @@ import pytest
 from buddy_api.analysis.grounding import (
     OcrWord,
     Rect,
+    _complete_sentence_target,
     _ground_object_target,
     _match_ocr,
     _matches_normalized_text,
@@ -17,6 +18,7 @@ from buddy_api.analysis.grounding import (
     _matches_text_words,
     _snap_object,
     _tagged_content_ids,
+    _target_kind_is_consistent,
     ground_actions,
 )
 from buddy_api.analysis.provider import ModelAction, ModelOutput, ModelSlide, ModelSummary
@@ -56,6 +58,24 @@ def _action(kind="highlight_region", quote="Buddy PDF presentation", *, hint=(0,
     )
 
 
+def test_key_sentence_contract_rejects_wrapped_line_fragments():
+    fragments = (
+        "our new SmartHome Hub, a central device",
+        "designed to connect and control all smart",
+        "home devices seamlessly. Our goal is to",
+        "growing sector.",
+    )
+    assert all(not _complete_sentence_target(fragment) for fragment in fragments)
+    assert _complete_sentence_target(
+        "Our goal is to revolutionize home automation and lead the market."
+    )
+    assert not _target_kind_is_consistent(
+        _action(quote="designed to connect and control all smart").model_copy(
+            update={"target_kind": "key_sentence"}
+        )
+    )
+
+
 def _load(path: Path):
     content = path.read_bytes()
     extraction = extract_pdf(BytesIO(content), source_revision="grounding-test")
@@ -74,6 +94,10 @@ def _two_column_pdf(phrase=b"caf\xe9 results", *, with_visual=False) -> bytes:
         b"BT /F1 24 Tf 90 700 Td (" + phrase + b") Tj ET "
         b"BT /F1 24 Tf 390 700 Td (" + phrase + b") Tj ET"
     )
+    return _pdf_with_content(content)
+
+
+def _pdf_with_content(content: bytes) -> bytes:
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
@@ -141,6 +165,47 @@ def test_source_inventory_does_not_turn_text_only_page_lines_into_actions():
     result = ground_actions(content, extraction, manifest, generated)
 
     assert result.slides[0].actions == ()
+
+
+def test_line_fragment_key_sentence_is_removed_before_analysis_is_saved():
+    content = _two_column_pdf()
+    extraction, manifest = _load_bytes(content)
+    fragment = _action(quote="café results").model_copy(update={"target_kind": "key_sentence"})
+
+    result = ground_actions(content, extraction, manifest, _output(extraction, {0: (fragment,)}))
+
+    assert result.slides[0].actions == ()
+
+
+def test_complete_sentence_can_be_grounded_across_wrapped_pdf_lines():
+    content = _pdf_with_content(
+        b"BT /F1 18 Tf 90 700 Td (This is a meaningful sentence) Tj T* "
+        b"(that wraps to its next line.) Tj ET"
+    )
+    extraction, manifest = _load_bytes(content)
+    sentence = "This is a meaningful sentence that wraps to its next line."
+    action = _action(quote=sentence, hint=(100, 150, 700, 100)).model_copy(
+        update={"target_kind": "key_sentence"}
+    )
+
+    result = ground_actions(content, extraction, manifest, _output(extraction, {0: (action,)}))
+
+    assert len(result.slides[0].actions) == 1
+    assert result.slides[0].actions[0].height > 20
+
+
+@pytest.mark.parametrize("formula", ["F = ma", "V = IR", "a + b = c", "5 - 3"])
+def test_symbolic_formula_without_digits_can_be_grounded(formula):
+    content = _pdf_with_content(b"BT /F1 18 Tf 90 700 Td (" + formula.encode("ascii") + b") Tj ET")
+    extraction, manifest = _load_bytes(content)
+    action = _action(quote=formula, hint=(100, 150, 700, 100)).model_copy(
+        update={"target_kind": "key_formula"}
+    )
+
+    result = ground_actions(content, extraction, manifest, _output(extraction, {0: (action,)}))
+
+    assert len(result.slides[0].actions) == 1
+    assert result.slides[0].actions[0].target_text == formula
 
 
 def test_text_grounding_declines_suffixes_inside_longer_words():

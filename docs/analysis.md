@@ -42,9 +42,13 @@ the model's semantic suggestions with source-measured visual candidates: each em
 be focused, and spatially connected vector objects can be focused as a group. The model is
 instructed to cover every visible title, subtitle, heading, informative visual, and people/name
 pair, plus speaker-relevant key facts in prose. It should not create an action for every ordinary
-sentence or visual text line; exact text-line geometry grounds only the text targets the model
-selects. When the 1,000-action cap or a source-inventory bound is reached, Review shows that some
-targets may be missing. PPTX retains its separate 100-action capacity.
+sentence or visual text line. Prose highlights must identify a complete key sentence; wrapped
+physical lines and sentence fragments are rejected during grounding before an analysis is saved.
+Complete sentences can span multiple PDF lines and are grounded to the tight union of their
+source glyphs. Titles, headings, people, bullets, key numbers/formulas, and visual targets retain
+their distinct target kinds. Rejected fragments never appear in Review as invalid actions. When
+the 1,000-action cap or a source-inventory bound is reached, Review shows that some targets may
+be missing. PPTX retains its separate 100-action capacity.
 
 This is a broad source-visual inventory plus a semantic model pass, not a promise to enumerate
 arbitrary phrases or semantically meaningful subregions inside a flattened image. The model
