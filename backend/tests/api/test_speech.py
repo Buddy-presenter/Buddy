@@ -138,8 +138,7 @@ def test_isolated_invalid_provider_updates_are_dropped_and_stream_continues(spee
 def test_consecutive_invalid_provider_results_request_bounded_recovery(speech_client, caplog):
     client, provider = speech_client
     provider.results_override = [
-        "not json"
-        for _ in range(speech.MAX_CONSECUTIVE_INVALID_PROVIDER_RESULTS)
+        "not json" for _ in range(speech.MAX_CONSECUTIVE_INVALID_PROVIDER_RESULTS)
     ]
     with client.websocket_connect(
         f"/api/v1/sessions/{uuid4()}/speech", headers={"Authorization": "Bearer owner"}
