@@ -237,7 +237,10 @@ async def stream_events(
     cursor: int | None,
 ) -> AsyncIterator[str]:
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + STREAM_SECONDS
+    started = loop.time()
+    deadline = started + STREAM_SECONDS
+    delivered = 0
+    outcome = "closed"
     logger.info("Session event stream opened")
     try:
         while loop.time() < deadline and not await request.is_disconnected():
@@ -245,11 +248,14 @@ async def stream_events(
                 events, ended = await event_batch(request, identifier, cursor)
             except HTTPException as exc:
                 if exc.status_code in {401, 403, 404}:
+                    outcome = "access_closed"
                     yield f'event: access_closed\ndata: {{"status":{exc.status_code}}}\n\n'
                 else:
+                    outcome = "unavailable"
                     yield 'event: unavailable\ndata: {"retry_ms":1000}\n\n'
                 return
             except (SQLAlchemyError, OSError, TimeoutError):
+                outcome = "unavailable"
                 yield 'event: unavailable\ndata: {"retry_ms":1000}\n\n'
                 return
             if events:
@@ -260,14 +266,22 @@ async def stream_events(
                         + "\n\n"
                     )
                     cursor = event.sequence
+                    delivered += 1
                 logger.info("Session event batch delivered (%d)", len(events))
             else:
                 yield ": heartbeat\n\n"
             if ended:
+                outcome = "ended"
                 return
             await asyncio.sleep(POLL_SECONDS)
     finally:
-        logger.info("Session event stream closed")
+        # Staging uses warning-level logging; never include event contents.
+        logger.warning(
+            "session_event_stream outcome=%s events=%d duration_ms=%d",
+            outcome,
+            delivered,
+            int((loop.time() - started) * 1000),
+        )
 
 
 async def prune_expired_events(database: Database) -> None:

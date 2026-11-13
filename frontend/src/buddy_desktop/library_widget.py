@@ -358,9 +358,12 @@ class LibraryWidget(QWidget):
         if (
             busy
             and self.account.operation in {"check", "profile"}
-            and self.account.account_id
-            and self.token()
+            and self.account.session
+            and self.account.session.tokens
         ):
+            # A periodic check can temporarily have no usable access token while
+            # its refresh is in flight. Keep the current library visible until
+            # that check confirms expiry or an identity change via session_changed.
             return
         self.account_busy = busy
         if busy:
@@ -374,13 +377,19 @@ class LibraryWidget(QWidget):
             )
 
     def account_changed(self) -> None:
+        session = self.account.session
+        tokens = session.tokens if session else None
         key = (
-            (id(self.account.session), self.account.account_id, self.config.api_url)
-            if self.token()
+            (id(session), self.account.account_id, self.config.api_url)
+            if tokens is not None and time.monotonic() < tokens.expires
             else None
         )
         if key is not None and key == self.account_key and self.account.account_id:
             self._access_layout()
+            self.refresh.setEnabled(self.token() is not None)
+            self.upload_button.setEnabled(self.token() is not None and not self.runner.busy)
+            if self.token() is not None and self.active and self.last_page is None:
+                self.reload()
             return
         self.invalidate()
         if key is None or key != self.account_key:

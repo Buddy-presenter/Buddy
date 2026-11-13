@@ -202,6 +202,31 @@ def test_failure_retry_empty_and_access_expiry(desktop_window, backend, qtbot):
     assert library.table.rowCount() == 0 and not library.refresh.isEnabled()
 
 
+def test_near_expiry_account_check_keeps_library_visible(desktop_window, backend, qtbot):
+    backend.body = json.dumps(payload("Keep this deck visible")).encode()
+    window = desktop_window(f"http://127.0.0.1:{backend.server_port}")
+    library = signed_in(window)
+    qtbot.waitUntil(lambda: not library.runner.busy)
+    window.account.account_id = "same-account"
+    window.account.session_changed.emit()
+    qtbot.waitUntil(lambda: not library.runner.busy)
+    assert library.table.rowCount() == 1
+
+    window.account.session.tokens = Tokens("near-expiry", "refresh", time.monotonic() + 10)
+    window.account.operation = "check"
+    window.account.activity_changed.emit(True)
+    assert library.table.rowCount() == 1
+    assert library.last_page is not None
+    assert not library.state.isVisible()
+
+    window.account.activity_changed.emit(False)
+    window.account.session_changed.emit()
+    assert library.table.rowCount() == 1
+    assert library.last_page is not None
+    assert not library.state.isVisible()
+    assert not library.refresh.isEnabled()
+
+
 def test_signout_drops_inflight_private_results(desktop_window, backend, qtbot):
     backend.release.clear()
     backend.body = json.dumps(payload("PRIVATE")).encode()

@@ -246,8 +246,10 @@ Keychain implementation. There is no plaintext or third-party keyring fallback. 
 entry is isolated by backend, issuer and client. Access tokens live only in process
 memory. After restart, **Resume session** rotates the saved refresh token and revalidates
 the account. While signed in, the account check runs each minute and renews tokens before
-expiry; failure removes signed-in state and exposes a recoverable message. An expired
-refresh token requires a new browser sign-in.
+expiry. A temporary network or provider failure keeps the signed-in identity and cached
+private view, blocks requests that lack a usable access token, and retries on the next
+check. Confirmed expiry, revocation, or an account identity change clears private views;
+an expired refresh token requires a new browser sign-in.
 
 Windows Credential Manager limits each credential blob to 2,560 bytes. Buddy stores
 refresh tokens in bounded vault entries (512 characters each, at most 32 pieces),

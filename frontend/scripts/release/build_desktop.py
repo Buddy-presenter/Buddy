@@ -228,6 +228,10 @@ def build(
         # COM automation modules are imported at runtime to keep the macOS build clean.
         command += [
             "--hidden-import",
+            "sounddevice",
+            "--collect-all",
+            "_sounddevice_data",
+            "--hidden-import",
             "pythoncom",
             "--hidden-import",
             "pywintypes",

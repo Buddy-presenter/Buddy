@@ -1,8 +1,11 @@
 """Real PostgreSQL event ordering, replay, authorization and safe command delivery."""
 
+import asyncio
 import json
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -24,6 +27,33 @@ from tests.api.test_authorization import (
 from tests.api.test_database import database_settings as database_settings
 
 HEADERS = {"Authorization": "Bearer owner"}
+
+
+def test_stream_health_is_visible_without_transcript_content(monkeypatch, caplog):
+    private_text = "private speech must never be logged"
+
+    class Event:
+        sequence = 1
+
+        def model_dump_json(self):
+            return json.dumps({"text": private_text})
+
+    async def batch(_request, _identifier, _cursor):
+        return [Event()], True
+
+    async def connected():
+        return False
+
+    async def consume():
+        request = SimpleNamespace(is_disconnected=connected)
+        return [frame async for frame in session_events.stream_events(request, uuid4(), None)]
+
+    monkeypatch.setattr(session_events, "event_batch", batch)
+    with caplog.at_level(logging.WARNING, logger=session_events.__name__):
+        frames = asyncio.run(consume())
+    assert private_text in frames[0]
+    assert "session_event_stream outcome=ended events=1" in caplog.text
+    assert private_text not in caplog.text
 
 
 def command(client, path, *, version=None):

@@ -42,6 +42,10 @@ variable "start_services" {
   type    = bool
   default = false
 }
+variable "enable_speech" {
+  type    = bool
+  default = false
+}
 variable "worker_start_services" {
   description = "Keep a newly provisioned staging worker paused until the release driver verifies and promotes its image."
   type        = bool
@@ -87,6 +91,7 @@ module "environment" {
   worker_image                = var.worker_image
   worker_text_targeting       = var.worker_text_targeting
   start_services              = var.start_services
+  enable_speech               = var.enable_speech
   worker_start_services       = var.worker_start_services
   enable_terraform_monitoring = false
   alert_email_recipients      = var.alert_email_recipients

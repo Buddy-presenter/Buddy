@@ -70,8 +70,9 @@ Deck/session deletion cascades journal deletion. While the API is stopped, expir
 remain on disk until cleanup resumes, but cannot be replayed. Speech is not copied into
 the durable session state. Database encryption/backups follow existing deployment policy;
 this journal does not replace recording consent or retention controls. Ordinary logs
-contain only stream open/close and batch counts, never audio, text, commands or tokens.
-These counts expose connection and delivery health.
+contain a warning-level stream summary with its bounded outcome, delivery count, and
+duration, never audio, text, commands or tokens. Summaries remain visible with staging's
+warning-level logging and expose connection and delivery health.
 
 ## Verification
 

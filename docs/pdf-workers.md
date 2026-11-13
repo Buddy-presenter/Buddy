@@ -94,8 +94,9 @@ diagnostics.
 
 The global DB admission lock bounds claimed work to two jobs by default, across worker
 replicas. Each worker process executes one job at a time. Its 45-second lease is renewed
-every 10 seconds, but never beyond the 900-second attempt deadline. PDF inspection and
-ephemeral PDFium manifest hashing run in an isolated process with a 120-second deadline,
+every 10 seconds throughout the full job lifecycle, including between short validation
+calls, but never beyond the 900-second attempt deadline. PDF inspection and ephemeral
+PDFium manifest hashing run in an isolated process with a 120-second deadline,
 1 GiB address-space ceiling, 30-second metadata parser limit and no persisted page images.
 Provider calls time out after 240 seconds. The provider boundary accepts at most an 18 MiB,
 100-page PDF, returns at most 64,000 tokens, and is attempted at most three times for a job.
