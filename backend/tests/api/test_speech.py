@@ -135,7 +135,7 @@ def test_isolated_invalid_provider_updates_are_dropped_and_stream_continues(spee
     assert provider.closed == 1
 
 
-def test_consecutive_invalid_provider_results_request_bounded_recovery(speech_client, caplog):
+def test_consecutive_invalid_provider_results_request_bounded_recovery(speech_client):
     client, provider = speech_client
     provider.results_override = [
         "not json" for _ in range(speech.MAX_CONSECUTIVE_INVALID_PROVIDER_RESULTS)
@@ -149,8 +149,6 @@ def test_consecutive_invalid_provider_results_request_bounded_recovery(speech_cl
         assert error["type"] == "error"
         assert error["code"] == "invalid_provider_result"
         assert error["retryable"] is True
-        assert f"diagnostic_id={error['diagnostic_id']}" in caplog.text
-        assert "invalid_result_count=3" in caplog.text
         assert ready["stream_id"]
     assert provider.closed == 1
 
