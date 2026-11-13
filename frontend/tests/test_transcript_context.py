@@ -134,6 +134,22 @@ def test_presenter_consumes_live_results_and_clears_on_sync_gap(qtbot, tmp_path,
         assert widget.transcript_context.snapshot().text
         widget.speech.cleared.emit()
         assert not widget.transcript_context.snapshot().text
+        clock[0] += 1_000_000_000
+        widget.speech.transcript_received.emit(event(clock, sequence=3, latency_ms=10))
+        assert widget.transcript_context.snapshot().text
+        widget._session_stream_failed(
+            widget.session_events.generation, "Session updates stopped.", False
+        )
+        assert not widget._context_connected
+        assert not widget.transcript_context.snapshot().text
+        # Restarted speech cannot repopulate decision context without live sync.
+        clock[0] += 1_000_000_000
+        widget.speech.transcript_received.emit(event(clock, sequence=4, latency_ms=10))
+        assert not widget.transcript_context.snapshot().text
+        widget._context_connection_changed(widget.session_events.generation, "connected")
+        clock[0] += 1_000_000_000
+        widget.speech.transcript_received.emit(event(clock, sequence=5, latency_ms=10))
+        assert widget.transcript_context.snapshot().text
     finally:
         widget.shutdown()
 
@@ -189,3 +205,15 @@ def test_long_utterance_does_not_bypass_time_bound(monkeypatch):
     clock[0] += 40_000_000_000
     context.accept(event(clock, start_seconds=0, end_seconds=35))
     assert not context.snapshot().text
+
+
+def test_accepted_long_utterance_expires_from_capture_start(monkeypatch):
+    context, clock = setup(monkeypatch)
+    clock[0] += 29_000_000_000
+    context.accept(event(clock, start_seconds=0, end_seconds=29, final=True))
+    assert context.snapshot().text
+    clock[0] += 2_000_000_000
+    snapshot = context.snapshot()
+    assert not snapshot.text
+    assert not snapshot.fresh
+    assert not context._segments

@@ -108,6 +108,12 @@ class TranscriptContext:
             key: value
             for key, value in self._segments.items()
             if 0 <= now - value.capture_end_ns <= 30_000_000_000
+            and now
+            - (
+                value.capture_end_ns
+                - round((value.end_seconds - value.start_seconds) * 1_000_000_000)
+            )
+            <= 30_000_000_000
         }
 
     def snapshot(self) -> ContextSnapshot:

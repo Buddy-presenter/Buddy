@@ -1181,6 +1181,8 @@ class PresentWidget(Page):
     def _session_stream_failed(self, generation: int, message: str, access_ended: bool) -> None:
         if generation != self.session_events.generation or self._closing:
             return
+        self._context_connected = False
+        self.transcript_context.invalidate()
         self.microphone.stop()
         self._session_error = True
         if access_ended:
