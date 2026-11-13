@@ -166,10 +166,10 @@ def test_source_inventory_turns_text_only_page_entities_into_actions():
     result = ground_actions(content, extraction, manifest, generated)
 
     assert len(result.slides[0].actions) == 2
-    assert {action.target_text for action in result.slides[0].actions} == {
+    assert [action.target_text for action in result.slides[0].actions] == [
         "café results",
         "café results",
-    }
+    ]
 
 
 def test_line_fragment_key_sentence_is_removed_before_analysis_is_saved():

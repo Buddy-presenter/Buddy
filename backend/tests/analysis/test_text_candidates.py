@@ -8,8 +8,8 @@ import pytest
 from backend.tests.analysis.test_grounding import (
     GEOMETRY_PDF,
     _load_bytes,
-    _pdf_with_content,
     _output,
+    _pdf_with_content,
     _two_column_pdf,
 )
 from backend.tests.analysis.test_provider import Session, response_for
