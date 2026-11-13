@@ -47,10 +47,11 @@ class CandidateService:
             "sequence": max(segment.sequence for segment in context.segments),
             "sent_at": datetime.now(UTC).isoformat(),
             "text": context.text,
+            "latest_utterance": context.segments[-1].text,
         }
         request = Request(
             self.config.api_url + f"/api/v1/sessions/{UUID(session.id)}/candidates",
-            data=json.dumps(payload).encode(),
+            data=json.dumps(payload, ensure_ascii=False).encode(),
             method="POST",
             headers={"Authorization": "Bearer " + access, "Content-Type": "application/json"},
         )
@@ -78,7 +79,7 @@ class CandidateService:
                     "candidates",
                 }
                 or result.get("protocol") != payload["protocol"]
-                or result.get("resolver_version") != "summary-overlap-1"
+                or result.get("resolver_version") not in {"summary-overlap-1", "summary-overlap-2"}
             ):
                 raise ValueError
             for key, value in (

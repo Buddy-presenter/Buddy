@@ -54,20 +54,22 @@ class DeterministicProvider:
         return self
 
     async def send(self, data):
-        if not self.sent:
+        self.audio_bytes = getattr(self, "audio_bytes", 0) + len(data)
+        if not self.sent and self.audio_bytes >= 4800:
             self.sent = True
-            for final in (False, True):
-                await self.queue.put(
-                    json.dumps(
-                        {
-                            "type": "Results",
-                            "start": 0,
-                            "duration": 0.05,
-                            "is_final": final,
-                            "channel": {"alternatives": [{"transcript": "Next slide"}]},
-                        }
+            for start, text in ((0, "Revenue growth"), (0.1, "Next slide")):
+                for final in (False, True):
+                    await self.queue.put(
+                        json.dumps(
+                            {
+                                "type": "Results",
+                                "start": start,
+                                "duration": 0.05,
+                                "is_final": final,
+                                "channel": {"alternatives": [{"transcript": text}]},
+                            }
+                        )
                     )
-                )
 
     async def recv(self):
         return await self.queue.get()
@@ -329,6 +331,8 @@ def test_qt_to_persisted_session_and_provider(database_settings, monkeypatch, qt
             assert result["state_version"] == initial.state_version
             assert result["context_epoch"] == snapshot.epoch
             assert result["candidates"][0]["kind"] == "no_change"
+            assert snapshot.text == "Revenue growth Next slide"
+            assert any(c["reason"] == "explicit_navigation" for c in result["candidates"])
 
         async def journal():
             database = Database(database_settings)

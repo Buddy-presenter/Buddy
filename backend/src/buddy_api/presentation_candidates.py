@@ -65,11 +65,20 @@ class CandidateRequest(Model):
     sequence: int = Field(ge=1, strict=True)
     sent_at: datetime
     text: str = Field(min_length=1, max_length=8192, repr=False)
+    latest_utterance: str | None = Field(default=None, min_length=1, max_length=4096, repr=False)
 
     @model_validator(mode="after")
     def aware(self) -> "CandidateRequest":
         if self.sent_at.tzinfo is None or not self.text.strip():
             raise ValueError("Fresh timestamp and nonempty context required")
+        if self.latest_utterance is not None and (
+            not self.latest_utterance.strip()
+            or not (
+                self.text == self.latest_utterance
+                or self.text.endswith(" " + self.latest_utterance)
+            )
+        ):
+            raise ValueError("Latest utterance must be the final segment of the rolling context")
         return self
 
 
@@ -83,7 +92,7 @@ class Candidate(Model):
 
 class CandidateSet(Model):
     protocol: Literal["presentation-candidates.v1"] = "presentation-candidates.v1"
-    resolver_version: Literal["summary-overlap-1"] = "summary-overlap-1"
+    resolver_version: Literal["summary-overlap-2"] = "summary-overlap-2"
     session_id: UUID
     analysis_id: UUID
     state_version: int
@@ -98,7 +107,9 @@ def tokens(text: str) -> frozenset[str]:
     return frozenset(re.findall(r"[^\W_]+", unicodedata.normalize("NFKC", text).casefold())) - STOP
 
 
-def resolve(analysis: AnalysisResult, current: str, text: str) -> tuple[Candidate, ...]:
+def resolve(
+    analysis: AnalysisResult, current: str, text: str, latest_utterance: str | None = None
+) -> tuple[Candidate, ...]:
     slides = analysis.slides
     identifiers = [slide.slide_id for slide in slides]
     if current not in identifiers or not 1 <= len(slides) <= 500:
@@ -109,7 +120,14 @@ def resolve(analysis: AnalysisResult, current: str, text: str) -> tuple[Candidat
         Candidate(kind="slide", slide_id=current, reason="current", score=0),
     ]
     query = tokens(text)
-    normalized = " ".join(re.findall(r"[^\W_]+", unicodedata.normalize("NFKC", text).casefold()))
+    normalized = " ".join(
+        re.findall(
+            r"[^\W_]+",
+            unicodedata.normalize(
+                "NFKC", latest_utterance if latest_utterance is not None else text
+            ).casefold(),
+        )
+    )
     # Commands are whole utterances, not substrings in slide discussion or negation.
     explicit = {
         "next slide": 1,
@@ -244,7 +262,11 @@ def candidate_router() -> APIRouter:
                     input_sha256=hashlib.sha256(values.model_dump_json().encode()).hexdigest(),
                     candidates=await asyncio.wait_for(
                         asyncio.to_thread(
-                            resolve, analysis, session.active_slide_id or "", values.text
+                            resolve,
+                            analysis,
+                            session.active_slide_id or "",
+                            values.text,
+                            values.latest_utterance,
                         ),
                         timeout=2,
                     ),

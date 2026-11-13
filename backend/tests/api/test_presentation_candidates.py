@@ -87,6 +87,19 @@ def test_persisted_candidate_route_is_private_fresh_and_read_only(ready_session_
     result = response.json()
     assert result["candidates"][0]["kind"] == "no_change"
     assert result["context_epoch"] == 2
+    separated = client.post(
+        path + "/candidates",
+        headers=headers,
+        json=payload(text="revenue growth next slide", latest_utterance="next slide"),
+    )
+    assert separated.status_code == 200
+    assert separated.json()["resolver_version"] == "summary-overlap-2"
+    assert (
+        client.post(
+            path + "/candidates", headers=headers, json=payload(latest_utterance="next slide")
+        ).status_code
+        == 422
+    )
     assert client.post(path + "/candidates", headers=headers, json=body).json() == result
     assert client.get(path, headers=headers).json()["data"] == before["data"]
     assert "private speech" not in caplog.text
@@ -144,3 +157,33 @@ def test_end_of_deck_and_maximum_deck_are_bounded():
     result = resolve(deck, "slide-499", "topic0")
     assert any(c.slide_id == "slide-0" for c in result)
     assert len(result) <= 8
+
+
+@pytest.mark.parametrize("utterance,direction", [("next slide", 1), ("previous slide", -1)])
+def test_latest_command_survives_earlier_topic_context(utterance, direction):
+    deck = analysis("revenue growth", "customer retention", "security encryption")
+    result = resolve(deck, "slide-1", "revenue growth " + utterance, latest_utterance=utterance)
+    assert any(
+        c.slide_id == f"slide-{1 + direction}" and c.reason == "explicit_navigation" for c in result
+    )
+    # The complete rolling window still retrieves its earlier topic.
+    assert any(c.slide_id == "slide-0" for c in result)
+
+
+@pytest.mark.parametrize(
+    "utterance", ["do not go to the next slide", "we discussed next slide behavior"]
+)
+def test_latest_utterance_keeps_negation_and_embedded_command_guards(utterance):
+    result = resolve(
+        analysis("revenue growth", "security"),
+        "slide-0",
+        "revenue growth " + utterance,
+        latest_utterance=utterance,
+    )
+    assert not any(c.reason == "explicit_navigation" for c in result)
+
+
+@pytest.mark.parametrize("latest", ["", "   ", "x" * 4097, "different utterance"])
+def test_latest_utterance_contract_is_bounded_and_part_of_context(latest):
+    with pytest.raises(ValueError):
+        CandidateRequest.model_validate(payload(latest_utterance=latest))

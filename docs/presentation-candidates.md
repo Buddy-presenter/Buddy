@@ -18,7 +18,10 @@ or persisted by this route. Existing speech journal retention is unchanged.
 
 The versioned request `presentation-candidates.v1` carries expected_state_version,
 context_epoch, stream_id, sequence, an aware sent_at timestamp and at most 8192
-characters of recent text. Bodies are limited to 64 KiB even with chunked transfer;
+characters of recent text. The optional `latest_utterance` preserves the final
+recognition segment separately (at most 4096 characters); when supplied it must
+be the whole text or an exact final segment suffix. It is also omitted from reprs.
+Older clients may omit it, retaining whole-window command matching. Bodies are limited to 64 KiB even with chunked transfer;
 body receipt and the database operation each have five-second deadlines. Timestamps
 older than five seconds or more than two seconds in the future are rejected. Clients
 must keep wall clocks synchronized. This timestamp bounds request transit, not proof
@@ -42,12 +45,13 @@ clients cannot propose rectangles or assert usability through this API.
 
 ## Retrieval and bounds
 
-Resolver `summary-overlap-1` normalizes Unicode (NFKC/casefold), tokenizes letters/numbers
+Resolver `summary-overlap-2` normalizes Unicode (NFKC/casefold), tokenizes letters/numbers
 and removes a small English stop-word set. It scans at most the validated 500-slide map
 and the bounded saved action list. Scoring counts distinct overlapping words in available
 summaries and usable action purposes. A unique highest positive match may propose an
 earlier/later slide; a tie abstains from non-linear navigation. Current-slide and explicit
-no-change candidates are always present. Whole-utterance English next/previous commands
+no-change candidates are always present. Whole-utterance English next/previous commands from `latest_utterance` (or the full
+text for older requests)
 produce a valid adjacent target except at deck boundaries. Negated or embedded command
 phrases are not interpreted as navigation commands. At most two matching usable region
 views from the shortlisted slides are included, with stable ordering and at most eight
@@ -73,3 +77,12 @@ case exercises the production Qt speech parser, live context, candidate client, 
 and PostgreSQL together. Only identity/speech-provider boundaries are substituted. No paid
 provider or human microphone recording is required. These tests are local evidence,
 not a claim of deployed or human-language accuracy acceptance.
+
+Recognition segment boundaries are preserved rather than inferred from punctuation
+or substring search. Thus an earlier topic followed by a separate "next slide"
+segment can propose the next slide, while "do not go to the next slide" in that
+same latest segment cannot. A segment is the existing speech provider segment,
+not a new linguistic sentence detector; words split across provider segments are
+not combined into an invented command. The full rolling text still drives topic
+retrieval. Desktop clients accept resolver versions 1 and 2 during upgrades; the
+server now reports version 2 so exact-request replay comparisons name the algorithm.

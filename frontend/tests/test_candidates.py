@@ -49,6 +49,27 @@ def test_response_is_bound_to_context_and_only_typed_candidates(corrupt, monkeyp
     session, context = inputs()
     if corrupt == "window_expired":
         context = replace(context, segments=(replace(context.segments[0], end_seconds=29),))
+    # Earlier speech must remain available for topics while the last segment
+    # is sent separately for whole-utterance navigation matching.
+    if corrupt != "window_expired":
+        context = replace(
+            context,
+            segments=(
+                replace(
+                    context.segments[0],
+                    text="revenue growth",
+                    capture_end_ns=context.observed_ns - 500_000_000,
+                ),
+                replace(
+                    context.segments[0],
+                    segment_id="b",
+                    sequence=2,
+                    text="next slide",
+                    start_seconds=0.5,
+                    end_seconds=0.6,
+                ),
+            ),
+        )
     clock = [context.observed_ns]
     monkeypatch.setattr("buddy_desktop.candidate_service.time.monotonic_ns", lambda: clock[0])
     seen = []
@@ -108,6 +129,7 @@ def test_response_is_bound_to_context_and_only_typed_candidates(corrupt, monkeyp
         assert seen[0][0] == f"/api/v1/sessions/{session.id}/candidates"
         assert seen[0][1] == "Bearer token"
         assert seen[0][2]["text"] == context.text
+        assert seen[0][2]["latest_utterance"] == context.segments[-1].text
     finally:
         server.shutdown()
         server.server_close()

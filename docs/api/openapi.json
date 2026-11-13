@@ -413,8 +413,8 @@
             "type": "string"
           },
           "resolver_version": {
-            "const": "summary-overlap-1",
-            "default": "summary-overlap-1",
+            "const": "summary-overlap-2",
+            "default": "summary-overlap-2",
             "title": "Resolver Version",
             "type": "string"
           },
@@ -6248,6 +6248,19 @@
                     "minimum": 0,
                     "title": "Expected State Version",
                     "type": "integer"
+                  },
+                  "latest_utterance": {
+                    "anyOf": [
+                      {
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Latest Utterance"
                   },
                   "protocol": {
                     "const": "presentation-candidates.v1",
