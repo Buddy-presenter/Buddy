@@ -136,3 +136,49 @@ def test_presenter_consumes_live_results_and_clears_on_sync_gap(qtbot, tmp_path,
         assert not widget.transcript_context.snapshot().text
     finally:
         widget.shutdown()
+
+
+def test_actual_speech_parser_feeds_context(qapp, monkeypatch):
+    import json
+    from uuid import uuid4
+
+    from buddy_desktop.speech import SpeechController
+
+    context, clock = setup(monkeypatch)
+    session, stream = str(uuid4()), str(uuid4())
+    context.bind(session, 1, "en-US")
+    control = SpeechController()
+    control._active = True
+    control._session = session
+    control.transcript_received.connect(context.accept)
+    control.cleared.connect(context.invalidate)
+    try:
+        control._message(json.dumps({"type": "ready", "version": 1, "stream_id": stream}))
+        clock[0] += 1_000_000_000
+        payload = event(
+            clock,
+            session_id=session,
+            stream_id=stream,
+            segment_id=stream + ":0",
+            type="transcript",
+            version=1,
+        )
+        control._message(json.dumps(payload))
+        assert context.snapshot().text == "private speech"
+        control.stop()
+        assert not context.snapshot().text
+    finally:
+        control.stop()
+
+
+def test_language_or_account_change_clears_context(monkeypatch):
+    context, clock = setup(monkeypatch)
+    context.accept(event(clock))
+    epoch = context.snapshot().epoch
+    context.bind("session", 1, "ar")
+    assert context.snapshot().epoch > epoch
+    assert not context.snapshot().text
+    context.bind("other-session", 1, "en-US")
+    clock[0] += 1_000_000_000
+    context.accept(event(clock))
+    assert not context.snapshot().text
