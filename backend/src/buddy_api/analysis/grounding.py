@@ -524,48 +524,19 @@ def _object_rects(
     return output, tagged
 
 
-def _source_inventory_actions(
-    page: object,
-    page_number: int,
-    source_sha256: str,
+def _source_visual_inventory_actions(
     objects: list[tuple[int, Rect]],
     width: int,
     height: int,
     max_actions: int,
 ) -> tuple[list[ModelAction], bool]:
-    """Make one measured highlight candidate per extracted text line and focus target.
+    """Add source-measured visual focus targets without inventing prose actions.
 
-    This deliberately inventories source elements independently of the model's
-    semantic shortlist. It does not infer semantic importance or split flattened
-    images into subregions.
+    Semantic text targets must come from the model; text-line geometry is used later
+    only to ground a model-selected phrase. This inventory intentionally cannot
+    decide which visible text is meaningful to a presenter.
     """
-    from buddy_api.analysis.text_candidates import candidate_page
-
-    coverage = [False]
-    try:
-        text_targets = candidate_page(page, page_number, source_sha256, omitted=coverage)
-    except ValueError:
-        text_targets = []
-        coverage[0] = True
-    limited = coverage[0]
-    text_actions: list[ModelAction] = []
-    if len(text_targets) > max_actions:
-        limited = True
-    for target in text_targets[:max_actions]:
-        region = target.region
-        text_actions.append(
-            ModelAction(
-                type="highlight_region",
-                purpose=f"Highlight text: {target.text}",
-                target_text=target.text,
-                target_id=target.id,
-                x=region.x,
-                y=region.y,
-                width=region.width,
-                height=region.height,
-            )
-        )
-
+    limited = False
     # Every embedded raster object is independently focusable. Vector artwork is
     # grouped by a bounded spatial index, independently of the semantic model.
     actions: list[ModelAction] = []
@@ -663,9 +634,6 @@ def _source_inventory_actions(
         if len(actions) >= max_actions:
             limited = True
             break
-    # Put object targets before line-level cues so a dense text page cannot crowd
-    # charts, tables, and images out of the bounded deck inventory.
-    actions.extend(text_actions)
     if len(actions) > max_actions:
         actions = actions[:max_actions]
         limited = True
@@ -875,10 +843,7 @@ def ground_actions(
                             coverage_limited = True
                         inventory_actions: list[ModelAction] = []
                         if output.source_inventory_enabled:
-                            inventory_actions, inventory_limited = _source_inventory_actions(
-                                page,
-                                page_index + 1,
-                                extraction.source_sha256,
+                            inventory_actions, inventory_limited = _source_visual_inventory_actions(
                                 objects,
                                 width,
                                 height,

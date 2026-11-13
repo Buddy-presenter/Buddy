@@ -115,7 +115,7 @@ def test_highlight_is_rebuilt_from_pdfium_glyph_positions_not_model_box():
     assert action.y + action.height <= page.height
 
 
-def test_source_inventory_accepts_pdfium_page_object_iterator():
+def test_source_inventory_adds_visuals_but_not_every_text_line():
     content, extraction, manifest = _load(GEOMETRY_PDF)
 
     generated = _output(extraction, {}).model_copy(update={"source_inventory_enabled": True})
@@ -123,6 +123,17 @@ def test_source_inventory_accepts_pdfium_page_object_iterator():
 
     assert result.slides[0].actions
     assert any(action.grounding_trace for action in result.slides[0].actions)
+    assert all(action.type == "zoom_region" for action in result.slides[0].actions)
+
+
+def test_source_inventory_does_not_turn_text_only_page_lines_into_actions():
+    content = _two_column_pdf()
+    extraction, manifest = _load_bytes(content)
+
+    generated = _output(extraction, {}).model_copy(update={"source_inventory_enabled": True})
+    result = ground_actions(content, extraction, manifest, generated)
+
+    assert result.slides[0].actions == ()
 
 
 def test_text_grounding_declines_suffixes_inside_longer_words():
@@ -175,7 +186,7 @@ def test_repeated_unicode_quote_in_columns_uses_hint_only_to_disambiguate_source
     assert grounded.height < manifest.slides[0].source.height * 0.05
 
 
-def test_repeated_quote_with_equally_plausible_hint_is_declined():
+def test_repeated_quote_with_equally_plausible_hint_is_declined_without_line_inventory():
     content = _two_column_pdf()
     extraction, manifest = _load_bytes(content)
     action = _action(
@@ -189,8 +200,7 @@ def test_repeated_quote_with_equally_plausible_hint_is_declined():
     result = ground_actions(content, extraction, manifest, generated)
 
     repeated = [item for item in result.slides[0].actions if item.target_text == "café results"]
-    assert len(repeated) == 2
-    assert all(item.grounding_trace and item.grounding_trace.target_id for item in repeated)
+    assert repeated == []
 
 
 def test_ligature_quote_maps_back_to_the_original_source_glyph():
