@@ -157,3 +157,42 @@ def test_nonretryable_configuration_error_does_not_loop(controller):
         json.dumps({"type": "error", "code": "speech_unconfigured", "retryable": False})
     )
     assert not controller._active and not controller._retry.isActive()
+
+
+def test_server_error_shows_safe_diagnostic_reference(controller):
+    diagnostic_id = str(uuid4())
+    updates = []
+    controller.status_changed.connect(updates.append)
+    controller._message(
+        json.dumps(
+            {
+                "type": "error",
+                "code": "provider_unavailable",
+                "retryable": False,
+                "diagnostic_id": diagnostic_id,
+            }
+        )
+    )
+    assert updates[-1] == (
+        f"The speech provider is temporarily unavailable. Reference: {diagnostic_id}. "
+        "Stop and restart the microphone to retry."
+    )
+
+
+def test_malformed_server_diagnostic_reference_is_omitted(controller):
+    updates = []
+    controller.status_changed.connect(updates.append)
+    controller._message(
+        json.dumps(
+            {
+                "type": "error",
+                "code": "speech_unavailable",
+                "retryable": False,
+                "diagnostic_id": "not-a-uuid",
+            }
+        )
+    )
+    assert updates[-1] == (
+        "The speech service encountered an internal error. "
+        "Stop and restart the microphone to retry."
+    )

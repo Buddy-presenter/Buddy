@@ -63,6 +63,19 @@ Secrets Manager. Only the API container gets `BUDDY_DEEPGRAM_API_KEY`; workers a
 migration containers do not. Existing release gates and task promotion remain unchanged.
 Key rotation requires deploying/restarting API tasks to load the new value.
 
+Speech stream failures are written to the API log at warning level so they remain
+visible with the deployed API's warning-level runtime configuration. The bounded
+`speech_stream` event records a random `diagnostic_id`, failure outcome, processing
+stage, duration, upstream HTTP status when supplied by Deepgram, and exception class
+for unexpected failures. The same opaque ID is returned with an error so an operator
+can find the exact event. It never records exception messages, provider response bodies,
+credentials, bearer tokens, audio, or transcript text. A normal client close is not
+logged as a warning. For staging diagnosis, inspect `/buddy/staging/api` in CloudWatch
+Logs and filter for `speech_stream`; match the UI's reference ID, then use `outcome`,
+`stage`, `provider_status`, and `exception_type` to choose the relevant server-side
+investigation. The desktop distinguishes provider unavailability, unexpected API
+failures, and lost speech connections in its status text.
+
 Deployment must support authenticated WebSocket upgrades over the existing HTTPS
 endpoint, including Authorization forwarding. CloudFront forwards all viewer headers in
 the current configuration. Verify the actual deployed route after release; a localhost
@@ -81,6 +94,10 @@ The first text message, within five seconds after authentication, is:
 ```json
 {"version":1,"language":"en-US","sample_rate":48000}
 ```
+
+An error response contains `type: error`, a bounded `code`, `retryable`, and a random
+UUID `diagnostic_id`. The desktop may display that ID as a support reference; clients
+must not treat it as authentication or session state.
 
 The schema rejects extra fields; the sample rate must be an integer from 8000 to 96000.
 The backend selects the provider, model, EU endpoint, encoding, and privacy settings.

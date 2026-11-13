@@ -5,7 +5,7 @@ import json
 import struct
 import time
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from backend.tests.api.test_authorization import private_api as private_api
@@ -156,11 +156,11 @@ def test_invalid_start_never_opens_provider(speech_client, configuration, code):
 @pytest.mark.parametrize(
     "failure",
     [
-        speech.SpeechFailure("provider_rate_limited", True),
+        speech.SpeechFailure("provider_rate_limited", True, provider_status=429),
         speech.SpeechFailure("provider_configuration"),
     ],
 )
-def test_provider_failure_is_sanitized_and_budget_released(speech_client, failure):
+def test_provider_failure_is_sanitized_and_budget_released(speech_client, failure, caplog):
     client, provider = speech_client
     provider.failure = failure
     for _ in range(2):
@@ -168,7 +168,33 @@ def test_provider_failure_is_sanitized_and_budget_released(speech_client, failur
             f"/api/v1/sessions/{uuid4()}/speech", headers={"Authorization": "Bearer owner"}
         ) as socket:
             error = start(socket)
-            assert error == {"type": "error", "code": failure.code, "retryable": failure.retryable}
+            assert error["type"] == "error"
+            assert error["code"] == failure.code
+            assert error["retryable"] == failure.retryable
+            assert str(UUID(error["diagnostic_id"])) == error["diagnostic_id"]
+            assert f"diagnostic_id={error['diagnostic_id']}" in caplog.text
+            assert f"outcome={failure.code}" in caplog.text
+            assert "stage=provider_connection" in caplog.text
+            if failure.provider_status is not None:
+                assert f"provider_status={failure.provider_status}" in caplog.text
+            assert "provider-secret" not in caplog.text
+            assert "private provider body" not in caplog.text
+
+
+def test_unexpected_provider_failure_logs_safe_type_only(speech_client, caplog):
+    client, provider = speech_client
+    provider.failure = RuntimeError("private transcript and provider-secret")
+    with client.websocket_connect(
+        f"/api/v1/sessions/{uuid4()}/speech", headers={"Authorization": "Bearer owner"}
+    ) as socket:
+        error = start(socket)
+        assert error["code"] == "speech_unavailable"
+        assert error["diagnostic_id"]
+    assert "outcome=speech_unavailable" in caplog.text
+    assert "stage=provider_connection" in caplog.text
+    assert "exception_type=RuntimeError" in caplog.text
+    assert "private transcript" not in caplog.text
+    assert "provider-secret" not in caplog.text
 
 
 def test_duplicate_stream_is_rejected(speech_client):
@@ -311,7 +337,10 @@ def test_active_stream_rechecks_access_and_closes_provider(private_api, monkeypa
                     )
 
             client.portal.call(mutate)
-        assert socket.receive_json() == {"type": "error", "code": code, "retryable": False}
+        error = socket.receive_json()
+        assert error["type"] == "error" and error["code"] == code
+        assert not error["retryable"]
+        assert str(UUID(error["diagnostic_id"])) == error["diagnostic_id"]
     assert provider.closed == 1
 
 

@@ -79,9 +79,10 @@ class SpeechProvider(Protocol):
 
 
 class SpeechFailure(Exception):
-    def __init__(self, code: str, retryable: bool = False):
+    def __init__(self, code: str, retryable: bool = False, *, provider_status: int | None = None):
         self.code = code
         self.retryable = retryable
+        self.provider_status = provider_status
         super().__init__(code)
 
 
@@ -119,12 +120,12 @@ class DeepgramProvider:
         except InvalidStatus as exc:
             status = exc.response.status_code
             if status == 429:
-                raise SpeechFailure("provider_rate_limited", True) from None
+                raise SpeechFailure("provider_rate_limited", True, provider_status=status) from None
             if status in {401, 403}:
-                raise SpeechFailure("provider_configuration") from None
+                raise SpeechFailure("provider_configuration", provider_status=status) from None
             if status in {400, 422}:
-                raise SpeechFailure("unsupported_configuration") from None
-            raise SpeechFailure("provider_unavailable", True) from None
+                raise SpeechFailure("unsupported_configuration", provider_status=status) from None
+            raise SpeechFailure("provider_unavailable", True, provider_status=status) from None
         except (OSError, TimeoutError):
             raise SpeechFailure("provider_unavailable", True) from None
 
@@ -289,10 +290,20 @@ def speech_router(allowed_hosts: tuple[str, ...]) -> APIRouter:
     router = APIRouter()
     budget = SpeechBudget()
 
-    async def error(socket: WebSocket, code: str, retryable: bool = False) -> None:
+    async def error(
+        socket: WebSocket, code: str, diagnostic_id: str, retryable: bool = False
+    ) -> None:
         with suppress(RuntimeError, WebSocketDisconnect, TimeoutError, OSError):
             await asyncio.wait_for(
-                socket.send_json({"type": "error", "code": code, "retryable": retryable}), 2
+                socket.send_json(
+                    {
+                        "type": "error",
+                        "code": code,
+                        "retryable": retryable,
+                        "diagnostic_id": diagnostic_id,
+                    }
+                ),
+                2,
             )
 
     @router.websocket("/api/v1/sessions/{identifier}/speech")
@@ -325,15 +336,22 @@ def speech_router(allowed_hosts: tuple[str, ...]) -> APIRouter:
         provider: ProviderStream | None = None
         started = time.monotonic()
         outcome = "closed"
+        stage = "session_verification"
+        provider_status: int | None = None
+        exception_type: str | None = None
+        diagnostic_id = str(uuid4())
         await socket.accept()
         try:
             principal = await asyncio.wait_for(verify_session(request, identifier), 10)
+            stage = "stream_admission"
             if not budget.acquire(principal.id):
                 raise SpeechFailure("stream_busy", True)
             owner = principal.id
             adapter = cast(SpeechProvider | None, socket.app.state.speech_provider)
+            stage = "provider_configuration"
             if adapter is None:
                 raise SpeechFailure("speech_unconfigured")
+            stage = "client_configuration"
             raw = await asyncio.wait_for(socket.receive_text(), 5)
             if len(raw) > 512:
                 raise SpeechFailure("invalid_configuration")
@@ -343,25 +361,29 @@ def speech_router(allowed_hosts: tuple[str, ...]) -> APIRouter:
                 raise SpeechFailure("invalid_configuration") from None
             if start.language not in LANGUAGES:
                 raise SpeechFailure("unsupported_language")
+            stage = "provider_connection"
             provider = await asyncio.wait_for(adapter.open(start), 10)
             stream_id = uuid4()
             await socket.send_json({"type": "ready", "version": 1, "stream_id": str(stream_id)})
+            stage = "streaming"
             await relay(socket, provider, request, identifier, start, stream_id)
         except HTTPException as exc:
             outcome = f"session_{exc.status_code}"
-            await error(socket, outcome, exc.status_code == 503)
+            await error(socket, outcome, diagnostic_id, exc.status_code == 503)
         except SpeechFailure as exc:
             outcome = exc.code
-            await error(socket, outcome, exc.retryable)
+            provider_status = exc.provider_status
+            await error(socket, outcome, diagnostic_id, exc.retryable)
         except (TimeoutError, ConnectionClosed, OSError):
             outcome = "connection_lost"
-            await error(socket, outcome, True)
+            await error(socket, outcome, diagnostic_id, True)
         except WebSocketDisconnect:
             pass
-        except Exception:
+        except Exception as exc:
             outcome = "speech_unavailable"
+            exception_type = type(exc).__name__
             # No exception bodies: provider/network diagnostics can contain private text/tokens.
-            await error(socket, outcome)
+            await error(socket, outcome, diagnostic_id)
         finally:
             try:
                 if provider is not None:
@@ -370,11 +392,17 @@ def speech_router(allowed_hosts: tuple[str, ...]) -> APIRouter:
             finally:
                 if owner is not None:
                     budget.owners.discard(owner)
-            logger.info(
-                "speech_stream outcome=%s duration_ms=%d",
-                outcome,
-                round((time.monotonic() - started) * 1000),
-            )
+            if outcome != "closed":
+                logger.warning(
+                    "speech_stream diagnostic_id=%s outcome=%s stage=%s duration_ms=%d "
+                    "provider_status=%s exception_type=%s",
+                    diagnostic_id,
+                    outcome,
+                    stage,
+                    round((time.monotonic() - started) * 1000),
+                    provider_status if provider_status is not None else "none",
+                    exception_type or "none",
+                )
             with suppress(RuntimeError, WebSocketDisconnect):
                 await socket.close(code=1000)
 

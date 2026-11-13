@@ -15,10 +15,17 @@ from buddy_desktop.config import AppConfig
 ERRORS = {
     "speech_unconfigured": "Speech recognition is not configured on this server.",
     "provider_configuration": "The server's speech provider credentials need attention.",
+    "provider_unavailable": "The speech provider is temporarily unavailable.",
+    "speech_unavailable": "The speech service encountered an internal error.",
+    "connection_lost": "The speech service connection was lost.",
+    "invalid_configuration": "The speech service rejected its session configuration.",
+    "session_503": "The presentation session service is temporarily unavailable.",
     "unsupported_language": "This recognition language is not supported.",
     "unsupported_configuration": "The provider does not support this audio or language setting.",
     "provider_rate_limited": "The speech provider is busy.",
-    "stream_busy": "Another speech stream is active or server capacity is reached.",
+    "stream_busy": (
+        "The speech service is at its active-stream limit or server capacity is reached."
+    ),
     "session_401": "Sign in again to use speech recognition.",
     "session_403": "Speech access to this presentation was denied.",
     "session_404": "This presentation is no longer available.",
@@ -117,8 +124,17 @@ class SpeechController(QObject):
                 raise ValueError
             if data.get("type") == "error":
                 code = str(data.get("code", ""))
+                message = ERRORS.get(code, "Speech recognition is temporarily unavailable.")
+                diagnostic_id = data.get("diagnostic_id")
+                if isinstance(diagnostic_id, str):
+                    try:
+                        diagnostic_id = str(UUID(diagnostic_id))
+                    except ValueError:
+                        diagnostic_id = ""
+                    if diagnostic_id:
+                        message += f" Reference: {diagnostic_id}."
                 self._fail(
-                    ERRORS.get(code, "Speech recognition is temporarily unavailable."),
+                    message,
                     data.get("retryable") is True,
                 )
                 return
