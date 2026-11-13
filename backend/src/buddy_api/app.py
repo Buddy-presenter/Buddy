@@ -32,6 +32,7 @@ from buddy_api.handoff import HandoffLimitMiddleware, handoff_router
 from buddy_api.library import library_router
 from buddy_api.middleware import RequestContextMiddleware
 from buddy_api.persistence.database import Database, DatabaseProbe
+from buddy_api.presentation_candidates import candidate_router
 from buddy_api.presentation_sessions import session_router
 from buddy_api.processing.api import processing_router
 from buddy_api.processing.queue import Queue
@@ -177,6 +178,7 @@ def create_app(
     app.include_router(library_router())
     app.include_router(analysis_router())
     app.include_router(session_router())
+    app.include_router(candidate_router())
     app.include_router(speech_router(config.allowed_hosts))
     app.include_router(upload_router())
     app.include_router(validation_router())

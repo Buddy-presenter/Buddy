@@ -328,6 +328,128 @@
         "title": "ArtifactReference",
         "type": "object"
       },
+      "Candidate": {
+        "additionalProperties": false,
+        "properties": {
+          "action_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action Id"
+          },
+          "kind": {
+            "enum": [
+              "no_change",
+              "slide",
+              "zoom_region",
+              "highlight_region"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "stay",
+              "current",
+              "explicit_navigation",
+              "topic",
+              "purpose"
+            ],
+            "title": "Reason",
+            "type": "string"
+          },
+          "score": {
+            "minimum": 0.0,
+            "title": "Score",
+            "type": "integer"
+          },
+          "slide_id": {
+            "title": "Slide Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "slide_id",
+          "reason",
+          "score"
+        ],
+        "title": "Candidate",
+        "type": "object"
+      },
+      "CandidateSet": {
+        "additionalProperties": false,
+        "properties": {
+          "analysis_id": {
+            "format": "uuid",
+            "title": "Analysis Id",
+            "type": "string"
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/Candidate"
+            },
+            "maxItems": 8,
+            "title": "Candidates",
+            "type": "array"
+          },
+          "context_epoch": {
+            "title": "Context Epoch",
+            "type": "integer"
+          },
+          "input_sha256": {
+            "title": "Input Sha256",
+            "type": "string"
+          },
+          "protocol": {
+            "const": "presentation-candidates.v1",
+            "default": "presentation-candidates.v1",
+            "title": "Protocol",
+            "type": "string"
+          },
+          "resolver_version": {
+            "const": "summary-overlap-1",
+            "default": "summary-overlap-1",
+            "title": "Resolver Version",
+            "type": "string"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "session_id": {
+            "format": "uuid",
+            "title": "Session Id",
+            "type": "string"
+          },
+          "state_version": {
+            "title": "State Version",
+            "type": "integer"
+          },
+          "stream_id": {
+            "format": "uuid",
+            "title": "Stream Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "analysis_id",
+          "state_version",
+          "context_epoch",
+          "stream_id",
+          "sequence",
+          "input_sha256",
+          "candidates"
+        ],
+        "title": "CandidateSet",
+        "type": "object"
+      },
       "CommandAcknowledgment": {
         "additionalProperties": false,
         "properties": {
@@ -6077,6 +6199,124 @@
         "summary": "Read",
         "tags": [
           "presentation sessions"
+        ]
+      }
+    },
+    "/api/v1/sessions/{identifier}/candidates": {
+      "post": {
+        "operationId": "candidates_api_v1_sessions__identifier__candidates_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "context_epoch": {
+                    "minimum": 0,
+                    "title": "Context Epoch",
+                    "type": "integer"
+                  },
+                  "expected_state_version": {
+                    "minimum": 0,
+                    "title": "Expected State Version",
+                    "type": "integer"
+                  },
+                  "protocol": {
+                    "const": "presentation-candidates.v1",
+                    "default": "presentation-candidates.v1",
+                    "title": "Protocol",
+                    "type": "string"
+                  },
+                  "sent_at": {
+                    "format": "date-time",
+                    "title": "Sent At",
+                    "type": "string"
+                  },
+                  "sequence": {
+                    "minimum": 1,
+                    "title": "Sequence",
+                    "type": "integer"
+                  },
+                  "stream_id": {
+                    "format": "uuid",
+                    "title": "Stream Id",
+                    "type": "string"
+                  },
+                  "text": {
+                    "maxLength": 8192,
+                    "minLength": 1,
+                    "title": "Text",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "expected_state_version",
+                  "context_epoch",
+                  "stream_id",
+                  "sequence",
+                  "sent_at",
+                  "text"
+                ],
+                "title": "CandidateRequest",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateSet"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "summary": "Candidates",
+        "tags": [
+          "presentation candidates"
         ]
       }
     },
