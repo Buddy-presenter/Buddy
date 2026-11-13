@@ -151,6 +151,14 @@ def test_bedrock_request_submits_exact_pdf_with_native_claude_api(monkeypatch):
     assert "multiple actions on a page" in prompt
     assert "distinct meaningful details" in prompt
     assert "Build a broad candidate library" in prompt
+    assert "MUST provide a usable action for every visible title" in prompt
+    assert "informative image/photo, chart/graph, table, diagram" in prompt
+    assert "each presenter/person's name and associated portrait" in prompt
+    assert "key numbers, formulas, decisions, recommendations" in prompt
+    assert "Do NOT make one action per visual line break" in prompt
+    assert "never split prose mechanically" in prompt
+    assert "Buddy will also add source-measured visual-object candidates" in prompt
+    assert "source-measured text-line" not in prompt
     assert "not applied all at once" in prompt
     assert "Do not stop at the first useful target" in prompt
     assert "Do not fill a quota" in prompt

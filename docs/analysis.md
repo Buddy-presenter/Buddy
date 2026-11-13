@@ -38,17 +38,20 @@ workflow explicitly handles these immutable records. Sessions keep their origina
 
 Limits: 500 slides, 1,000 actions per slide and per PDF analysis, 8 MiB serialized analysis,
 and 16,000 characters per summary. Empty action lists are valid. PDF action generation combines
-the model's semantic suggestions with source-measured candidates: each extracted horizontal
-text line can be highlighted, each embedded image can be focused, and spatially connected vector
-objects can be focused as a group. When the 1,000-action cap or a source-inventory bound is
-reached, Review shows that some targets may be missing. PPTX retains its separate 100-action
-capacity.
+the model's semantic suggestions with source-measured visual candidates: each embedded image can
+be focused, and spatially connected vector objects can be focused as a group. The model is
+instructed to cover every visible title, subtitle, heading, informative visual, and people/name
+pair, plus speaker-relevant key facts in prose. It should not create an action for every ordinary
+sentence or visual text line; exact text-line geometry grounds only the text targets the model
+selects. When the 1,000-action cap or a source-inventory bound is reached, Review shows that some
+targets may be missing. PPTX retains its separate 100-action capacity.
 
-This is a broad source-element inventory, not a promise to enumerate arbitrary phrases or
-semantically meaningful subregions inside a flattened image. The model can add semantic
-subtargets, while the PDF parser provides exact text-line and PDF-object candidates; OCR and
-visual QA remain responsible for scanned content and flattened-image crops. A bounded limit
-must be visible because very dense or pathological documents cannot produce an unlimited list.
+This is a broad source-visual inventory plus a semantic model pass, not a promise to enumerate
+arbitrary phrases or semantically meaningful subregions inside a flattened image. The model
+selects meaningful text targets and proposes visual subtargets; the PDF parser provides exact
+text-line grounding and PDF-object bounds for those proposals. OCR and visual QA remain
+responsible for scanned content and flattened-image crops. A bounded limit must be visible
+because very dense or pathological documents cannot produce an unlimited list.
 
 ## Summaries, publication and readiness
 
