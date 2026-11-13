@@ -63,9 +63,15 @@ def _load(path: Path):
     return content, extraction, manifest
 
 
-def _two_column_pdf(phrase=b"caf\xe9 results") -> bytes:
+def _two_column_pdf(phrase=b"caf\xe9 results", *, with_visual=False) -> bytes:
     """Build a deterministic WinAnsi source PDF with repeated text in two columns."""
-    content = (
+    visual = (
+        b"q 1 0 0 rg 100 500 30 30 re f 0 1 0 rg 131 500 30 30 re f "
+        b"0 0 1 rg 162 500 30 30 re f Q "
+        if with_visual
+        else b""
+    )
+    content = visual + (
         b"BT /F1 24 Tf 90 700 Td (" + phrase + b") Tj ET "
         b"BT /F1 24 Tf 390 700 Td (" + phrase + b") Tj ET"
     )
@@ -116,7 +122,8 @@ def test_highlight_is_rebuilt_from_pdfium_glyph_positions_not_model_box():
 
 
 def test_source_inventory_adds_visuals_but_not_every_text_line():
-    content, extraction, manifest = _load(GEOMETRY_PDF)
+    content = _two_column_pdf(with_visual=True)
+    extraction, manifest = _load_bytes(content)
 
     generated = _output(extraction, {}).model_copy(update={"source_inventory_enabled": True})
     result = ground_actions(content, extraction, manifest, generated)
