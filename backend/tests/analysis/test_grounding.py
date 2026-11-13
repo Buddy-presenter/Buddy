@@ -63,9 +63,14 @@ def _load(path: Path):
     return content, extraction, manifest
 
 
-def _two_column_pdf(phrase=b"caf\xe9 results") -> bytes:
+def _two_column_pdf(phrase=b"caf\xe9 results", *, with_visual=False) -> bytes:
     """Build a deterministic WinAnsi source PDF with repeated text in two columns."""
-    content = (
+    visual = (
+        b"q 1 0 0 rg 100 500 30 30 re f 0 1 0 rg 131 500 30 30 re f 0 0 1 rg 162 500 30 30 re f Q "
+        if with_visual
+        else b""
+    )
+    content = visual + (
         b"BT /F1 24 Tf 90 700 Td (" + phrase + b") Tj ET "
         b"BT /F1 24 Tf 390 700 Td (" + phrase + b") Tj ET"
     )
@@ -115,14 +120,27 @@ def test_highlight_is_rebuilt_from_pdfium_glyph_positions_not_model_box():
     assert action.y + action.height <= page.height
 
 
-def test_source_inventory_accepts_pdfium_page_object_iterator():
-    content, extraction, manifest = _load(GEOMETRY_PDF)
+def test_source_inventory_adds_visuals_but_not_every_text_line():
+    content = _two_column_pdf(with_visual=True)
+    extraction, manifest = _load_bytes(content)
 
     generated = _output(extraction, {}).model_copy(update={"source_inventory_enabled": True})
     result = ground_actions(content, extraction, manifest, generated)
 
-    assert result.slides[0].actions
-    assert any(action.grounding_trace for action in result.slides[0].actions)
+    actions = [action for slide in result.slides for action in slide.actions]
+    assert actions
+    assert any(action.grounding_trace for action in actions)
+    assert all(action.type == "zoom_region" for action in actions)
+
+
+def test_source_inventory_does_not_turn_text_only_page_lines_into_actions():
+    content = _two_column_pdf()
+    extraction, manifest = _load_bytes(content)
+
+    generated = _output(extraction, {}).model_copy(update={"source_inventory_enabled": True})
+    result = ground_actions(content, extraction, manifest, generated)
+
+    assert result.slides[0].actions == ()
 
 
 def test_text_grounding_declines_suffixes_inside_longer_words():
@@ -175,7 +193,7 @@ def test_repeated_unicode_quote_in_columns_uses_hint_only_to_disambiguate_source
     assert grounded.height < manifest.slides[0].source.height * 0.05
 
 
-def test_repeated_quote_with_equally_plausible_hint_is_declined():
+def test_repeated_quote_with_equally_plausible_hint_is_declined_without_line_inventory():
     content = _two_column_pdf()
     extraction, manifest = _load_bytes(content)
     action = _action(
@@ -189,8 +207,7 @@ def test_repeated_quote_with_equally_plausible_hint_is_declined():
     result = ground_actions(content, extraction, manifest, generated)
 
     repeated = [item for item in result.slides[0].actions if item.target_text == "café results"]
-    assert len(repeated) == 2
-    assert all(item.grounding_trace and item.grounding_trace.target_id for item in repeated)
+    assert repeated == []
 
 
 def test_ligature_quote_maps_back_to_the_original_source_glyph():
