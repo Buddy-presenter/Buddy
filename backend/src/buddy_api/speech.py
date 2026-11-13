@@ -79,9 +79,7 @@ class SpeechProvider(Protocol):
 
 
 class SpeechFailure(Exception):
-    def __init__(
-        self, code: str, retryable: bool = False, *, provider_status: int | None = None
-    ):
+    def __init__(self, code: str, retryable: bool = False, *, provider_status: int | None = None):
         self.code = code
         self.retryable = retryable
         self.provider_status = provider_status
@@ -122,9 +120,7 @@ class DeepgramProvider:
         except InvalidStatus as exc:
             status = exc.response.status_code
             if status == 429:
-                raise SpeechFailure(
-                    "provider_rate_limited", True, provider_status=status
-                ) from None
+                raise SpeechFailure("provider_rate_limited", True, provider_status=status) from None
             if status in {401, 403}:
                 raise SpeechFailure("provider_configuration", provider_status=status) from None
             if status in {400, 422}:

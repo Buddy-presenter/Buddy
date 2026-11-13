@@ -18,13 +18,14 @@ ERRORS = {
     "provider_unavailable": "The speech provider is temporarily unavailable.",
     "speech_unavailable": "The speech service encountered an internal error.",
     "connection_lost": "The speech service connection was lost.",
-    "stream_busy": "The speech service is at its active-stream limit.",
     "invalid_configuration": "The speech service rejected its session configuration.",
     "session_503": "The presentation session service is temporarily unavailable.",
     "unsupported_language": "This recognition language is not supported.",
     "unsupported_configuration": "The provider does not support this audio or language setting.",
     "provider_rate_limited": "The speech provider is busy.",
-    "stream_busy": "Another speech stream is active or server capacity is reached.",
+    "stream_busy": (
+        "The speech service is at its active-stream limit or server capacity is reached."
+    ),
     "session_401": "Sign in again to use speech recognition.",
     "session_403": "Speech access to this presentation was denied.",
     "session_404": "This presentation is no longer available.",
