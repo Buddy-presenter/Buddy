@@ -70,7 +70,11 @@ class TranscriptContext:
         end = cast(float, event["end_seconds"])
         # Discard segments that may straddle a manual change or reconnect.
         capture_start = stamp - round((end - start) * 1_000_000_000)
-        if capture_start <= self._boundary_ns or not 0 <= now - stamp <= 30_000_000_000:
+        if (
+            capture_start <= self._boundary_ns
+            or not 0 <= now - stamp <= 30_000_000_000
+            or now - capture_start > 30_000_000_000
+        ):
             return
         stream = cast(str, event["stream_id"])
         sequence = cast(int, event["sequence"])

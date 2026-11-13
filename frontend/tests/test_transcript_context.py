@@ -182,3 +182,10 @@ def test_language_or_account_change_clears_context(monkeypatch):
     clock[0] += 1_000_000_000
     context.accept(event(clock))
     assert not context.snapshot().text
+
+
+def test_long_utterance_does_not_bypass_time_bound(monkeypatch):
+    context, clock = setup(monkeypatch)
+    clock[0] += 40_000_000_000
+    context.accept(event(clock, start_seconds=0, end_seconds=35))
+    assert not context.snapshot().text
