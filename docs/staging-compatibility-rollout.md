@@ -54,7 +54,7 @@ staging transition does not certify production readiness.
 ## Mandatory proof before live migration
 
 Feature promotion and explicit rollback additionally seed a synthetic analysis with a
-non-empty `pdf_candidate_line` grounding trace, action hash and final rectangle. Both
+non-empty candidate grounding trace (`pdf_candidate_line`), action hash and final rectangle. Both
 actual API images must read that same immutable record through their packaged repositories,
 validate its new content digest and preserve its unusable, unverified action state.
 Readers that drop the trace, reject it or hash a trace-free document fail preflight.
