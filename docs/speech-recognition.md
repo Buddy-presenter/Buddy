@@ -67,13 +67,14 @@ Speech stream failures are written to the API log at warning level so they remai
 visible with the deployed API's warning-level runtime configuration. The bounded
 `speech_stream` event records a random `diagnostic_id`, failure outcome, processing
 stage, duration, upstream HTTP status when supplied by Deepgram, and exception class
-for unexpected failures. The same opaque ID is returned with an error so an operator
-can find the exact event. It never records exception messages, provider response bodies,
+for unexpected failures. A stream ended after repeated invalid provider results also
+records the bounded `invalid_result_count`. The same opaque ID is returned with an error
+so an operator can find the exact event. It never records exception messages, provider response bodies,
 credentials, bearer tokens, audio, or transcript text. A normal client close is not
 logged as a warning. For staging diagnosis, inspect `/buddy/staging/api` in CloudWatch
 Logs and filter for `speech_stream`; match the UI's reference ID, then use `outcome`,
-`stage`, `provider_status`, and `exception_type` to choose the relevant server-side
-investigation. The desktop distinguishes provider unavailability, unexpected API
+`stage`, `provider_status`, `invalid_result_count`, and `exception_type` to choose the
+relevant server-side investigation. The desktop distinguishes provider unavailability, unexpected API
 failures, and lost speech connections in its status text.
 
 Deployment must support authenticated WebSocket upgrades over the existing HTTPS
@@ -121,8 +122,11 @@ Provider-independent transcript messages contain `type: transcript`, `version: 1
 `session_id`, `stream_id`, an increasing `sequence`, a stable `segment_id`, `final`,
 `text`, `start_seconds`, `end_seconds`, and `capture_end_ns`. Partial revisions for the
 same segment share a segment ID; a final segment is immutable to the desktop. Provider
-text is limited to 4096 characters. Malformed, nonfinite, cross-session, duplicate,
-out-of-order, future, or stale results cause safe failure without presentation actions.
+text is limited to 4096 characters. An isolated malformed provider update is discarded
+without ending the stream or producing a transcript. Three consecutive invalid provider
+updates end the stream with a retryable error; the desktop applies its existing bounded
+reconnect policy. Cross-session, duplicate, out-of-order, future, or stale transcript
+events cause safe failure without presentation actions.
 Adjacent segment boundaries tolerate provider float32 rounding (one microsecond or
 one float32 relative precision step, whichever is larger); finalized segment starts
 must still strictly increase, including for zero-duration finals.
