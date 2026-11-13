@@ -13,7 +13,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Request
-from pydantic import Field, model_validator
+from pydantic import Field, ValidationError, model_validator
 from sqlalchemy import delete, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -182,6 +182,24 @@ async def publish_server_event(
     return await append_event(db, record, payload)
 
 
+async def publish_live_speech_event(
+    db: AsyncSession,
+    principal: Principal,
+    identifier: UUID,
+    payload: SpeechEvent,
+) -> EventEnvelope:
+    """Attach speech to the current authorized state at journal commit time.
+
+    The version is an observation at publication, not proof of which slide was
+    visible when the words were spoken. Consumers must apply their own freshness
+    and capture-boundary rules before proposing any presentation action.
+    """
+    record = await owned_session(db, principal, identifier, lock=True)
+    if record.status != "active":
+        raise HTTPException(409, "The presentation session has ended.")
+    return await append_event(db, record, payload)
+
+
 async def event_batch(
     request: Request,
     identifier: UUID,
@@ -215,7 +233,12 @@ async def event_batch(
                 and rows
                 and rows[0].sequence == cursor + 1
             ):
-                events = [EventEnvelope.model_validate(row.document) for row in rows]
+                try:
+                    events = [EventEnvelope.model_validate(row.document) for row in rows]
+                except (ValidationError, ValueError, TypeError):
+                    # Validation errors can contain transcript text. Never let
+                    # one reach the server's exception/traceback logger.
+                    raise HTTPException(503, "Session event data is unavailable.") from None
         # A missing/expired/overflowed cursor restores one authoritative snapshot.
         # This replaces history; it never asks a client to execute old actions.
         if cursor is None or (cursor != record.event_sequence and not events):

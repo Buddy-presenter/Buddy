@@ -32,12 +32,17 @@ PostgreSQL probe exercises legacy reads, writes and sessions against the upgrade
 
 ## Producer and execution boundaries
 
-Public clients cannot publish speech or decisions. Backend producers call
+Public clients cannot publish speech or decisions. The speech adapter journals real
+partial/final results after they are recognized and before forwarding them to the speaker.
+Journal failure closes the speech stream with a retryable error. The speech event's state
+version is the session state at publication; it does not identify the slide at capture
+time. Downstream decisions must enforce capture-time freshness independently.
+Other backend producers call
 `publish_server_event` within their transaction; it locks and checks ownership, active
 lifecycle and expected state version. Schema-validated inputs are `speech.transcript`
 partial/final segments (stream/segment IDs, revision, language, offsets and bounded text),
 or `decision.status` notifications with bounded outcome/reason codes and optional navigation
-action names. Neither mutates player state. Provider integration belongs to #16, rolling
+action names. Neither mutates player state. Rolling
 context to #18, and decision execution/policy to their own issues.
 
 Events are observations, never an executable action queue. Duplicate/older sequence IDs

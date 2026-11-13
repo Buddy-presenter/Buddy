@@ -25,6 +25,7 @@ from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from buddy_api.auth import Principal, authenticated
 from buddy_api.presentation_sessions import owned_session
+from buddy_api.session_events import SpeechEvent, publish_live_speech_event
 
 LANGUAGES = {"en-US", "en-GB", "ar", "fr", "de", "es"}
 logger = logging.getLogger(__name__)
@@ -237,6 +238,34 @@ async def verify_session(request: Request, identifier: UUID) -> Principal:
     return principal
 
 
+async def journal_transcript(
+    request: Request,
+    principal: Principal,
+    identifier: UUID,
+    event: TranscriptEvent,
+    language: str,
+) -> None:
+    try:
+        async with request.app.state.database.sessions() as db, db.begin():
+            await publish_live_speech_event(
+                db,
+                principal,
+                identifier,
+                SpeechEvent(
+                    stream_id=event.stream_id,
+                    segment_id=event.segment_id,
+                    revision=event.sequence,
+                    text=event.text,
+                    final=event.final,
+                    language=language,
+                    start_ms=round(event.start_seconds * 1000),
+                    end_ms=round(event.end_seconds * 1000),
+                ),
+            )
+    except SQLAlchemyError:
+        raise SpeechFailure("event_journal_unavailable", True) from None
+
+
 async def relay(
     socket: WebSocket,
     provider: ProviderStream,
@@ -244,6 +273,7 @@ async def relay(
     identifier: UUID,
     start: StartSpeech,
     stream_id: UUID,
+    principal: Principal,
 ) -> None:
     timeline = AudioTimeline(start.sample_rate)
 
@@ -264,6 +294,9 @@ async def relay(
             event = transcript_event(raw, timeline, identifier, stream_id, sequence + 1)
             if event is not None:
                 sequence += 1
+                await asyncio.wait_for(
+                    journal_transcript(request, principal, identifier, event, start.language), 5
+                )
                 await asyncio.wait_for(socket.send_text(event.model_dump_json()), 5)
 
     async def verify() -> None:
@@ -366,7 +399,7 @@ def speech_router(allowed_hosts: tuple[str, ...]) -> APIRouter:
             stream_id = uuid4()
             await socket.send_json({"type": "ready", "version": 1, "stream_id": str(stream_id)})
             stage = "streaming"
-            await relay(socket, provider, request, identifier, start, stream_id)
+            await relay(socket, provider, request, identifier, start, stream_id, principal)
         except HTTPException as exc:
             outcome = f"session_{exc.status_code}"
             await error(socket, outcome, diagnostic_id, exc.status_code == 503)

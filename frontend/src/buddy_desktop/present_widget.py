@@ -411,7 +411,8 @@ class PresentWidget(Page):
         self.speech_language.currentIndexChanged.connect(lambda _index: self.microphone.stop())
         microphone_layout.addWidget(self.speech_language)
         self.speech_status = QLabel(
-            "Saved PDF sessions: microphone audio is sent to Deepgram (EU) for transcription."
+            "Saved PDF sessions: audio is sent to Deepgram (EU). "
+            "Transcript text is available for session sync for five minutes."
         )
         self.speech_status.setTextFormat(Qt.TextFormat.PlainText)
         self.speech_status.setWordWrap(True)
@@ -580,7 +581,8 @@ class PresentWidget(Page):
         if message != "Microphone on":
             self.speech.stop()
             self.speech_status.setText(
-                "Transcription off. Audio is sent only during an active saved PDF session."
+                "Transcription off. During a saved PDF session, audio is sent to Deepgram (EU) "
+                "and transcript text is available for session sync for five minutes."
             )
         if message == "Microphone on" and self._powerpoint_info is None:
             self._microphone_pdf_generation += 1

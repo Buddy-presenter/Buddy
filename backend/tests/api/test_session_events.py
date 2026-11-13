@@ -203,6 +203,29 @@ def test_rest_changes_are_ordered_and_reconnect_does_not_repeat(ready_session_ap
 
 
 @pytest.mark.postgres
+def test_corrupt_speech_journal_is_not_exposed_in_error_logs(ready_session_api, caplog):
+    client, ids, *_ = ready_session_api
+    path = f"/api/v1/sessions/{ids['sessions']}"
+    assert (
+        client.post(
+            path + "/sync/commands", headers=HEADERS, json=command(client, path)
+        ).status_code
+        == 200
+    )
+    private_text = "PRIVATE_TRANSCRIPT_MUST_NOT_APPEAR"
+
+    async def corrupt():
+        async with client.app.state.database.sessions() as db, db.begin():
+            await db.execute(update(SessionEvent).values(document={"text": private_text}))
+
+    client.portal.call(corrupt)
+    response = client.get(path + "/sync/events", headers={**HEADERS, "Last-Event-ID": "0"})
+    assert response.status_code == 503
+    assert private_text not in response.text
+    assert private_text not in caplog.text
+
+
+@pytest.mark.postgres
 def test_bounded_journal_and_slow_consumer_restore_snapshot(ready_session_api, monkeypatch):
     client, ids, *_ = ready_session_api
     path = f"/api/v1/sessions/{ids['sessions']}"
@@ -295,6 +318,37 @@ def test_internal_speech_events_are_bound_to_current_session_and_not_logged(
     assert len(documents) == 1
     assert documents[0]["payload"]["kind"] == "player.state"
     assert speech.text not in json.dumps(documents)
+
+
+@pytest.mark.postgres
+def test_live_speech_uses_authoritative_publication_state_without_changing_it(ready_session_api):
+    from buddy_api.auth import Principal
+
+    client, ids, owner, *_ = ready_session_api
+    path = f"/api/v1/sessions/{ids['sessions']}"
+    response = client.post(path + "/sync/commands", headers=HEADERS, json=command(client, path))
+    assert response.status_code == 200
+    payload = SpeechEvent(
+        stream_id=uuid4(),
+        segment_id="segment-1",
+        revision=1,
+        text="test speech",
+        final=True,
+        language="en-US",
+        start_ms=10,
+        end_ms=20,
+    )
+
+    async def publish():
+        async with client.app.state.database.sessions() as db, db.begin():
+            return await session_events.publish_live_speech_event(
+                db, Principal(owner, "owner@example.test"), ids["sessions"], payload
+            )
+
+    event = client.portal.call(publish)
+    assert event.state_version == 5
+    assert event.sequence == 2
+    assert client.get(path, headers=HEADERS).json()["data"]["state_version"] == 5
 
 
 def test_command_size_limit_precedes_json_parsing():
