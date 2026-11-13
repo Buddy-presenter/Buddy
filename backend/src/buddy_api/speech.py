@@ -28,6 +28,7 @@ from buddy_api.presentation_sessions import owned_session
 from buddy_api.session_events import SpeechEvent, publish_live_speech_event
 
 LANGUAGES = {"en-US", "en-GB", "ar", "fr", "de", "es"}
+MAX_CONSECUTIVE_INVALID_PROVIDER_RESULTS = 3
 logger = logging.getLogger(__name__)
 
 
@@ -80,10 +81,18 @@ class SpeechProvider(Protocol):
 
 
 class SpeechFailure(Exception):
-    def __init__(self, code: str, retryable: bool = False, *, provider_status: int | None = None):
+    def __init__(
+        self,
+        code: str,
+        retryable: bool = False,
+        *,
+        provider_status: int | None = None,
+        invalid_result_count: int | None = None,
+    ):
         self.code = code
         self.retryable = retryable
         self.provider_status = provider_status
+        self.invalid_result_count = invalid_result_count
         super().__init__(code)
 
 
@@ -289,9 +298,25 @@ async def relay(
 
     async def download() -> None:
         sequence = 0
+        consecutive_invalid_results = 0
         while True:
             raw = await provider.recv()
-            event = transcript_event(raw, timeline, identifier, stream_id, sequence + 1)
+            try:
+                event = transcript_event(raw, timeline, identifier, stream_id, sequence + 1)
+            except SpeechFailure as exc:
+                if exc.code != "invalid_provider_result":
+                    raise
+                consecutive_invalid_results += 1
+                if consecutive_invalid_results >= MAX_CONSECUTIVE_INVALID_PROVIDER_RESULTS:
+                    raise SpeechFailure(
+                        "invalid_provider_result",
+                        True,
+                        invalid_result_count=consecutive_invalid_results,
+                    ) from None
+                # A malformed or not-yet-alignable provider update must not tear down
+                # an otherwise healthy stream. Discard the update, never its raw body.
+                continue
+            consecutive_invalid_results = 0
             if event is not None:
                 sequence += 1
                 await asyncio.wait_for(
@@ -371,6 +396,7 @@ def speech_router(allowed_hosts: tuple[str, ...]) -> APIRouter:
         outcome = "closed"
         stage = "session_verification"
         provider_status: int | None = None
+        invalid_result_count: int | None = None
         exception_type: str | None = None
         diagnostic_id = str(uuid4())
         await socket.accept()
@@ -406,6 +432,7 @@ def speech_router(allowed_hosts: tuple[str, ...]) -> APIRouter:
         except SpeechFailure as exc:
             outcome = exc.code
             provider_status = exc.provider_status
+            invalid_result_count = exc.invalid_result_count
             await error(socket, outcome, diagnostic_id, exc.retryable)
         except (TimeoutError, ConnectionClosed, OSError):
             outcome = "connection_lost"
@@ -428,12 +455,13 @@ def speech_router(allowed_hosts: tuple[str, ...]) -> APIRouter:
             if outcome != "closed":
                 logger.warning(
                     "speech_stream diagnostic_id=%s outcome=%s stage=%s duration_ms=%d "
-                    "provider_status=%s exception_type=%s",
+                    "provider_status=%s invalid_result_count=%s exception_type=%s",
                     diagnostic_id,
                     outcome,
                     stage,
                     round((time.monotonic() - started) * 1000),
                     provider_status if provider_status is not None else "none",
+                    invalid_result_count if invalid_result_count is not None else "none",
                     exception_type or "none",
                 )
             with suppress(RuntimeError, WebSocketDisconnect):

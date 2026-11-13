@@ -49,6 +49,7 @@ class Provider:
         self.audio = []
         self.queue = None
         self.failure = None
+        self.results_override = None
 
     async def open(self, start):
         self.opened += 1
@@ -59,8 +60,11 @@ class Provider:
 
     async def send(self, data):
         self.audio.append(data)
-        await self.queue.put(result(final=False))
-        await self.queue.put(result())
+        results = self.results_override
+        if results is None:
+            results = [result(final=False), result()]
+        for message in results:
+            await self.queue.put(message)
 
     async def recv(self):
         return await self.queue.get()
@@ -179,6 +183,44 @@ def test_recognized_speech_is_journaled_and_removed_when_session_ends(ready_sess
     assert all(
         entry["payload"]["kind"] != "speech.transcript" for entry in client.portal.call(journal)
     )
+
+
+def test_isolated_invalid_provider_updates_are_dropped_and_stream_continues(speech_client):
+    client, provider = speech_client
+    provider.results_override = [
+        "not json",
+        result(final=False),
+        "[]",
+        result(final=True),
+    ]
+    with client.websocket_connect(
+        f"/api/v1/sessions/{uuid4()}/speech", headers={"Authorization": "Bearer owner"}
+    ) as socket:
+        assert start(socket)["type"] == "ready"
+        socket.send_bytes(packet())
+        partial, final = socket.receive_json(), socket.receive_json()
+        assert partial["sequence"] == 1 and not partial["final"]
+        assert final["sequence"] == 2 and final["final"]
+        assert partial["stream_id"] == final["stream_id"]
+    assert provider.closed == 1
+
+
+def test_consecutive_invalid_provider_results_request_bounded_recovery(speech_client):
+    client, provider = speech_client
+    provider.results_override = [
+        "not json" for _ in range(speech.MAX_CONSECUTIVE_INVALID_PROVIDER_RESULTS)
+    ]
+    with client.websocket_connect(
+        f"/api/v1/sessions/{uuid4()}/speech", headers={"Authorization": "Bearer owner"}
+    ) as socket:
+        ready = start(socket)
+        socket.send_bytes(packet())
+        error = socket.receive_json()
+        assert error["type"] == "error"
+        assert error["code"] == "invalid_provider_result"
+        assert error["retryable"] is True
+        assert ready["stream_id"]
+    assert provider.closed == 1
 
 
 @pytest.mark.parametrize(
