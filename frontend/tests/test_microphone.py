@@ -2,9 +2,12 @@
 
 import os
 import plistlib
+import struct
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC
 from pathlib import Path
 from queue import Empty, Queue
+from threading import Event, Lock
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -12,7 +15,7 @@ import pytest
 from PySide6.QtCore import QByteArray, QObject, Qt, Signal
 
 from buddy_desktop import present_widget
-from buddy_desktop.microphone import MicrophoneController
+from buddy_desktop.microphone import MicrophoneController, _CaptureWorker
 from buddy_desktop.powerpoint import PresentationInfo
 
 
@@ -126,6 +129,40 @@ def test_audio_queue_is_bounded_and_cleared_on_stop(qapp, qtbot):
             pass
     finally:
         mic.shutdown()
+
+
+def test_capture_worker_enqueues_strictly_increasing_timestamps(qapp, monkeypatch):
+    from buddy_desktop import microphone
+
+    frames = Queue(maxsize=64)
+    accepting = Event()
+    accepting.set()
+    worker = _CaptureWorker(frames, accepting, Lock())
+    worker.generation = 3
+    clock_values = iter([100, 100, 90, 400])
+    monkeypatch.setattr(microphone.time, "monotonic_ns", lambda: next(clock_values))
+
+    with ThreadPoolExecutor(max_workers=4) as callbacks:
+        list(callbacks.map(lambda _index: worker._queue_pcm(b"\0\0", 3), range(4)))
+
+    timestamps = [struct.unpack(">Q", frames.get_nowait()[:8])[0] for _ in range(4)]
+    assert all(
+        current > previous for previous, current in zip(timestamps, timestamps[1:], strict=False)
+    )
+
+
+def test_capture_worker_discards_packets_from_previous_generation(qapp):
+    frames = Queue(maxsize=8)
+    accepting = Event()
+    accepting.set()
+    worker = _CaptureWorker(frames, accepting, Lock())
+    worker.generation = 5
+
+    worker._queue_pcm(b"\0\0", 4)
+    worker._queue_pcm(b"\0\0", 5)
+
+    assert frames.qsize() == 1
+    assert struct.unpack(">Q", frames.get_nowait()[:8])[0] > 0
 
 
 def test_late_permission_response_cannot_restart_a_stopped_microphone(qapp, monkeypatch):

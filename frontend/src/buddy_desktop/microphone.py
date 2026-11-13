@@ -55,13 +55,19 @@ class _CaptureWorker(QObject):
         self._com_initialized = False
         self.monitor: QTimer | None = None
         self.generation = 0
+        self.last_capture_ns = 0
         self.encoder: PCM16Encoder | None = None
         self.compatibility: WindowsInput | None = None
 
     @Slot(object, int, bool)
     def start(self, device_id: bytes, generation: int, compatibility: bool = False) -> None:
+        # Invalidate callbacks from the previous capture before stopping its source.
+        # Clear under the same lock used to enqueue frames, so an in-flight old
+        # callback either finishes before this clear or observes the new generation.
+        with self.frame_lock:
+            self.generation = generation
+            _clear_frames(self.frames)
         self.stop()
-        self.generation = generation
         if not self.accepting.is_set():
             return
         try:
@@ -81,7 +87,9 @@ class _CaptureWorker(QObject):
                 from buddy_desktop.windows_microphone import WindowsInput
 
                 self.compatibility = WindowsInput(
-                    device_id, self._queue_pcm, lambda: self.gap.emit(generation)
+                    device_id,
+                    lambda pcm: self._queue_pcm(pcm, generation),
+                    lambda: self.gap.emit(generation),
                 )
                 self.compatibility.start()
                 self.monitor = QTimer(self)
@@ -116,7 +124,7 @@ class _CaptureWorker(QObject):
                 generation, "Microphone unavailable. Check device and system permissions."
             )
             return
-        self.stream.readyRead.connect(self._drain)
+        self.stream.readyRead.connect(lambda: self._drain(generation))
         self.monitor = QTimer(self)
         self.monitor.setInterval(250)
         self.monitor.timeout.connect(self._check_error)
@@ -125,8 +133,8 @@ class _CaptureWorker(QObject):
         self.changed.emit(generation, "Microphone on")
 
     @Slot()
-    def _drain(self) -> None:
-        if self.stream is None:
+    def _drain(self, generation: int) -> None:
+        if self.stream is None or generation != self.generation:
             return
         while self.stream.bytesAvailable() > 0:
             frame = bytes(self.stream.read(4096).data())
@@ -137,14 +145,19 @@ class _CaptureWorker(QObject):
             pcm = self.encoder.encode(frame)
             if not pcm:
                 continue
-            self._queue_pcm(pcm)
+            self._queue_pcm(pcm, generation)
 
-    def _queue_pcm(self, pcm: bytes) -> None:
-        packet = struct.pack(">Q", time.monotonic_ns()) + pcm
+    def _queue_pcm(self, pcm: bytes, generation: int) -> None:
         dropped = False
         with self.frame_lock:
-            if not self.accepting.is_set():
+            if not self.accepting.is_set() or generation != self.generation:
                 return
+            # Timestamp in the same critical section as FIFO insertion. Capture
+            # callbacks may overlap during device transitions; a correction of
+            # one nanosecond handles equal-resolution clock readings without
+            # weakening the server's strict increasing-timestamp validation.
+            stamp = max(time.monotonic_ns(), self.last_capture_ns + 1)
+            packet = struct.pack(">Q", stamp) + pcm
             try:
                 self.frames.put_nowait(packet)
             except Full:
@@ -153,8 +166,9 @@ class _CaptureWorker(QObject):
                     self.frames.get_nowait()
                 with suppress(Full):
                     self.frames.put_nowait(packet)
+            self.last_capture_ns = stamp
         if dropped:
-            self.gap.emit(self.generation)
+            self.gap.emit(generation)
         self.received.emit(len(pcm))
 
     @Slot()
