@@ -58,6 +58,19 @@ class ModelSummary(BaseModel):
 class ModelAction(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True, allow_inf_nan=False)
     type: Literal["zoom_region", "highlight_region"]
+    # Semantic class is used by the grounding boundary to reject prose fragments before
+    # they can become immutable, user-visible actions. It is internal provider metadata.
+    target_kind: Literal[
+        "visual",
+        "title",
+        "heading",
+        "bullet",
+        "person",
+        "key_sentence",
+        "key_number",
+        "key_formula",
+        "unspecified",
+    ] = "unspecified"
     purpose: str = Field(min_length=1, max_length=512)
     # Exact text anchor for highlights/text zooms. Coordinates below are only a coarse
     # disambiguation hint and are never stored without source-geometry resolution.
@@ -132,6 +145,19 @@ def _json_schema(page_count: int) -> dict[str, object]:
                     "type": "object",
                     "properties": {
                         "type": {"type": "string", "enum": ["zoom_region", "highlight_region"]},
+                        "target_kind": {
+                            "type": "string",
+                            "enum": [
+                                "visual",
+                                "title",
+                                "heading",
+                                "bullet",
+                                "person",
+                                "key_sentence",
+                                "key_number",
+                                "key_formula",
+                            ],
+                        },
                         "purpose": {"type": "string"},
                         "target_text": {"type": ["string", "null"]},
                         "x": {"type": "number"},
@@ -139,7 +165,16 @@ def _json_schema(page_count: int) -> dict[str, object]:
                         "width": {"type": "number"},
                         "height": {"type": "number"},
                     },
-                    "required": ["type", "purpose", "target_text", "x", "y", "width", "height"],
+                    "required": [
+                        "type",
+                        "target_kind",
+                        "purpose",
+                        "target_text",
+                        "x",
+                        "y",
+                        "width",
+                        "height",
+                    ],
                     "additionalProperties": False,
                 },
             },
@@ -214,15 +249,21 @@ def _prompt(extraction: Extraction, deck_id: str, manifest: Manifest) -> str:
         "unrelated points into "
         "one broad rectangle, or invent unsupported targets. A blank, decorative-only, or "
         "unreadable page may have no action. "
-        "For highlight_region, target one visible line or a short phrase only: return its exact "
-        "visible words in target_text and describe the reason in purpose. For text zooms, also "
+        "For each action, set target_kind to visual, title, heading, bullet, person, key_sentence, "
+        "key_number, or key_formula. Use visual for zoom_region. For prose highlights use "
+        "key_sentence and quote the complete, concise sentence exactly as printed, even when it "
+        "wraps across physical PDF lines. Never turn a wrapped line or a sentence fragment into "
+        "its own action. A bullet action must quote the complete bullet/list item, including all "
+        "wrapped lines. Use title or heading for the complete visible title/heading; person for "
+        "the complete visible name; key_number or key_formula only for a genuinely important "
+        "number/formula. Describe why the target matters in purpose. For text zooms, also "
         "return the exact visible target in target_text; for image/graphic zooms use null. "
         "Coordinates are approximate visual hints only; Buddy resolves the final region against "
         "source text or PDF object geometry, and an unresolved/ambiguous target is omitted. "
-        "Keep highlight targets limited to that text; exclude neighboring lines, paragraphs, "
-        "headings, and decorative areas. A highlight is a "
-        "line-level "
-        "cue, not a paragraph or section selection. Use zoom_region for broader visual context. "
+        "Keep highlight targets limited to that text; exclude neighboring paragraphs, headings, "
+        "and decorative areas. A multi-line sentence may use the tight union of its own glyphs; "
+        "never highlight a whole paragraph merely because one sentence is important. Use "
+        "zoom_region for broader visual context. "
         "Coordinates are top-left-origin "
         "Buddy canonical PDF source pixels at 144 dpi; keep each rectangle fully within the "
         "listed page dimensions. Describe visual structure precisely: call content a table only "

@@ -157,14 +157,19 @@ def test_bedrock_request_submits_exact_pdf_with_native_claude_api(monkeypatch):
     assert "key numbers, formulas, decisions, recommendations" in prompt
     assert "Do NOT make one action per visual line break" in prompt
     assert "never split prose mechanically" in prompt
+    assert "target_kind" in action_schema["items"]["properties"]
+    assert "key_sentence" in action_schema["items"]["properties"]["target_kind"]["enum"]
+    assert "quote the complete, concise sentence exactly as printed" in prompt
+    assert "Never turn a wrapped line or a sentence fragment into its own action" in prompt
+    assert "A multi-line sentence may use the tight union of its own glyphs" in prompt
     assert "Buddy will also add source-measured visual-object candidates" in prompt
     assert "source-measured text-line" not in prompt
     assert "not applied all at once" in prompt
     assert "Do not stop at the first useful target" in prompt
     assert "Do not fill a quota" in prompt
-    assert "one visible line or a short phrase only" in prompt
-    assert "exact visible words in target_text" in prompt
-    assert "paragraph or section selection" in prompt
+    assert "one visible line or a short phrase only" not in prompt
+    assert "line-level cue" not in prompt
+    assert "never highlight a whole paragraph" in prompt
     assert action_schema["items"]["properties"]["type"]["enum"] == [
         "zoom_region",
         "highlight_region",
