@@ -488,6 +488,28 @@ class BedrockProvider:
                 raise ValueError("Provider cannot set Buddy-owned coverage state")
             if "source_inventory_enabled" in payload:
                 raise ValueError("Provider cannot set Buddy-owned inventory state")
+            # The semantic Bedrock response must carry an explicit classification:
+            # ModelAction's default exists only for deterministic legacy providers.
+            # The candidate-selection experiment has its own intentionally smaller
+            # schema and is exempt because Buddy resolves those IDs to measured text.
+            if catalog is None and any(
+                isinstance(action, dict)
+                and action.get("target_kind")
+                not in {
+                    "visual",
+                    "title",
+                    "heading",
+                    "bullet",
+                    "person",
+                    "key_sentence",
+                    "key_number",
+                    "key_formula",
+                }
+                for slide in payload["slides"]
+                if isinstance(slide, dict) and isinstance(slide.get("actions"), list)
+                for action in slide["actions"]
+            ):
+                raise ValueError("Bedrock actions require an explicit semantic target kind")
             if any(
                 (
                     "visual_qa_pending" in action

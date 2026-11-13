@@ -494,12 +494,28 @@ def _target_kind_is_consistent(action: ModelAction) -> bool:
     if action.target_kind == "key_number":
         return bool(action.target_text and any(char.isdigit() for char in action.target_text))
     if action.target_kind == "key_formula":
-        return bool(
-            action.target_text
-            and any(char.isdigit() for char in action.target_text)
-            and any(char in "=+-−×÷%<>^∑√" for char in action.target_text)
-        )
+        return _formula_target(action.target_text)
     return True
+
+
+def _formula_target(value: str | None) -> bool:
+    """Accept symbolic equations without digits while rejecting prose fragments."""
+    if not value:
+        return False
+    normalized = " ".join(value.split())
+    allowed_symbols = "_()[]{}.,+-−×÷*/^%=<>≤≥≈≠∑√π∞|·"
+    if not all(char.isalnum() or char.isspace() or char in allowed_symbols for char in normalized):
+        return False
+    # A meaningful formula needs visible operands around at least one relation or
+    # binary arithmetic operator. This accepts e.g. F = ma and a + b = c without
+    # relying on digits, while rejecting an isolated operator or ordinary text.
+    return (
+        re.search(
+            r"[\w)\]}]\s*(?:<=|>=|!=|==|=|≤|≥|≈|≠|[+−×÷*/^%<>])\s*[\w([{]",
+            normalized,
+        )
+        is not None
+    )
 
 
 def _padded(rect: Rect, width: int, height: int, *, zoom: bool) -> Rect:

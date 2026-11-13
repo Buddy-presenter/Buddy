@@ -206,13 +206,14 @@ def test_provider_accepts_multiple_distinct_actions_on_one_slide(monkeypatch):
         "slides": [
             {
                 "number": 1,
-                "text": "Revenue rose and the outlook remains positive.",
+                "text": "Revenue rose.",
                 "reason": None,
                 "actions": [
                     {
                         "type": "highlight_region",
+                        "target_kind": "key_sentence",
                         "purpose": "Highlight the exact visible phrase “Revenue rose”.",
-                        "target_text": "Revenue rose",
+                        "target_text": "Revenue rose.",
                         "x": 40,
                         "y": 120,
                         "width": 190,
@@ -220,6 +221,7 @@ def test_provider_accepts_multiple_distinct_actions_on_one_slide(monkeypatch):
                     },
                     {
                         "type": "zoom_region",
+                        "target_kind": "visual",
                         "purpose": "Zoom out to show the adjacent outlook chart.",
                         "target_text": None,
                         "x": 620,
@@ -240,6 +242,40 @@ def test_provider_accepts_multiple_distinct_actions_on_one_slide(monkeypatch):
     ]
 
 
+@pytest.mark.parametrize("target_kind", [None, "unspecified"])
+def test_bedrock_rejects_actions_without_explicit_semantic_kind(monkeypatch, target_kind):
+    extraction, manifest = inputs()
+    monkeypatch.setattr(provider, "Session", Session)
+    action = {
+        "type": "highlight_region",
+        "purpose": "Highlight a complete sentence.",
+        "target_text": "designed to connect and control all smart",
+        "x": 40,
+        "y": 120,
+        "width": 190,
+        "height": 24,
+    }
+    if target_kind is not None:
+        action["target_kind"] = target_kind
+    generated = {
+        "presentation": {"text": "Quarterly results overview.", "reason": None},
+        "slides": [
+            {
+                "number": 1,
+                "text": "Revenue rose.",
+                "reason": None,
+                "actions": [action],
+            }
+        ],
+    }
+
+    with pytest.raises(ProviderFailure, match="provider_malformed_output"):
+        BedrockProvider(
+            "eu-central-1",
+            transport=Opener(response_for(output_text=json.dumps(generated))).transport,
+        ).analyze(PDF, extraction, str(DECK_ID), manifest)
+
+
 @pytest.mark.parametrize("server_field", ["visual_qa_pending", "grounding_trace"])
 def test_provider_cannot_assign_server_owned_visual_qa_state(monkeypatch, server_field):
     extraction, manifest = inputs()
@@ -254,6 +290,7 @@ def test_provider_cannot_assign_server_owned_visual_qa_state(monkeypatch, server
                 "actions": [
                     {
                         "type": "zoom_region",
+                        "target_kind": "visual",
                         "purpose": "Focus on this crop.",
                         "target_text": None,
                         server_field: True,
@@ -282,13 +319,14 @@ def test_provider_never_exceeds_the_bounded_deck_action_budget(monkeypatch):
         "slides": [
             {
                 "number": 1,
-                "text": "Revenue rose and the outlook remains positive.",
+                "text": "Revenue rose.",
                 "reason": None,
                 "actions": [
                     {
                         "type": "highlight_region",
+                        "target_kind": "key_sentence",
                         "purpose": "Highlight the exact visible phrase “Revenue rose”.",
-                        "target_text": "Revenue rose",
+                        "target_text": "Revenue rose.",
                         "x": 40,
                         "y": 120,
                         "width": 190,
@@ -296,6 +334,7 @@ def test_provider_never_exceeds_the_bounded_deck_action_budget(monkeypatch):
                     },
                     {
                         "type": "zoom_region",
+                        "target_kind": "visual",
                         "purpose": "Zoom out to show the adjacent outlook chart.",
                         "target_text": None,
                         "x": 620,

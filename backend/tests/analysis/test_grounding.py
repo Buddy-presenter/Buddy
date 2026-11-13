@@ -194,6 +194,20 @@ def test_complete_sentence_can_be_grounded_across_wrapped_pdf_lines():
     assert result.slides[0].actions[0].height > 20
 
 
+@pytest.mark.parametrize("formula", ["F = ma", "V = IR", "a + b = c"])
+def test_symbolic_formula_without_digits_can_be_grounded(formula):
+    content = _pdf_with_content(b"BT /F1 18 Tf 90 700 Td (" + formula.encode("ascii") + b") Tj ET")
+    extraction, manifest = _load_bytes(content)
+    action = _action(quote=formula, hint=(100, 150, 700, 100)).model_copy(
+        update={"target_kind": "key_formula"}
+    )
+
+    result = ground_actions(content, extraction, manifest, _output(extraction, {0: (action,)}))
+
+    assert len(result.slides[0].actions) == 1
+    assert result.slides[0].actions[0].target_text == formula
+
+
 def test_text_grounding_declines_suffixes_inside_longer_words():
     from contextlib import closing
 
