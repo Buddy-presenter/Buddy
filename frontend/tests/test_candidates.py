@@ -42,9 +42,13 @@ def inputs():
     return session, context
 
 
-@pytest.mark.parametrize("corrupt", [None, "state_version", "tool", "action", "oversize"])
-def test_response_is_bound_to_context_and_only_typed_candidates(corrupt):
+@pytest.mark.parametrize(
+    "corrupt", [None, "state_version", "tool", "action", "oversize", "expired"]
+)
+def test_response_is_bound_to_context_and_only_typed_candidates(corrupt, monkeypatch):
     session, context = inputs()
+    clock = [context.observed_ns]
+    monkeypatch.setattr("buddy_desktop.candidate_service.time.monotonic_ns", lambda: clock[0])
     seen = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -81,6 +85,8 @@ def test_response_is_bound_to_context_and_only_typed_candidates(corrupt):
             elif corrupt == "action":
                 result["candidates"][0]["action_id"] = "arbitrary-action"
             raw = b"x" * 32769 if corrupt == "oversize" else json.dumps(result).encode()
+            if corrupt == "expired":
+                clock[0] += 6_000_000_000
             self.send_response(200)
             self.end_headers()
             self.wfile.write(raw)
