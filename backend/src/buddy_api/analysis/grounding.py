@@ -511,7 +511,7 @@ def _formula_target(value: str | None) -> bool:
     # relying on digits, while rejecting an isolated operator or ordinary text.
     return (
         re.search(
-            r"[\w)\]}]\s*(?:<=|>=|!=|==|=|≤|≥|≈|≠|[+−×÷*/^%<>])\s*[\w([{]",
+            r"[\w)\]}]\s*(?:<=|>=|!=|==|=|≤|≥|≈|≠|[+−×÷*/^%<>-])\s*[\w([{]",
             normalized,
         )
         is not None
