@@ -14,7 +14,18 @@ from sqlalchemy import select
 
 from buddy_api.embeddings import DIMENSIONS, CohereEmbeddings, EmbeddingFailure, EmbeddingSettings
 from buddy_api.persistence.models import EmbeddingQuota
-from buddy_api.semantic_candidates import SemanticCandidates
+from buddy_api.semantic_candidates import SemanticCandidates, combined_context
+
+
+def test_combined_query_preserves_references_and_bounds_old_context():
+    passage = "The application stores addresses and payment tokens. These need protection."
+    assert combined_context(passage) == passage
+    latest = "This is the completed latest segment."
+    bounded = combined_context("older context " * 600 + latest)
+    assert len(bounded) <= 4096 and bounded.endswith(latest)
+    assert not bounded.startswith("lder")
+    assert combined_context(" \n" + passage + " \n") == passage
+    assert len(combined_context("界" * 5000)) == 4096
 
 
 def vector(axis):
@@ -62,12 +73,14 @@ class FakeProvider:
 
     def __init__(self):
         self.calls = []
+        self.inputs = []
 
     async def aclose(self):
         pass
 
     async def embed(self, texts, kind):
         self.calls.append((kind, len(texts)))
+        self.inputs.append(list(texts))
         if kind == "document":
             return tuple(tuple(vector(i)) for i, _ in enumerate(texts))
         return tuple(tuple(vector(1)) for _ in texts)
@@ -92,20 +105,16 @@ def test_index_persists_queries_cache_and_budget_is_enforced(ready_session_api):
     assert first.status_code == 200, first.text
     assert first.json()["created"]
     assert not client.post(path + "/candidates/prepare", headers=headers).json()["created"]
-    result = client.post(
-        path + "/candidates", headers=headers, json=payload(text="different phrasing")
-    )
+    context = "The application stores addresses and payment tokens. These need protection."
+    request = payload(text=context, latest_utterance="These need protection.")
+    result = client.post(path + "/candidates", headers=headers, json=request)
     assert result.status_code == 200, result.text
-    assert result.json()["resolver_version"] == "cohere-embed5-v1"
+    assert result.json()["resolver_version"] == "cohere-embed5-v2"
     assert any(c["reason"] == "topic" for c in result.json()["candidates"])
     # Cached query does not spend a third call; quota is persistent across engines.
-    assert (
-        client.post(
-            path + "/candidates", headers=headers, json=payload(text="different phrasing")
-        ).status_code
-        == 200
-    )
-    assert provider.calls == [("document", 2), ("query", 2)]
+    assert client.post(path + "/candidates", headers=headers, json=request).status_code == 200
+    assert provider.calls == [("document", 2), ("query", 1)]
+    assert provider.inputs[-1] == [context]
     new_engine = SemanticCandidates(client.app.state.database, provider, call_limit=2)
     client.app.state.semantic_candidates = new_engine
     exhausted = client.post(path + "/candidates", headers=headers, json=payload(text="new query"))
@@ -120,6 +129,20 @@ def test_index_persists_queries_cache_and_budget_is_enforced(ready_session_api):
     navigation = client.post(path + "/candidates", headers=headers, json=payload(text="next slide"))
     assert navigation.status_code == 200, navigation.text
     assert any(c["reason"] == "explicit_navigation" for c in navigation.json()["candidates"])
+    # At the last slide an explicit next command still avoids the provider and
+    # cannot turn the older topic into a spurious non-linear destination.
+    from buddy_api.analysis.store import Analyses
+
+    async def at_boundary():
+        async with client.app.state.database.sessions() as db:
+            analysis = await Analyses(db).read(ids["analyses"], owner_id=owner)
+        return await new_engine.retrieve(
+            analysis, owner, analysis.slides[-1].slide_id, "next slide", "older topic next slide"
+        )
+
+    boundary = client.portal.call(at_boundary)
+    assert len(boundary) == 2 and all(c.reason in {"stay", "current"} for c in boundary)
+    assert provider.calls == [("document", 2), ("query", 1)]
 
 
 @pytest.mark.postgres

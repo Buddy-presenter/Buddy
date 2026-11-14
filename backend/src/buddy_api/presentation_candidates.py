@@ -98,7 +98,9 @@ class Candidate(Model):
 
 class CandidateSet(Model):
     protocol: Literal["presentation-candidates.v1"] = "presentation-candidates.v1"
-    resolver_version: Literal["summary-overlap-2", "cohere-embed5-v1"] = "summary-overlap-2"
+    resolver_version: Literal["summary-overlap-2", "cohere-embed5-v1", "cohere-embed5-v2"] = (
+        "summary-overlap-2"
+    )
     session_id: UUID
     analysis_id: UUID
     state_version: int
@@ -156,6 +158,17 @@ def tokens(text: str) -> frozenset[str]:
     return frozenset(re.findall(r"[^\W_]+", unicodedata.normalize("NFKC", text).casefold())) - STOP
 
 
+def navigation_step(text: str) -> int | None:
+    """Only complete explicit commands, including when the deck has no neighbor."""
+    normalized = " ".join(re.findall(r"[^\W_]+", unicodedata.normalize("NFKC", text).casefold()))
+    return {
+        "next slide": 1,
+        "please go to the next slide": 1,
+        "previous slide": -1,
+        "please go to the previous slide": -1,
+    }.get(normalized)
+
+
 def resolve(
     analysis: AnalysisResult, current: str, text: str, latest_utterance: str | None = None
 ) -> tuple[Candidate, ...]:
@@ -169,22 +182,9 @@ def resolve(
         Candidate(kind="slide", slide_id=current, reason="current", score=0),
     ]
     query = tokens(text)
-    normalized = " ".join(
-        re.findall(
-            r"[^\W_]+",
-            unicodedata.normalize(
-                "NFKC", latest_utterance if latest_utterance is not None else text
-            ).casefold(),
-        )
-    )
     # Commands are whole utterances, not substrings in slide discussion or negation.
-    explicit = {
-        "next slide": 1,
-        "please go to the next slide": 1,
-        "previous slide": -1,
-        "please go to the previous slide": -1,
-    }
-    target = position + explicit[normalized] if normalized in explicit else position
+    step = navigation_step(latest_utterance if latest_utterance is not None else text)
+    target = position + (step or 0)
     if 0 <= target < len(slides) and target != position:
         result.append(
             Candidate(
@@ -320,7 +320,7 @@ def candidate_router() -> APIRouter:
                         timeout=2,
                     )
                 return CandidateSet(
-                    resolver_version="cohere-embed5-v1"
+                    resolver_version="cohere-embed5-v2"
                     if semantic is not None
                     else "summary-overlap-2",
                     session_id=identifier,
@@ -364,7 +364,7 @@ def candidate_router() -> APIRouter:
                     raise HTTPException(409, "The analysis changed.")
                 analysis = await request.app.state.candidate_analyses.read(db, record, principal.id)
             created = await semantic.prepare(analysis, principal.id)
-            return {"ready": True, "created": created, "resolver_version": "cohere-embed5-v1"}
+            return {"ready": True, "created": created, "resolver_version": "cohere-embed5-v2"}
         except EmbeddingFailure:
             raise
         except (PersistenceError, SQLAlchemyError, OSError, TimeoutError):

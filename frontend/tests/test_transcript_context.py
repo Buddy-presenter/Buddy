@@ -70,6 +70,81 @@ def test_silence_expires_without_new_events(monkeypatch):
     assert not context.snapshot().text
 
 
+def test_new_thought_after_pause_clears_previous_text_and_advances_epoch(monkeypatch):
+    context, clock = setup(monkeypatch)
+    context.accept(event(clock, final=True, text="Old topic."))
+    epoch = context.snapshot().epoch
+    clock[0] += 7_000_000_000
+    context.accept(event(clock, sequence=2, segment_id="b", final=True, text="New topic."))
+    snapshot = context.snapshot()
+    assert snapshot.text == "New topic." and snapshot.epoch > epoch
+    assert snapshot.stream_id == "stream" and snapshot.segments[0].received_ns == clock[0]
+    context.accept(
+        event(clock, sequence=3, segment_id="delayed", capture_end_ns=clock[0] - 3_000_000_000)
+    )
+    assert context.snapshot().text == "New topic."
+
+
+def test_pause_boundary_survives_expiration_of_old_text(monkeypatch):
+    context, clock = setup(monkeypatch)
+    context.accept(event(clock, final=True))
+    epoch = context.snapshot().epoch
+    clock[0] += 31_000_000_000
+    assert not context.snapshot().text
+    context.accept(event(clock, sequence=2, segment_id="new", final=True, text="Fresh topic."))
+    assert context.snapshot().text == "Fresh topic."
+    assert context.snapshot().epoch > epoch
+
+
+def test_candidate_passage_keeps_only_recent_contiguous_completed_segments(monkeypatch):
+    context, clock = setup(monkeypatch)
+    for n in range(6):
+        clock[0] += 200_000_000
+        context.accept(
+            event(
+                clock,
+                segment_id=str(n),
+                sequence=n + 1,
+                start_seconds=n * 0.2,
+                end_seconds=n * 0.2 + 0.1,
+                final=True,
+                text=f"Sentence {n}.",
+            )
+        )
+    assert [s.text for s in context.snapshot().candidate_segments] == [
+        f"Sentence {n}." for n in range(2, 6)
+    ]
+    clock[0] += 200_000_000
+    context.accept(
+        event(clock, segment_id="partial", sequence=7, start_seconds=1.2, end_seconds=1.3)
+    )
+    assert not context.snapshot().candidate_segments
+    clock[0] += 200_000_000
+    context.accept(
+        event(
+            clock,
+            segment_id="after",
+            sequence=8,
+            start_seconds=1.4,
+            end_seconds=1.5,
+            final=True,
+            text="Completed after partial.",
+        )
+    )
+    assert [s.text for s in context.snapshot().candidate_segments] == ["Completed after partial."]
+
+
+def test_candidate_passage_drops_whole_old_segments_at_character_bound(monkeypatch):
+    context, clock = setup(monkeypatch)
+    for n in range(4):
+        clock[0] += 200_000_000
+        context.accept(event(clock, sequence=n + 1, segment_id=str(n), final=True, text="x" * 1500))
+    selected = context.snapshot().candidate_segments
+    assert [s.segment_id for s in selected] == ["2", "3"]
+    assert len(" ".join(s.text for s in selected)) <= 4096
+    assert all(len(s.text) == 1500 for s in selected)
+
+
 def test_reconnect_clear_and_privacy(monkeypatch):
     context, clock = setup(monkeypatch)
     context.accept(event(clock))

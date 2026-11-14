@@ -416,7 +416,8 @@
             "default": "summary-overlap-2",
             "enum": [
               "summary-overlap-2",
-              "cohere-embed5-v1"
+              "cohere-embed5-v1",
+              "cohere-embed5-v2"
             ],
             "title": "Resolver Version",
             "type": "string"

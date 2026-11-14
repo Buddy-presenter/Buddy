@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -57,6 +58,19 @@ def fingerprint(items: tuple[Document, ...]) -> str:
             [(d.slide_id, d.action_id, d.kind, d.text) for d in items], ensure_ascii=False
         ).encode()
     ).hexdigest()
+
+
+def combined_context(recent: str) -> str:
+    """Embed a coherent bounded passage, retaining preceding references in one input."""
+    text = recent.strip()
+    if len(text) <= 4096:
+        return text
+    tail = text[-4096:]
+    if not text[-4097].isspace() and not tail[0].isspace():
+        boundary = re.search(r"\s", tail)
+        if boundary is not None:
+            tail = tail[boundary.end() :]
+    return tail.strip()
 
 
 class SemanticCandidates:
@@ -124,10 +138,10 @@ class SemanticCandidates:
     async def retrieve(
         self, analysis: AnalysisResult, owner: UUID, current: str, latest: str, recent: str
     ) -> tuple["Candidate", ...]:
-        from buddy_api.presentation_candidates import Candidate, resolve
+        from buddy_api.presentation_candidates import Candidate, navigation_step, resolve
 
         base = resolve(analysis, current, "", latest)
-        if any(candidate.reason == "explicit_navigation" for candidate in base):
+        if navigation_step(latest) is not None:
             return base
         items = documents(analysis)
         async with self.database.sessions() as db:
@@ -148,7 +162,7 @@ class SemanticCandidates:
         cache_key = (
             owner,
             analysis.id,
-            hashlib.sha256((latest + "\0" + recent).encode()).hexdigest(),
+            hashlib.sha256(combined_context(recent).encode()).hexdigest(),
         )
         now = time.monotonic()
         self._cache = {k: v for k, v in self._cache.items() if now - v[0] <= 5}
@@ -162,8 +176,9 @@ class SemanticCandidates:
             self._queries.add(owner)
             self._last_call[owner] = now
             try:
-                # Both query perspectives use one provider call. No extra LLM pass.
-                queries = await self._embed([latest, recent[-2000:]], "query")
+                # One complete passage lets the encoder relate pronouns to earlier
+                # sentences, instead of scoring a vague final segment separately.
+                queries = await self._embed([combined_context(recent)], "query")
             finally:
                 self._queries.discard(owner)
             if len(self._cache) >= 128:
@@ -171,8 +186,7 @@ class SemanticCandidates:
             self._cache[cache_key] = (time.monotonic(), queries)
         scored = [
             (
-                0.8 * sum(a * b for a, b in zip(vector, queries[0], strict=True))
-                + 0.2 * sum(a * b for a, b in zip(vector, queries[1], strict=True)),
+                sum(a * b for a, b in zip(vector, queries[0], strict=True)),
                 doc,
             )
             for doc, vector in zip(items, vectors, strict=True)

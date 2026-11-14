@@ -41,6 +41,7 @@ class CandidateService:
     ) -> dict[str, object]:
         """Call off the GUI thread. Recheck context epoch/state before using results."""
         now = time.monotonic_ns()
+        segments = context.candidate_segments
         if (
             not context.fresh
             or not context.segments
@@ -57,15 +58,19 @@ class CandidateService:
             )
         ):
             raise ServiceError("Speech context changed or expired; wait for fresh speech.")
+        if not segments:
+            raise ServiceError("Wait for a completed speech segment before searching.")
+        if now - max(s.received_ns for s in segments) < 200_000_000:
+            raise ServiceError("Wait briefly for completed speech context to settle.")
         payload = {
             "protocol": "presentation-candidates.v1",
             "expected_state_version": context.state_version,
             "context_epoch": context.epoch,
             "stream_id": context.stream_id,
-            "sequence": max(segment.sequence for segment in context.segments),
+            "sequence": max(segment.sequence for segment in segments),
             "sent_at": datetime.now(UTC).isoformat(),
-            "text": context.text,
-            "latest_utterance": context.segments[-1].text,
+            "text": " ".join(segment.text for segment in segments),
+            "latest_utterance": segments[-1].text,
         }
         request = Request(
             self.config.api_url + f"/api/v1/sessions/{UUID(session.id)}/candidates",
@@ -98,7 +103,12 @@ class CandidateService:
                 }
                 or result.get("protocol") != payload["protocol"]
                 or result.get("resolver_version")
-                not in {"summary-overlap-1", "summary-overlap-2", "cohere-embed5-v1"}
+                not in {
+                    "summary-overlap-1",
+                    "summary-overlap-2",
+                    "cohere-embed5-v1",
+                    "cohere-embed5-v2",
+                }
             ):
                 raise ValueError
             for key, value in (

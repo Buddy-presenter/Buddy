@@ -294,7 +294,13 @@ def test_qt_to_persisted_session_and_provider(database_settings, monkeypatch, qt
             timer.timeout.connect(send)
             timer.start(50)
             qtbot.waitUntil(
-                lambda: not timer.isActive() and any(e["final"] for e in updates), timeout=30000
+                # Audio delivery can end before the async provider's final command
+                # reaches Qt. Wait for the result this test actually asserts.
+                lambda: (
+                    not timer.isActive()
+                    and any(e["final"] and "next slide" in e["text"].lower() for e in updates)
+                ),
+                timeout=30000,
             )
         finals = [e for e in updates if e["final"]]
         if live:
@@ -322,6 +328,7 @@ def test_qt_to_persisted_session_and_provider(database_settings, monkeypatch, qt
         assert control._active, statuses
 
         if not live:
+            qtbot.wait(210)
             snapshot = context.snapshot()
             assert snapshot.fresh
             with ThreadPoolExecutor(max_workers=1) as pool:

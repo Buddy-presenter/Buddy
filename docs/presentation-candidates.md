@@ -8,7 +8,7 @@ See [resumable PDF processing](pdf-workers.md#resumable-pdf-region-processing). 
 `0020_pdf_checkpoints` follows the embedding migration; both require the reviewed rollout.
 Pending-summary inspection does not bypass the candidate route's completed-analysis gates.
 
-When the backend has `BUDDY_COHERE_API_KEY`, retrieval uses `cohere-embed5-v1`.
+When the backend has `BUDDY_COHERE_API_KEY`, retrieval uses `cohere-embed5-v2`.
 Without it, the lexical resolver remains available and identifies itself as
 `summary-overlap-2`; it must not be described as semantic understanding. A configured
 semantic service never silently downgrades after provider failure.
@@ -21,13 +21,24 @@ The index binds analysis, deck, owner, model space and document fingerprint. Rep
 preparation of unchanged content makes no model calls. Changes in summaries or
 action eligibility require preparation again. Stale vectors cannot enable actions.
 
-Live queries use `embed-v5.0-fast`. Latest utterance and bounded recent text are two
-inputs in one request, weighted 80/20. Document indexing uses `search_document`;
-queries use `search_query`. Positive-cosine matches form a ranked shortlist of at
+Live queries use `embed-v5.0-fast` to embed one coherent recent passage, bounded to
+4096 characters. Version 2 removes the separate latest/recent vector mixture: preceding
+sentences and references such as "these" reach the encoder together. New desktop callers
+send at most four contiguous completed recognition segments, dropping older segments
+whole to fit the bound. The server also bounds older clients' text, avoiding a partial
+leading word when whitespace permits. This is a bounded capture window, not a semantic
+topic classifier or a new linguistic sentence parser. Latest utterance remains separate
+for whole-utterance navigation; it does not receive an extra semantic weight. Document
+vectors and their model space are unchanged, so upgrading this query algorithm does not
+require reindexing a prepared presentation.
+
+Document indexing uses `search_document`; queries use `search_query`.
+Positive-cosine matches form a ranked shortlist of at
 most five slide destinations including current, plus region options and no change,
 with eight candidates maximum. Similarity is a ranking signal, not a calibrated
 confidence probability. Exact whole-utterance next/previous navigation keeps a
-validated no-model fast path. #20 owns decisions, abstention and execution policy.
+validated no-model fast path, including a no-change result at deck boundaries.
+#20 owns decisions, abstention and execution policy.
 
 ### Limits and usage accounting
 
@@ -133,6 +144,17 @@ GUI thread. The caller must recheck the live session/version/epoch against the r
 before using it; a frozen snapshot or returned candidate cannot authorize an action.
 This service is the callable boundary for #20; Present does not yet run an autonomous
 agent or make a provider call for each partial transcript.
+
+The service refuses partial latest segments and requests made within 200 ms of the
+last change to the selected completed segments. It does not sleep or start an agent loop:
+the #20 caller owns scheduling the off-thread request after this settling interval and
+refreshing the snapshot. Freshness checks still run before and after network access.
+
+The unchanged five-passage presenter-narration replay on the 61-page saved analysis
+ranked all five intended slides first with v2 (v1 included four, with two ranked first).
+HTTP requests measured 443–526 ms in that small local replay. Identity/source metadata
+were mirrored locally; Cohere and PostgreSQL were real. This is typed narration evidence,
+not a microphone, staging, general-accuracy or P95 guarantee.
 
 The response binds session/analysis/state version, epoch, stream, revision sequence,
 resolver version and SHA-256 of the exact request. Identical requests against identical

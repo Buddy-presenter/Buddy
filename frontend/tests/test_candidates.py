@@ -35,7 +35,11 @@ def inputs():
         1,
         str(uuid4()),
         "en-US",
-        (ContextSegment("a", 1, "private speech", True, 0, 0.1, now),),
+        (
+            ContextSegment(
+                "a", 1, "private speech", True, 0, 0.1, now - 500_000_000, now - 250_000_000
+            ),
+        ),
         now,
         True,
     )
@@ -146,3 +150,18 @@ def test_stale_context_rejected_before_network():
     ):
         with pytest.raises(ServiceError, match="changed or expired"):
             client.resolve("token", session, stale)
+
+
+def test_partial_and_unsettled_final_do_not_make_network_requests(monkeypatch):
+    session, context = inputs()
+    now = context.observed_ns
+    monkeypatch.setattr("buddy_desktop.candidate_service.time.monotonic_ns", lambda: now)
+    client = CandidateService(AppConfig("http://127.0.0.1:1"))
+    partial = replace(context, segments=(replace(context.segments[0], final=False),))
+    with pytest.raises(ServiceError, match="completed"):
+        client.resolve("token", session, partial)
+    unsettled = replace(
+        context, segments=(replace(context.segments[0], received_ns=now - 100_000_000),)
+    )
+    with pytest.raises(ServiceError, match="settle"):
+        client.resolve("token", session, unsettled)

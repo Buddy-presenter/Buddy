@@ -17,6 +17,7 @@ class ContextSegment:
     start_seconds: float
     end_seconds: float
     capture_end_ns: int
+    received_ns: int
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,21 @@ class ContextSnapshot:
     def text(self) -> str:
         return " ".join(segment.text for segment in self.segments)
 
+    @property
+    def candidate_segments(self) -> tuple[ContextSegment, ...]:
+        """A bounded, contiguous completed thought; never bridge a partial segment."""
+        selected: list[ContextSegment] = []
+        size = 0
+        for segment in reversed(self.segments):
+            if not segment.final or len(selected) == 4:
+                break
+            extra = len(segment.text) + bool(selected)
+            if size + extra > 4096:
+                break
+            selected.append(segment)
+            size += extra
+        return tuple(reversed(selected))
+
 
 class TranscriptContext:
     """One presenter, one live stream; no additional transcript persistence."""
@@ -47,6 +63,7 @@ class TranscriptContext:
         self._stream: str | None = None
         self._sequence = 0
         self._segments: dict[str, ContextSegment] = {}
+        self._last_capture_end_ns: int | None = None
 
     def invalidate(self) -> None:
         self._epoch += 1
@@ -54,6 +71,7 @@ class TranscriptContext:
         self._segments.clear()
         self._stream = None
         self._sequence = 0
+        self._last_capture_end_ns = None
 
     def bind(self, session: str, version: int, language: str) -> None:
         if (session, version, language) != (self._session, self._version, self._language):
@@ -83,12 +101,22 @@ class TranscriptContext:
             return
         if sequence <= self._sequence:
             return
-        self._stream, self._sequence = stream, sequence
-        self._expire(now)
         key = cast(str, event["segment_id"])
         previous = self._segments.get(key)
         if previous is not None and previous.final:
+            self._sequence = sequence
             return
+        if (
+            self._last_capture_end_ns is not None
+            and capture_start - self._last_capture_end_ns > 5_000_000_000
+        ):
+            boundary = self._last_capture_end_ns + 5_000_000_000
+            self.invalidate()
+            # Use the capture boundary, not event-arrival time: delayed delivery
+            # must not discard the genuinely new utterance after the pause.
+            self._boundary_ns = boundary
+        self._stream, self._sequence = stream, sequence
+        self._expire(now)
         self._segments[key] = ContextSegment(
             key,
             sequence,
@@ -97,7 +125,9 @@ class TranscriptContext:
             start,
             end,
             stamp,
+            now,
         )
+        self._last_capture_end_ns = max(self._last_capture_end_ns or stamp, stamp)
         while (
             len(self._segments) > 64 or sum(len(s.text) + 1 for s in self._segments.values()) > 8192
         ):

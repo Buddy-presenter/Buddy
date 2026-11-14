@@ -9,7 +9,8 @@ publication timestamps, which cannot prove which slide was visible at capture.
 A frozen snapshot includes session ID, authoritative state version, a local
 invalidation epoch, stream ID, language, ordered segments and local monotonic
 observation time. Segments include audio offsets, capture-end timestamps and
-revision sequence. `text` joins segments once; partial corrections replace the
+revision sequence, plus a local monotonic arrival timestamp for request settling.
+`text` joins segments once; partial corrections replace the
 same segment and a final segment cannot be overwritten. Duplicate and older
 updates are ignored. SpeechController enforces wire validation and current-stream
 identity before delivery. Consumers must verify session/version/epoch are still
@@ -23,6 +24,18 @@ snapshot is not fresh. Snapshot reads expire text; a one-second Qt timer also
 expires stored text during silence. Time is measured against the microphone's
 local monotonic capture clock, never a server wall clock. Hardware capture delay
 has the same limitations as the existing recognition latency measurement.
+
+When the next accepted segment starts more than five seconds after the last captured
+segment, the old thought is cleared and the epoch advances. The reset boundary uses the
+capture clock, allowing delayed delivery of a genuinely new utterance while rejecting
+older speech. Out-of-order or finalized revisions cannot reset the thought. The last
+capture timestamp is retained even if the 30-second text window has already expired.
+
+`candidate_segments` selects up to four consecutive final segments, capped at 4096
+characters. It stops at a partial or the size boundary rather than joining text across a
+hole or splitting a segment. `CandidateService` waits for 200 ms of stability after their
+most recent arrival before allowing a request. This is an off-thread caller scheduling
+contract for #20; this window itself does not start provider requests.
 
 Manual navigation/focus changes invalidate immediately before the server write.
 Remote state/version changes, identity/session/deck/language changes, speech
