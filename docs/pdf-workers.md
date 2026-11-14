@@ -86,6 +86,55 @@ still works without AWS credentials and proves geometry only.
 
 ## States and limits
 
+### Resumable PDF region processing
+
+Migration `0020_pdf_checkpoints` adds a private PDF-only checkpoint keyed by the job,
+with composite owner/deck/job and extraction foreign keys. A validated provider response
+is saved **before** source grounding. The checkpoint binds source revision/SHA, extraction,
+manifest and grounding protocol; a changed binding is rejected, never silently reused.
+It stores text and coordinates, not page images, and follows the database encryption and
+backup policy. Provider coordinates in this table are untrusted internal work, never
+published actions. Checkpoints are removed atomically when a job completes, removed when
+their deck is tombstoned, and cascade with job deletion. No provider output or document
+text is added to logs.
+
+The `grounding` stage locates highlights and zoom regions one page at a time in the existing
+isolated child process. Each page retains a 120-second deadline and 1 GiB parser ceiling;
+the original document text/OCR/page limits and final fair deck action cap still apply.
+Completed pages are committed under the current lease, source and manifest binding. Before
+the worker delivery deadline, the job yields and resumes without charging a failure attempt.
+A failed page uses the existing bounded failure budget; earlier pages and the saved provider
+response survive restart. `grounding_timeout` and `grounding_failed` distinguish this stage
+from provider failure. A single pathological page can still fail; increasing document length
+does not remove safety limits. Successful provider calls that have been checkpointed are not
+repeated on grounding or validation retries. A crash before that transaction commits can
+still require another provider call.
+
+Grounding advances progress from 60% to 79% as pages are saved. Independent executor
+checks then advance from 80% to 95%, including already completed checks after resumption;
+only job completion reports 100%.
+
+`GET /api/v1/jobs/{job_id}/pdf-summaries` exposes the saved presentation/page summaries and
+completed page numbers to the authenticated owner, with `Cache-Control: no-store`, even while
+region work is pending or failed. Before provider output is saved it returns a recoverable
+409. Changed sources and tombstoned decks cannot expose old summaries. This is an inspection
+contract, not a new session or action authorization path; Library/Review still require the
+normal immutable analysis and usability gates. The current desktop reports region progress
+and specific failures, but does not add a pending-summary preview screen.
+After successful job completion, this endpoint reads the immutable analysis instead of
+retaining a duplicate raw provider response and page checkpoint forever.
+
+The provider output and grounded pages are assembled only after all pages finish. The
+existing immutable analysis publication and independent executor/semantic verification
+rules then apply. Incomplete region work cannot enable actions or an agent session. Apply
+the additive migration through the documented compatibility bridge and paused-worker
+rollout; strict readiness prevents an older worker from running against the new head.
+
+Regression checks in `backend/tests/processing/test_checkpoints.py` exercise a real PDF,
+PostgreSQL, interruption/restart, planned yield, owner-only summary inspection, cancelled
+leases, source/manifest changes, and checkpoint deletion. Paged geometry is compared with
+whole-document grounding in `backend/tests/analysis/test_grounding.py`.
+
 New jobs transition `queued -> running` through `pdf_metadata.v1` and `pdf_analysis.v1`,
 then finish as `analysis_ready` or explicitly `analysis_partial`. A partial status means
 one or more summaries were unavailable; it never implies completion of missing content.
@@ -104,7 +153,9 @@ every 10 seconds throughout the full job lifecycle, including between short vali
 calls, but never beyond the 900-second attempt deadline. PDF inspection and ephemeral
 PDFium manifest hashing run in an isolated process with a 120-second deadline,
 1 GiB address-space ceiling, 30-second metadata parser limit and no persisted page images.
-Provider calls time out after 240 seconds. The provider boundary accepts at most an 18 MiB,
+Provider calls time out after 600 seconds, within the worker's 900-second attempt ceiling.
+Short requests return immediately when ready; this adds no deliberate waiting. The provider
+boundary accepts at most an 18 MiB,
 100-page PDF, returns at most 64,000 tokens, and is attempted at most three times for a job.
 The 18 MiB source limit leaves room for base64 expansion and request metadata under Bedrock's
 25 MiB InvokeModel body quota.

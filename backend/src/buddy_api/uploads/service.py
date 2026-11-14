@@ -27,6 +27,7 @@ from buddy_api.persistence.models import (
     DeckUpload,
     JobOutbox,
     LegacyAnalysisPayload,
+    PDFProcessingCheckpoint,
     PresentationSession,
     ProcessingJob,
     RenderedAsset,
@@ -352,6 +353,9 @@ class UploadService:
                 if job.source_revision is not None:
                     await cancel(session, job)
                 await session.execute(delete(JobOutbox).where(JobOutbox.job_id == job.id))
+            await session.execute(
+                delete(PDFProcessingCheckpoint).where(PDFProcessingCheckpoint.deck_id == identifier)
+            )
             await session.flush()
             return True
 

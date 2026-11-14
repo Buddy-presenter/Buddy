@@ -115,3 +115,6 @@ acceptance are documented in [speech recognition](speech-recognition.md).
 
 The ephemeral decision-input window and its capture-time invalidation rules are
 documented in [rolling speech context](transcript-context.md).
+
+The versioned, owner-scoped candidate resolver is documented in
+[presentation candidates](presentation-candidates.md).

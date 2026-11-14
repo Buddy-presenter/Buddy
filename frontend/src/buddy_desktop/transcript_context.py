@@ -34,6 +34,35 @@ class ContextSnapshot:
     def text(self) -> str:
         return " ".join(segment.text for segment in self.segments)
 
+    @property
+    def candidate_segments(self) -> tuple[ContextSegment, ...]:
+        """Recent completed speech within the query budget; never bridge a partial."""
+        selected: list[ContextSegment] = []
+        size = 0
+        for segment in reversed(self.segments):
+            if not segment.final:
+                break
+            extra = len(segment.text) + bool(selected)
+            if size + extra > 4096:
+                break
+            selected.append(segment)
+            size += extra
+        return tuple(reversed(selected))
+
+    def matches(self, current: "ContextSnapshot") -> bool:
+        """A result may be used only for the same fresh, unchanged live input."""
+        return (
+            self.fresh
+            and current.fresh
+            and bool(self.candidate_segments)
+            and self.session_id == current.session_id
+            and self.state_version == current.state_version
+            and self.epoch == current.epoch
+            and self.stream_id == current.stream_id
+            and self.language == current.language
+            and self.segments == current.segments
+        )
+
 
 class TranscriptContext:
     """One presenter, one live stream; no additional transcript persistence."""
@@ -83,12 +112,13 @@ class TranscriptContext:
             return
         if sequence <= self._sequence:
             return
-        self._stream, self._sequence = stream, sequence
-        self._expire(now)
         key = cast(str, event["segment_id"])
         previous = self._segments.get(key)
         if previous is not None and previous.final:
+            self._sequence = sequence
             return
+        self._stream, self._sequence = stream, sequence
+        self._expire(now)
         self._segments[key] = ContextSegment(
             key,
             sequence,

@@ -28,15 +28,18 @@ from buddy_api.contracts import (
     VersionData,
     VersionResponse,
 )
+from buddy_api.embeddings import CohereEmbeddings, EmbeddingFailure
 from buddy_api.handoff import HandoffLimitMiddleware, handoff_router
 from buddy_api.library import library_router
 from buddy_api.middleware import RequestContextMiddleware
 from buddy_api.persistence.database import Database, DatabaseProbe
+from buddy_api.presentation_candidates import CandidateAnalyses, candidate_router
 from buddy_api.presentation_sessions import session_router
 from buddy_api.processing.api import processing_router
 from buddy_api.processing.queue import Queue
 from buddy_api.processing.service import Processor
 from buddy_api.readiness import DependencyProbe, check_dependencies, validate_probes
+from buddy_api.semantic_candidates import SemanticCandidates
 from buddy_api.session_events import (
     SessionCommandLimitMiddleware,
     cleanup_events,
@@ -143,6 +146,9 @@ def create_app(
                     await validation_cleanup
             if storage:
                 await asyncio.to_thread(storage.close)
+            semantic = getattr(_app.state, "semantic_candidates", None)
+            if semantic is not None:
+                await semantic.provider.aclose()
             if database is not None:
                 await database.close()
 
@@ -164,8 +170,14 @@ def create_app(
     app.add_middleware(HandoffLimitMiddleware)
     app.add_middleware(RequestContextMiddleware, allowed_hosts=config.allowed_hosts)
     app.state.database = database
+    app.state.candidate_analyses = CandidateAnalyses()
     app.state.authentication = Authentication(config.identity)
     app.state.speech_provider = DeepgramProvider(config.speech) if config.speech else None
+    app.state.semantic_candidates = (
+        SemanticCandidates(database, CohereEmbeddings(config.embeddings))
+        if database is not None and config.embeddings is not None
+        else None
+    )
     app.state.uploads = uploads
     app.state.validator = validator
     app.state.worker_settings = config.worker
@@ -177,6 +189,7 @@ def create_app(
     app.include_router(library_router())
     app.include_router(analysis_router())
     app.include_router(session_router())
+    app.include_router(candidate_router())
     app.include_router(speech_router(config.allowed_hosts))
     app.include_router(upload_router())
     app.include_router(validation_router())
@@ -187,6 +200,36 @@ def create_app(
         headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after is not None else {}
         return JSONResponse(
             exc.body(request_id(request)).model_dump(), status_code=exc.status, headers=headers
+        )
+
+    @app.exception_handler(EmbeddingFailure)
+    async def embedding_error(request: Request, exc: EmbeddingFailure) -> JSONResponse:
+        messages = {
+            "embedding_budget_exhausted": "The configured embedding call allowance is exhausted.",
+            "embedding_index_not_ready": "Prepare this presentation before semantic retrieval.",
+            "embedding_query_busy": "A recent query is still active; wait before retrying.",
+            "embedding_preparation_busy": "Presentation preparation is busy; retry shortly.",
+            "embedding_rate_limited": "The embedding provider is rate limited; retry later.",
+        }
+        known = set(messages) | {
+            "embedding_document_limit",
+            "embedding_input_limit",
+            "embedding_provider_unavailable",
+            "embedding_invalid_response",
+            "embedding_invalid_index",
+        }
+        code = exc.code if exc.code in known else "embedding_provider_unavailable"
+        body = ErrorResponse(
+            error=ErrorData(
+                code=code,
+                message=messages.get(
+                    code, "Semantic retrieval unavailable; retry with fresh context."
+                ),
+            ),
+            request_id=request_id(request),
+        )
+        return JSONResponse(
+            body.model_dump(), status_code=503, headers={"Cache-Control": "no-store"}
         )
 
     @app.exception_handler(HTTPException)
