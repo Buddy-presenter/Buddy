@@ -75,23 +75,23 @@ def _table_row_groups(lines: list[Line]) -> dict[int, tuple[int, ...]]:
     if len(qualified) < 3:
         return {}
 
-    # Two columns are common in ordinary slide prose. Parallel baselines alone
-    # are not enough to call them table rows. Require compact, cell-like content
-    # (or an explicit numeric value column) before combining two-column text.
-    # Three or more stable columns already provide substantially stronger table
-    # structure and continue to use the general rule below.
+    # Two columns are common in ordinary slide prose. Parallel baselines and
+    # short text are not enough to call them table rows: require a repeated,
+    # numeric-like value column. Three or more stable columns provide stronger
+    # structural evidence and continue to use the general rule below.
     qualified_columns = {
         column_for(index) for band in qualified for index in band if column_for(index) >= 0
     }
     if len(qualified_columns) == 2:
-        compact_cells = all(
-            len(lines[index][0]) <= 48 and len(lines[index][0].split()) <= 7
-            for band in qualified
-            for index in band
-        )
         numeric_column = any(
             sum(
-                bool(re.fullmatch(r"[\s$€£¥+−-]?\d[\d,.%$€£¥\s()−/+-]*", lines[index][0]))
+                bool(
+                    re.fullmatch(
+                        r"[\s$€£¥+−-]?\d[\d,.%$€£¥\s()−/+-]*(?:[KMBT]|million|billion|thousand)?",
+                        lines[index][0],
+                        flags=re.IGNORECASE,
+                    )
+                )
                 for band in qualified
                 for index in band
                 if column_for(index) == column
@@ -102,7 +102,7 @@ def _table_row_groups(lines: list[Line]) -> dict[int, tuple[int, ...]]:
             )
             for column in qualified_columns
         )
-        if not compact_cells and not numeric_column:
+        if not numeric_column:
             return {}
 
     # Require two stable columns across at least three neighboring rows. A few

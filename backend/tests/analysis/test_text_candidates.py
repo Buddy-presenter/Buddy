@@ -296,6 +296,32 @@ def test_parallel_wrapped_prose_columns_remain_separate_paragraphs():
     assert not any(item.kind == "table_row" for item in catalog.candidates)
 
 
+def test_short_parallel_prose_columns_are_not_mistaken_for_table_rows():
+    left_lines = (
+        "Left paragraph begins",
+        "and continues here",
+        "before ending now.",
+    )
+    right_lines = (
+        "Right paragraph begins",
+        "with separate content",
+        "and ends separately.",
+    )
+    commands = [b"BT /F1 12 Tf "]
+    for row_index, (left, right) in enumerate(zip(left_lines, right_lines, strict=True)):
+        baseline = 700 - row_index * 18
+        for x, text in ((70, left), (350, right)):
+            escaped = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+            commands.append(f"1 0 0 1 {x} {baseline} Tm ({escaped}) Tj ".encode())
+    commands.append(b"ET")
+
+    catalog = extract_candidates(_pdf_with_content(b"".join(commands)))
+    paragraphs = [item.text for item in catalog.candidates if item.kind == "paragraph"]
+
+    assert paragraphs == [" ".join(left_lines), " ".join(right_lines)]
+    assert not any(item.kind == "table_row" for item in catalog.candidates)
+
+
 def test_paragraph_before_table_does_not_consume_table_header_cells():
     rows = (
         ("Name", "Revenue"),
