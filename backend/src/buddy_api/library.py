@@ -167,26 +167,48 @@ def processing_state_for(
 async def read_deck_details(
     db: AsyncSession, deck: Deck, worker: WorkerSettings | None
 ) -> DeckDetails:
-    job = await db.scalar(
-        select(ProcessingJob)
-        .where(
-            ProcessingJob.deck_id == deck.id,
-            ProcessingJob.owner_id == deck.owner_id,
+    job = (
+        await db.execute(
+            select(
+                ProcessingJob.id,
+                ProcessingJob.status,
+                ProcessingJob.stage,
+                ProcessingJob.progress,
+                ProcessingJob.attempts,
+                ProcessingJob.error_code,
+                ProcessingJob.source_revision,
+            )
+            .where(ProcessingJob.deck_id == deck.id, ProcessingJob.owner_id == deck.owner_id)
+            .order_by(ProcessingJob.created_at.desc(), ProcessingJob.id.desc())
+            .limit(1)
         )
-        .order_by(ProcessingJob.created_at.desc(), ProcessingJob.id.desc())
-        .limit(1)
-    )
-    analysis = await db.scalar(
-        select(AnalysisVersion)
-        .where(
-            AnalysisVersion.deck_id == deck.id,
-            AnalysisVersion.owner_id == deck.owner_id,
+    ).first()
+    analysis = (
+        await db.execute(
+            select(
+                AnalysisVersion.id,
+                AnalysisVersion.version,
+                AnalysisVersion.job_id,
+                AnalysisVersion.extraction_id,
+                AnalysisVersion.publication,
+            )
+            .where(AnalysisVersion.deck_id == deck.id, AnalysisVersion.owner_id == deck.owner_id)
+            .order_by(AnalysisVersion.version.desc())
+            .limit(1)
         )
-        .order_by(AnalysisVersion.version.desc())
-        .limit(1)
-    )
+    ).first()
+    # Read only lineage metadata. Extraction documents, graphs and processing
+    # stage payloads can be large and are unnecessary for this owner-details view.
     extraction = (
-        await db.get(DeckExtraction, analysis.extraction_id)
+        (
+            await db.execute(
+                select(
+                    DeckExtraction.source_revision,
+                    DeckExtraction.source_sha256,
+                    DeckExtraction.document["source_format"].as_string().label("source_format"),
+                ).where(DeckExtraction.id == analysis.extraction_id)
+            )
+        ).first()
         if analysis and analysis.extraction_id
         else None
     )
@@ -201,7 +223,7 @@ async def read_deck_details(
         and analysis.job_id == job.id
         and extraction.source_revision == deck.source_revision
         and extraction.source_sha256 == deck.source_sha256
-        and extraction.document.get("source_format") == deck.source_format
+        and extraction.source_format == deck.source_format
     )
     published = bool(analysis_matches and analysis and analysis.publication == "published")
     state = processing_state_for(job.status if job else None, job.stage if job else None, published)
