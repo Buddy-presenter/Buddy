@@ -34,7 +34,7 @@ class TutorialPage(Page):
             (
                 "Find your way around",
                 "Home is the starting point. Library contains decks saved to your account. "
-                "Review shows saved summaries, suggested regions and evidence for a selected PDF. "
+                "Review shows saved summaries, suggested actions and evidence for a selected deck. "
                 "Present contains manual PDF and Windows PowerPoint controls. "
                 "Settings contains connection and reduced-motion preferences.\n\n"
                 "Use Sign in at the top right for account access. Once signed in, "
@@ -47,26 +47,30 @@ class TutorialPage(Page):
                 "1. Choose Sign in at the top right and complete the browser sign-in. "
                 "Use the browser's registration or password-recovery options if needed. "
                 "Return to Buddy when the browser confirms the result.\n"
-                "2. Open Library and choose Upload PDF or PPTX…\n"
+                "2. Open Library and choose Upload, then select a PDF or PPTX.\n"
                 "3. Select one file and follow its upload progress. Uploading saves a private "
                 "copy to your account and requires an internet connection.\n"
-                "4. Wait for the processing state to update. PDF analysis runs on the service; "
+                "4. Wait for the processing state to update. Analysis runs on the service; "
                 "saving a file does not mean its analysis is ready. Refresh Library as needed.\n"
                 "5. Select the saved PDF and choose Review to inspect analysis, or Present PDF "
                 "to use the manual viewer. You can present a PDF before analysis finishes.\n\n"
                 "If a job fails, read its message and use the available retry or cancel control. "
                 "Retry an interrupted upload through the existing upload card. "
                 "Choosing the file again after a successful upload creates another deck. "
-                "For summaries and in-app playback, export a PowerPoint deck to PDF first.",
+                "Saved PPTX decks have PowerPoint-specific analysis and Review. Native playback "
+                "requires desktop PowerPoint on Windows; export to PDF for Buddy's PDF viewer. "
+                "Select a deck and use Delete only when you want to remove its saved data. "
+                "Read the confirmation carefully; deletion cannot be undone.",
                 "Open Library",
                 1,
             ),
             (
                 "Review summaries and suggested actions",
-                "1. Select a saved PDF in Library and choose Review. "
+                "1. Select a saved PDF or PPTX in Library and choose Review. "
                 "Opening Review directly will ask you to choose a presentation.\n"
                 "2. Read the presentation summary, then browse the slide summaries.\n"
-                "3. Select an action row. The outline shows its proposed target region; "
+                "3. Select an action row. Where a preview is available, "
+                "its outline shows the target; "
                 "the details describe its purpose and validation result.\n"
                 "4. Choose available validation evidence and Open evidence to inspect the report "
                 "or before/after image.\n\n"
@@ -76,8 +80,36 @@ class TutorialPage(Page):
                 "intended content. Inspect every proposed box yourself, even if its status "
                 "says validated. Empty action lists are possible.\n\n"
                 "Review displays saved results; it does not edit boxes or automatically play "
-                "suggestions. Use Present to select and highlight or zoom a region manually. "
+                "suggestions. On Windows, validated PPTX suggestions can be applied explicitly "
+                "to the matching connected PowerPoint slideshow when the Apply control is enabled. "
+                "Inspect the actual slideshow after applying a suggestion. "
+                "Use Present to select and highlight or zoom a PDF region manually. "
                 "Automatic visual verification and correction are not available yet.",
+                None,
+                None,
+            ),
+            (
+                "Saved sessions and speech recognition",
+                "A saved PDF connects to your account's presentation session and restores its "
+                "saved position. End session finishes that session; Start session begins another. "
+                "If saving is interrupted, use Retry sync. "
+                "Manual slide controls remain available.\n\n"
+                "To transcribe speech, sign in and open a saved PDF from Library. Wait for its "
+                "session to connect, select the microphone and language, "
+                "and choose Start microphone. "
+                "Allow microphone access only when you want Buddy to listen. "
+                "Saved PDF audio is sent through Buddy's service to Deepgram in the EU. "
+                "Transcripts and rolling context are temporary; audio is not saved to disk.\n\n"
+                "Mute and Pause stop capture; clear the control to resume. Stop microphone, "
+                "leaving Present, ending the session or signing out stops listening. "
+                "Recognition displays speech; it does not automatically navigate slides. "
+                "Local-only PDFs do not have a saved speech session. Microphone capture in a "
+                "connected PowerPoint slideshow stays local and is not transcribed.\n\n"
+                "If the microphone cannot open, check system microphone permissions "
+                "and the selected device. On Windows, the optional native microphone setting "
+                "in Present uses exclusive capture and can prevent other apps from using "
+                "that microphone while Buddy listens. A provider or connection error may "
+                "require stopping and starting the microphone again.",
                 None,
                 None,
             ),
@@ -108,7 +140,8 @@ class TutorialPage(Page):
                 "the static reference image. Watch the real PowerPoint slideshow to confirm "
                 "the result. Disconnect detaches Buddy from the slideshow.\n\n"
                 "PDF keyboard shortcuts apply to Buddy's PDF viewer. PowerPoint has separate "
-                "controls and coordinate units; region zoom is not available through this path. "
+                "controls and coordinate units. Zoom to selected area magnifies the slideshow on "
+                "Windows; Reset zoom restores the display without erasing annotations. "
                 "On macOS, or without desktop PowerPoint, export the deck to PDF and use Present.",
                 None,
                 None,

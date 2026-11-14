@@ -20,6 +20,9 @@ def test_tutorial_navigation_scroll_and_actions(desktop_window, qapp, size):
     text = "\n".join(label.text() for label in window.tutorial.findChildren(QLabel))
     assert "Open PDF" in text and "Execution validation" in text
     assert "Automatic visual verification and correction are not available yet" in text
+    assert "Deepgram in the EU" in text
+    assert "does not automatically navigate slides" in text
+    assert "Reset zoom" in text and "PPTX" in text
     assert not window.runner.busy and not window.library.runner.busy
     for title, destination in (("Open Present", 3), ("Open Library", 1), ("Open Settings", 4)):
         window.navigation.setCurrentRow(5)
