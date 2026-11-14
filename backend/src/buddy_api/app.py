@@ -33,7 +33,7 @@ from buddy_api.handoff import HandoffLimitMiddleware, handoff_router
 from buddy_api.library import library_router
 from buddy_api.middleware import RequestContextMiddleware
 from buddy_api.persistence.database import Database, DatabaseProbe
-from buddy_api.presentation_candidates import candidate_router
+from buddy_api.presentation_candidates import CandidateAnalyses, candidate_router
 from buddy_api.presentation_sessions import session_router
 from buddy_api.processing.api import processing_router
 from buddy_api.processing.queue import Queue
@@ -170,6 +170,7 @@ def create_app(
     app.add_middleware(HandoffLimitMiddleware)
     app.add_middleware(RequestContextMiddleware, allowed_hosts=config.allowed_hosts)
     app.state.database = database
+    app.state.candidate_analyses = CandidateAnalyses()
     app.state.authentication = Authentication(config.identity)
     app.state.speech_provider = DeepgramProvider(config.speech) if config.speech else None
     app.state.semantic_candidates = (

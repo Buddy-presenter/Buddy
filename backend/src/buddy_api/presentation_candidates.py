@@ -3,14 +3,18 @@
 import asyncio
 import hashlib
 import re
+import time
 import unicodedata
+from collections import OrderedDict
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import Field, ValidationError, model_validator
+from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.exceptions import HTTPException
 
 from buddy_api.analysis.contracts import AnalysisResult, Model
@@ -18,7 +22,7 @@ from buddy_api.analysis.store import Analyses
 from buddy_api.auth import Principal, authenticated
 from buddy_api.embeddings import EmbeddingFailure
 from buddy_api.persistence.errors import PersistenceError
-from buddy_api.persistence.models import Deck
+from buddy_api.persistence.models import ActionValidation, AnalysisVersion, Deck
 from buddy_api.presentation_sessions import current_ready_analysis, owned_session
 from buddy_api.semantic_candidates import SemanticCandidates
 
@@ -103,6 +107,49 @@ class CandidateSet(Model):
     sequence: int
     input_sha256: str
     candidates: tuple[Candidate, ...] = Field(max_length=8)
+
+
+class CandidateAnalyses:
+    """Briefly reuse region-free typed reads; never cache authorization or usable regions."""
+
+    def __init__(self) -> None:
+        self._entries: OrderedDict[tuple[UUID, UUID, str, int], tuple[float, AnalysisResult]] = (
+            OrderedDict()
+        )
+
+    async def read(self, db: AsyncSession, record: AnalysisVersion, owner: UUID) -> AnalysisResult:
+        # Both callers use REPEATABLE READ. Validation history is append-only:
+        # its count identifies the same eligibility snapshot as the canonical read.
+        revision = int(
+            await db.scalar(
+                select(func.count())
+                .select_from(ActionValidation)
+                .where(
+                    ActionValidation.analysis_id == record.id,
+                    ActionValidation.owner_id == owner,
+                )
+            )
+            or 0
+        )
+        key = (owner, record.id, record.content_sha256 or "", revision)
+        now = time.monotonic()
+        self._entries = OrderedDict(
+            (k, value) for k, value in self._entries.items() if now - value[0] < 30
+        )
+        cached = self._entries.get(key)
+        if cached is not None:
+            self._entries.move_to_end(key)
+            return cached[1]
+        analysis = await Analyses(db).read(record.id, owner_id=owner)
+        if not isinstance(analysis, AnalysisResult):
+            raise HTTPException(409, "Saved PDF analysis is required.")
+        # A cached read can propose slides only. Any positively usable region always
+        # takes the canonical path, including its current evidence and hash checks.
+        if record.content_sha256 and not any(a.usable for s in analysis.slides for a in s.actions):
+            self._entries[key] = (now, analysis)
+            while len(self._entries) > 8:
+                self._entries.popitem(last=False)
+        return analysis
 
 
 def tokens(text: str) -> frozenset[str]:
@@ -251,9 +298,7 @@ def candidate_router() -> APIRouter:
                 record, _ = await current_ready_analysis(db, deck, principal.id)
                 if record.id != session.analysis_version_id:
                     raise HTTPException(409, "The analysis changed; reconnect the session.")
-                analysis = await Analyses(db).read(record.id, owner_id=principal.id)
-                if not isinstance(analysis, AnalysisResult):
-                    raise HTTPException(409, "Saved PDF analysis is required.")
+                analysis = await request.app.state.candidate_analyses.read(db, record, principal.id)
                 semantic: SemanticCandidates | None = request.app.state.semantic_candidates
                 if semantic is not None:
                     targets = await semantic.retrieve(
@@ -307,6 +352,7 @@ def candidate_router() -> APIRouter:
             raise HTTPException(503, "Semantic retrieval is not configured.")
         try:
             async with request.app.state.database.sessions() as db, db.begin():
+                await db.connection(execution_options={"isolation_level": "REPEATABLE READ"})
                 session = await owned_session(db, principal, identifier)
                 if session.status != "active":
                     raise HTTPException(409, "The session ended.")
@@ -316,9 +362,7 @@ def candidate_router() -> APIRouter:
                 record, _ = await current_ready_analysis(db, deck, principal.id)
                 if record.id != session.analysis_version_id:
                     raise HTTPException(409, "The analysis changed.")
-                analysis = await Analyses(db).read(record.id, owner_id=principal.id)
-                if not isinstance(analysis, AnalysisResult):
-                    raise HTTPException(409, "Saved PDF analysis is required.")
+                analysis = await request.app.state.candidate_analyses.read(db, record, principal.id)
             created = await semantic.prepare(analysis, principal.id)
             return {"ready": True, "created": created, "resolver_version": "cohere-embed5-v1"}
         except EmbeddingFailure:

@@ -12,6 +12,95 @@ from backend.tests.support.database import database_settings as database_setting
 from buddy_api.presentation_candidates import CandidateRequest, resolve
 
 
+@pytest.mark.postgres
+def test_region_free_cache_keeps_authorization_and_validation_revisions_fresh(
+    ready_session_api, monkeypatch
+):
+    from backend.tests.support.analysis import prepare
+
+    from buddy_api.analysis.contracts import EvidenceReference, ValidationInput, digest
+    from buddy_api.analysis.store import Analyses
+    from buddy_api.persistence.models import PresentationSession, ProcessingJob
+    from buddy_api.persistence.repositories import Repositories
+
+    client, ids, owner, *_ = ready_session_api
+    database = client.app.state.database
+
+    async def setup():
+        async with database.sessions() as db, db.begin():
+            repos = Repositories.for_session(db)
+            document = await prepare(
+                repos, owner_id=owner, deck_id=ids["decks"], job_id=ids["jobs"], actions=True
+            )
+            analysis = await Analyses(db).create(
+                owner_id=owner, deck_id=ids["decks"], version=2, document=document
+            )
+            analysis.publication = "awaiting_validation"
+            (await db.get(ProcessingJob, ids["jobs"])).status = "analysis_partial"
+            (await db.get(PresentationSession, ids["sessions"])).analysis_version_id = analysis.id
+            return analysis.id
+
+    analysis_id = client.portal.call(setup)
+    original = Analyses.read
+    reads = []
+
+    async def measured(self, *args, **kwargs):
+        reads.append(1)
+        return await original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Analyses, "read", measured)
+    path = f"/api/v1/sessions/{ids['sessions']}/candidates"
+    headers = {"Authorization": "Bearer owner"}
+    for _ in range(2):
+        assert client.post(path, headers=headers, json=payload()).status_code == 200
+    assert len(reads) == 1
+    assert (
+        client.post(path, headers={"Authorization": "Bearer other"}, json=payload()).status_code
+        == 403
+    )
+    assert (
+        client.post(path, headers=headers, json=payload(expected_state_version=3)).status_code
+        == 409
+    )
+    assert len(reads) == 1
+
+    async def verify_region():
+        async with database.sessions() as db, db.begin():
+            analysis = await original(Analyses(db), analysis_id, owner_id=owner)
+            action = next(a.action for s in analysis.slides for a in s.actions)
+            verified = await Analyses(db).record_validation(
+                owner_id=owner,
+                result=ValidationInput(
+                    validation_id=uuid4(),
+                    analysis_id=analysis.id,
+                    analysis_sha256=analysis.analysis_sha256,
+                    instance_id=action.instance_id,
+                    action_sha256=digest(action),
+                    validator_version=analysis.inputs.validator_version,
+                    renderer_version=analysis.inputs.renderer_version,
+                    display_profile=analysis.inputs.display_profile,
+                    state="validated",
+                    reasons=(),
+                    validation_kind="visual",
+                    semantic_verified=True,
+                    evidence=(EvidenceReference(id=uuid4(), kind="report", sha256="a" * 64),),
+                ),
+            )
+            (await db.get(ProcessingJob, ids["jobs"])).status = (
+                "analysis_ready" if verified.publication == "published" else "analysis_partial"
+            )
+
+    client.portal.call(verify_region)
+    reads.clear()
+    for _ in range(2):
+        assert (
+            client.post(path, headers=headers, json=payload(text="revenue chart")).status_code
+            == 200
+        )
+    # New eligibility invalidates the old cache, and usable-region reads are never cached.
+    assert len(reads) == 2
+
+
 def analysis(*texts):
     return SimpleNamespace(
         slides=tuple(

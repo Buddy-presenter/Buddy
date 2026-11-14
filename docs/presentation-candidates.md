@@ -103,6 +103,15 @@ redacted 422; oversized input is 413; dependency errors are recoverable 503 resp
 Responses are no-store. Request bodies and speech are never added to ordinary logs
 or persisted by this route. Existing speech journal retention is unchanged.
 
+To avoid reconstructing hundreds of unavailable regions on every live request, the API
+may keep up to eight region-free typed analysis reads in memory for 30 seconds. Each
+request still rechecks identity/ownership, active session/state, current source/job and
+pinned analysis in PostgreSQL. The cache also binds the immutable content hash and the
+append-only validation-history count in the same repeatable-read snapshot; a new check
+invalidates the cached eligibility. Analyses containing any usable region always take
+the canonical evidence-validation read path. This cache contains presentation data only,
+never speech, and cannot cache an authorization decision or enable a region.
+
 ## Protocol and freshness
 
 The versioned request `presentation-candidates.v1` carries expected_state_version,
