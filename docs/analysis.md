@@ -37,25 +37,24 @@ change on the parent. Deletion is also blocked until a separately reviewed reten
 workflow explicitly handles these immutable records. Sessions keep their original analysis foreign key.
 
 Limits: 500 slides, 1,000 actions per slide and per PDF analysis, 8 MiB serialized analysis,
-and 16,000 characters per summary. Empty action lists are valid. PDF action generation combines
-the model's semantic suggestions with source-measured visual candidates: each embedded image can
-be focused, and spatially connected vector objects can be focused as a group. The model is
-instructed to cover every visible title, subtitle, heading, informative visual, and people/name
-pair, plus speaker-relevant key facts in prose. It should not create an action for every ordinary
-sentence or visual text line. Prose highlights must identify a complete key sentence; wrapped
-physical lines and sentence fragments are rejected during grounding before an analysis is saved.
-Complete sentences can span multiple PDF lines and are grounded to the tight union of their
-source glyphs. Titles, headings, people, bullets, key numbers/formulas, and visual targets retain
-their distinct target kinds. Rejected fragments never appear in Review as invalid actions. When
-the 1,000-action cap or a source-inventory bound is reached, Review shows that some targets may
-be missing. PPTX retains its separate 100-action capacity.
+and 16,000 characters per summary. Empty action lists are valid. For real PDF provider
+responses, Buddy builds a bounded source-text inventory from PDFium glyph geometry and adds a
+grounded action for each detected title, heading, paragraph, complete bullet, and structurally
+repeated table row. Wrapped prose stays one paragraph, wrapped bullets stay one list item, and
+table cells in a row become one row action. Font size/weight, alignment, glyph baselines, spacing,
+and repeated column positions help classify and group text; highlight rectangles use the union
+of their source glyph boxes. The model may add further semantic choices, while the inventory
+prevents it from silently omitting extracted text entities. Each embedded image can be focused,
+and spatially connected vector objects can be focused as a group. Model highlights covered by
+an inventory entity are deduplicated; distinct targets such as text baked into an image can
+remain. The 1,000-action cap or a source-inventory bound is surfaced in Review. PPTX retains its
+separate 100-action capacity.
 
-This is a broad source-visual inventory plus a semantic model pass, not a promise to enumerate
-arbitrary phrases or semantically meaningful subregions inside a flattened image. The model
-selects meaningful text targets and proposes visual subtargets; the PDF parser provides exact
-text-line grounding and PDF-object bounds for those proposals. OCR and visual QA remain
-responsible for scanned content and flattened-image crops. A bounded limit must be visible
-because very dense or pathological documents cannot produce an unlimited list.
+Text grouping approximates semantic structure from measurable PDF layout; it cannot guarantee
+perfect recovery from every PDF. A visually complex file may encode a paragraph as unrelated
+objects or flatten text, charts, and tables into pixels. Such content can be split or merged
+incorrectly or require OCR and visual QA. Dense and pathological documents remain subject to
+the published source and action limits.
 
 ## Summaries, publication and readiness
 
@@ -103,8 +102,10 @@ visual QA/correction path; the execution validator is skipped and cannot promote
 server-owned handoff is persisted with the immutable action record, without changing the public
 action catalog. The original PDF remains the provider input. Coordinates returned by the model
 are only hints; ambiguous or unresolved targets are omitted. The isolated validator applies a 6%-of-page-long-side maximum to the
-short axis of model-generated line highlights, so narrow vertical text is handled like a
-horizontal line. Broader regions are stored as rejected suggestions with evidence. Source
+short axis of free-form model quote highlights, so narrow vertical text is handled like a
+horizontal line. Source-ID highlights use the standard visual validation profile because their
+exact glyph-union rectangle may legitimately span wrapped paragraphs, bullets, or table rows;
+the text must still match measured source content. Broader free-form regions remain rejected. Source
 matching improves geometric grounding, but it still does not prove that the model chose the
 right semantic point; validation remains explicitly non-semantic and requires human review.
 
@@ -121,36 +122,39 @@ aspect ratios must agree; values are not silently interpreted in the other plane
 
 ## Validation evidence and typed reads
 
-### Opt-in experiment: select measured text IDs instead of predicting boxes
+### Source-measured PDF text entities
 
 `execute_text_candidates(pdf_bytes)` builds a bounded ephemeral catalogue in the isolated
-parser process. It uses PDFium character origins to group horizontal text by actual
-baseline, glyph boxes for the line rectangle, and gaps to split separated columns.
-Targets receive IDs bound to the PDF digest, page, text and measured geometry. Identical
-phrases in different places have different IDs. No coordinates are memorized for a deck.
+parser process. It uses PDFium glyph boxes, baselines, font metrics, alignment and spacing to
+join wrapped paragraphs and bullets, identify titles/headings, and group repeated multi-column
+table rows. Each text entity receives an ID bound to the PDF digest, page, text and measured
+geometry. Identical phrases in different places have different IDs. No coordinates are
+memorized for a deck.
 
-Pass the catalogue as `BedrockProvider(region, text_candidates=catalog)` to opt in.
-The original PDF is still sent unchanged. This mode's output schema allows only
+Real provider responses receive source-inventory actions in the default `quote` mode. Passing
+the catalogue as `BedrockProvider(region, text_candidates=catalog)` additionally opts the model
+into selecting measured text IDs. The original PDF is still sent unchanged. This mode's output schema allows only
 `highlight_region`, `purpose` and `target_id`; it has no model-generated coordinate or
-text fields. Candidate text is untrusted input. Buddy fills in the selected target's
-text and rectangle, then independently remeasures the target ID in the grounding
-subprocess. Unknown, changed-source, cross-page or inconsistent text/ID combinations
-reject without falling back to coordinate guessing. Provenance records the selected ID
-and `pdf_candidate_line` method. This is still not independent semantic verification.
+text fields. Candidate text is untrusted input. Buddy fills in the selected target's text and
+rectangle, then independently rebuilds and verifies the source inventory in the grounding
+subprocess. Unknown, changed-source, cross-page or inconsistent text/ID combinations reject
+without falling back to coordinate guessing. Provenance records the selected ID and
+`pdf_candidate_line` method (the established identifier is retained for rollout compatibility). This is still not independent semantic verification.
 
-The worker can opt in with `BUDDY_WORKER_TEXT_TARGETING=candidate_lines`; the default
-`quote` keeps the existing quote-and-hint method. The catalogue is extracted inside the
+The worker can opt in with `BUDDY_WORKER_TEXT_TARGETING=candidate_lines` (the setting name is
+kept for deployment compatibility); the default `quote` keeps the quote-and-hint model request,
+while source inventory also runs on real provider responses. The catalogue is extracted inside the
 fenced job, passed per request (not stored on a shared provider), and discarded afterward.
 Extraction failure fails the attempt; it does not silently switch back to coordinate
-guessing. [Worker enablement](pdf-workers.md#enable-candidate-line-targeting) describes
-deployment and desktop testing. This prototype currently handles whole
-horizontal left-to-right text lines; it does not provide OCR candidates, graphics/diagram targets,
-rotated pages, precise arbitrary subphrases, or multi-line highlight contracts. Candidate
+guessing. [Worker setting](pdf-workers.md#optional-candidate-id-model-targeting) describes
+deployment and desktop testing. The inventory currently handles horizontal, source-extractable
+text and measured visual objects; it does not provide OCR text entities, precise arbitrary
+subphrases, or semantic subregions inside flattened artwork. Candidate
 extraction is bounded by 18 MiB, 100 pages, 200,000 characters/page, 2,000 candidates and
 80,000 candidate-text characters, plus the existing child resource/deadline limits.
 The existing provider request-size and action budgets still apply. Omitted targets do
 not imply the slide has no useful content. Real provider selection quality must be
-evaluated separately before making this the worker default.
+evaluated separately; entity inventory is already independent of that selection mode.
 
 Run the offline geometry experiment without credentials or paid calls:
 

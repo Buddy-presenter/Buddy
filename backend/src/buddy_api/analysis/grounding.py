@@ -29,6 +29,7 @@ from buddy_api.analysis.contracts import (
     Region,
 )
 from buddy_api.analysis.provider import ModelAction, ModelOutput, ModelSlide
+from buddy_api.analysis.text_candidates import TextCandidate
 from buddy_api.extraction.contracts import Extraction, ExtractionError
 
 MAX_PAGE_OBJECTS = 5000
@@ -495,7 +496,61 @@ def _target_kind_is_consistent(action: ModelAction) -> bool:
         return bool(action.target_text and any(char.isdigit() for char in action.target_text))
     if action.target_kind == "key_formula":
         return _formula_target(action.target_text)
+    if action.target_kind == "paragraph":
+        return bool(action.target_text and action.target_text.strip())
     return True
+
+
+def _target_is_covered_by_entity(target_text: str | None, candidates: Iterable[object]) -> bool:
+    """Whether a model text target belongs to one complete source-measured entity."""
+    if not target_text:
+        return False
+    target = _tokens(target_text)
+    if not target:
+        return False
+    for candidate in candidates:
+        candidate_text = getattr(candidate, "text", None)
+        entity = _tokens(candidate_text) if isinstance(candidate_text, str) else ()
+        if len(target) <= len(entity) and any(
+            entity[index : index + len(target)] == target
+            for index in range(len(entity) - len(target) + 1)
+        ):
+            return True
+    return False
+
+
+def _entity_action(candidate: TextCandidate, purpose: str | None = None) -> ModelAction:
+    """Create a complete text-entity action using its measured source geometry."""
+    kind = candidate.kind
+    text = candidate.text
+    region = candidate.region
+    labels = {
+        "title": "slide title",
+        "heading": "section heading",
+        "bullet": "bullet point",
+        "paragraph": "paragraph",
+        "table_row": "table row",
+    }
+    excerpt = text if len(text) <= 150 else text[:147].rstrip() + "…"
+    description = purpose or f"Highlight {labels.get(kind, 'text')}: {excerpt}"
+    return ModelAction(
+        type="highlight_region",
+        target_kind=kind,
+        purpose=description[:512],
+        target_text=text,
+        target_id=candidate.id,
+        x=region.x,
+        y=region.y,
+        width=region.width,
+        height=region.height,
+    )
+
+
+def _trace_text_excerpt(value: str | None) -> str | None:
+    """Keep the public trace readable within its existing rollback-safe bound."""
+    if value is None or len(value) <= 256:
+        return value
+    return value[:255].rstrip() + "…"
 
 
 def _formula_target(value: str | None) -> bool:
@@ -621,9 +676,8 @@ def _source_visual_inventory_actions(
 ) -> tuple[list[ModelAction], bool]:
     """Add source-measured visual focus targets without inventing prose actions.
 
-    Semantic text targets must come from the model; text-line geometry is used later
-    only to ground a model-selected phrase. This inventory intentionally cannot
-    decide which visible text is meaningful to a presenter.
+    This source inventory adds every measurable embedded image and spatially connected
+    vector group. Text entity inventory is built separately from PDFium glyph geometry.
     """
     limited = False
     # Every embedded raster object is independently focusable. Vector artwork is
@@ -947,22 +1001,62 @@ def ground_actions(
                                 ),
                             )
                             coverage_limited = coverage_limited or inventory_limited
-                        proposed_actions = (*generated.actions, *inventory_actions)
+                        candidate_targets = {}
+                        entity_actions: list[ModelAction] = []
+                        if output.source_inventory_enabled or any(
+                            action.target_id is not None for action in generated.actions
+                        ):
+                            from buddy_api.analysis.text_candidates import candidate_page
+
+                            omitted = [False]
+                            candidates = candidate_page(
+                                page,
+                                page_index + 1,
+                                extraction.source_sha256,
+                                omitted=omitted,
+                            )
+                            coverage_limited = coverage_limited or omitted[0]
+                            candidate_targets = {item.id: item for item in candidates}
+                        if output.source_inventory_enabled:
+                            generated_by_id = {
+                                action.target_id: action
+                                for action in generated.actions
+                                if action.target_id in candidate_targets
+                            }
+                            generated_by_text = {
+                                action.target_text: action.purpose
+                                for action in generated.actions
+                                if action.target_text
+                            }
+                            entity_actions = [
+                                _entity_action(
+                                    candidate,
+                                    generated_by_id[candidate.id].purpose
+                                    if candidate.id in generated_by_id
+                                    else generated_by_text.get(candidate.text),
+                                )
+                                for candidate in candidates
+                            ]
+                        # Source text entities are exhaustive for selectable PDF text.
+                        # Keep model text targets only when they cannot be assigned to an
+                        # extracted entity (for example, OCR text baked into a photograph).
+                        semantic_actions = tuple(
+                            action
+                            for action in generated.actions
+                            if not (
+                                output.source_inventory_enabled
+                                and action.type == "highlight_region"
+                                and _target_is_covered_by_entity(
+                                    action.target_text, candidate_targets.values()
+                                )
+                            )
+                        )
+                        proposed_actions = (*semantic_actions, *entity_actions, *inventory_actions)
                         source_text_targets = {
                             action.target_id: action
                             for action in inventory_actions
                             if action.target_id is not None
                         }
-                        candidate_targets = {}
-                        if any(action.target_id is not None for action in generated.actions):
-                            from buddy_api.analysis.text_candidates import candidate_page
-
-                            candidate_targets = {
-                                item.id: item
-                                for item in candidate_page(
-                                    page, page_index + 1, extraction.source_sha256
-                                )
-                            }
                         for action in proposed_actions:
                             if not _target_kind_is_consistent(action):
                                 # These proposals are removed before analysis persistence;
@@ -996,12 +1090,17 @@ def ground_actions(
                                     ):
                                         continue
                                     target_rect = Rect(**target.region.model_dump())
+                                # Keep the established trace method identifier so an
+                                # older analysis reader can validate this new text
+                                # entity geometry during staged worker rollout.
                                 method = "pdf_candidate_line"
                                 rect = _padded(target_rect, width, height, zoom=False)
                             elif action.target_text:
                                 allow_multiline = action.target_kind in {
                                     "key_sentence",
                                     "bullet",
+                                    "paragraph",
+                                    "table_row",
                                 }
                                 matches = _matches_text(
                                     page,
@@ -1076,7 +1175,7 @@ def ground_actions(
                                             "height": rect.height,
                                             "grounding_trace": GroundingTrace(
                                                 method=method,
-                                                target_text=action.target_text or None,
+                                                target_text=_trace_text_excerpt(action.target_text),
                                                 target_id=action.target_id,
                                                 model_region=Region(
                                                     x=action.x,
