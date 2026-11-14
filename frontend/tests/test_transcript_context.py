@@ -70,22 +70,31 @@ def test_silence_expires_without_new_events(monkeypatch):
     assert not context.snapshot().text
 
 
-def test_new_thought_after_pause_clears_previous_text_and_advances_epoch(monkeypatch):
+def test_pause_preserves_references_without_new_decisions(monkeypatch):
     context, clock = setup(monkeypatch)
-    context.accept(event(clock, final=True, text="Old topic."))
-    epoch = context.snapshot().epoch
+    context.accept(event(clock, final=True, text="The provider sends payment confirmations."))
+    before = context.snapshot()
     clock[0] += 7_000_000_000
-    context.accept(event(clock, sequence=2, segment_id="b", final=True, text="New topic."))
-    snapshot = context.snapshot()
-    assert snapshot.text == "New topic." and snapshot.epoch > epoch
-    assert snapshot.stream_id == "stream" and snapshot.segments[0].received_ns == clock[0]
+    assert not context.snapshot().fresh
+    assert context.snapshot().text == before.text
     context.accept(
-        event(clock, sequence=3, segment_id="delayed", capture_end_ns=clock[0] - 3_000_000_000)
+        event(
+            clock,
+            sequence=2,
+            segment_id="b",
+            start_seconds=7,
+            end_seconds=7.1,
+            final=True,
+            text="Its signature must be verified.",
+        )
     )
-    assert context.snapshot().text == "New topic."
+    after = context.snapshot()
+    assert after.epoch == before.epoch and after.fresh
+    assert after.text == before.text + " Its signature must be verified."
+    assert len(after.candidate_segments) == 2
 
 
-def test_pause_boundary_survives_expiration_of_old_text(monkeypatch):
+def test_long_pause_still_obeys_memory_retention(monkeypatch):
     context, clock = setup(monkeypatch)
     context.accept(event(clock, final=True))
     epoch = context.snapshot().epoch
@@ -93,7 +102,7 @@ def test_pause_boundary_survives_expiration_of_old_text(monkeypatch):
     assert not context.snapshot().text
     context.accept(event(clock, sequence=2, segment_id="new", final=True, text="Fresh topic."))
     assert context.snapshot().text == "Fresh topic."
-    assert context.snapshot().epoch > epoch
+    assert context.snapshot().epoch == epoch
 
 
 def test_candidate_passage_keeps_only_recent_contiguous_completed_segments(monkeypatch):
@@ -112,7 +121,7 @@ def test_candidate_passage_keeps_only_recent_contiguous_completed_segments(monke
             )
         )
     assert [s.text for s in context.snapshot().candidate_segments] == [
-        f"Sentence {n}." for n in range(2, 6)
+        f"Sentence {n}." for n in range(6)
     ]
     clock[0] += 200_000_000
     context.accept(
@@ -292,3 +301,90 @@ def test_accepted_long_utterance_expires_from_capture_start(monkeypatch):
     assert not snapshot.text
     assert not snapshot.fresh
     assert not context._segments
+
+
+def test_natural_correction_and_topic_change_invalidate_pending_results(monkeypatch):
+    context, clock = setup(monkeypatch)
+    phrases = [
+        "We considered storing passwords directly.",
+        "But we rejected that; we store only salted password hashes.",
+        "An audience member asks how refunds work.",
+        "Returning to authentication, a leaked database must not expose passwords.",
+        "Now let's discuss privacy: combining location traces can identify a person.",
+    ]
+    pending = None
+    for n, phrase in enumerate(phrases):
+        clock[0] += 1_000_000_000
+        context.accept(
+            event(
+                clock,
+                sequence=n + 1,
+                segment_id=str(n),
+                start_seconds=n,
+                end_seconds=n + 0.1,
+                text=phrase,
+                final=True,
+            )
+        )
+        latest = context.snapshot()
+        if pending:
+            assert not pending.matches(latest)
+        assert latest.matches(context.snapshot())
+        assert latest.candidate_segments[-1].text == phrase
+        pending = latest
+    # More than four provider chunks still form the actual bounded passage.
+    assert len(context.snapshot().candidate_segments) == 5
+    clock[0] += 6_000_000_000
+    assert not pending.matches(context.snapshot())
+
+
+def test_different_recognition_chunk_sizes_preserve_same_passage(monkeypatch):
+    words = [
+        "The",
+        "provider",
+        "confirms",
+        "payments",
+        "and",
+        "we",
+        "check",
+        "its",
+        "signature",
+        "before",
+        "accepting",
+        "the",
+        "message",
+    ]
+    context, clock = setup(monkeypatch)
+    for n, word in enumerate(words):
+        clock[0] += 100_000_000
+        context.accept(
+            event(
+                clock,
+                sequence=n + 1,
+                segment_id=str(n),
+                start_seconds=n * 0.1,
+                end_seconds=(n + 1) * 0.1,
+                text=word,
+                final=True,
+            )
+        )
+    assert " ".join(s.text for s in context.snapshot().candidate_segments) == " ".join(words)
+
+
+def test_snapshot_match_checks_all_bindings_and_expiration(monkeypatch):
+    from dataclasses import replace
+
+    context, clock = setup(monkeypatch)
+    context.accept(event(clock, final=True))
+    snapshot = context.snapshot()
+    assert snapshot.matches(replace(snapshot, observed_ns=snapshot.observed_ns + 1))
+    for changes in (
+        {"session_id": "other"},
+        {"state_version": 2},
+        {"epoch": snapshot.epoch + 1},
+        {"stream_id": "other"},
+        {"language": "ar"},
+        {"fresh": False},
+        {"segments": ()},
+    ):
+        assert not snapshot.matches(replace(snapshot, **changes))

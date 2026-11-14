@@ -35,11 +35,7 @@ def inputs():
         1,
         str(uuid4()),
         "en-US",
-        (
-            ContextSegment(
-                "a", 1, "private speech", True, 0, 0.1, now - 500_000_000, now - 250_000_000
-            ),
-        ),
+        (ContextSegment("a", 1, "private speech", True, 0, 0.1, now),),
         now,
         True,
     )
@@ -47,7 +43,19 @@ def inputs():
 
 
 @pytest.mark.parametrize(
-    "corrupt", [None, "state_version", "tool", "action", "oversize", "expired", "window_expired"]
+    "corrupt",
+    [
+        None,
+        "state_version",
+        "tool",
+        "action",
+        "oversize",
+        "expired",
+        "window_expired",
+        "correction",
+        "partial_started",
+        "topic_change",
+    ],
 )
 def test_response_is_bound_to_context_and_only_typed_candidates(corrupt, monkeypatch):
     session, context = inputs()
@@ -77,6 +85,7 @@ def test_response_is_bound_to_context_and_only_typed_candidates(corrupt, monkeyp
     clock = [context.observed_ns]
     monkeypatch.setattr("buddy_desktop.candidate_service.time.monotonic_ns", lambda: clock[0])
     seen = []
+    current = [context]
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
@@ -116,6 +125,18 @@ def test_response_is_bound_to_context_and_only_typed_candidates(corrupt, monkeyp
                 clock[0] += 6_000_000_000
             elif corrupt == "window_expired":
                 clock[0] += 2_000_000_000
+            if corrupt in {"correction", "partial_started", "topic_change"}:
+                replacement = replace(
+                    context.segments[-1],
+                    sequence=3,
+                    text={
+                        "correction": "Actually, that was rejected.",
+                        "partial_started": "But instead we",
+                        "topic_change": "Now consider privacy.",
+                    }[corrupt],
+                    final=corrupt != "partial_started",
+                )
+                current[0] = replace(context, segments=(*context.segments[:-1], replacement))
             self.send_response(200)
             self.end_headers()
             self.wfile.write(raw)
@@ -127,9 +148,14 @@ def test_response_is_bound_to_context_and_only_typed_candidates(corrupt, monkeyp
         client = CandidateService(AppConfig(f"http://127.0.0.1:{server.server_port}"))
         if corrupt:
             with pytest.raises(ServiceError):
-                client.resolve("token", session, context)
+                client.resolve("token", session, context, current_context=lambda: current[0])
         else:
-            assert client.resolve("token", session, context)["candidates"][0]["kind"] == "no_change"
+            assert (
+                client.resolve("token", session, context, current_context=lambda: current[0])[
+                    "candidates"
+                ][0]["kind"]
+                == "no_change"
+            )
         assert seen[0][0] == f"/api/v1/sessions/{session.id}/candidates"
         assert seen[0][1] == "Bearer token"
         assert seen[0][2]["text"] == context.text
@@ -152,7 +178,7 @@ def test_stale_context_rejected_before_network():
             client.resolve("token", session, stale)
 
 
-def test_partial_and_unsettled_final_do_not_make_network_requests(monkeypatch):
+def test_partial_does_not_make_network_requests(monkeypatch):
     session, context = inputs()
     now = context.observed_ns
     monkeypatch.setattr("buddy_desktop.candidate_service.time.monotonic_ns", lambda: now)
@@ -160,8 +186,3 @@ def test_partial_and_unsettled_final_do_not_make_network_requests(monkeypatch):
     partial = replace(context, segments=(replace(context.segments[0], final=False),))
     with pytest.raises(ServiceError, match="completed"):
         client.resolve("token", session, partial)
-    unsettled = replace(
-        context, segments=(replace(context.segments[0], received_ns=now - 100_000_000),)
-    )
-    with pytest.raises(ServiceError, match="settle"):
-        client.resolve("token", session, unsettled)

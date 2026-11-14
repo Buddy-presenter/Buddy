@@ -73,6 +73,40 @@ def combined_context(recent: str) -> str:
     return tail.strip()
 
 
+def balanced_shortlist(
+    items: tuple[Document, ...], similarities: tuple[tuple[float, ...], ...], current: str
+) -> tuple[list[tuple[float, Document]], set[str]]:
+    """Reserve two destinations per view; never average incompatible query vectors."""
+    rankings = [
+        sorted(
+            range(len(items)),
+            key=lambda i: (-scores[i], items[i].slide_id, items[i].action_id or ""),
+        )
+        for scores in similarities
+    ]
+    # Reciprocal ranks combine ordering evidence, not confidence probabilities.
+    fused = [0.0] * len(items)
+    destinations = {current}
+    for scores, ranking in zip(similarities, rankings, strict=True):
+        view_slides: set[str] = set()
+        for rank, index in enumerate(ranking):
+            if scores[index] <= 0:
+                continue
+            fused[index] += 1 / (rank + 1)
+            slide = items[index].slide_id
+            if slide != current and len(view_slides) < 2:
+                view_slides.add(slide)
+                destinations.add(slide)
+    scored = sorted(
+        zip(fused, items, strict=True),
+        key=lambda item: (-item[0], item[1].slide_id, item[1].action_id or ""),
+    )
+    for score, doc in scored:
+        if score > 0 and len(destinations) < 5:
+            destinations.add(doc.slide_id)
+    return scored, destinations
+
+
 class SemanticCandidates:
     def __init__(self, database: Database, provider: CohereEmbeddings, call_limit: int = 750):
         self.database, self.provider, self.call_limit = database, provider, call_limit
@@ -162,7 +196,7 @@ class SemanticCandidates:
         cache_key = (
             owner,
             analysis.id,
-            hashlib.sha256(combined_context(recent).encode()).hexdigest(),
+            hashlib.sha256(json.dumps([combined_context(recent), latest]).encode()).hexdigest(),
         )
         now = time.monotonic()
         self._cache = {k: v for k, v in self._cache.items() if now - v[0] <= 5}
@@ -176,22 +210,22 @@ class SemanticCandidates:
             self._queries.add(owner)
             self._last_call[owner] = now
             try:
-                # One complete passage lets the encoder relate pronouns to earlier
-                # sentences, instead of scoring a vague final segment separately.
-                queries = await self._embed([combined_context(recent)], "query")
+                # Keep contextual references and the newest topic as independent
+                # retrieval evidence; batch both inputs in one provider request.
+                texts = [combined_context(recent)]
+                if latest.strip() and latest.strip() != texts[0]:
+                    texts.append(combined_context(latest))
+                queries = await self._embed(texts, "query")
             finally:
                 self._queries.discard(owner)
             if len(self._cache) >= 128:
                 self._cache.pop(next(iter(self._cache)))
             self._cache[cache_key] = (time.monotonic(), queries)
-        scored = [
-            (
-                sum(a * b for a, b in zip(vector, queries[0], strict=True)),
-                doc,
-            )
-            for doc, vector in zip(items, vectors, strict=True)
-        ]
-        scored.sort(key=lambda item: (-item[0], item[1].slide_id, item[1].action_id or ""))
+        similarities = tuple(
+            tuple(sum(a * b for a, b in zip(vector, query, strict=True)) for vector in vectors)
+            for query in queries
+        )
+        scored, destinations = balanced_shortlist(items, similarities, current)
         result = [
             Candidate(kind="no_change", slide_id=current, reason="stay", score=0),
             Candidate(kind="slide", slide_id=current, reason="current", score=0),
@@ -207,7 +241,7 @@ class SemanticCandidates:
         for score, doc in scored:
             if score <= 0:
                 continue
-            if doc.slide_id not in selected and len(selected) < 5:
+            if doc.slide_id not in selected and doc.slide_id in destinations:
                 selected.add(doc.slide_id)
                 result.append(
                     Candidate(

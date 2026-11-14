@@ -9,7 +9,7 @@ publication timestamps, which cannot prove which slide was visible at capture.
 A frozen snapshot includes session ID, authoritative state version, a local
 invalidation epoch, stream ID, language, ordered segments and local monotonic
 observation time. Segments include audio offsets, capture-end timestamps and
-revision sequence, plus a local monotonic arrival timestamp for request settling.
+revision sequence.
 `text` joins segments once; partial corrections replace the
 same segment and a final segment cannot be overwritten. Duplicate and older
 updates are ignored. SpeechController enforces wire validation and current-stream
@@ -25,17 +25,27 @@ expires stored text during silence. Time is measured against the microphone's
 local monotonic capture clock, never a server wall clock. Hardware capture delay
 has the same limitations as the existing recognition latency measurement.
 
-When the next accepted segment starts more than five seconds after the last captured
-segment, the old thought is cleared and the epoch advances. The reset boundary uses the
-capture clock, allowing delayed delivery of a genuinely new utterance while rejecting
-older speech. Out-of-order or finalized revisions cannot reset the thought. The last
-capture timestamp is retained even if the 30-second text window has already expired.
+Silence does not advance the epoch or clear a thought. After five seconds without
+fresh captured speech, no new candidate request is allowed; resumed speech can use the
+preceding context still inside the 30-second capture window. A six- or twenty-second
+pause therefore preserves references, while an older context still expires under the
+existing memory-retention policy. Pauses are not a topic classifier.
 
-`candidate_segments` selects up to four consecutive final segments, capped at 4096
-characters. It stops at a partial or the size boundary rather than joining text across a
-hole or splitting a segment. `CandidateService` waits for 200 ms of stability after their
-most recent arrival before allowing a request. This is an off-thread caller scheduling
-contract for #20; this window itself does not start provider requests.
+`candidate_segments` selects consecutive final segments, capped at 4096 characters with
+no fixed segment count. It stops at a partial or size boundary instead of bridging a
+hole or splitting a segment. A completed segment is eligible immediately; there is no
+additional settling timer. Provider segmentation is not treated as sentence structure.
+`ContextSnapshot.matches(current)` rejects an old result after any speech revision,
+including a new partial, or after freshness/session/state/epoch/stream/language changes.
+An unchanged newer observation alone does not invalidate a result.
+
+`CandidateService.resolve(..., current_context=...)` can check a caller-supplied current
+snapshot before and after the network request. Callers must supply a thread-safe source
+of newly published immutable snapshots and recheck `matches` again at result consumption.
+Without this callback, that input-revision check remains the caller's responsibility.
+#20 owns worker scheduling, keeping only the newest pending input while a request is
+running, honoring provider pacing, and final decision/execution policy. This change does
+not add an automatic worker or decision loop to Present.
 
 Manual navigation/focus changes invalidate immediately before the server write.
 Remote state/version changes, identity/session/deck/language changes, speech

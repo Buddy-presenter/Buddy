@@ -3,6 +3,7 @@
 import json
 import re
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, build_opener
@@ -37,9 +38,18 @@ class CandidateService:
             ) from None
 
     def resolve(
-        self, access: str, session: PresentationSession, context: ContextSnapshot
+        self,
+        access: str,
+        session: PresentationSession,
+        context: ContextSnapshot,
+        *,
+        current_context: Callable[[], ContextSnapshot] | None = None,
     ) -> dict[str, object]:
-        """Call off the GUI thread. Recheck context epoch/state before using results."""
+        """Call off GUI thread; recheck input again at consumption.
+
+        current_context must read caller-published immutable snapshots safely;
+        it must not access widgets or mutate the live Qt-owned context.
+        """
         now = time.monotonic_ns()
         segments = context.candidate_segments
         if (
@@ -60,8 +70,8 @@ class CandidateService:
             raise ServiceError("Speech context changed or expired; wait for fresh speech.")
         if not segments:
             raise ServiceError("Wait for a completed speech segment before searching.")
-        if now - max(s.received_ns for s in segments) < 200_000_000:
-            raise ServiceError("Wait briefly for completed speech context to settle.")
+        if current_context is not None and not context.matches(current_context()):
+            raise ServiceError("Speech context changed or expired; wait for fresh speech.")
         payload = {
             "protocol": "presentation-candidates.v1",
             "expected_state_version": context.state_version,
@@ -108,6 +118,7 @@ class CandidateService:
                     "summary-overlap-2",
                     "cohere-embed5-v1",
                     "cohere-embed5-v2",
+                    "cohere-embed5-v3",
                 }
             ):
                 raise ValueError
@@ -175,6 +186,8 @@ class CandidateService:
                 for segment in context.segments
             ):
                 raise ValueError
+            if current_context is not None and not context.matches(current_context()):
+                raise ServiceError("Speech context changed during retrieval; discard this result.")
             return result
         except HTTPError as exc:
             status = exc.code

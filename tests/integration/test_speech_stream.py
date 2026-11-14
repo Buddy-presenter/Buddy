@@ -328,7 +328,6 @@ def test_qt_to_persisted_session_and_provider(database_settings, monkeypatch, qt
         assert control._active, statuses
 
         if not live:
-            qtbot.wait(210)
             snapshot = context.snapshot()
             assert snapshot.fresh
             with ThreadPoolExecutor(max_workers=1) as pool:

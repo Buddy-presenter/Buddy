@@ -98,9 +98,9 @@ class Candidate(Model):
 
 class CandidateSet(Model):
     protocol: Literal["presentation-candidates.v1"] = "presentation-candidates.v1"
-    resolver_version: Literal["summary-overlap-2", "cohere-embed5-v1", "cohere-embed5-v2"] = (
-        "summary-overlap-2"
-    )
+    resolver_version: Literal[
+        "summary-overlap-2", "cohere-embed5-v1", "cohere-embed5-v2", "cohere-embed5-v3"
+    ] = "summary-overlap-2"
     session_id: UUID
     analysis_id: UUID
     state_version: int
@@ -320,7 +320,7 @@ def candidate_router() -> APIRouter:
                         timeout=2,
                     )
                 return CandidateSet(
-                    resolver_version="cohere-embed5-v2"
+                    resolver_version="cohere-embed5-v3"
                     if semantic is not None
                     else "summary-overlap-2",
                     session_id=identifier,
@@ -364,7 +364,7 @@ def candidate_router() -> APIRouter:
                     raise HTTPException(409, "The analysis changed.")
                 analysis = await request.app.state.candidate_analyses.read(db, record, principal.id)
             created = await semantic.prepare(analysis, principal.id)
-            return {"ready": True, "created": created, "resolver_version": "cohere-embed5-v2"}
+            return {"ready": True, "created": created, "resolver_version": "cohere-embed5-v3"}
         except EmbeddingFailure:
             raise
         except (PersistenceError, SQLAlchemyError, OSError, TimeoutError):

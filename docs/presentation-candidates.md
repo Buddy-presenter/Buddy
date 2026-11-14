@@ -8,7 +8,7 @@ See [resumable PDF processing](pdf-workers.md#resumable-pdf-region-processing). 
 `0020_pdf_checkpoints` follows the embedding migration; both require the reviewed rollout.
 Pending-summary inspection does not bypass the candidate route's completed-analysis gates.
 
-When the backend has `BUDDY_COHERE_API_KEY`, retrieval uses `cohere-embed5-v2`.
+When the backend has `BUDDY_COHERE_API_KEY`, retrieval uses `cohere-embed5-v3`.
 Without it, the lexical resolver remains available and identifies itself as
 `summary-overlap-2`; it must not be described as semantic understanding. A configured
 semantic service never silently downgrades after provider failure.
@@ -21,16 +21,25 @@ The index binds analysis, deck, owner, model space and document fingerprint. Rep
 preparation of unchanged content makes no model calls. Changes in summaries or
 action eligibility require preparation again. Stale vectors cannot enable actions.
 
-Live queries use `embed-v5.0-fast` to embed one coherent recent passage, bounded to
-4096 characters. Version 2 removes the separate latest/recent vector mixture: preceding
-sentences and references such as "these" reach the encoder together. New desktop callers
-send at most four contiguous completed recognition segments, dropping older segments
-whole to fit the bound. The server also bounds older clients' text, avoiding a partial
-leading word when whitespace permits. This is a bounded capture window, not a semantic
-topic classifier or a new linguistic sentence parser. Latest utterance remains separate
-for whole-utterance navigation; it does not receive an extra semantic weight. Document
-vectors and their model space are unchanged, so upgrading this query algorithm does not
-require reindexing a prepared presentation.
+Live queries use `embed-v5.0-fast` with two independent retrieval views batched in
+one HTTP call: the coherent recent passage and the newest completed segment. Identical
+inputs are embedded once. Each input is bounded to 4096 characters. The passage preserves
+references across sentences; the newest view prevents an earlier topic from occupying
+the entire shortlist after a topic change. These query vectors are not averaged.
+
+Version 3 reserves up to two non-current slide destinations from each view, then fills
+remaining slots using reciprocal-rank fusion (sum of 1 / one-based document rank for
+positive-cosine evidence). Current slide and no change remain present. Region eligibility
+is unchanged. The shortlist expresses competing evidence, not a final interpretation of
+negation, correction or audience intent. No keyword-based topic detector or extra language
+model is used. Latest utterance still drives whole-utterance navigation independently.
+
+Desktop callers send as many contiguous completed segments as fit the 4096-character
+budget within the existing 30-second memory window; there is no four-segment cutoff,
+post-final 200 ms delay or pause-triggered reset. The server bounds older clients' text,
+avoiding a partial leading word when whitespace permits. Document vectors/model space
+are unchanged, so prepared presentations do not require reindexing. Two query inputs
+increase encoded text/token usage, but consume one attempted API call in Buddy's ledger.
 
 Document indexing uses `search_document`; queries use `search_query`.
 Positive-cosine matches form a ranked shortlist of at
@@ -145,16 +154,18 @@ before using it; a frozen snapshot or returned candidate cannot authorize an act
 This service is the callable boundary for #20; Present does not yet run an autonomous
 agent or make a provider call for each partial transcript.
 
-The service refuses partial latest segments and requests made within 200 ms of the
-last change to the selected completed segments. It does not sleep or start an agent loop:
-the #20 caller owns scheduling the off-thread request after this settling interval and
-refreshing the snapshot. Freshness checks still run before and after network access.
+The service refuses partial latest segments, but completed input is immediately eligible.
+Freshness checks run before and after network access. Supply `current_context` to detect
+speech changes during retrieval, and compare `snapshot.matches(current)` again before
+using a result. A correction or new partial invalidates an older result even when the
+presentation state/epoch is unchanged. #20 owns off-thread scheduling, newest-pending-input
+coalescing under the existing two-second provider pacing, and final decision/execution.
+This PR does not start that automatic loop.
 
-The unchanged five-passage presenter-narration replay on the 61-page saved analysis
-ranked all five intended slides first with v2 (v1 included four, with two ranked first).
-HTTP requests measured 443–526 ms in that small local replay. Identity/source metadata
-were mirrored locally; Cohere and PostgreSQL were real. This is typed narration evidence,
-not a microphone, staging, general-accuracy or P95 guarantee.
+Earlier v2 five-passage replay ranked all five intended slides first, but a broader
+sequence test exposed a missed privacy topic after an attack-tree explanation. This
+motivated v3's independent newest/contextual shortlist. See the natural-sequence results
+below; older v2 latency/accuracy figures are historical, not v3 acceptance evidence.
 
 The response binds session/analysis/state version, epoch, stream, revision sequence,
 resolver version and SHA-256 of the exact request. Identical requests against identical
@@ -204,5 +215,36 @@ segment can propose the next slide, while "do not go to the next slide" in that
 same latest segment cannot. A segment is the existing speech provider segment,
 not a new linguistic sentence detector; words split across provider segments are
 not combined into an invented command. The full rolling text still drives topic
-retrieval. Desktop clients accept resolver versions 1 and 2 during upgrades; the
-server now reports version 2 so exact-request replay comparisons name the algorithm.
+retrieval. Desktop clients accept resolver versions 1, 2 and 3 during upgrades; the
+server now reports version 3 so exact-request replay comparisons name the algorithm.
+
+
+### Natural presentation sequence acceptance (2026-11-14)
+
+A fixed seven-scenario replay used the saved 61-page Threat Modeling analysis, the actual
+native context builder and HTTP client, local API/PostgreSQL, and real Cohere Pro/Fast.
+Recognition events and capture clocks were synthesized to test timing without asking a
+person to repeat a pitch. Identity and source metadata were mirrored locally; no new
+Bedrock generation or microphone capture was involved. Targets were fixed before calls.
+
+| Scenario | Expected slide | v3 rank |
+| --- | --- | --- |
+| Payment confirmation, six-second pause, then “Its signature needs checking” | 25 | 2 |
+| Assets explained in eight short recognition chunks | 20 | 2 |
+| Correct “steal payment details” to stopping dinner service by exhausting capacity | 50 | 1 |
+| Attack-tree explanation followed by a switch to identifying people from location traces | 55 | 4 |
+| Audience detour into availability, then return to payment callback signatures | 25 | 1 |
+| Return from attack goals to customer profiles, tokens, locations and refunds | 20 | 1 |
+| OR/AND attack-tree explanation, twenty-second pause, then refer to “that” | 40 or 41 | 1 |
+
+All seven intended targets were shortlisted; four ranked first. V2 missed the privacy
+switch entirely in this same sequence set. V3 preserves alternatives instead of claiming
+to resolve every correction/intent itself. Six requests took 414–626 ms and one took
+1,454 ms; no extra 200 ms desktop delay remains. This small sample is not general accuracy,
+a P95 guarantee, staging acceptance or evidence of automatic slide decisions.
+
+Automated regressions also cover immediate final eligibility, partial refusal, incoming
+corrections/partials invalidating in-flight HTTP results, silence freshness without
+clearing context, the unchanged 30-second memory expiry, many short chunks, whole-segment
+budget trimming, two-view slot reservation despite duplicate region documents, query
+cache separation by focused text, batched-call accounting and identical-input deduplication.

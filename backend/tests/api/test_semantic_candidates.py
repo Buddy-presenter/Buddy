@@ -14,7 +14,12 @@ from sqlalchemy import select
 
 from buddy_api.embeddings import DIMENSIONS, CohereEmbeddings, EmbeddingFailure, EmbeddingSettings
 from buddy_api.persistence.models import EmbeddingQuota
-from buddy_api.semantic_candidates import SemanticCandidates, combined_context
+from buddy_api.semantic_candidates import (
+    Document,
+    SemanticCandidates,
+    balanced_shortlist,
+    combined_context,
+)
 
 
 def test_combined_query_preserves_references_and_bounds_old_context():
@@ -109,12 +114,12 @@ def test_index_persists_queries_cache_and_budget_is_enforced(ready_session_api):
     request = payload(text=context, latest_utterance="These need protection.")
     result = client.post(path + "/candidates", headers=headers, json=request)
     assert result.status_code == 200, result.text
-    assert result.json()["resolver_version"] == "cohere-embed5-v2"
+    assert result.json()["resolver_version"] == "cohere-embed5-v3"
     assert any(c["reason"] == "topic" for c in result.json()["candidates"])
     # Cached query does not spend a third call; quota is persistent across engines.
     assert client.post(path + "/candidates", headers=headers, json=request).status_code == 200
-    assert provider.calls == [("document", 2), ("query", 1)]
-    assert provider.inputs[-1] == [context]
+    assert provider.calls == [("document", 2), ("query", 2)]
+    assert provider.inputs[-1] == [context, "These need protection."]
     new_engine = SemanticCandidates(client.app.state.database, provider, call_limit=2)
     client.app.state.semantic_candidates = new_engine
     exhausted = client.post(path + "/candidates", headers=headers, json=payload(text="new query"))
@@ -142,7 +147,7 @@ def test_index_persists_queries_cache_and_budget_is_enforced(ready_session_api):
 
     boundary = client.portal.call(at_boundary)
     assert len(boundary) == 2 and all(c.reason in {"stay", "current"} for c in boundary)
-    assert provider.calls == [("document", 2), ("query", 1)]
+    assert provider.calls == [("document", 2), ("query", 2)]
 
 
 @pytest.mark.postgres
@@ -184,3 +189,70 @@ def test_rate_limit_response_does_not_retry_or_leak_provider_content():
     with pytest.raises(EmbeddingFailure, match="^embedding_rate_limited$"):
         asyncio.run(check())
     assert calls == [1]
+
+
+def test_topic_shift_keeps_both_newest_and_contextual_destinations():
+    items = tuple(Document(str(i), None, "slide", f"Synthetic topic {i}") for i in range(8))
+    scores, selected = balanced_shortlist(
+        items,
+        ((0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2), (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.9, 0.8)),
+        "current",
+    )
+    assert selected == {"current", "0", "1", "6", "7"}
+    assert all(score > 0 for score, _ in scores)
+
+
+def test_context_view_backfills_when_focused_view_has_no_positive_evidence():
+    items = tuple(Document(str(i), None, "slide", "Synthetic") for i in range(6))
+    _, selected = balanced_shortlist(
+        items, ((0.9, 0.8, 0.7, 0.6, 0.5, 0.4), (-0.1,) * 6), "current"
+    )
+    assert selected == {"current", "0", "1", "2", "3"}
+
+
+@pytest.mark.postgres
+def test_identical_views_embed_once_and_latest_view_changes_query_cache(ready_session_api):
+    client, ids, *_ = ready_session_api
+    provider = FakeProvider()
+    engine = SemanticCandidates(client.app.state.database, provider, call_limit=4)
+    client.app.state.semantic_candidates = engine
+    path = f"/api/v1/sessions/{ids['sessions']}"
+    headers = {"Authorization": "Bearer owner"}
+    assert client.post(path + "/candidates/prepare", headers=headers).status_code == 200
+    passage = "We protect payment confirmations. Its signature needs checking."
+    # A one-segment passage is not encoded twice.
+    assert (
+        client.post(
+            path + "/candidates",
+            headers=headers,
+            json=payload(text=passage, latest_utterance=passage),
+        ).status_code
+        == 200
+    )
+    assert provider.inputs[-1] == [passage]
+    # A different segmentation changes the focused view even with identical passage text.
+    engine._last_call.clear()
+    assert (
+        client.post(
+            path + "/candidates",
+            headers=headers,
+            json=payload(text=passage, latest_utterance="Its signature needs checking."),
+        ).status_code
+        == 200
+    )
+    assert provider.inputs[-1] == [passage, "Its signature needs checking."]
+    assert provider.calls == [("document", 2), ("query", 1), ("query", 2)]
+
+
+def test_duplicate_region_documents_cannot_consume_all_reserved_slide_slots():
+    items = (
+        Document("old", None, "slide", "Old topic"),
+        Document("old", "a", "zoom_region", "Old detail"),
+        Document("older", None, "slide", "Old second topic"),
+        Document("new", None, "slide", "New topic"),
+        Document("newer", None, "slide", "New second topic"),
+    )
+    _, selected = balanced_shortlist(
+        items, ((0.9, 0.8, 0.7, 0.2, 0.1), (0.1, 0.2, 0.3, 0.9, 0.8)), "current"
+    )
+    assert selected == {"current", "old", "older", "new", "newer"}
