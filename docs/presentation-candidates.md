@@ -77,8 +77,9 @@ with real Pro/Fast calls. Totient and simultaneous-congruence references rank th
 intended page first. The correct page for “question two” is in the shortlist but
 ranks behind page 2: embeddings do not solve every reference. There are zero usable
 region actions in that deck, so no positive region-accuracy claim is made. Initial
-semantic HTTP requests took about 0.85–1.3 seconds before connection pooling; the
-500 ms P95 target is not demonstrated. This is not deployed or microphone evidence.
+semantic HTTP requests took about 0.85–1.3 seconds before connection pooling. Two
+follow-up requests with pooling took 501 and 486 ms; this small sample does not
+demonstrate the 500 ms P95 target. This is not deployed or microphone evidence.
 
 ## Legacy lexical protocol and behavior
 
