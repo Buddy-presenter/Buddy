@@ -8,7 +8,7 @@ See [resumable PDF processing](pdf-workers.md#resumable-pdf-region-processing). 
 `0020_pdf_checkpoints` follows the embedding migration; both require the reviewed rollout.
 Pending-summary inspection does not bypass the candidate route's completed-analysis gates.
 
-When the backend has `BUDDY_COHERE_API_KEY`, retrieval uses `cohere-embed5-v3`.
+When the backend has `BUDDY_COHERE_API_KEY`, retrieval uses `cohere-embed5-v4`.
 Without it, the lexical resolver remains available and identifies itself as
 `summary-overlap-2`; it must not be described as semantic understanding. A configured
 semantic service never silently downgrades after provider failure.
@@ -27,8 +27,12 @@ inputs are embedded once. Each input is bounded to 4096 characters. The passage 
 references across sentences; the newest view prevents an earlier topic from occupying
 the entire shortlist after a topic change. These query vectors are not averaged.
 
-Version 3 reserves up to two non-current slide destinations from each view, then fills
-remaining slots using reciprocal-rank fusion (sum of 1 / one-based document rank for
+Version 4 shares the existing eight-candidate budget between both views. Current slide
+and no change occupy two slots. With no usable region documents, the remaining six slots
+allow up to three non-current destinations per view. When usable region documents exist,
+two slots remain reserved for region candidates, leaving two slide destinations per view.
+This avoids discarding a third contextual hit merely to reserve unavailable actions.
+Identical views use one ranking. It fills remaining slide slots using reciprocal-rank fusion (sum of 1 / one-based document rank for
 positive-cosine evidence). Current slide and no change remain present. Region eligibility
 is unchanged. The shortlist expresses competing evidence, not a final interpretation of
 negation, correction or audience intent. No keyword-based topic detector or extra language
@@ -43,7 +47,8 @@ increase encoded text/token usage, but consume one attempted API call in Buddy's
 
 Document indexing uses `search_document`; queries use `search_query`.
 Positive-cosine matches form a ranked shortlist of at
-most five slide destinations including current, plus region options and no change,
+most seven slide destinations including current (five when region slots are reserved),
+plus eligible region options and no change,
 with eight candidates maximum. Similarity is a ranking signal, not a calibrated
 confidence probability. Exact whole-utterance next/previous navigation keeps a
 validated no-model fast path, including a no-change result at deck boundaries.
@@ -215,8 +220,8 @@ segment can propose the next slide, while "do not go to the next slide" in that
 same latest segment cannot. A segment is the existing speech provider segment,
 not a new linguistic sentence detector; words split across provider segments are
 not combined into an invented command. The full rolling text still drives topic
-retrieval. Desktop clients accept resolver versions 1, 2 and 3 during upgrades; the
-server now reports version 3 so exact-request replay comparisons name the algorithm.
+retrieval. Desktop clients accept resolver versions 1 through 4 during upgrades; the
+server now reports version 4 so exact-request replay comparisons name the algorithm.
 
 
 ### Natural presentation sequence acceptance (2026-11-14)
@@ -248,3 +253,43 @@ corrections/partials invalidating in-flight HTTP results, silence freshness with
 clearing context, the unchanged 30-second memory expiry, many short chunks, whole-segment
 budget trimming, two-view slot reservation despite duplicate region documents, query
 cache separation by focused text, batched-call accounting and identical-input deduplication.
+
+
+### Speech-path diagnosis and candidate capacity
+
+The microphone acceptance did not pass: one stream produced 14–24 second recognition
+delays and reconnected; a short repeat disconnected without a transcript. These attempts
+cannot establish #19 real-voice accuracy. The four speech/capture source modules are
+byte-identical on main bc8b78d and the PR after main merge 1a38aa0. Controlled generated
+playback through each checkout's actual Qt client, API/PostgreSQL and Deepgram returned
+all four repetitions at both 16 and 48 kHz. Delay ranges were 164–961 / 220–612 ms on main
+and 174–561 / 379–1424 ms on the PR, respectively. Packet age at API ingress was at most
+2 ms and sampled provider-send awaits at most 1 ms. This does not establish the exact
+cause of the intermittent microphone failure or prove sample rate is responsible.
+
+A generated natural-speech replay through real Deepgram and Cohere separately exposed a
+candidate capacity bug: the correct privacy slide ranked third in the coherent view,
+but v3 discarded it while reserving two unavailable region slots. V4 uses those slots
+for slide alternatives while preserving the eight-candidate response ceiling and region
+eligibility. No keywords, model change, extra provider calls or audio resampling were
+added. The delayed-final/reconnect regression also verifies that stale recognized speech
+cannot trigger candidate retrieval, and that old input cannot survive a stream reset.
+
+
+After the capacity repair, the same three generated natural phrases were replayed at
+16 kHz through the actual Qt speech client, Deepgram, rolling context, candidate HTTP
+client, API/PostgreSQL and Cohere. All three intended slides were shortlisted: payment
+signature (page 25, rank 1), corrected dinner-service availability goal (50, rank 1), and
+privacy identification (55, rank 5). Retrieval took 400, 487 and 1079 ms. Speech-result
+delays ranged from 151 to 1030 ms. This validates candidate recall through real providers
+with generated audio, not human-microphone or staging acceptance. An additional 48 kHz
+replay produced growing recognition delays up to 7.1 seconds; freshness checks refused
+the stale requests rather than acting on them. The intermittent streaming gap remains
+tracked separately in [#180](https://github.com/Buddy-presenter/Buddy/issues/180).
+
+
+The unchanged seven-scenario typed narration set was also replayed through the native
+context/client, local API/PostgreSQL and real Cohere with v4. All seven intended slides
+were shortlisted, four ranked first, with 505–1087 ms HTTP requests. A preceding replay
+had stopped on a recoverable 503; the final seven-request run succeeded without automatic
+retries. These are small acceptance samples, not service-availability or P95 guarantees.

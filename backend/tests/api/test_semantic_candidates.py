@@ -114,7 +114,7 @@ def test_index_persists_queries_cache_and_budget_is_enforced(ready_session_api):
     request = payload(text=context, latest_utterance="These need protection.")
     result = client.post(path + "/candidates", headers=headers, json=request)
     assert result.status_code == 200, result.text
-    assert result.json()["resolver_version"] == "cohere-embed5-v3"
+    assert result.json()["resolver_version"] == "cohere-embed5-v4"
     assert any(c["reason"] == "topic" for c in result.json()["candidates"])
     # Cached query does not spend a third call; quota is persistent across engines.
     assert client.post(path + "/candidates", headers=headers, json=request).status_code == 200
@@ -198,7 +198,7 @@ def test_topic_shift_keeps_both_newest_and_contextual_destinations():
         ((0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2), (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.9, 0.8)),
         "current",
     )
-    assert selected == {"current", "0", "1", "6", "7"}
+    assert selected == {"current", "0", "1", "2", "5", "6", "7"}
     assert all(score > 0 for score, _ in scores)
 
 
@@ -207,7 +207,7 @@ def test_context_view_backfills_when_focused_view_has_no_positive_evidence():
     _, selected = balanced_shortlist(
         items, ((0.9, 0.8, 0.7, 0.6, 0.5, 0.4), (-0.1,) * 6), "current"
     )
-    assert selected == {"current", "0", "1", "2", "3"}
+    assert selected == {"current", "0", "1", "2", "3", "4", "5"}
 
 
 @pytest.mark.postgres
@@ -256,3 +256,17 @@ def test_duplicate_region_documents_cannot_consume_all_reserved_slide_slots():
         items, ((0.9, 0.8, 0.7, 0.2, 0.1), (0.1, 0.2, 0.3, 0.9, 0.8)), "current"
     )
     assert selected == {"current", "old", "older", "new", "newer"}
+
+
+@pytest.mark.parametrize("usable_regions", [False, True])
+def test_current_slide_and_action_reservation_fit_eight_candidate_contract(usable_regions):
+    items = tuple(Document(str(i), None, "slide", "Synthetic") for i in range(20))
+    if usable_regions:
+        items += (Document("0", "region", "zoom_region", "Synthetic detail"),)
+    context = tuple(1 / (i + 1) for i in range(len(items)))
+    focus = tuple(reversed(context))
+    _, selected = balanced_shortlist(items, (context, focus), "0")
+    assert "0" in selected
+    # Current is already indexed and must not consume a second destination.
+    assert len(selected) == (5 if usable_regions else 7)
+    assert len(selected) + 1 + (2 if usable_regions else 0) == 8

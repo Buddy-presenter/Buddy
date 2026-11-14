@@ -186,3 +186,42 @@ def test_partial_does_not_make_network_requests(monkeypatch):
     partial = replace(context, segments=(replace(context.segments[0], final=False),))
     with pytest.raises(ServiceError, match="completed"):
         client.resolve("token", session, partial)
+
+
+def test_delayed_final_and_reconnect_cannot_replay_old_speech(monkeypatch):
+    from buddy_desktop.transcript_context import TranscriptContext
+
+    session, _ = inputs()
+    clock = [1_000_000_000]
+    monkeypatch.setattr("buddy_desktop.transcript_context.time.monotonic_ns", lambda: clock[0])
+    context = TranscriptContext()
+    context.bind(session.id, session.state_version, "en-US")
+    clock[0] += 1_000_000_000
+    event = {
+        "session_id": session.id,
+        "stream_id": str(uuid4()),
+        "sequence": 1,
+        "segment_id": "payment",
+        "text": "We must verify the payment provider's signature.",
+        "final": True,
+        "start_seconds": 0.0,
+        "end_seconds": 0.5,
+        "capture_end_ns": clock[0],
+    }
+    # Reproduce the observed 15-second recognition delay: the text is retained
+    # within the memory policy but must never reach a new candidate request.
+    clock[0] += 15_000_000_000
+    context.accept(event)
+    delayed = context.snapshot()
+    assert delayed.text and not delayed.fresh
+    client = CandidateService(AppConfig("http://127.0.0.1:1"))
+    with pytest.raises(ServiceError, match="changed or expired"):
+        client.resolve("token", session, delayed)
+    context.invalidate()
+    context.accept(event)
+    assert not context.snapshot().text
+    clock[0] += 1_000_000_000
+    context.accept({**event, "stream_id": str(uuid4()), "capture_end_ns": clock[0]})
+    fresh = context.snapshot()
+    assert fresh.fresh and fresh.text
+    assert not delayed.matches(fresh)

@@ -119,6 +119,7 @@ class CandidateService:
                     "cohere-embed5-v1",
                     "cohere-embed5-v2",
                     "cohere-embed5-v3",
+                    "cohere-embed5-v4",
                 }
             ):
                 raise ValueError

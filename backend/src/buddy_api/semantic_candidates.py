@@ -76,7 +76,12 @@ def combined_context(recent: str) -> str:
 def balanced_shortlist(
     items: tuple[Document, ...], similarities: tuple[tuple[float, ...], ...], current: str
 ) -> tuple[list[tuple[float, Document]], set[str]]:
-    """Reserve two destinations per view; never average incompatible query vectors."""
+    """Share available slide slots between views within the eight-candidate budget."""
+    # Current slide and no change occupy two slots. Reserve two more only when
+    # the index actually contains usable region actions; otherwise use all six
+    # remaining slots for slide destinations, rather than discarding evidence.
+    other_slides = 4 if any(doc.action_id is not None for doc in items) else 6
+    per_view = other_slides // len(similarities)
     rankings = [
         sorted(
             range(len(items)),
@@ -94,7 +99,7 @@ def balanced_shortlist(
                 continue
             fused[index] += 1 / (rank + 1)
             slide = items[index].slide_id
-            if slide != current and len(view_slides) < 2:
+            if slide != current and len(view_slides) < per_view:
                 view_slides.add(slide)
                 destinations.add(slide)
     scored = sorted(
@@ -102,7 +107,7 @@ def balanced_shortlist(
         key=lambda item: (-item[0], item[1].slide_id, item[1].action_id or ""),
     )
     for score, doc in scored:
-        if score > 0 and len(destinations) < 5:
+        if score > 0 and len(destinations) < other_slides + 1:
             destinations.add(doc.slide_id)
     return scored, destinations
 
