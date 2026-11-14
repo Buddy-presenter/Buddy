@@ -88,8 +88,9 @@ is saved **before** source grounding. The checkpoint binds source revision/SHA, 
 manifest and grounding protocol; a changed binding is rejected, never silently reused.
 It stores text and coordinates, not page images, and follows the database encryption and
 backup policy. Provider coordinates in this table are untrusted internal work, never
-published actions. Checkpoints are removed when their deck is tombstoned and cascade with
-job deletion. No provider output or document text is added to logs.
+published actions. Checkpoints are removed atomically when a job completes, removed when
+their deck is tombstoned, and cascade with job deletion. No provider output or document
+text is added to logs.
 
 The `grounding` stage locates highlights and zoom regions one page at a time in the existing
 isolated child process. Each page retains a 120-second deadline and 1 GiB parser ceiling;
@@ -114,6 +115,8 @@ region work is pending or failed. Before provider output is saved it returns a r
 contract, not a new session or action authorization path; Library/Review still require the
 normal immutable analysis and usability gates. The current desktop reports region progress
 and specific failures, but does not add a pending-summary preview screen.
+After successful job completion, this endpoint reads the immutable analysis instead of
+retaining a duplicate raw provider response and page checkpoint forever.
 
 The provider output and grounded pages are assembled only after all pages finish. The
 existing immutable analysis publication and independent executor/semantic verification

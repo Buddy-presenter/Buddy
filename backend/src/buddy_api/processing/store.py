@@ -3,7 +3,7 @@
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
-from sqlalchemy import exists, func, select, text
+from sqlalchemy import delete, exists, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -13,6 +13,7 @@ from buddy_api.persistence.models import (
     Deck,
     DeckExtraction,
     JobOutbox,
+    PDFProcessingCheckpoint,
     ProcessingJob,
 )
 from buddy_api.persistence.repositories import Extractions
@@ -368,6 +369,11 @@ async def complete(session: AsyncSession, identifier: UUID, token: UUID, analysi
     )
     job.stage_state, job.progress, job.error_code = "succeeded", 100, None
     job.lease_id = job.lease_until = job.deadline_at = None
+    # Immutable analysis and validation history now own all completed work. Keep
+    # checkpoints only for unfinished/failed jobs, avoiding permanent raw duplicates.
+    await session.execute(
+        delete(PDFProcessingCheckpoint).where(PDFProcessingCheckpoint.job_id == job.id)
+    )
     return True
 
 

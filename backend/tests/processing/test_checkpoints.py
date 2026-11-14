@@ -116,6 +116,18 @@ def test_timeout_saves_provider_pages_and_resumes_after_restart(
             completed = await row(db, identifier)
             assert completed.status == "analysis_ready"
             assert calls == [1] and visited == ([1, 2, 2, 3] if mode == "timeout" else [1, 2, 3])
+            async with db.sessions() as session:
+                assert await session.get(PDFProcessingCheckpoint, identifier) is None
+            completed_app = create_app(
+                Settings(Environment.TEST, ("testserver",), database=migrated_database)
+            )
+            completed_app.dependency_overrides[authenticated] = lambda: Principal(
+                owner, "owner@example.test"
+            )
+            with TestClient(completed_app) as client:
+                final_summaries = client.get(f"/api/v1/jobs/{identifier}/pdf-summaries")
+                assert final_summaries.status_code == 200, final_summaries.text
+                assert final_summaries.json()["grounded_pages"] == [1, 2, 3]
             async with db.sessions() as session, session.begin():
                 stale_write = await checkpoints.locked_job(session, identifier, uuid4())
                 assert stale_write is None

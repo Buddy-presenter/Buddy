@@ -7,10 +7,17 @@ from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
+from buddy_api.analysis.contracts import AnalysisResult
 from buddy_api.analysis.provider import ModelSummary, parse_model_output
+from buddy_api.analysis.store import Analyses
 from buddy_api.auth import Principal, authenticated
 from buddy_api.contracts import ErrorResponse
-from buddy_api.persistence.models import Deck, PDFProcessingCheckpoint, ProcessingJob
+from buddy_api.persistence.models import (
+    AnalysisVersion,
+    Deck,
+    PDFProcessingCheckpoint,
+    ProcessingJob,
+)
 from buddy_api.processing import store
 from buddy_api.processing.contracts import JobResponse, PDFPageSummary, PDFProcessingSummaries
 from buddy_api.uploads.contracts import UploadError
@@ -99,12 +106,56 @@ def processing_router() -> APIRouter:
                 job = await store.owned(session, principal.id, identifier)
                 row = await session.get(PDFProcessingCheckpoint, identifier)
                 deck = await session.get(Deck, job.deck_id)
-                if row is None:
-                    raise UploadError(409, "summaries_pending", "PDF summaries are not saved yet.")
                 if (
                     deck is None
                     or deck.source_format != "pdf"
-                    or deck.source_revision != row.source_revision
+                    or deck.source_revision != job.source_revision
+                ):
+                    raise UploadError(
+                        409, "source_changed", "Saved PDF summaries are no longer current."
+                    )
+                if row is None:
+                    record = await session.scalar(
+                        select(AnalysisVersion)
+                        .where(
+                            AnalysisVersion.job_id == job.id,
+                            AnalysisVersion.owner_id == principal.id,
+                            AnalysisVersion.deck_id == deck.id,
+                            AnalysisVersion.extraction_id == job.extraction_id,
+                        )
+                        .order_by(AnalysisVersion.version.desc())
+                        .limit(1)
+                    )
+                    if record is None:
+                        raise UploadError(
+                            409, "summaries_pending", "PDF summaries are not saved yet."
+                        )
+                    saved = await Analyses(session).read(record.id, owner_id=principal.id)
+                    if (
+                        not isinstance(saved, AnalysisResult)
+                        or saved.inputs is None
+                        or saved.inputs.source_revision != deck.source_revision
+                        or saved.inputs.source_sha256 != deck.source_sha256
+                    ):
+                        raise UploadError(
+                            409, "source_changed", "Saved PDF summaries are no longer current."
+                        )
+                    summary = saved.inputs.presentation_summary
+                    return PDFProcessingSummaries(
+                        job_id=job.id,
+                        source_revision=saved.inputs.source_revision,
+                        presentation=ModelSummary(text=summary.text, reason=summary.reason),
+                        slides=tuple(
+                            PDFPageSummary(
+                                number=n,
+                                summary=ModelSummary(text=s.summary.text, reason=s.summary.reason),
+                            )
+                            for n, s in enumerate(saved.slides, 1)
+                        ),
+                        grounded_pages=tuple(range(1, len(saved.slides) + 1)),
+                    )
+                if (
+                    deck.source_revision != row.source_revision
                     or deck.source_sha256 != row.source_sha256
                     or row.owner_id != principal.id
                     or row.deck_id != job.deck_id
