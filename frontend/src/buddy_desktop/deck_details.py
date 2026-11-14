@@ -99,6 +99,19 @@ class DeckDetailsPanel(QWidget):
         self.data = data
         self.name.setText(data.title)
         processing = data.processing
+        processing_label = {
+            "uploaded": "Uploaded",
+            "queued": "Queued",
+            "inspecting_pdf_metadata": (
+                "Inspecting PowerPoint" if data.source_format == "pptx" else "Inspecting PDF"
+            ),
+            "analyzing": "Analyzing",
+            "validating": "Checking suggested actions",
+            "review_ready": "Results available",
+            "partial": "Partial results",
+            "failed": "Failed",
+            "cancelled": "Cancelled",
+        }[processing.state]
         analysis = {
             "unavailable": "No saved analysis yet.",
             "stale": "Saved analysis is for an earlier source or processing job.",
@@ -110,13 +123,16 @@ class DeckDetailsPanel(QWidget):
         self.summary.setPlainText(
             f"Type: {data.source_format.upper()}\n"
             f"Added: {data.created_at.astimezone().strftime('%Y-%m-%d %H:%M')}\n"
-            f"Processing: {processing.state.replace('_', ' ')}\n"
+            f"Processing: {processing_label}\n"
             f"Progress: {processing.progress}%\nAttempts: {processing.attempts}\n"
-            f"Stage: {(processing.stage or 'Not started').replace('_', ' ')}\n"
             f"Analysis: {analysis}\n"
             f"Analysis version: {version}\n"
             f"Slides in saved analysis: {data.slide_count}\n"
-            + (f"Processing error: {processing.error_code}\n" if processing.error_code else "")
+            + (
+                f"Processing issue: {processing.error_code.replace('_', ' ')}\n"
+                if processing.error_code
+                else ""
+            )
             + "\nPublished analysis and execution checks do not prove correct visual targeting."
         )
         self.status.setText("Presentation name saved." if renamed else "")
