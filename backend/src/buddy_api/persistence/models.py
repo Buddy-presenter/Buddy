@@ -456,3 +456,29 @@ class SessionEvent(Base):
     command_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     document: Mapped[dict[str, Any]] = mapped_column(JSONB)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class CandidateIndex(Base):
+    """Derived presentation vectors only; never speech/query text or vectors."""
+
+    __tablename__ = "candidate_indexes"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["analysis_id", "deck_id", "owner_id"],
+            ["analysis_versions.id", "analysis_versions.deck_id", "analysis_versions.owner_id"],
+            ondelete="CASCADE",
+        ),
+    )
+    analysis_id: Mapped[UUID] = mapped_column(primary_key=True)
+    space: Mapped[str] = mapped_column(String(64), primary_key=True)
+    deck_id: Mapped[UUID] = mapped_column()
+    owner_id: Mapped[UUID] = mapped_column(index=True)
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    vectors: Mapped[list[Any]] = mapped_column(JSONB)
+
+
+class EmbeddingQuota(Base):
+    __tablename__ = "embedding_quotas"
+    key_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    month: Mapped[str] = mapped_column(String(7), primary_key=True)
+    calls: Mapped[int] = mapped_column(default=0)

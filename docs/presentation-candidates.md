@@ -1,5 +1,87 @@
 # Presentation candidates (#19)
 
+## Semantic retrieval with Cohere Embed 5
+
+When the backend has `BUDDY_COHERE_API_KEY`, retrieval uses `cohere-embed5-v1`.
+Without it, the lexical resolver remains available and identifies itself as
+`summary-overlap-2`; it must not be described as semantic understanding. A configured
+semantic service never silently downgrades after provider failure.
+
+Call `CandidateService.prepare(access, session)` off the GUI thread before live
+queries, or POST `/api/v1/sessions/{id}/candidates/prepare` with the bearer header.
+Preparation embeds available slide summaries and currently usable action purposes
+with `embed-v5.0-pro`, saving normalized 512-dimensional vectors in the database.
+The index binds analysis, deck, owner, model space and document fingerprint. Repeated
+preparation of unchanged content makes no model calls. Changes in summaries or
+action eligibility require preparation again. Stale vectors cannot enable actions.
+
+Live queries use `embed-v5.0-fast`. Latest utterance and bounded recent text are two
+inputs in one request, weighted 80/20. Document indexing uses `search_document`;
+queries use `search_query`. Positive-cosine matches form a ranked shortlist of at
+most five slide destinations including current, plus region options and no change,
+with eight candidates maximum. Similarity is a ranking signal, not a calibrated
+confidence probability. Exact whole-utterance next/previous navigation keeps a
+validated no-model fast path. #20 owns decisions, abstention and execution policy.
+
+### Limits and usage accounting
+
+- Prepare: at most 1500 documents and two million characters, batches of 64, two
+  simultaneous preparations per process, one per owner, 120-second deadline.
+- Queries: one concurrent request per owner, at most one new call every two seconds
+  per process, 16 concurrent owners total. A bounded 128-entry memory cache may
+  reuse identical query vectors for five seconds. Speech vectors are never persisted.
+- Provider: fixed HTTPS endpoint, no redirects, persistent connection pool, bounded
+  responses, strict finite/nonzero 512-dimensional vectors, two-second query and
+  20-second document-call deadlines. There are no automatic rate-limit retries.
+- PostgreSQL atomically reserves at most 750 attempted calls per API-key hash per
+  UTC calendar month, shared across API replicas and restarts. Preparation batches
+  and query calls both count; failed attempts count conservatively. This leaves a
+  buffer below the documented 1000-call trial limit but cannot account for key use
+  outside this database. Disposable test schemas have separate counters. Account or
+  key rotation is not a quota-control mechanism.
+
+### Setup, deployment and privacy
+
+Apply migration `0019_candidate_indexes` before upgrading API/workers. Both services
+use strict schema readiness; use the normal reviewed compatibility-bridge and
+paused-worker rollout. The additive index has an analysis/deck/owner foreign key
+and cascades with analysis deletion. Vectors remain private database data subject
+to the existing encryption and backup policies. No database extension is needed.
+
+Terraform `enable_semantic_candidates` defaults false. Enabling it creates an
+operator-populated `embeddings/cohere` Secrets Manager secret and grants only the
+API execution role access to inject `BUDDY_COHERE_API_KEY`. No secret value belongs
+in Terraform, Git, desktop settings, logs or command arguments. Worker and migration
+containers do not receive it. This implementation applies no infrastructure itself.
+For local development, load the DPAPI-protected key only into the backend process,
+configure database/identity normally, and remove its process variable after shutdown.
+
+The standard Cohere API receives summaries/action purposes during preparation and
+latest/recent transcript text during queries. No audio is sent to Cohere. This is
+additional processing beyond Deepgram and Buddy's journal. Retention and training
+controls depend on the account; the requester explicitly authorized training-enabled
+trial use and provider retention for this development. This is not EU-only or
+zero-retention processing. Before a wider automatic agent/microphone rollout,
+disclose Cohere processing in the product's consent/status flow. See
+[Cohere data commitments](https://cohere.com/enterprise-data-commitments).
+
+### Verification and limitations
+
+Tests cover preparation caching, persistent indexes, temporary query caching,
+cross-owner denial, atomic concurrent quota reservation, restart budget persistence,
+malformed/nonfinite vectors, rate limits and no-model navigation. Paid provider
+checks are explicit; CI substitutes the external provider boundary.
+
+Actual CH8 SOL analysis was replayed through local HTTP and isolated PostgreSQL
+with real Pro/Fast calls. Totient and simultaneous-congruence references rank the
+intended page first. The correct page for “question two” is in the shortlist but
+ranks behind page 2: embeddings do not solve every reference. There are zero usable
+region actions in that deck, so no positive region-accuracy claim is made. Initial
+semantic HTTP requests took about 0.85–1.3 seconds before connection pooling; the
+500 ms P95 target is not demonstrated. This is not deployed or microphone evidence.
+
+## Legacy lexical protocol and behavior
+
 Issue #19 uses the current persisted slide summaries and validated action purposes,
 as agreed for the PDF-first analysis design. It does not reintroduce the historical
 semantic graph or add a model/provider request. Candidate retrieval proposes targets;

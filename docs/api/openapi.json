@@ -413,8 +413,11 @@
             "type": "string"
           },
           "resolver_version": {
-            "const": "summary-overlap-2",
             "default": "summary-overlap-2",
+            "enum": [
+              "summary-overlap-2",
+              "cohere-embed5-v1"
+            ],
             "title": "Resolver Version",
             "type": "string"
           },
@@ -6328,6 +6331,76 @@
           }
         },
         "summary": "Candidates",
+        "tags": [
+          "presentation candidates"
+        ]
+      }
+    },
+    "/api/v1/sessions/{identifier}/candidates/prepare": {
+      "post": {
+        "operationId": "prepare_candidates_api_v1_sessions__identifier__candidates_prepare_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "boolean"
+                      }
+                    ]
+                  },
+                  "title": "Response Prepare Candidates Api V1 Sessions  Identifier  Candidates Prepare Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "summary": "Prepare Candidates",
         "tags": [
           "presentation candidates"
         ]

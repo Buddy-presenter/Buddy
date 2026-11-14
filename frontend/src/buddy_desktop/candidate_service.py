@@ -18,6 +18,24 @@ class CandidateService:
     def __init__(self, config: AppConfig):
         self.config = config
 
+    def prepare(self, access: str, session: PresentationSession) -> None:
+        """Prepare once before starting live candidate queries; run off GUI thread."""
+        request = Request(
+            self.config.api_url + f"/api/v1/sessions/{UUID(session.id)}/candidates/prepare",
+            data=b"",
+            method="POST",
+            headers={"Authorization": "Bearer " + access},
+        )
+        try:
+            with build_opener(NoRedirects()).open(request, timeout=125) as reply:
+                result = json.loads(reply.read(4097))
+                if not isinstance(result, dict) or result.get("ready") is not True:
+                    raise ValueError
+        except (HTTPError, URLError, OSError, ValueError):
+            raise ServiceError(
+                "Semantic preparation unavailable; retry before presenting."
+            ) from None
+
     def resolve(
         self, access: str, session: PresentationSession, context: ContextSnapshot
     ) -> dict[str, object]:
@@ -79,7 +97,8 @@ class CandidateService:
                     "candidates",
                 }
                 or result.get("protocol") != payload["protocol"]
-                or result.get("resolver_version") not in {"summary-overlap-1", "summary-overlap-2"}
+                or result.get("resolver_version")
+                not in {"summary-overlap-1", "summary-overlap-2", "cohere-embed5-v1"}
             ):
                 raise ValueError
             for key, value in (
@@ -149,7 +168,20 @@ class CandidateService:
             return result
         except HTTPError as exc:
             status = exc.code
-            exc.close()
+            try:
+                error = json.loads(exc.read(4096)).get("error", {}).get("code")
+            except (ValueError, AttributeError):
+                error = None
+            finally:
+                exc.close()
+            messages = {
+                "embedding_budget_exhausted": "Embedding allowance exhausted.",
+                "embedding_index_not_ready": "Prepare this presentation before semantic retrieval.",
+                "embedding_query_busy": "Wait for the current speech query before retrying.",
+                "embedding_rate_limited": "The embedding provider is busy; wait before retrying.",
+            }
+            if isinstance(error, str) and error in messages:
+                raise ServiceError(messages[error]) from None
             raise ServiceError(
                 f"Candidate request failed ({status}); refresh session and speech."
             ) from None

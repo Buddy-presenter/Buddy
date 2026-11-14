@@ -16,9 +16,11 @@ from starlette.exceptions import HTTPException
 from buddy_api.analysis.contracts import AnalysisResult, Model
 from buddy_api.analysis.store import Analyses
 from buddy_api.auth import Principal, authenticated
+from buddy_api.embeddings import EmbeddingFailure
 from buddy_api.persistence.errors import PersistenceError
 from buddy_api.persistence.models import Deck
 from buddy_api.presentation_sessions import current_ready_analysis, owned_session
+from buddy_api.semantic_candidates import SemanticCandidates
 
 STOP = frozenset(
     [
@@ -92,7 +94,7 @@ class Candidate(Model):
 
 class CandidateSet(Model):
     protocol: Literal["presentation-candidates.v1"] = "presentation-candidates.v1"
-    resolver_version: Literal["summary-overlap-2"] = "summary-overlap-2"
+    resolver_version: Literal["summary-overlap-2", "cohere-embed5-v1"] = "summary-overlap-2"
     session_id: UUID
     analysis_id: UUID
     state_version: int
@@ -252,15 +254,17 @@ def candidate_router() -> APIRouter:
                 analysis = await Analyses(db).read(record.id, owner_id=principal.id)
                 if not isinstance(analysis, AnalysisResult):
                     raise HTTPException(409, "Saved PDF analysis is required.")
-                return CandidateSet(
-                    session_id=identifier,
-                    analysis_id=record.id,
-                    state_version=session.state_version,
-                    context_epoch=values.context_epoch,
-                    stream_id=values.stream_id,
-                    sequence=values.sequence,
-                    input_sha256=hashlib.sha256(values.model_dump_json().encode()).hexdigest(),
-                    candidates=await asyncio.wait_for(
+                semantic: SemanticCandidates | None = request.app.state.semantic_candidates
+                if semantic is not None:
+                    targets = await semantic.retrieve(
+                        analysis,
+                        principal.id,
+                        session.active_slide_id or "",
+                        values.latest_utterance or values.text,
+                        values.text,
+                    )
+                else:
+                    targets = await asyncio.wait_for(
                         asyncio.to_thread(
                             resolve,
                             analysis,
@@ -269,11 +273,57 @@ def candidate_router() -> APIRouter:
                             values.latest_utterance,
                         ),
                         timeout=2,
-                    ),
+                    )
+                return CandidateSet(
+                    resolver_version="cohere-embed5-v1"
+                    if semantic is not None
+                    else "summary-overlap-2",
+                    session_id=identifier,
+                    analysis_id=record.id,
+                    state_version=session.state_version,
+                    context_epoch=values.context_epoch,
+                    stream_id=values.stream_id,
+                    sequence=values.sequence,
+                    input_sha256=hashlib.sha256(values.model_dump_json().encode()).hexdigest(),
+                    candidates=targets,
                 )
+        except EmbeddingFailure:
+            raise
         except (PersistenceError, SQLAlchemyError, OSError, TimeoutError):
             raise HTTPException(
                 503, "Candidates are unavailable; retry with fresh context."
             ) from None
+
+    @router.post("/{identifier}/candidates/prepare")
+    async def prepare_candidates(
+        identifier: UUID,
+        request: Request,
+        response: Response,
+        principal: Annotated[Principal, Depends(authenticated)],
+    ) -> dict[str, str | bool]:
+        response.headers["Cache-Control"] = "no-store"
+        semantic: SemanticCandidates | None = request.app.state.semantic_candidates
+        if semantic is None:
+            raise HTTPException(503, "Semantic retrieval is not configured.")
+        try:
+            async with request.app.state.database.sessions() as db, db.begin():
+                session = await owned_session(db, principal, identifier)
+                if session.status != "active":
+                    raise HTTPException(409, "The session ended.")
+                deck = await db.get(Deck, session.deck_id)
+                if deck is None:
+                    raise HTTPException(404)
+                record, _ = await current_ready_analysis(db, deck, principal.id)
+                if record.id != session.analysis_version_id:
+                    raise HTTPException(409, "The analysis changed.")
+                analysis = await Analyses(db).read(record.id, owner_id=principal.id)
+                if not isinstance(analysis, AnalysisResult):
+                    raise HTTPException(409, "Saved PDF analysis is required.")
+            created = await semantic.prepare(analysis, principal.id)
+            return {"ready": True, "created": created, "resolver_version": "cohere-embed5-v1"}
+        except EmbeddingFailure:
+            raise
+        except (PersistenceError, SQLAlchemyError, OSError, TimeoutError):
+            raise HTTPException(503, "Semantic preparation unavailable.") from None
 
     return router
