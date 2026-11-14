@@ -2,6 +2,7 @@
 
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from math import ceil
 from pathlib import Path
 from threading import Event
@@ -30,8 +31,10 @@ from PySide6.QtWidgets import (
 
 from buddy_desktop.account_widget import AccountWidget
 from buddy_desktop.config import AppConfig
+from buddy_desktop.deck_details import DeckDetailsPanel
 from buddy_desktop.library_service import (
     DeckDeletionResult,
+    DeckDetails,
     DeckSummary,
     LibraryAccessExpired,
     LibraryPage,
@@ -109,6 +112,9 @@ class LibraryWidget(QWidget):
         self.upload_cancelled: Event | None = None
         self.upload_service: PresentationService | None = None
         self.retry_path: Path | None = None
+        self.details_open = False
+        self.details_id: UUID | None = None
+        self.details_operation = "read"
         self.upload_progress.connect(self.update_upload_progress)
         # The window header names this route; the page starts with its tools.
         layout = QVBoxLayout(self)
@@ -175,6 +181,12 @@ class LibraryWidget(QWidget):
         self.delete_button.setToolTip("Permanently delete the selected presentation and saved data")
         self.delete_button.clicked.connect(self.delete_selected)
         self.delete_button.hide()
+        self.details_button = QPushButton()
+        command(self.details_button, "arrow-up-right", compact=True)
+        self.details_button.setAccessibleName("Open selected presentation details")
+        self.details_button.setToolTip("Presentation details and rename")
+        self.details_button.setEnabled(False)
+        self.details_button.clicked.connect(self.open_details)
         self.cancel_job_button: QPushButton = QPushButton("Cancel processing")
         self.cancel_job_button.setAccessibleName("Cancel processing job")
         command(self.cancel_job_button, "x")
@@ -218,6 +230,13 @@ class LibraryWidget(QWidget):
         self.state.retry.setAccessibleName("Retry library request")
         self.state.retry_requested.connect(self.reload)
         layout.addWidget(self.state)
+        self.deck_details = DeckDetailsPanel()
+        self.deck_details.back_requested.connect(self.reload)
+        self.deck_details.refresh_requested.connect(self.load_details)
+        self.deck_details.rename_requested.connect(self.rename_selected)
+        self.deck_details.delete_requested.connect(self.delete_selected)
+        self.activity_changed.connect(self.deck_details.set_busy)
+        layout.addWidget(self.deck_details, 1)
         self.signin_button = QPushButton("Sign in")
         self.signin_button.setAccessibleName("Sign in to Buddy")
         command(self.signin_button, "log-in", primary=True)
@@ -266,6 +285,7 @@ class LibraryWidget(QWidget):
         self.detail.setAccessibleName("Selected deck processing status")
         # Selected-deck details sit beside the action that uses them.
         actions.addWidget(self.detail, 1)
+        actions.addWidget(self.details_button, alignment=Qt.AlignmentFlag.AlignTop)
         actions.addWidget(self.cancel_job_button, alignment=Qt.AlignmentFlag.AlignTop)
         actions.addWidget(self.retry_job_button, alignment=Qt.AlignmentFlag.AlignTop)
         actions.addWidget(self.review_button, alignment=Qt.AlignmentFlag.AlignTop)
@@ -322,6 +342,9 @@ class LibraryWidget(QWidget):
         self.account_changed()
 
     def clear(self) -> None:
+        self.details_open = False
+        self.details_id = None
+        self.deck_details.clear()
         self.table.setRowCount(0)
         self.table.hide()
         self.detail.clear()
@@ -412,8 +435,8 @@ class LibraryWidget(QWidget):
 
     def _access_layout(self) -> None:
         signed_in = bool(self.account.session and self.account.session.tokens)
-        self.toolbar.setVisible(signed_in)
-        self.pager.setVisible(signed_in)
+        self.toolbar.setVisible(signed_in and not self.details_open)
+        self.pager.setVisible(signed_in and not self.details_open)
         self.signin_button.setVisible(not signed_in)
         self.signin_button.setEnabled(not self.account_busy)
 
@@ -435,6 +458,8 @@ class LibraryWidget(QWidget):
         self.reload()
 
     def reload(self, *, retain_rows: bool = False) -> None:
+        if self.details_open and retain_rows:
+            return
         self.debounce.stop()
         if self.closing or not self.active:
             return
@@ -528,6 +553,25 @@ class LibraryWidget(QWidget):
             self.pending = True
             self.state.show_state("Processing updated", "Refreshing the saved job status…")
             return
+        if isinstance(result, DeckDetails):
+            if not self.details_open or result.id != self.details_id:
+                return
+            renamed = self.details_operation == "rename"
+            self.deck_details.show_details(result, renamed=renamed)
+            if renamed and self.last_page is not None:
+                self.last_page = replace(
+                    self.last_page,
+                    items=tuple(
+                        replace(item, title=result.title) if item.id == result.id else item
+                        for item in self.last_page.items
+                    ),
+                )
+                row = self.table.currentRow()
+                item = self.table.item(row, 0)
+                if item is not None:
+                    item.setText(result.title)
+                    item.setToolTip(result.title)
+            return
         if not isinstance(result, LibraryPage):
             self.failed(_identifier, "The backend returned an invalid library response.")
             return
@@ -606,6 +650,7 @@ class LibraryWidget(QWidget):
         row = self.table.currentRow()
         if self.last_page and 0 <= row < len(self.last_page.items):
             deck = self.last_page.items[row]
+            self.details_button.setEnabled(self.token() is not None and not self.runner.busy)
             _label, guidance = self.deck_status_text(deck)
             processing = deck.processing
             self.cancel_job_button.setVisible(bool(processing and processing.can_cancel))
@@ -635,12 +680,75 @@ class LibraryWidget(QWidget):
                 guidance += f" Progress: {processing.progress}%."
             self.detail.setPlainText(deck.title + "\n" + guidance + attempts)
         else:
+            self.details_button.setEnabled(False)
             self.open_button.setEnabled(False)
             self.review_button.setEnabled(False)
             self.delete_button.setEnabled(False)
             self.delete_button.hide()
             self.cancel_job_button.hide()
             self.retry_job_button.hide()
+
+    def open_details(self) -> None:
+        row = self.table.currentRow()
+        if (
+            not self.last_page
+            or not 0 <= row < len(self.last_page.items)
+            or self.runner.busy
+            or not self.token()
+        ):
+            return
+        self.details_id = self.last_page.items[row].id
+        self.details_open = True
+        self.poll.stop()
+        self.debounce.stop()
+        for widget in (
+            self.toolbar,
+            self.table,
+            self.pager,
+            self.selection_actions,
+            self.empty_space,
+            self.state,
+        ):
+            widget.hide()
+        self.deck_details.show()
+        self.deck_details.back.setFocus()
+        self.load_details()
+
+    def load_details(self) -> None:
+        self._request_details()
+
+    def rename_selected(self, title: str) -> None:
+        self._request_details(title)
+
+    def _request_details(self, title: str | None = None) -> None:
+        access, identifier = self.token(), self.details_id
+        if (
+            self.closing
+            or not self.details_open
+            or identifier is None
+            or access is None
+            or self.runner.busy
+        ):
+            return
+        self.details_operation = "rename" if title is not None else "read"
+        self.request_generation = self.generation
+        self.deck_details.status.setText(
+            "Saving presentation name…" if title is not None else "Loading presentation details…"
+        )
+        self.activity_changed.emit(True)
+        service = LibraryService(self.config)
+
+        def work() -> DeckDetails | LibraryAccessExpired:
+            try:
+                return (
+                    service.rename_deck(access, identifier, title)
+                    if title is not None
+                    else service.deck_details(access, identifier)
+                )
+            except LibraryAccessExpired as exc:
+                return exc
+
+        self.runner.submit(work)
 
     def delete_selected(self) -> None:
         row = self.table.currentRow()
@@ -658,6 +766,7 @@ class LibraryWidget(QWidget):
             parent=self,
         )
         delete_button = dialog.addButton("Delete", QMessageBox.ButtonRole.DestructiveRole)
+        dialog.setTextFormat(Qt.TextFormat.PlainText)
         dialog.addButton(QMessageBox.StandardButton.Cancel)
         dialog.setDefaultButton(QMessageBox.StandardButton.Cancel)
         dialog.exec()
@@ -749,6 +858,9 @@ class LibraryWidget(QWidget):
             self.state.hide()
             return
         if self.current():
+            if self.details_open:
+                self.deck_details.status.setText(message)
+                return
             self.state.show_state("Library unavailable", message, retry=True)
 
     def idle(self) -> None:

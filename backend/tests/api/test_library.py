@@ -316,6 +316,10 @@ def test_processing_review_ready_requires_published_analysis_for_current_pdf_rev
     assert item["processing"]["state"] == "review_ready"
     assert item["processing"]["stage"] == "validation"
     assert item["processing"]["progress"] == 100
+    details = client.get(f"/api/v1/decks/{deck_id}", headers=HEADERS)
+    assert details.status_code == 200
+    assert details.json()["data"]["analysis"]["status"] == "published"
+    assert details.json()["data"]["processing"] == item["processing"]
 
     async def change_source():
         db = Database(settings.database)
@@ -331,3 +335,63 @@ def test_processing_review_ready_requires_published_analysis_for_current_pdf_rev
     stale_item = next(row for row in stale if row["id"] == str(deck_id))
     assert stale_item["processing"]["state"] == "failed"
     assert stale_item["processing"]["error_code"] == "analysis_unavailable"
+    assert (
+        client.get(f"/api/v1/decks/{deck_id}", headers=HEADERS).json()["data"]["analysis"]["status"]
+        == "stale"
+    )
+
+
+@pytest.mark.postgres
+def test_deck_details_and_rename_are_owner_scoped_and_survive_reload(
+    library_api, api_client_factory
+):
+    client, ids, _, settings = library_api
+    path = f"/api/v1/decks/{ids[0]}"
+    response = client.get(path, headers=HEADERS)
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.json()["data"]["analysis"] == {
+        "status": "unavailable",
+        "version": None,
+        "slide_count": 0,
+    }
+    assert "source_key" not in response.text and "owner_id" not in response.text
+    other = {"Authorization": "Bearer other"}
+    assert client.get(path, headers=other).status_code == 404
+    assert client.patch(path, headers=other, json={"title": "stolen"}).status_code == 404
+    assert client.get(path).status_code == 401
+    for body in (
+        {"title": " "},
+        {"title": "x" * 257},
+        {"title": "new", "owner_id": "owner"},
+        {"title": "line\nbreak"},
+        {"title": "null\x00byte"},
+    ):
+        assert client.patch(path, headers=HEADERS, json=body).status_code == 422
+    changed = client.patch(path, headers=HEADERS, json={"title": "  Revised <title> العربية  "})
+    assert changed.status_code == 200
+    expected = "Revised <title> العربية"
+    assert changed.json()["data"]["title"] == expected
+    fresh = api_client_factory(settings)
+    assert fresh.get(path, headers=HEADERS).json()["data"]["title"] == expected
+    listed = fresh.get("/api/v1/decks", headers=HEADERS, params={"search": expected}).json()["data"]
+    assert len(listed["items"]) == 1 and listed["items"][0]["id"] == str(ids[0])
+
+
+@pytest.mark.postgres
+def test_deleted_deck_cannot_be_read_or_renamed(library_api):
+    client, ids, _, settings = library_api
+
+    async def tombstone():
+        db = Database(settings.database)
+        try:
+            async with db.sessions() as session, session.begin():
+                deck = await session.get(Deck, ids[0])
+                deck.deletion_requested_at = datetime.now(UTC)
+        finally:
+            await db.close()
+
+    asyncio.run(tombstone())
+    path = f"/api/v1/decks/{ids[0]}"
+    assert client.get(path, headers=HEADERS).status_code == 404
+    assert client.patch(path, headers=HEADERS, json={"title": "restore"}).status_code == 404
