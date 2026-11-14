@@ -2,19 +2,27 @@
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.exceptions import HTTPException
 from starlette.responses import Response
 
 from buddy_api.auth import Principal, authenticated
 from buddy_api.contracts import ErrorResponse
-from buddy_api.persistence.models import AnalysisVersion, Deck, DeckExtraction, ProcessingJob
+from buddy_api.persistence.models import (
+    AnalysisSlide,
+    AnalysisVersion,
+    Deck,
+    DeckExtraction,
+    ProcessingJob,
+)
+from buddy_api.processing.config import WorkerSettings
 from buddy_api.uploads.contracts import UploadError
 from buddy_api.uploads.router import service
 from buddy_api.uploads.service import blocking
@@ -92,6 +100,174 @@ class DeckDeletionResponse(BaseModel):
     request_id: str
 
 
+class RenameDeck(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    title: str = Field(min_length=1, max_length=256)
+
+    @field_validator("title")
+    @classmethod
+    def printable_title(cls, value: str) -> str:
+        if any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError("Use a title without control characters.")
+        return value
+
+
+class DeckAnalysisStatus(BaseModel):
+    status: Literal["unavailable", "stale", "partial", "awaiting_validation", "published"]
+    version: int | None = Field(default=None, ge=1)
+    slide_count: int = Field(ge=0)
+
+
+class DeckDetails(BaseModel):
+    id: UUID
+    title: str = Field(min_length=1, max_length=256)
+    created_at: datetime
+    source_format: Literal["pdf", "pptx"]
+    processing: LibraryProcessing
+    analysis: DeckAnalysisStatus
+
+
+class DeckDetailsResponse(BaseModel):
+    data: DeckDetails
+    request_id: str
+
+
+def processing_state_for(
+    status: str | None, stage: str | None, has_analysis: bool
+) -> ProcessingState:
+    state = {
+        None: ProcessingState.UPLOADED,
+        "pending": ProcessingState.QUEUED,
+        "queued": ProcessingState.QUEUED,
+        "retry_wait": ProcessingState.QUEUED,
+        "running": {
+            "pdf_metadata.v1": ProcessingState.INSPECTING,
+            "pptx_metadata.v1": ProcessingState.INSPECTING,
+            "pptx_analysis.v1": ProcessingState.ANALYZING,
+            "pdf_render": ProcessingState.ANALYZING,
+            "provider": ProcessingState.ANALYZING,
+            "pdf_analysis.v1": ProcessingState.ANALYZING,
+            "validation": ProcessingState.VALIDATING,
+        }.get(stage or "", ProcessingState.ANALYZING),
+        "analysis_ready": ProcessingState.REVIEW_READY,
+        "succeeded": ProcessingState.REVIEW_READY,
+        "metadata_ready": ProcessingState.FAILED,
+        "analysis_partial": ProcessingState.PARTIAL,
+        "dead_letter": ProcessingState.FAILED,
+        "failed": ProcessingState.FAILED,
+        "cancelled": ProcessingState.CANCELLED,
+    }[status]
+    return (
+        ProcessingState.FAILED
+        if state == ProcessingState.REVIEW_READY and not has_analysis
+        else state
+    )
+
+
+async def read_deck_details(
+    db: AsyncSession, deck: Deck, worker: WorkerSettings | None
+) -> DeckDetails:
+    job = await db.scalar(
+        select(ProcessingJob)
+        .where(
+            ProcessingJob.deck_id == deck.id,
+            ProcessingJob.owner_id == deck.owner_id,
+        )
+        .order_by(ProcessingJob.created_at.desc(), ProcessingJob.id.desc())
+        .limit(1)
+    )
+    analysis = await db.scalar(
+        select(AnalysisVersion)
+        .where(
+            AnalysisVersion.deck_id == deck.id,
+            AnalysisVersion.owner_id == deck.owner_id,
+        )
+        .order_by(AnalysisVersion.version.desc())
+        .limit(1)
+    )
+    extraction = (
+        await db.get(DeckExtraction, analysis.extraction_id)
+        if analysis and analysis.extraction_id
+        else None
+    )
+    source_matches = bool(
+        job and job.source_revision and job.source_revision == deck.source_revision
+    )
+    analysis_matches = bool(
+        source_matches
+        and analysis
+        and extraction
+        and job
+        and analysis.job_id == job.id
+        and extraction.source_revision == deck.source_revision
+        and extraction.source_sha256 == deck.source_sha256
+        and extraction.document.get("source_format") == deck.source_format
+    )
+    published = bool(analysis_matches and analysis and analysis.publication == "published")
+    state = processing_state_for(job.status if job else None, job.stage if job else None, published)
+    analysis_status: Literal[
+        "unavailable", "stale", "partial", "awaiting_validation", "published"
+    ] = "unavailable"
+    if analysis:
+        if not analysis_matches:
+            analysis_status = "stale"
+        elif analysis.publication == "published":
+            analysis_status = "published"
+        elif analysis.publication == "partial":
+            analysis_status = "partial"
+        elif analysis.publication == "awaiting_validation":
+            analysis_status = "awaiting_validation"
+    slide_count = 0
+    if analysis:
+        slide_count = (
+            await db.scalar(
+                select(func.count())
+                .select_from(AnalysisSlide)
+                .where(
+                    AnalysisSlide.analysis_id == analysis.id,
+                    AnalysisSlide.owner_id == deck.owner_id,
+                    AnalysisSlide.deck_id == deck.id,
+                )
+            )
+            or 0
+        )
+    return DeckDetails(
+        id=deck.id,
+        title=deck.title,
+        created_at=deck.created_at,
+        source_format=cast(Literal["pdf", "pptx"], deck.source_format),
+        processing=LibraryProcessing(
+            job_id=job.id if job else None,
+            state=state,
+            stage=job.stage if job else None,
+            progress=job.progress if job else 0,
+            attempts=job.attempts if job else 0,
+            error_code=(
+                "analysis_unavailable"
+                if job and job.status in {"analysis_ready", "succeeded"} and not published
+                else job.error_code
+                if job
+                else None
+            ),
+            can_retry=bool(
+                job
+                and job.status in {"metadata_ready", "dead_letter", "failed", "cancelled"}
+                and worker
+                and job.attempts < worker.max_attempts
+                and source_matches
+            ),
+            can_cancel=bool(
+                job and job.status in {"queued", "retry_wait", "running"} and source_matches
+            ),
+        ),
+        analysis=DeckAnalysisStatus(
+            status=analysis_status,
+            version=analysis.version if analysis else None,
+            slide_count=slide_count,
+        ),
+    )
+
+
 def library_router() -> APIRouter:
     router = APIRouter(
         prefix="/api/v1/decks",
@@ -101,6 +277,49 @@ def library_router() -> APIRouter:
             422: {"model": ErrorResponse, "description": "Request validation failed."},
         },
     )
+
+    async def details_operation(
+        request: Request,
+        principal: Principal,
+        identifier: UUID,
+        values: RenameDeck | None = None,
+    ) -> DeckDetailsResponse:
+        try:
+            async with request.app.state.database.sessions() as db, db.begin():
+                await db.connection(execution_options={"isolation_level": "REPEATABLE READ"})
+                query = select(Deck).where(
+                    Deck.id == identifier,
+                    Deck.owner_id == principal.id,
+                    Deck.deletion_requested_at.is_(None),
+                )
+                if values is not None:
+                    query = query.with_for_update()
+                deck = await db.scalar(query)
+                if deck is None:
+                    raise HTTPException(404)
+                if values is not None:
+                    deck.title = values.title
+                data = await read_deck_details(db, deck, request.app.state.worker_settings)
+                return DeckDetailsResponse(data=data, request_id=request.state.request_id)
+        except (SQLAlchemyError, OSError, TimeoutError):
+            raise HTTPException(503) from None
+
+    @router.get("/{identifier}", response_model=DeckDetailsResponse)
+    async def details(
+        request: Request,
+        identifier: UUID,
+        principal: Annotated[Principal, Depends(authenticated)],
+    ) -> DeckDetailsResponse:
+        return await details_operation(request, principal, identifier)
+
+    @router.patch("/{identifier}", response_model=DeckDetailsResponse)
+    async def rename(
+        request: Request,
+        identifier: UUID,
+        values: RenameDeck,
+        principal: Annotated[Principal, Depends(authenticated)],
+    ) -> DeckDetailsResponse:
+        return await details_operation(request, principal, identifier, values)
 
     @router.get("", response_model=LibraryResponse)
     async def listing(
@@ -254,30 +473,7 @@ def library_router() -> APIRouter:
                             else DeckStatus.INCOMPLETE
                         ),
                     }[job_status]
-                    processing_state = {
-                        None: ProcessingState.UPLOADED,
-                        "pending": ProcessingState.QUEUED,
-                        "queued": ProcessingState.QUEUED,
-                        "retry_wait": ProcessingState.QUEUED,
-                        "running": {
-                            "pdf_metadata.v1": ProcessingState.INSPECTING,
-                            "pptx_metadata.v1": ProcessingState.INSPECTING,
-                            "pptx_analysis.v1": ProcessingState.ANALYZING,
-                            "pdf_render": ProcessingState.ANALYZING,
-                            "provider": ProcessingState.ANALYZING,
-                            "pdf_analysis.v1": ProcessingState.ANALYZING,
-                            "validation": ProcessingState.VALIDATING,
-                        }.get(job_stage, ProcessingState.ANALYZING),
-                        "analysis_ready": ProcessingState.REVIEW_READY,
-                        "succeeded": ProcessingState.REVIEW_READY,
-                        "metadata_ready": ProcessingState.FAILED,
-                        "analysis_partial": ProcessingState.PARTIAL,
-                        "dead_letter": ProcessingState.FAILED,
-                        "failed": ProcessingState.FAILED,
-                        "cancelled": ProcessingState.CANCELLED,
-                    }[job_status]
-                    if processing_state == ProcessingState.REVIEW_READY and not has_analysis:
-                        processing_state = ProcessingState.FAILED
+                    processing_state = processing_state_for(job_status, job_stage, has_analysis)
                     retryable = job_status in {
                         "metadata_ready",
                         "dead_letter",

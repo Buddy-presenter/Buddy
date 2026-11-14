@@ -77,6 +77,39 @@ No migration is needed: additive library fields read existing durable records an
 values fit the existing bounded job column. Local tests seed disposable PostgreSQL records;
 the application never injects sample decks or reads a backend database directly.
 
+## Deck details, rename and deletion
+
+Select a deck and choose the details arrow beside the selection actions. The details
+view fetches its type, added date, latest processing stage/progress/attempts, safe error
+code and analysis status from the authenticated API. Refresh details reads a new snapshot;
+Back to Library reloads the list. A published analysis status indicates saved results,
+not independent verification that every suggested target is visually correct. Stale
+analysis is identified explicitly, including results tied to an earlier source or job.
+
+Edit Name and choose Save name (or press Enter) to persist a new title. Names are trimmed,
+limited to 256 characters, and cannot contain control characters. The saved title appears
+in the library and survives subsequent loads. Processing, source bytes, active sessions
+and analysis versions are not changed by a rename.
+
+Delete presentation uses the existing permanent-deletion confirmation and asynchronous
+cleanup. Cancel is the default. Confirming immediately revokes deck access and schedules
+the existing retryable source/derived-data cleanup. See [private uploads](uploads.md) for
+deletion and retention behavior. Account deletion remains a separate feature.
+
+`GET /api/v1/decks/{id}` and `PATCH /api/v1/decks/{id}` (body `{"title":"New name"}`)
+return a `DeckDetailsResponse` with the normal request ID and no-store caching. Both resolve
+the verified owner, exclude deletion tombstones, and return 404 for foreign, missing or
+deleted decks. Rename rejects unknown fields and invalid titles with 422. Current source,
+latest job, latest analysis and slide count are read in a repeatable-read transaction;
+storage keys and private analysis/provider content are never included. No migration is needed.
+
+The UI uses the library's existing serialized background runner. Controls expose accessible
+names, keyboard name saving, loading/error states and an explicit refresh. Account/backend
+changes and sign-out clear details and discard late responses. The test suite includes
+real local HTTP reads/renames, native Qt interactions, deletion cancellation, minimum-width
+layout and sign-out races; PostgreSQL CI verifies owner isolation, persistence, current/stale
+analysis and tombstone protection.
+
 ## Verification
 
 Install the documented API/dev extras, then run:
