@@ -37,9 +37,13 @@ existing bounded job retry schedule. Only the API role sends; workers receive/de
 reconcile DB leases. Multiple dispatchers lock job rows with SKIP LOCKED. No polling thread
 holds source bytes.
 
-## Enable candidate-line targeting
+## Optional candidate-ID model targeting
 
-The default worker mode is `quote`. To try the experimental text-ID method in the normal
+The default worker mode is `quote`. Real provider responses in either mode now receive the
+source-measured text-entity inventory (titles, headings, paragraphs, complete bullets, and
+repeated table rows) plus source visual candidates. The `candidate_lines` value controls whether
+the model selects text by measured ID instead of returning a quote and approximate coordinates;
+it is not required to enable entity coverage. To exercise the ID-selection path in the normal
 desktop Library/Review flow, start the reviewed worker with:
 
 ```powershell
@@ -64,18 +68,20 @@ After deployment, open Buddy, sign in normally, and upload the test PDF as a **n
 from Library. Wait for processing, then open Review and select the generated highlights.
 Opening the local PDF in Present does not request a new analysis. Completed old jobs and
 saved boxes are not regenerated when the flag changes; do not use Retry on a completed
-analysis to test a different generator. Candidate traces report `pdf_candidate_line` and
-the chosen target ID. Selection is performed by the live model; availability of a measured
-line does not guarantee the model selects it.
+analysis to test a different generator. Candidate traces report `pdf_candidate_line` (legacy method identifier retained for compatible readers) and
+the chosen entity ID. In default `quote` mode, Buddy also creates source-grounded actions for
+all measured text entities without asking the model to select them.
 
-This mode currently produces whole horizontal left-to-right text-line highlights only.
-It does not generate zooms, OCR/diagram targets, rotated-page targets or multiline boxes.
-Independent visual verification remains required for usability. Revert the setting to
+Candidate-ID selection currently supports horizontal, source-extractable text entities; it
+does not provide OCR text entities, arbitrary subphrase selection, or semantic crops inside
+flattened artwork. Source-measured entity grouping is based on PDF layout and can still miss
+or misgroup malformed, rotated, scanned, or unusually structured text. Independent visual
+verification remains required for usability. Revert the setting to
 `quote` and restart/redeploy the worker to change **future** generation. Existing candidate
 analyses retain their immutable geometry and require the compatible reader to remain
 available; changing the flag is not a database or reader rollback.
 
-The [offline experiment](analysis.md#opt-in-experiment-select-measured-text-ids-instead-of-predicting-boxes)
+The [offline experiment](analysis.md#source-measured-pdf-text-entities)
 still works without AWS credentials and proves geometry only.
 
 ## States and limits
@@ -154,7 +160,7 @@ boundary accepts at most an 18 MiB,
 The 18 MiB source limit leaves room for base64 expansion and request metadata under Bedrock's
 25 MiB InvokeModel body quota.
 The model context window and request/output limits bound token spend; PDF generation combines
-semantic model targets with source-measured text-line and PDF visual-object candidates, up to
+semantic model targets with source-measured text-entity and PDF visual-object candidates, up to
 1,000 actions per analysis. Review warns when inventory bounds are reached. Each action is
 validated in an isolated run with a 15-second limit. New PDF analyses use `buddy.analysis.v2`;
 old clients receive a 409 upgrade response, while compatible clients read

@@ -35,14 +35,15 @@ the response is constrained to JSON summaries plus `zoom_region` and `highlight_
 objects. Buddy validates slide order, IDs, schema, catalog membership, coordinate bounds,
 ownership, source revision, and action hash before persistence.
 
-The opt-in [text-candidate experiment](analysis.md#opt-in-experiment-select-measured-text-ids-instead-of-predicting-boxes)
-also submits extracted horizontal line text, location-specific IDs and measured regions
+The opt-in [candidate-ID selection experiment](analysis.md#source-measured-pdf-text-entities)
+also submits extracted text-entity content, location-specific IDs and measured regions
 alongside the original PDF when the worker operator explicitly enables
 `BUDDY_WORKER_TEXT_TARGETING=candidate_lines` (default: `quote`). Its response selects IDs
 instead of supplying coordinates; selected geometry is independently measured again
 before grounding. Candidate text remains private, untrusted document content and is
 excluded from logs. Extraction is bounded to 2,000 candidates and 80,000 text characters
-per deck, with the existing encoded provider request limit still enforced.
+per deck, with the existing encoded provider request limit still enforced. Entity inventory
+coverage also runs in the default quote mode and never stores extracted text in logs.
 
 The worker uses its ECS task role through SigV4; no Anthropic API key or long-lived AWS key
 is stored in application configuration. IAM permits `bedrock:InvokeModel` only on the

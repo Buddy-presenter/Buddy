@@ -628,6 +628,11 @@ class Processor:
             if analysis_hash is None:
                 raise ProviderFailure("stored_analysis_unavailable")
             visual_qa_pending = set(analysis_result.visual_qa_pending_instance_ids)
+            source_measured_text_ids = {
+                item.instance_id
+                for item in getattr(analysis_result.inputs, "grounding", ())
+                if item.trace.method == "pdf_candidate_line" and item.trace.target_id is not None
+            }
 
             def needs_validation(result: Any) -> bool:
                 return result.state == "candidate" or (
@@ -683,7 +688,18 @@ class Processor:
                                 )
                             ),
                             source_content=content,
-                            precision=("line" if action.type == "highlight_region" else "standard"),
+                            # Measured entity IDs resolve to the exact union of their
+                            # source glyphs and may legitimately span wrapped lines
+                            # (paragraphs, bullets, table rows). Keep the narrow-line
+                            # cap for free-form model quote targets only.
+                            precision=(
+                                "standard"
+                                if action.type == "highlight_region"
+                                and action.instance_id in source_measured_text_ids
+                                else "line"
+                                if action.type == "highlight_region"
+                                else "standard"
+                            ),
                             duplicate_candidate=action.instance_id in duplicate_candidate_ids,
                         )
                     )
