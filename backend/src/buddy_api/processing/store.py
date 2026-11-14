@@ -171,6 +171,7 @@ async def claim(
             "pdf_analysis.v1",
             "pdf_render",
             "provider",
+            "grounding",
             "validation",
             "pptx_metadata.v1",
             "pptx_analysis.v1",
@@ -231,6 +232,7 @@ async def defer_for_capacity(session: AsyncSession, message: Message) -> bool:
             "pdf_analysis.v1",
             "pdf_render",
             "provider",
+            "grounding",
             "validation",
             "pptx_metadata.v1",
             "pptx_analysis.v1",
@@ -278,7 +280,10 @@ async def advance_stage(
     progress: int,
 ) -> bool:
     """Persist a truthful, lease-fenced worker stage for library polling."""
-    if stage not in {"pdf_render", "provider", "validation"} or not 0 <= progress <= 95:
+    if (
+        stage not in {"pdf_render", "provider", "grounding", "validation"}
+        or not 0 <= progress <= 95
+    ):
         raise ValueError("Invalid processing stage")
     job = await session.scalar(
         select(ProcessingJob).where(ProcessingJob.id == identifier).with_for_update()
@@ -286,6 +291,7 @@ async def advance_stage(
     if job is None or not valid_lease(job, token):
         return False
     job.stage, job.stage_state = stage, "running"
+    job.error_code = None
     job.progress = max(job.progress, progress)
     return True
 

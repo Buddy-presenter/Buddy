@@ -192,6 +192,33 @@ class ProcessingJob(OwnedRecord):
     extraction_id: Mapped[UUID | None] = mapped_column()
 
 
+class PDFProcessingCheckpoint(Base):
+    """Private, lease-fenced provider output and completed grounding pages."""
+
+    __tablename__ = "pdf_processing_checkpoints"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["job_id", "deck_id", "owner_id"],
+            ["processing_jobs.id", "processing_jobs.deck_id", "processing_jobs.owner_id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["extraction_id", "deck_id", "owner_id"],
+            ["deck_extractions.id", "deck_extractions.deck_id", "deck_extractions.owner_id"],
+            ondelete="RESTRICT",
+        ),
+    )
+    job_id: Mapped[UUID] = mapped_column(primary_key=True)
+    deck_id: Mapped[UUID] = mapped_column()
+    owner_id: Mapped[UUID] = mapped_column(index=True)
+    extraction_id: Mapped[UUID] = mapped_column()
+    source_revision: Mapped[str] = mapped_column(String(128))
+    source_sha256: Mapped[str] = mapped_column(String(64))
+    binding: Mapped[str] = mapped_column(String(64))
+    generated: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    pages: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
+
 class JobOutbox(Base):
     __tablename__ = "job_outbox"
     job_id: Mapped[UUID] = mapped_column(

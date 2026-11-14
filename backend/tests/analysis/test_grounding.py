@@ -18,9 +18,11 @@ from buddy_api.analysis.grounding import (
     _snap_object,
     _tagged_content_ids,
     ground_actions,
+    limit_grounded_actions,
 )
 from buddy_api.analysis.provider import ModelAction, ModelOutput, ModelSlide, ModelSummary
 from buddy_api.analysis.rendering import render_manifest
+from buddy_api.extraction.contracts import ExtractionError
 from buddy_api.extraction.runner import extract_pdf
 from buddy_api.processing.stage import _configure_child_resource_limits, execute_grounding
 
@@ -61,6 +63,23 @@ def _load(path: Path):
     extraction = extract_pdf(BytesIO(content), source_revision="grounding-test")
     manifest = render_manifest(content, extraction, str(uuid4()))
     return content, extraction, manifest
+
+
+def test_checkpointed_pages_preserve_whole_deck_geometry_and_absolute_page_numbers():
+    content, extraction, manifest = _load(GEOMETRY_PDF)
+    proposed = _output(extraction, {0: (_action(),), 1: (_action(),)})
+    whole = ground_actions(content, extraction, manifest, proposed)
+    pages = [
+        ground_actions(content, extraction, manifest, proposed, page_number=n)
+        for n in range(1, len(extraction.slides) + 1)
+    ]
+    assert [p.slides[0].number for p in pages] == list(range(1, len(extraction.slides) + 1))
+    combined = limit_grounded_actions(
+        proposed.model_copy(update={"slides": tuple(p.slides[0] for p in pages)})
+    )
+    assert combined == whole
+    with pytest.raises(ExtractionError, match="grounding_page_limit"):
+        ground_actions(content, extraction, manifest, proposed, page_number=0)
 
 
 def _two_column_pdf(phrase=b"caf\xe9 results", *, with_visual=False) -> bytes:

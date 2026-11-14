@@ -783,7 +783,12 @@ def _snap_object_from_objects(
 
 
 def ground_actions(
-    content: bytes, extraction: Extraction, manifest: Manifest, output: ModelOutput
+    content: bytes,
+    extraction: Extraction,
+    manifest: Manifest,
+    output: ModelOutput,
+    *,
+    page_number: int | None = None,
 ) -> ModelOutput:
     """Replace untrusted coordinates with exact source geometry, dropping ambiguity."""
     if hashlib.sha256(content).hexdigest() != extraction.source_sha256:
@@ -795,6 +800,8 @@ def ground_actions(
         or [slide.number for slide in output.slides] != list(range(1, len(extraction.slides) + 1))
     ):
         raise ExtractionError("grounding_page_limit")
+    if page_number is not None and not 1 <= page_number <= len(extraction.slides):
+        raise ExtractionError("grounding_page_limit")
     grounded: list[ModelSlide] = []
     coverage_limited = output.action_limit_reached
     ocr_cache: dict[int, list[OcrWord]] = {}
@@ -805,9 +812,22 @@ def ground_actions(
         with pdfium.PdfDocument(content) as document:
             if len(document) != len(extraction.slides):
                 raise ExtractionError("page_count_mismatch")
+            if page_number is not None:
+                # Paging must retain the original whole-document text budget.
+                characters = 0
+                for index in range(len(document)):
+                    with (
+                        closing(document[index]) as budget_page,
+                        closing(budget_page.get_textpage()) as budget_text,
+                    ):
+                        characters += budget_text.count_chars()
+                        if characters > MAX_TEXT_CHARACTERS:
+                            raise ExtractionError("grounding_text_limit")
             for page_index, (_slide, generated) in enumerate(
                 zip(extraction.slides, output.slides, strict=True)
             ):
+                if page_number is not None and page_index + 1 != page_number:
+                    continue
                 page_actions: list[ModelAction] = []
                 width, height = (
                     manifest.slides[page_index].source.width,
@@ -994,6 +1014,17 @@ def ground_actions(
         raise
     except Exception:
         raise ExtractionError("pdf_action_grounding_failed") from None
+    return limit_grounded_actions(
+        output.model_copy(
+            update={"slides": tuple(grounded), "action_limit_reached": coverage_limited}
+        )
+    )
+
+
+def limit_grounded_actions(output: ModelOutput) -> ModelOutput:
+    """Apply the same fair deck-wide cap after whole-deck or checkpointed grounding."""
+    grounded = list(output.slides)
+    coverage_limited = output.action_limit_reached
     total_actions = sum(len(slide.actions) for slide in grounded)
     if total_actions > MAX_GENERATED_ACTIONS_PER_DECK:
         coverage_limited = True

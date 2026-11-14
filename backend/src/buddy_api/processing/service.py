@@ -53,7 +53,7 @@ from buddy_api.persistence.models import (
     JobOutbox,
     ProcessingJob,
 )
-from buddy_api.processing import store
+from buddy_api.processing import checkpoints, store
 from buddy_api.processing.config import WorkerSettings
 from buddy_api.processing.contracts import (
     Message,
@@ -501,28 +501,79 @@ class Processor:
             if existing is None:
                 if hashlib.sha256(content).hexdigest() != source_digest:
                     raise UploadError(409, "source_mismatch", "Accepted PDF source changed.")
-                active_stage = "provider"
-                active_stage_started_at = time.perf_counter()
-                if not await persist_stage("provider", 60):
-                    return
-                alive, generated = await fenced(
-                    self._generate_analysis(content, extraction, str(deck_id), manifest)
-                )
-                if not alive:
-                    return
+                checkpoint = None
                 if _format == "pdf":
-                    alive, generated = await fenced(
-                        blocking(
-                            partial(
-                                execute_grounding,
-                                content,
-                                extraction,
-                                manifest,
-                                generated,
-                                min(120, self.settings.runtime_seconds - 15),
-                            )
+                    async with self.database.sessions() as session, session.begin():
+                        checkpoint = await checkpoints.load(
+                            session, job.id, token, extraction, manifest
                         )
+                if checkpoint is None:
+                    active_stage = "provider"
+                    active_stage_started_at = time.perf_counter()
+                    if not await persist_stage("provider", 60):
+                        return
+                    alive, generated = await fenced(
+                        self._generate_analysis(content, extraction, str(deck_id), manifest)
                     )
+                    if not alive:
+                        return
+                    pages: dict[str, Any] = {}
+                    if _format == "pdf":
+                        async with self.database.sessions() as session, session.begin():
+                            if not await checkpoints.save_provider(
+                                session, job.id, token, extraction, manifest, generated
+                            ):
+                                return
+                else:
+                    generated, pages = checkpoint
+                if _format == "pdf":
+                    active_stage = "grounding"
+                    active_stage_started_at = time.perf_counter()
+                    if not await persist_stage("grounding", 60):
+                        return
+                    for page in range(1, len(extraction.slides) + 1):
+                        if str(page) in pages:
+                            continue
+                        if (
+                            time.perf_counter() - job_started_at
+                            >= self.settings.runtime_seconds - 135
+                        ):
+                            async with self.database.sessions() as session, session.begin():
+                                await store.defer(session, job.id, token, 1)
+                            await blocking(lambda: self.queue.acknowledge(raw["ReceiptHandle"]))
+                            return
+                        page_started = time.perf_counter()
+                        try:
+                            alive, grounded_page = await fenced(
+                                blocking(
+                                    partial(
+                                        execute_grounding,
+                                        content,
+                                        extraction,
+                                        manifest,
+                                        generated,
+                                        min(120, self.settings.runtime_seconds - 15),
+                                        page_number=page,
+                                    )
+                                )
+                            )
+                        except TimeoutError:
+                            raise ProviderFailure("grounding_timeout") from None
+                        except ExtractionError:
+                            raise ProviderFailure("grounding_failed", permanent=True) from None
+                        if not alive:
+                            return
+                        async with self.database.sessions() as session, session.begin():
+                            if not await checkpoints.save_page(
+                                session, job.id, token, extraction, manifest, page, grounded_page
+                            ):
+                                return
+                        pages[str(page)] = {
+                            "slide": grounded_page.slides[0].model_dump(mode="json"),
+                            "action_limit_reached": grounded_page.action_limit_reached,
+                        }
+                        stage_metric("grounding", "success", page_started)
+                    generated = checkpoints.assemble(generated, pages)
                 if not alive:
                     return
                 active_stage = analysis_stage

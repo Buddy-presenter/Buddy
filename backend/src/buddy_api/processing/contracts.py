@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from buddy_api.analysis.contracts import Manifest, PowerPointManifest
+from buddy_api.analysis.provider import ModelSummary
 from buddy_api.extraction.contracts import Extraction
 
 ACTIVE = ("queued", "retry_wait", "running")
@@ -81,3 +82,19 @@ class JobData(BaseModel):
 class JobResponse(BaseModel):
     data: JobData
     request_id: str
+
+
+class PDFPageSummary(BaseModel):
+    number: int = Field(ge=1, le=100)
+    summary: ModelSummary
+
+
+class PDFProcessingSummaries(BaseModel):
+    """Saved summaries only; this response never authorizes an action or session."""
+
+    protocol: Literal["pdf-processing-summaries.v1"] = "pdf-processing-summaries.v1"
+    job_id: UUID
+    source_revision: str
+    presentation: ModelSummary
+    slides: tuple[PDFPageSummary, ...] = Field(min_length=1, max_length=100)
+    grounded_pages: tuple[int, ...] = Field(max_length=100)

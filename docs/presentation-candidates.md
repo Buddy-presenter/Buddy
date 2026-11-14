@@ -2,6 +2,12 @@
 
 ## Semantic retrieval with Cohere Embed 5
 
+Richer-PDF preparation is also repaired on this issue branch: private provider/page
+checkpoints prevent a whole-deck grounding timeout from discarding successful AI work.
+See [resumable PDF processing](pdf-workers.md#resumable-pdf-region-processing). Migration
+`0020_pdf_checkpoints` follows the embedding migration; both require the reviewed rollout.
+Pending-summary inspection does not bypass the candidate route's completed-analysis gates.
+
 When the backend has `BUDDY_COHERE_API_KEY`, retrieval uses `cohere-embed5-v1`.
 Without it, the lexical resolver remains available and identifies itself as
 `summary-overlap-2`; it must not be described as semantic understanding. A configured

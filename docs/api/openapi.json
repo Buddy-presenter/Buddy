@@ -1378,6 +1378,41 @@
         "title": "ManifestSlide",
         "type": "object"
       },
+      "ModelSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "maxLength": 16000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "required": [
+          "text",
+          "reason"
+        ],
+        "title": "ModelSummary",
+        "type": "object"
+      },
       "PDFAnalysisInputV2": {
         "additionalProperties": false,
         "description": "Expanded PDF action provenance; v1 remains bounded at 40 for old clients.",
@@ -1575,6 +1610,74 @@
           "slides"
         ],
         "title": "PDFAnalysisResultV2",
+        "type": "object"
+      },
+      "PDFPageSummary": {
+        "properties": {
+          "number": {
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Number",
+            "type": "integer"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/ModelSummary"
+          }
+        },
+        "required": [
+          "number",
+          "summary"
+        ],
+        "title": "PDFPageSummary",
+        "type": "object"
+      },
+      "PDFProcessingSummaries": {
+        "description": "Saved summaries only; this response never authorizes an action or session.",
+        "properties": {
+          "grounded_pages": {
+            "items": {
+              "type": "integer"
+            },
+            "maxItems": 100,
+            "title": "Grounded Pages",
+            "type": "array"
+          },
+          "job_id": {
+            "format": "uuid",
+            "title": "Job Id",
+            "type": "string"
+          },
+          "presentation": {
+            "$ref": "#/components/schemas/ModelSummary"
+          },
+          "protocol": {
+            "const": "pdf-processing-summaries.v1",
+            "default": "pdf-processing-summaries.v1",
+            "title": "Protocol",
+            "type": "string"
+          },
+          "slides": {
+            "items": {
+              "$ref": "#/components/schemas/PDFPageSummary"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Slides",
+            "type": "array"
+          },
+          "source_revision": {
+            "title": "Source Revision",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "source_revision",
+          "presentation",
+          "slides",
+          "grounded_pages"
+        ],
+        "title": "PDFProcessingSummaries",
         "type": "object"
       },
       "PDFSlideOutputV2": {
@@ -5404,6 +5507,115 @@
           }
         },
         "summary": "Cancel",
+        "tags": [
+          "processing"
+        ]
+      }
+    },
+    "/api/v1/jobs/{identifier}/pdf-summaries": {
+      "get": {
+        "operationId": "pdf_summaries_api_v1_jobs__identifier__pdf_summaries_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PDFProcessingSummaries"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Pdf Summaries",
         "tags": [
           "processing"
         ]
