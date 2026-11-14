@@ -29,7 +29,10 @@ MAX_PAGES = 100
 MAX_ACTIONS_PER_DECK = MAX_GENERATED_ACTIONS_PER_DECK
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_OUTPUT_TOKENS = 64_000
-TIMEOUT_SECONDS = 240
+# A supported dense PDF can return tens of thousands of tokens. Allow that bounded
+# response to complete instead of repeatedly abandoning paid successful inference.
+# The worker's 900-second lease deadline remains larger; grounding/validation yield.
+TIMEOUT_SECONDS = 600
 MAX_REQUEST_BYTES = 25 * 1024 * 1024
 
 
