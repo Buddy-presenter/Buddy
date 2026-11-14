@@ -103,6 +103,10 @@ does not remove safety limits. Successful provider calls that have been checkpoi
 repeated on grounding or validation retries. A crash before that transaction commits can
 still require another provider call.
 
+Grounding advances progress from 60% to 79% as pages are saved. Independent executor
+checks then advance from 80% to 95%, including already completed checks after resumption;
+only job completion reports 100%.
+
 `GET /api/v1/jobs/{job_id}/pdf-summaries` exposes the saved presentation/page summaries and
 completed page numbers to the authenticated owner, with `Cache-Control: no-store`, even while
 region work is pending or failed. Before provider output is saved it returns a recoverable

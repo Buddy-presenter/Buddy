@@ -636,11 +636,14 @@ class Processor:
                     and POWERPOINT_BUSY_REASON in result.validation.reasons
                 )
 
-            has_candidates = any(
-                needs_validation(action) and action.action.instance_id not in visual_qa_pending
+            required_checks = [
+                action
                 for slide in analysis_result.slides
                 for action in slide.actions
-            )
+                if action.action.instance_id not in visual_qa_pending
+            ]
+            completed_checks = sum(not needs_validation(action) for action in required_checks)
+            has_candidates = completed_checks < len(required_checks)
             if has_candidates and self.validation is None:
                 raise ProviderFailure("validator_unavailable")
             if has_candidates and not await persist_stage("validation", 80):
@@ -724,6 +727,11 @@ class Processor:
                             return
                         await Analyses(session).record_validation(
                             owner_id=owner_id, result=validation_input
+                        )
+                        completed_checks += 1
+                        current.progress = max(
+                            current.progress,
+                            80 + 15 * completed_checks // max(1, len(required_checks)),
                         )
             async with self.database.sessions() as session, session.begin():
                 completed = await store.complete(session, job.id, token, analysis_id)
