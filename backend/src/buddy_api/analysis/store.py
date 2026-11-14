@@ -1,5 +1,6 @@
 """Trusted, owner-scoped writes and typed reads of immutable analysis revisions."""
 
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
@@ -13,10 +14,22 @@ from buddy_api.analysis.contracts import (
     AnalysisInput,
     AnalysisResult,
     ContentAction,
+    ManifestSlide,
+    PDFAnalysisInputV2,
+    PDFAnalysisResultV2,
+    PowerPointActionResult,
+    PowerPointAnalysisInput,
+    PowerPointAnalysisResult,
+    PowerPointContentAction,
+    PowerPointManifestSlide,
+    PowerPointSlideOutput,
+    PowerPointSlideResult,
+    SlideOutput,
     SlideResult,
     Summary,
     ValidationInput,
     digest,
+    parse_analysis_input,
     publication,
 )
 from buddy_api.extraction.contracts import Extraction
@@ -42,6 +55,40 @@ def summary(record: AnalysisVersion | AnalysisSlide) -> Summary:
     )
 
 
+def action_is_usable(source_format: str, state: str, semantic_verified: bool) -> bool:
+    """Apply the canonical format-specific gate used by analysis and session reads."""
+    return state == "validated" and (source_format == "pptx" or semantic_verified)
+
+
+def check_validation_evidence(
+    value: AnalysisVersion, action: SlideAction, evidence: ValidationInput
+) -> None:
+    """Ensure stored evidence is bound to the immutable analysis/action/profile."""
+    provenance = value.provenance or {}
+    if (
+        evidence.analysis_id != value.id
+        or evidence.source_format != value.source_format
+        or action.source_format != value.source_format
+        or evidence.analysis_sha256 != value.content_sha256
+        or evidence.instance_id != action.instance_id
+        or evidence.action_sha256 != action.content_sha256
+        or any(
+            getattr(evidence, key) != provenance.get(key)
+            for key in ("renderer_version", "display_profile")
+        )
+        or (
+            evidence.validator_version != provenance.get("validator_version")
+            and not (
+                action.source_format == "pptx"
+                and action.action_type == "zoom_region"
+                and provenance.get("validator_version") == "powerpoint-executor-2"
+                and evidence.validator_version in {"powerpoint-executor-3", "powerpoint-executor-4"}
+            )
+        )
+    ):
+        raise PersistenceConflict("Validation does not match the analysis/action/profile revision.")
+
+
 class Analyses:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -49,7 +96,11 @@ class Analyses:
     async def get(self, identifier: UUID, *, owner_id: UUID) -> AnalysisVersion:
         value = await self.session.scalar(
             select(AnalysisVersion).where(
-                AnalysisVersion.id == identifier, AnalysisVersion.owner_id == owner_id
+                AnalysisVersion.id == identifier,
+                AnalysisVersion.owner_id == owner_id,
+                AnalysisVersion.deck_id.in_(
+                    select(Deck.id).where(Deck.deletion_requested_at.is_(None))
+                ),
             )
         )
         if value is None:
@@ -60,7 +111,13 @@ class Analyses:
         """Return the newest immutable analysis revision for one owned deck."""
         value = await self.session.scalar(
             select(AnalysisVersion)
-            .where(AnalysisVersion.deck_id == deck_id, AnalysisVersion.owner_id == owner_id)
+            .where(
+                AnalysisVersion.deck_id == deck_id,
+                AnalysisVersion.owner_id == owner_id,
+                AnalysisVersion.deck_id.in_(
+                    select(Deck.id).where(Deck.deletion_requested_at.is_(None))
+                ),
+            )
             .order_by(AnalysisVersion.version.desc(), AnalysisVersion.id.desc())
             .limit(1)
         )
@@ -75,27 +132,38 @@ class Analyses:
             await self.session.scalars(
                 select(AnalysisVersion)
                 .where(AnalysisVersion.owner_id == owner_id)
+                .where(
+                    AnalysisVersion.deck_id.in_(
+                        select(Deck.id).where(Deck.deletion_requested_at.is_(None))
+                    )
+                )
                 .order_by(AnalysisVersion.created_at, AnalysisVersion.id)
                 .limit(limit)
             )
         )
 
     async def create(
-        self, *, owner_id: UUID, deck_id: UUID, version: int, document: AnalysisInput
+        self,
+        *,
+        owner_id: UUID,
+        deck_id: UUID,
+        version: int,
+        document: AnalysisInput | PowerPointAnalysisInput,
     ) -> AnalysisVersion:
         # Revalidate even model_construct/model_copy caller values; they bypass Pydantic validation.
         document_values = document.model_dump(mode="json")
-        document_values["visual_qa_pending_instance_ids"] = list(
-            document.visual_qa_pending_instance_ids
-        )
-        document = AnalysisInput.model_validate(document_values)
+        if isinstance(document, AnalysisInput):
+            document_values["visual_qa_pending_instance_ids"] = list(
+                document.visual_qa_pending_instance_ids
+            )
+        document = parse_analysis_input(document_values)
         visual_qa_pending = set(document.visual_qa_pending_instance_ids)
         if type(version) is not int or version < 1:
             raise ValueError("Analysis version must be positive.")
         deck = await self.session.scalar(
             select(Deck).where(Deck.id == deck_id, Deck.owner_id == owner_id).with_for_update()
         )
-        if deck is None:
+        if deck is None or deck.deletion_requested_at is not None:
             raise RecordNotFound("Owned deck was not found.")
         extraction = await self.session.scalar(
             select(DeckExtraction).where(
@@ -115,7 +183,9 @@ class Analyses:
             raise RecordNotFound("Owned analysis inputs were not found.")
         extracted = Extraction.model_validate(extraction.document)
         if (
-            document.manifest.deck_id != str(deck_id)
+            document.source_format != deck.source_format
+            or extracted.source_format != document.source_format
+            or document.manifest.deck_id != str(deck_id)
             or document.source_revision != extraction.source_revision
             or document.source_sha256 != extraction.source_sha256
             or extracted.source_revision != extraction.source_revision
@@ -125,9 +195,15 @@ class Analyses:
             or [s.index for s in extracted.slides] != list(range(len(extracted.slides)))
         ):
             raise PersistenceConflict("Analysis source/slide revision does not match extraction.")
-        for source, rendered in zip(extracted.slides, document.manifest.slides, strict=True):
+        manifest_slides = cast(
+            tuple[ManifestSlide | PowerPointManifestSlide, ...], document.manifest.slides
+        )
+        for source, rendered in zip(extracted.slides, manifest_slides, strict=True):
             # Extraction EMU and canonical source pixels are different planes, with equal aspect.
-            if source.width * rendered.source.height != source.height * rendered.source.width:
+            if (
+                abs(source.width * rendered.source.height - source.height * rendered.source.width)
+                > 0.01
+            ):
                 raise PersistenceConflict("Render geometry does not match the extracted slide.")
         content_hash = digest(document)
         existing = await self.session.scalar(
@@ -141,6 +217,7 @@ class Analyses:
             return existing
         value = AnalysisVersion(
             id=uuid4(),
+            source_format=document.source_format,
             owner_id=owner_id,
             deck_id=deck_id,
             version=version,
@@ -155,7 +232,8 @@ class Analyses:
         )
         self.session.add(value)
         await self.session.flush()
-        for position, output in enumerate(document.slides):
+        document_slides = cast(tuple[SlideOutput | PowerPointSlideOutput, ...], document.slides)
+        for position, output in enumerate(document_slides):
             slide = AnalysisSlide(
                 id=uuid4(),
                 owner_id=owner_id,
@@ -169,9 +247,13 @@ class Analyses:
             )
             self.session.add(slide)
             await self.session.flush()
-            for index, action in enumerate(output.actions):
+            content_actions = cast(
+                tuple[ContentAction | PowerPointContentAction, ...], output.actions
+            )
+            for index, action in enumerate(content_actions):
                 record = SlideAction(
                     id=uuid4(),
+                    source_format=document.source_format,
                     owner_id=owner_id,
                     deck_id=deck_id,
                     analysis_id=value.id,
@@ -190,6 +272,7 @@ class Analyses:
                 self.session.add(
                     ActionValidation(
                         owner_id=owner_id,
+                        source_format=document.source_format,
                         deck_id=deck_id,
                         analysis_id=value.id,
                         action_id=record.id,
@@ -204,9 +287,21 @@ class Analyses:
         await self.session.flush()
         return value
 
-    async def read(self, identifier: UUID, *, owner_id: UUID) -> AnalysisResult:
+    async def read(
+        self, identifier: UUID, *, owner_id: UUID
+    ) -> AnalysisResult | PowerPointAnalysisResult:
         value = await self.get(identifier, owner_id=owner_id)
         if value.publication == "legacy":
+            if value.source_format == "pptx":
+                return PowerPointAnalysisResult(
+                    id=value.id,
+                    deck_id=value.deck_id,
+                    version=value.version,
+                    publication="legacy",
+                    analysis_sha256=None,
+                    inputs=None,
+                    slides=(),
+                )
             return AnalysisResult(
                 id=value.id,
                 deck_id=value.deck_id,
@@ -221,7 +316,9 @@ class Analyses:
         except (ValidationError, ValueError, KeyError, TypeError):
             raise PersistenceUnavailable("Stored analysis contract is unavailable.") from None
 
-    async def _read(self, value: AnalysisVersion, owner_id: UUID) -> AnalysisResult:
+    async def _read(
+        self, value: AnalysisVersion, owner_id: UUID
+    ) -> AnalysisResult | PowerPointAnalysisResult:
         slides = list(
             await self.session.scalars(
                 select(AnalysisSlide)
@@ -251,13 +348,24 @@ class Analyses:
         visual_qa_pending = tuple(
             action.instance_id for action in actions if action.visual_qa_pending
         )
-        results = []
+        results: list[Any] = []
+        action_result_model: Any = (
+            PowerPointActionResult if value.source_format == "pptx" else ActionResult
+        )
+        slide_result_model: Any = (
+            PowerPointSlideResult if value.source_format == "pptx" else SlideResult
+        )
         for slide in slides:
             output = []
             for action in actions:
                 if action.slide_record_id != slide.id:
                     continue
-                instance = ContentAction.model_validate(
+                action_model = (
+                    PowerPointContentAction if value.source_format == "pptx" else ContentAction
+                )
+                if action.source_format != value.source_format:
+                    raise ValueError("Stored action format mismatch.")
+                instance = action_model.model_validate(
                     {
                         "version": action.catalog_version,
                         "instance_id": action.instance_id,
@@ -267,6 +375,7 @@ class Analyses:
                         "slide_id": slide.slide_id,
                         "type": action.action_type,
                         "params": action.parameters,
+                        **({"source_format": "pptx"} if value.source_format == "pptx" else {}),
                     }
                 )
                 stored = latest.get(action.id)
@@ -278,27 +387,37 @@ class Analyses:
                 if digest(instance) != action.content_sha256:
                     raise ValueError("Action digest mismatch.")
                 if evidence is not None:
-                    self._check_evidence(value, action, evidence)
+                    check_validation_evidence(value, action, evidence)
                     if stored is None or stored.state != evidence.state:
                         raise ValueError("Validation state mismatch.")
                 state = evidence.state if evidence else "candidate"
                 semantic_verified = bool(evidence and evidence.semantic_verified)
                 output.append(
-                    ActionResult(
+                    action_result_model(
                         action=instance,
                         state=state,
-                        usable=state == "validated" and semantic_verified,
-                        semantic_verified=semantic_verified,
+                        usable=action_is_usable(value.source_format, state, semantic_verified),
+                        **(
+                            {"semantic_verified": semantic_verified}
+                            if value.source_format == "pdf"
+                            else {}
+                        ),
                         validation=evidence,
                     )
                 )
             results.append(
-                SlideResult(slide_id=slide.slide_id, summary=summary(slide), actions=tuple(output))
+                slide_result_model(
+                    slide_id=slide.slide_id, summary=summary(slide), actions=tuple(output)
+                )
             )
-        inputs = AnalysisInput.model_validate(
+        inputs = parse_analysis_input(
             {
                 **(value.provenance or {}),
-                "visual_qa_pending_instance_ids": visual_qa_pending,
+                **(
+                    {"visual_qa_pending_instance_ids": visual_qa_pending}
+                    if value.source_format == "pdf"
+                    else {}
+                ),
                 "presentation_summary": summary(value).model_dump(),
                 "slides": [
                     {
@@ -310,48 +429,58 @@ class Analyses:
                 ],
             }
         )
-        if digest(inputs) != value.content_sha256 or (
-            inputs.extraction_id != value.extraction_id or inputs.job_id != value.job_id
+        if (
+            inputs.source_format != value.source_format
+            or digest(inputs) != value.content_sha256
+            or (inputs.extraction_id != value.extraction_id or inputs.job_id != value.job_id)
         ):
             raise ValueError("Analysis digest/lineage mismatch.")
-        return AnalysisResult(
+        if isinstance(inputs, PowerPointAnalysisInput):
+            return PowerPointAnalysisResult(
+                id=value.id,
+                deck_id=value.deck_id,
+                version=value.version,
+                publication=publication(inputs.presentation_summary, tuple(results)),
+                action_limit_reached=sum(len(s.actions) for s in results) == 100,
+                analysis_sha256=value.content_sha256,
+                inputs=inputs,
+                slides=tuple(results),
+            )
+        result_model: type[AnalysisResult] = (
+            PDFAnalysisResultV2 if isinstance(inputs, PDFAnalysisInputV2) else AnalysisResult
+        )
+        return result_model(
             id=value.id,
             deck_id=value.deck_id,
             version=value.version,
             publication=publication(inputs.presentation_summary, tuple(results)),
-            action_limit_reached=sum(len(slide.actions) for slide in results)
-            == MAX_GENERATED_ACTIONS_PER_DECK,
+            action_limit_reached=(
+                bool(getattr(inputs, "action_limit_reached", False))
+                or sum(len(slide.actions) for slide in results)
+                == (
+                    MAX_GENERATED_ACTIONS_PER_DECK if isinstance(inputs, PDFAnalysisInputV2) else 40
+                )
+            ),
             analysis_sha256=value.content_sha256,
             inputs=inputs,
             slides=tuple(results),
             visual_qa_pending_instance_ids=visual_qa_pending,
         )
 
-    @staticmethod
-    def _check_evidence(
-        value: AnalysisVersion, action: SlideAction, evidence: ValidationInput
-    ) -> None:
-        provenance = value.provenance or {}
-        if (
-            evidence.analysis_id != value.id
-            or evidence.analysis_sha256 != value.content_sha256
-            or evidence.instance_id != action.instance_id
-            or evidence.action_sha256 != action.content_sha256
-            or any(
-                getattr(evidence, key) != provenance.get(key)
-                for key in ("validator_version", "renderer_version", "display_profile")
-            )
-        ):
-            raise PersistenceConflict(
-                "Validation does not match the analysis/action/profile revision."
-            )
-
-    async def record_validation(self, *, owner_id: UUID, result: ValidationInput) -> AnalysisResult:
+    async def record_validation(
+        self, *, owner_id: UUID, result: ValidationInput
+    ) -> AnalysisResult | PowerPointAnalysisResult:
         """Trusted validator boundary only. There is intentionally no HTTP write endpoint."""
         result = ValidationInput.model_validate(result.model_dump(mode="json"))
         value = await self.session.scalar(
             select(AnalysisVersion)
-            .where(AnalysisVersion.id == result.analysis_id, AnalysisVersion.owner_id == owner_id)
+            .where(
+                AnalysisVersion.id == result.analysis_id,
+                AnalysisVersion.owner_id == owner_id,
+                AnalysisVersion.deck_id.in_(
+                    select(Deck.id).where(Deck.deletion_requested_at.is_(None))
+                ),
+            )
             .with_for_update()
         )
         if value is None:
@@ -365,7 +494,7 @@ class Analyses:
         )
         if action is None:
             raise RecordNotFound("Owned action was not found.")
-        self._check_evidence(value, action, result)
+        check_validation_evidence(value, action, result)
         existing = await self.session.get(ActionValidation, result.validation_id)
         document = result.model_dump(mode="json")
         if existing is not None:
@@ -390,6 +519,7 @@ class Analyses:
         self.session.add(
             ActionValidation(
                 id=result.validation_id,
+                source_format=result.source_format,
                 owner_id=owner_id,
                 deck_id=value.deck_id,
                 analysis_id=value.id,

@@ -269,6 +269,12 @@
             "title": "Slides",
             "type": "array"
           },
+          "source_format": {
+            "const": "pdf",
+            "default": "pdf",
+            "title": "Source Format",
+            "type": "string"
+          },
           "version": {
             "title": "Version",
             "type": "integer"
@@ -320,6 +326,35 @@
           "size_bytes"
         ],
         "title": "ArtifactReference",
+        "type": "object"
+      },
+      "CommandAcknowledgment": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "format": "uuid",
+            "title": "Command Id",
+            "type": "string"
+          },
+          "duplicate": {
+            "title": "Duplicate",
+            "type": "boolean"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/SessionSnapshot"
+          }
+        },
+        "required": [
+          "command_id",
+          "sequence",
+          "duplicate",
+          "snapshot"
+        ],
+        "title": "CommandAcknowledgment",
         "type": "object"
       },
       "ContentAction": {
@@ -374,6 +409,102 @@
         "title": "ContentAction",
         "type": "object"
       },
+      "DecisionEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "enum": [
+                  "next_slide",
+                  "previous_slide",
+                  "go_to_slide"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          },
+          "decision_id": {
+            "format": "uuid",
+            "title": "Decision Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "decision.status",
+            "default": "decision.status",
+            "title": "Kind",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "applied",
+              "abstained",
+              "rejected"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "accepted",
+              "uncertain",
+              "stale",
+              "unsupported",
+              "manual_override"
+            ],
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision_id",
+          "outcome",
+          "reason"
+        ],
+        "title": "DecisionEvent",
+        "type": "object"
+      },
+      "DeckDeletionData": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "deleting",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "DeckDeletionData",
+        "type": "object"
+      },
+      "DeckDeletionResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/DeckDeletionData"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "request_id"
+        ],
+        "title": "DeckDeletionResponse",
+        "type": "object"
+      },
       "DeckStatus": {
         "enum": [
           "uploaded",
@@ -412,6 +543,21 @@
       "Digest": {
         "pattern": "^[0-9a-f]{64}$",
         "type": "string"
+      },
+      "EndSession": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_state_version": {
+            "minimum": 0.0,
+            "title": "Expected State Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_state_version"
+        ],
+        "title": "EndSession",
+        "type": "object"
       },
       "ErrorData": {
         "additionalProperties": false,
@@ -476,6 +622,69 @@
         "title": "ErrorResponse",
         "type": "object"
       },
+      "EventEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "payload": {
+            "discriminator": {
+              "mapping": {
+                "decision.status": "#/components/schemas/DecisionEvent",
+                "player.state": "#/components/schemas/PlayerStateEvent",
+                "speech.transcript": "#/components/schemas/SpeechEvent"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlayerStateEvent"
+              },
+              {
+                "$ref": "#/components/schemas/SpeechEvent"
+              },
+              {
+                "$ref": "#/components/schemas/DecisionEvent"
+              }
+            ],
+            "title": "Payload"
+          },
+          "protocol": {
+            "const": "session-events.v1",
+            "default": "session-events.v1",
+            "title": "Protocol",
+            "type": "string"
+          },
+          "sequence": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "session_id": {
+            "format": "uuid",
+            "title": "Session Id",
+            "type": "string"
+          },
+          "state_version": {
+            "minimum": 0.0,
+            "title": "State Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_id",
+          "sequence",
+          "state_version",
+          "created_at",
+          "payload"
+        ],
+        "title": "EventEnvelope",
+        "type": "object"
+      },
       "EvidenceReference": {
         "additionalProperties": false,
         "properties": {
@@ -504,6 +713,43 @@
           "sha256"
         ],
         "title": "EvidenceReference",
+        "type": "object"
+      },
+      "FocusRegion": {
+        "additionalProperties": false,
+        "properties": {
+          "height": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 100000.0,
+            "title": "Height",
+            "type": "number"
+          },
+          "width": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 100000.0,
+            "title": "Width",
+            "type": "number"
+          },
+          "x": {
+            "maximum": 100000.0,
+            "minimum": 0.0,
+            "title": "X",
+            "type": "number"
+          },
+          "y": {
+            "maximum": 100000.0,
+            "minimum": 0.0,
+            "title": "Y",
+            "type": "number"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "title": "FocusRegion",
         "type": "object"
       },
       "GroundingMethod": {
@@ -1007,6 +1253,1124 @@
         "title": "ManifestSlide",
         "type": "object"
       },
+      "PDFAnalysisInputV2": {
+        "additionalProperties": false,
+        "description": "Expanded PDF action provenance; v1 remains bounded at 40 for old clients.",
+        "properties": {
+          "action_limit_reached": {
+            "default": false,
+            "title": "Action Limit Reached",
+            "type": "boolean"
+          },
+          "catalog_version": {
+            "const": "1.1",
+            "default": "1.1",
+            "title": "Catalog Version",
+            "type": "string"
+          },
+          "display_profile": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "extraction_id": {
+            "format": "uuid",
+            "title": "Extraction Id",
+            "type": "string"
+          },
+          "extraction_schema_version": {
+            "const": "buddy.extraction.v1",
+            "default": "buddy.extraction.v1",
+            "title": "Extraction Schema Version",
+            "type": "string"
+          },
+          "extractor_version": {
+            "const": "1",
+            "default": "1",
+            "title": "Extractor Version",
+            "type": "string"
+          },
+          "grounding": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ActionGrounding"
+            },
+            "maxItems": 1000,
+            "title": "Grounding",
+            "type": "array"
+          },
+          "job_id": {
+            "format": "uuid",
+            "title": "Job Id",
+            "type": "string"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/Manifest"
+          },
+          "presentation_summary": {
+            "$ref": "#/components/schemas/Summary"
+          },
+          "renderer_version": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "schema_version": {
+            "const": "buddy.analysis.v2",
+            "default": "buddy.analysis.v2",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "slides": {
+            "items": {
+              "$ref": "#/components/schemas/PDFSlideOutputV2"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Slides",
+            "type": "array"
+          },
+          "source_revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "title": "Source Revision",
+            "type": "string"
+          },
+          "source_sha256": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "validator_version": {
+            "$ref": "#/components/schemas/Identifier"
+          }
+        },
+        "required": [
+          "extraction_id",
+          "source_revision",
+          "source_sha256",
+          "job_id",
+          "renderer_version",
+          "display_profile",
+          "validator_version",
+          "manifest",
+          "presentation_summary",
+          "slides"
+        ],
+        "title": "PDFAnalysisInputV2",
+        "type": "object"
+      },
+      "PDFAnalysisResponseV2": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PDFAnalysisResultV2"
+              },
+              {
+                "$ref": "#/components/schemas/AnalysisResult"
+              }
+            ],
+            "title": "Data"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "request_id"
+        ],
+        "title": "PDFAnalysisResponseV2",
+        "type": "object"
+      },
+      "PDFAnalysisResultV2": {
+        "additionalProperties": false,
+        "properties": {
+          "action_limit_reached": {
+            "default": false,
+            "title": "Action Limit Reached",
+            "type": "boolean"
+          },
+          "analysis_sha256": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Digest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "deck_id": {
+            "format": "uuid",
+            "title": "Deck Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "inputs": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PDFAnalysisInputV2"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "publication": {
+            "$ref": "#/components/schemas/Publication"
+          },
+          "slides": {
+            "items": {
+              "$ref": "#/components/schemas/SlideResult"
+            },
+            "title": "Slides",
+            "type": "array"
+          },
+          "source_format": {
+            "const": "pdf",
+            "default": "pdf",
+            "title": "Source Format",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "deck_id",
+          "version",
+          "publication",
+          "analysis_sha256",
+          "inputs",
+          "slides"
+        ],
+        "title": "PDFAnalysisResultV2",
+        "type": "object"
+      },
+      "PDFSlideOutputV2": {
+        "additionalProperties": false,
+        "properties": {
+          "actions": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ContentAction"
+            },
+            "maxItems": 1000,
+            "title": "Actions",
+            "type": "array"
+          },
+          "slide_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          }
+        },
+        "required": [
+          "slide_id",
+          "summary"
+        ],
+        "title": "PDFSlideOutputV2",
+        "type": "object"
+      },
+      "PlayerCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "format": "uuid",
+            "title": "Command Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "player.state",
+            "title": "Kind",
+            "type": "string"
+          },
+          "sent_at": {
+            "format": "date-time",
+            "title": "Sent At",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/UpdateSessionState"
+          }
+        },
+        "required": [
+          "kind",
+          "command_id",
+          "sent_at",
+          "state"
+        ],
+        "title": "PlayerCommand",
+        "type": "object"
+      },
+      "PlayerStateEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "player.state",
+            "default": "player.state",
+            "title": "Kind",
+            "type": "string"
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/SessionSnapshot"
+          }
+        },
+        "required": [
+          "snapshot"
+        ],
+        "title": "PlayerStateEvent",
+        "type": "object"
+      },
+      "PowerPointActionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/PowerPointContentAction"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ValidationState"
+          },
+          "usable": {
+            "title": "Usable",
+            "type": "boolean"
+          },
+          "validation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ValidationInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "action",
+          "state",
+          "usable",
+          "validation"
+        ],
+        "title": "PowerPointActionResult",
+        "type": "object"
+      },
+      "PowerPointActionResultV2": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/PowerPointContentActionV2"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ValidationState"
+          },
+          "usable": {
+            "title": "Usable",
+            "type": "boolean"
+          },
+          "validation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ValidationInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "action",
+          "state",
+          "usable",
+          "validation"
+        ],
+        "title": "PowerPointActionResultV2",
+        "type": "object"
+      },
+      "PowerPointAnalysisInput": {
+        "additionalProperties": false,
+        "properties": {
+          "catalog_version": {
+            "const": "powerpoint-2",
+            "default": "powerpoint-2",
+            "title": "Catalog Version",
+            "type": "string"
+          },
+          "display_profile": {
+            "const": "windows-powerpoint-2",
+            "default": "windows-powerpoint-2",
+            "title": "Display Profile",
+            "type": "string"
+          },
+          "extraction_id": {
+            "format": "uuid",
+            "title": "Extraction Id",
+            "type": "string"
+          },
+          "extraction_schema_version": {
+            "const": "buddy.extraction.v1",
+            "default": "buddy.extraction.v1",
+            "title": "Extraction Schema Version",
+            "type": "string"
+          },
+          "extractor_version": {
+            "const": "1",
+            "default": "1",
+            "title": "Extractor Version",
+            "type": "string"
+          },
+          "job_id": {
+            "format": "uuid",
+            "title": "Job Id",
+            "type": "string"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/PowerPointManifest"
+          },
+          "office_safe": {
+            "default": false,
+            "title": "Office Safe",
+            "type": "boolean"
+          },
+          "presentation_summary": {
+            "$ref": "#/components/schemas/Summary"
+          },
+          "renderer_version": {
+            "const": "desktop-powerpoint-2",
+            "default": "desktop-powerpoint-2",
+            "title": "Renderer Version",
+            "type": "string"
+          },
+          "representation": {
+            "const": "bounded_ooxml_extraction",
+            "default": "bounded_ooxml_extraction",
+            "title": "Representation",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "buddy.powerpoint.analysis.v2",
+            "default": "buddy.powerpoint.analysis.v2",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "slides": {
+            "items": {
+              "$ref": "#/components/schemas/PowerPointSlideOutput"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Slides",
+            "type": "array"
+          },
+          "source_format": {
+            "const": "pptx",
+            "default": "pptx",
+            "title": "Source Format",
+            "type": "string"
+          },
+          "source_revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "title": "Source Revision",
+            "type": "string"
+          },
+          "source_sha256": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "validator_version": {
+            "const": "powerpoint-executor-2",
+            "default": "powerpoint-executor-2",
+            "title": "Validator Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "extraction_id",
+          "source_revision",
+          "source_sha256",
+          "job_id",
+          "manifest",
+          "presentation_summary",
+          "slides"
+        ],
+        "title": "PowerPointAnalysisInput",
+        "type": "object"
+      },
+      "PowerPointAnalysisInputV2": {
+        "additionalProperties": false,
+        "properties": {
+          "catalog_version": {
+            "const": "powerpoint-2",
+            "default": "powerpoint-2",
+            "title": "Catalog Version",
+            "type": "string"
+          },
+          "display_profile": {
+            "const": "windows-powerpoint-2",
+            "default": "windows-powerpoint-2",
+            "title": "Display Profile",
+            "type": "string"
+          },
+          "extraction_id": {
+            "format": "uuid",
+            "title": "Extraction Id",
+            "type": "string"
+          },
+          "extraction_schema_version": {
+            "const": "buddy.extraction.v1",
+            "default": "buddy.extraction.v1",
+            "title": "Extraction Schema Version",
+            "type": "string"
+          },
+          "extractor_version": {
+            "const": "1",
+            "default": "1",
+            "title": "Extractor Version",
+            "type": "string"
+          },
+          "job_id": {
+            "format": "uuid",
+            "title": "Job Id",
+            "type": "string"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/PowerPointManifest"
+          },
+          "office_safe": {
+            "default": false,
+            "title": "Office Safe",
+            "type": "boolean"
+          },
+          "presentation_summary": {
+            "$ref": "#/components/schemas/Summary"
+          },
+          "renderer_version": {
+            "const": "desktop-powerpoint-2",
+            "default": "desktop-powerpoint-2",
+            "title": "Renderer Version",
+            "type": "string"
+          },
+          "representation": {
+            "const": "bounded_ooxml_extraction",
+            "default": "bounded_ooxml_extraction",
+            "title": "Representation",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "buddy.powerpoint.analysis.v2",
+            "default": "buddy.powerpoint.analysis.v2",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "slides": {
+            "items": {
+              "$ref": "#/components/schemas/PowerPointSlideOutputV2"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Slides",
+            "type": "array"
+          },
+          "source_format": {
+            "const": "pptx",
+            "default": "pptx",
+            "title": "Source Format",
+            "type": "string"
+          },
+          "source_revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "title": "Source Revision",
+            "type": "string"
+          },
+          "source_sha256": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "validator_version": {
+            "const": "powerpoint-executor-2",
+            "default": "powerpoint-executor-2",
+            "title": "Validator Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "extraction_id",
+          "source_revision",
+          "source_sha256",
+          "job_id",
+          "manifest",
+          "presentation_summary",
+          "slides"
+        ],
+        "title": "PowerPointAnalysisInputV2",
+        "type": "object"
+      },
+      "PowerPointAnalysisResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/PowerPointAnalysisResult"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "request_id"
+        ],
+        "title": "PowerPointAnalysisResponse",
+        "type": "object"
+      },
+      "PowerPointAnalysisResponseV2": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/PowerPointAnalysisResultV2"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "request_id"
+        ],
+        "title": "PowerPointAnalysisResponseV2",
+        "type": "object"
+      },
+      "PowerPointAnalysisResult": {
+        "additionalProperties": false,
+        "properties": {
+          "action_limit_reached": {
+            "default": false,
+            "title": "Action Limit Reached",
+            "type": "boolean"
+          },
+          "analysis_sha256": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Digest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "deck_id": {
+            "format": "uuid",
+            "title": "Deck Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "inputs": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PowerPointAnalysisInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "publication": {
+            "$ref": "#/components/schemas/Publication"
+          },
+          "slides": {
+            "items": {
+              "$ref": "#/components/schemas/PowerPointSlideResult"
+            },
+            "title": "Slides",
+            "type": "array"
+          },
+          "source_format": {
+            "const": "pptx",
+            "default": "pptx",
+            "title": "Source Format",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "deck_id",
+          "version",
+          "publication",
+          "analysis_sha256",
+          "inputs",
+          "slides"
+        ],
+        "title": "PowerPointAnalysisResult",
+        "type": "object"
+      },
+      "PowerPointAnalysisResultV2": {
+        "additionalProperties": false,
+        "properties": {
+          "action_limit_reached": {
+            "default": false,
+            "title": "Action Limit Reached",
+            "type": "boolean"
+          },
+          "analysis_sha256": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Digest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "deck_id": {
+            "format": "uuid",
+            "title": "Deck Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "inputs": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PowerPointAnalysisInputV2"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "publication": {
+            "$ref": "#/components/schemas/Publication"
+          },
+          "slides": {
+            "items": {
+              "$ref": "#/components/schemas/PowerPointSlideResultV2"
+            },
+            "title": "Slides",
+            "type": "array"
+          },
+          "source_format": {
+            "const": "pptx",
+            "default": "pptx",
+            "title": "Source Format",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "deck_id",
+          "version",
+          "publication",
+          "analysis_sha256",
+          "inputs",
+          "slides"
+        ],
+        "title": "PowerPointAnalysisResultV2",
+        "type": "object"
+      },
+      "PowerPointContentAction": {
+        "additionalProperties": false,
+        "properties": {
+          "deck_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "instance_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "params": {
+            "$ref": "#/components/schemas/PowerPointParameters"
+          },
+          "purpose": {
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Purpose",
+            "type": "string"
+          },
+          "render_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "slide_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "source_format": {
+            "const": "pptx",
+            "default": "pptx",
+            "title": "Source Format",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "highlight_region",
+              "draw_rectangle",
+              "draw_oval",
+              "draw_underline",
+              "draw_arrow",
+              "callout",
+              "draw_line",
+              "filled_rectangle",
+              "filled_oval",
+              "text_box",
+              "draw_rounded_rectangle",
+              "draw_diamond",
+              "draw_triangle",
+              "draw_hexagon",
+              "draw_star"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "version": {
+            "const": "powerpoint-2",
+            "default": "powerpoint-2",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "instance_id",
+          "purpose",
+          "deck_id",
+          "render_id",
+          "slide_id",
+          "type",
+          "params"
+        ],
+        "title": "PowerPointContentAction",
+        "type": "object"
+      },
+      "PowerPointContentActionV2": {
+        "additionalProperties": false,
+        "properties": {
+          "deck_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "instance_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "params": {
+            "$ref": "#/components/schemas/PowerPointParameters"
+          },
+          "purpose": {
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Purpose",
+            "type": "string"
+          },
+          "render_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "slide_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "source_format": {
+            "const": "pptx",
+            "default": "pptx",
+            "title": "Source Format",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "highlight_region",
+              "draw_rectangle",
+              "draw_oval",
+              "draw_underline",
+              "draw_arrow",
+              "callout",
+              "draw_line",
+              "filled_rectangle",
+              "filled_oval",
+              "text_box",
+              "draw_rounded_rectangle",
+              "draw_diamond",
+              "draw_triangle",
+              "draw_hexagon",
+              "draw_star",
+              "zoom_region"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "version": {
+            "const": "powerpoint-2",
+            "default": "powerpoint-2",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "instance_id",
+          "purpose",
+          "deck_id",
+          "render_id",
+          "slide_id",
+          "type",
+          "params"
+        ],
+        "title": "PowerPointContentActionV2",
+        "type": "object"
+      },
+      "PowerPointManifest": {
+        "additionalProperties": false,
+        "properties": {
+          "deck_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "render_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "slides": {
+            "items": {
+              "$ref": "#/components/schemas/PowerPointManifestSlide"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Slides",
+            "type": "array"
+          },
+          "source_format": {
+            "const": "pptx",
+            "default": "pptx",
+            "title": "Source Format",
+            "type": "string"
+          },
+          "version": {
+            "const": "powerpoint-2",
+            "default": "powerpoint-2",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deck_id",
+          "render_id",
+          "slides"
+        ],
+        "title": "PowerPointManifest",
+        "type": "object"
+      },
+      "PowerPointManifestSlide": {
+        "additionalProperties": false,
+        "properties": {
+          "native_slide_id": {
+            "exclusiveMinimum": 0.0,
+            "title": "Native Slide Id",
+            "type": "integer"
+          },
+          "slide_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "source": {
+            "$ref": "#/components/schemas/PowerPointPlane"
+          }
+        },
+        "required": [
+          "slide_id",
+          "native_slide_id",
+          "source"
+        ],
+        "title": "PowerPointManifestSlide",
+        "type": "object"
+      },
+      "PowerPointParameters": {
+        "additionalProperties": false,
+        "properties": {
+          "region": {
+            "$ref": "#/components/schemas/Region"
+          },
+          "source_shape_id": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Shape Id"
+          },
+          "target_text": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Target Text",
+            "type": "string"
+          },
+          "text": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "region"
+        ],
+        "title": "PowerPointParameters",
+        "type": "object"
+      },
+      "PowerPointPlane": {
+        "additionalProperties": false,
+        "properties": {
+          "height": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 100000.0,
+            "title": "Height",
+            "type": "number"
+          },
+          "origin": {
+            "const": "top_left",
+            "default": "top_left",
+            "title": "Origin",
+            "type": "string"
+          },
+          "units": {
+            "const": "slide_points",
+            "default": "slide_points",
+            "title": "Units",
+            "type": "string"
+          },
+          "width": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 100000.0,
+            "title": "Width",
+            "type": "number"
+          }
+        },
+        "required": [
+          "width",
+          "height"
+        ],
+        "title": "PowerPointPlane",
+        "type": "object"
+      },
+      "PowerPointSlideOutput": {
+        "additionalProperties": false,
+        "properties": {
+          "actions": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PowerPointContentAction"
+            },
+            "maxItems": 40,
+            "title": "Actions",
+            "type": "array"
+          },
+          "slide_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          }
+        },
+        "required": [
+          "slide_id",
+          "summary"
+        ],
+        "title": "PowerPointSlideOutput",
+        "type": "object"
+      },
+      "PowerPointSlideOutputV2": {
+        "additionalProperties": false,
+        "properties": {
+          "actions": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PowerPointContentActionV2"
+            },
+            "maxItems": 40,
+            "title": "Actions",
+            "type": "array"
+          },
+          "slide_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          }
+        },
+        "required": [
+          "slide_id",
+          "summary"
+        ],
+        "title": "PowerPointSlideOutputV2",
+        "type": "object"
+      },
+      "PowerPointSlideResult": {
+        "additionalProperties": false,
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/PowerPointActionResult"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "slide_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          }
+        },
+        "required": [
+          "slide_id",
+          "summary",
+          "actions"
+        ],
+        "title": "PowerPointSlideResult",
+        "type": "object"
+      },
+      "PowerPointSlideResultV2": {
+        "additionalProperties": false,
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/PowerPointActionResultV2"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "slide_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          }
+        },
+        "required": [
+          "slide_id",
+          "summary",
+          "actions"
+        ],
+        "title": "PowerPointSlideResultV2",
+        "type": "object"
+      },
       "ProcessResult": {
         "additionalProperties": false,
         "properties": {
@@ -1340,6 +2704,150 @@
         "title": "ResourceUpdate",
         "type": "object"
       },
+      "SessionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/SessionSnapshot"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "request_id"
+        ],
+        "title": "SessionResponse",
+        "type": "object"
+      },
+      "SessionSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "analysis_version_id": {
+            "format": "uuid",
+            "title": "Analysis Version Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "deck_id": {
+            "format": "uuid",
+            "title": "Deck Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "owner_id": {
+            "format": "uuid",
+            "title": "Owner Id",
+            "type": "string"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state_version": {
+            "minimum": 0.0,
+            "title": "State Version",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "created",
+              "active",
+              "ended"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "owner_id",
+          "deck_id",
+          "analysis_version_id",
+          "status",
+          "state_version",
+          "state",
+          "created_at"
+        ],
+        "title": "SessionSnapshot",
+        "type": "object"
+      },
+      "SessionState": {
+        "additionalProperties": false,
+        "properties": {
+          "active_slide_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Active Slide Id",
+            "type": "string"
+          },
+          "autonomy_mode": {
+            "default": "manual",
+            "enum": [
+              "manual",
+              "assisted",
+              "autonomous"
+            ],
+            "title": "Autonomy Mode",
+            "type": "string"
+          },
+          "focus_region": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FocusRegion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "focus_view": {
+            "default": "slide",
+            "enum": [
+              "slide",
+              "zoom_region",
+              "highlight_region"
+            ],
+            "title": "Focus View",
+            "type": "string"
+          },
+          "last_accepted_action_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Accepted Action Id"
+          }
+        },
+        "required": [
+          "active_slide_id"
+        ],
+        "title": "SessionState",
+        "type": "object"
+      },
       "SlideOutput": {
         "additionalProperties": false,
         "properties": {
@@ -1491,6 +2999,91 @@
         "title": "SourcePlane",
         "type": "object"
       },
+      "SpeechEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "end_ms": {
+            "maximum": 86400000.0,
+            "minimum": 0.0,
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "final": {
+            "title": "Final",
+            "type": "boolean"
+          },
+          "kind": {
+            "const": "speech.transcript",
+            "default": "speech.transcript",
+            "title": "Kind",
+            "type": "string"
+          },
+          "language": {
+            "maxLength": 32,
+            "minLength": 2,
+            "pattern": "^[a-zA-Z0-9-]+$",
+            "title": "Language",
+            "type": "string"
+          },
+          "revision": {
+            "maximum": 1000000.0,
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "segment_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "title": "Segment Id",
+            "type": "string"
+          },
+          "start_ms": {
+            "maximum": 86400000.0,
+            "minimum": 0.0,
+            "title": "Start Ms",
+            "type": "integer"
+          },
+          "stream_id": {
+            "format": "uuid",
+            "title": "Stream Id",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stream_id",
+          "segment_id",
+          "revision",
+          "text",
+          "final",
+          "language",
+          "start_ms",
+          "end_ms"
+        ],
+        "title": "SpeechEvent",
+        "type": "object"
+      },
+      "StartSession": {
+        "additionalProperties": false,
+        "properties": {
+          "deck_id": {
+            "format": "uuid",
+            "title": "Deck Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deck_id"
+        ],
+        "title": "StartSession",
+        "type": "object"
+      },
       "StoredResult": {
         "additionalProperties": false,
         "properties": {
@@ -1573,6 +3166,72 @@
         "minLength": 1,
         "pattern": "\\S",
         "type": "string"
+      },
+      "UpdateSessionState": {
+        "additionalProperties": false,
+        "properties": {
+          "active_slide_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Active Slide Id",
+            "type": "string"
+          },
+          "autonomy_mode": {
+            "default": "manual",
+            "enum": [
+              "manual",
+              "assisted",
+              "autonomous"
+            ],
+            "title": "Autonomy Mode",
+            "type": "string"
+          },
+          "expected_state_version": {
+            "minimum": 0.0,
+            "title": "Expected State Version",
+            "type": "integer"
+          },
+          "focus_region": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FocusRegion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "focus_view": {
+            "default": "slide",
+            "enum": [
+              "slide",
+              "zoom_region",
+              "highlight_region"
+            ],
+            "title": "Focus View",
+            "type": "string"
+          },
+          "last_accepted_action_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Accepted Action Id"
+          }
+        },
+        "required": [
+          "active_slide_id",
+          "expected_state_version"
+        ],
+        "title": "UpdateSessionState",
+        "type": "object"
       },
       "UploadData": {
         "properties": {
@@ -1832,6 +3491,16 @@
           "renderer_version": {
             "$ref": "#/components/schemas/Identifier"
           },
+          "runtime_version": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Identifier"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "schema_version": {
             "const": "buddy.validation.v1",
             "default": "buddy.validation.v1",
@@ -1842,6 +3511,15 @@
             "default": false,
             "title": "Semantic Verified",
             "type": "boolean"
+          },
+          "source_format": {
+            "default": "pdf",
+            "enum": [
+              "pdf",
+              "pptx"
+            ],
+            "title": "Source Format",
+            "type": "string"
           },
           "state": {
             "$ref": "#/components/schemas/ValidationState"
@@ -2320,6 +3998,105 @@
         ]
       }
     },
+    "/api/v1/analyses/powerpoint/by-deck/{deck_id}": {
+      "get": {
+        "operationId": "powerpoint_for_deck_api_v1_analyses_powerpoint_by_deck__deck_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deck_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Deck Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PowerPointAnalysisResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Powerpoint For Deck",
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
     "/api/v1/analyses/{identifier}": {
       "get": {
         "operationId": "read_api_v1_analyses__identifier__get",
@@ -2469,7 +4246,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Unprocessable Entity"
           },
           "429": {
             "content": {
@@ -2583,6 +4360,26 @@
               }
             },
             "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
           },
           "422": {
             "content": {
@@ -2760,6 +4557,115 @@
         ]
       }
     },
+    "/api/v1/decks/{identifier}": {
+      "delete": {
+        "operationId": "delete_deck_api_v1_decks__identifier__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeckDeletionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Delete Deck",
+        "tags": [
+          "library"
+        ]
+      }
+    },
     "/api/v1/decks/{identifier}/job": {
       "get": {
         "operationId": "latest_api_v1_decks__identifier__job_get",
@@ -2840,7 +4746,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Unprocessable Entity"
           },
           "429": {
             "content": {
@@ -2866,6 +4772,111 @@
         "summary": "Latest",
         "tags": [
           "processing"
+        ]
+      }
+    },
+    "/api/v1/decks/{identifier}/powerpoint-source": {
+      "get": {
+        "operationId": "powerpoint_source_api_v1_decks__identifier__powerpoint_source_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/vnd.openxmlformats-officedocument.presentationml.presentation": {}
+            },
+            "description": "Owner-only immutable original PowerPoint source."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Powerpoint Source",
+        "tags": [
+          "library"
         ]
       }
     },
@@ -2916,6 +4927,26 @@
               }
             },
             "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
           },
           "422": {
             "content": {
@@ -3115,7 +5146,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Unprocessable Entity"
           },
           "429": {
             "content": {
@@ -3224,7 +5255,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Unprocessable Entity"
           },
           "429": {
             "content": {
@@ -3333,7 +5364,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Unprocessable Entity"
           },
           "429": {
             "content": {
@@ -3830,6 +5861,344 @@
         ]
       }
     },
+    "/api/v1/sessions": {
+      "post": {
+        "description": "Start a session or idempotently resume the current one for this ready deck.",
+        "operationId": "start_or_resume_api_v1_sessions_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartSession"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Start Or Resume",
+        "tags": [
+          "presentation sessions"
+        ]
+      }
+    },
+    "/api/v1/sessions/{identifier}": {
+      "get": {
+        "operationId": "read_api_v1_sessions__identifier__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Read",
+        "tags": [
+          "presentation sessions"
+        ]
+      }
+    },
+    "/api/v1/sessions/{identifier}/end": {
+      "post": {
+        "operationId": "end_api_v1_sessions__identifier__end_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EndSession"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "End",
+        "tags": [
+          "presentation sessions"
+        ]
+      }
+    },
     "/api/v1/sessions/{identifier}/events": {
       "get": {
         "operationId": "subscribe_api_v1_sessions__identifier__events_get",
@@ -3939,6 +6308,613 @@
         "summary": "Subscribe",
         "tags": [
           "private resources"
+        ]
+      }
+    },
+    "/api/v1/sessions/{identifier}/resume": {
+      "post": {
+        "operationId": "resume_api_v1_sessions__identifier__resume_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Resume",
+        "tags": [
+          "presentation sessions"
+        ]
+      }
+    },
+    "/api/v1/sessions/{identifier}/state": {
+      "patch": {
+        "operationId": "update_state_api_v1_sessions__identifier__state_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSessionState"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Update State",
+        "tags": [
+          "presentation sessions"
+        ]
+      }
+    },
+    "/api/v1/sessions/{identifier}/sync/commands": {
+      "post": {
+        "operationId": "publish_api_v1_sessions__identifier__sync_commands_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlayerCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandAcknowledgment"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Publish",
+        "tags": [
+          "session events"
+        ]
+      }
+    },
+    "/api/v1/sessions/{identifier}/sync/events": {
+      "get": {
+        "operationId": "subscribe_api_v1_sessions__identifier__sync_events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "last-event-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Subscribe",
+        "tags": [
+          "session events"
+        ]
+      }
+    },
+    "/api/v1/sessions/{identifier}/sync/snapshot": {
+      "get": {
+        "description": "Read current state and the committed event cursor atomically.",
+        "operationId": "read_snapshot_api_v1_sessions__identifier__sync_snapshot_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventEnvelope"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Read Snapshot",
+        "tags": [
+          "session events"
         ]
       }
     },
@@ -4537,6 +7513,204 @@
         "summary": "Version",
         "tags": [
           "operations"
+        ]
+      }
+    },
+    "/api/v2/analyses/pdf/by-deck/{deck_id}": {
+      "get": {
+        "operationId": "pdf_for_deck_v2_api_v2_analyses_pdf_by_deck__deck_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deck_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Deck Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PDFAnalysisResponseV2"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Pdf For Deck V2",
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/api/v2/analyses/powerpoint/by-deck/{deck_id}": {
+      "get": {
+        "operationId": "powerpoint_for_deck_v2_api_v2_analyses_powerpoint_by_deck__deck_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deck_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Deck Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PowerPointAnalysisResponseV2"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Powerpoint For Deck V2",
+        "tags": [
+          "analysis"
         ]
       }
     },

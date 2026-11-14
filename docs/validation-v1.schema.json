@@ -100,6 +100,17 @@
     "renderer_version": {
       "$ref": "#/$defs/Identifier"
     },
+    "runtime_version": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Identifier"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "schema_version": {
       "const": "buddy.validation.v1",
       "default": "buddy.validation.v1",
@@ -110,6 +121,15 @@
       "default": false,
       "title": "Semantic Verified",
       "type": "boolean"
+    },
+    "source_format": {
+      "default": "pdf",
+      "enum": [
+        "pdf",
+        "pptx"
+      ],
+      "title": "Source Format",
+      "type": "string"
     },
     "state": {
       "$ref": "#/$defs/ValidationState"

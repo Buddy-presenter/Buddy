@@ -1,5 +1,9 @@
 # Slide action catalog v1 / v1.1
 
+This catalog is **PDF-only**, in canonical PDF source pixels. The independent
+[`powerpoint-1` catalog](powerpoint-analysis.md) uses native slide points and its own
+schema/execution path. Equal action names do not make their instances interchangeable.
+
 Issue #47 provides a reusable production PySide6 executor and raster presentation surface.
 It implements `next_slide`, `previous_slide`, `go_to_slide`, `zoom_region`, `reset_view`
 and the requester-approved sixth command, `highlight_region`. Buddy's Present workspace

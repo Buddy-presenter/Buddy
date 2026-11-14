@@ -17,7 +17,7 @@ import httpx
 import pytest
 from backend.tests.analysis.test_provider import Session, response_for
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from buddy_api.analysis import provider as provider_module
 from buddy_api.analysis.provider import (
@@ -32,7 +32,14 @@ from buddy_api.app import create_app
 from buddy_api.auth import Principal, authenticated
 from buddy_api.config import Environment, Settings
 from buddy_api.persistence.database import Database
-from buddy_api.persistence.models import ActionCheck, DeckExtraction, JobOutbox, ProcessingJob
+from buddy_api.persistence.models import (
+    ActionCheck,
+    Deck,
+    DeckExtraction,
+    JobOutbox,
+    ProcessingJob,
+    User,
+)
 from buddy_api.processing import store
 from buddy_api.processing.config import WorkerSettings
 from buddy_api.processing.contracts import Message, PDFSource
@@ -822,12 +829,12 @@ def test_invalid_pdf_dead_letter_safe_error_and_bounded_retry(migrated_database)
     asyncio.run(scenario())
 
 
-def test_pdf_only_quota_and_global_concurrency(migrated_database):
+def test_pdf_and_pptx_share_quota_and_global_concurrency(migrated_database):
     async def scenario():
         db = Database(migrated_database)
         try:
-            _, _, legacy = await seed(db, source_format="pptx", subject="pptx")
-            assert legacy is None
+            _, _, powerpoint = await seed(db, source_format="pptx", subject="pptx")
+            assert powerpoint is not None and powerpoint.stage == "pptx_metadata.v1"
             owner, deck, first = await seed(db)
             _, _, second = await seed(db, subject="second")
             async with db.sessions() as session, session.begin():
@@ -1013,33 +1020,92 @@ def test_preupgrade_metadata_ready_pdf_is_resumed_into_analysis(database_setting
         await migrate_to("0009_pdf_workers")
         db = Database(database_settings)
         storage = SourceStorage(UPLOADS, S3(PDF.read_bytes()))
-        owner, deck, job = await seed(db)
+        content = PDF.read_bytes()
+        owner_id, deck_id, job_id, extraction_id = (uuid4() for _ in range(4))
+        source_revision = str(uuid4())
+        source_key = f"sources/{owner_id}/original.pdf"
+        source_hash = hashlib.sha256(content).hexdigest()
+        owner = User(id=owner_id, subject="preupgrade-worker-owner")
+        deck = Deck(
+            id=deck_id,
+            owner_id=owner_id,
+            title="PDF worker",
+            source_key=source_key,
+            source_revision=source_revision,
+            source_sha256=source_hash,
+            source_size_bytes=len(content),
+            source_version_id="pinned-version",
+            source_format="pdf",
+        )
+        job = ProcessingJob(id=job_id, owner_id=owner_id, deck_id=deck_id)
         metadata = inspect_source(
             PDFSource(
-                key=deck.source_key,
-                version=deck.source_version_id,
-                size=deck.source_size_bytes,
-                sha256=deck.source_sha256,
-                revision=deck.source_revision,
-                deck_id=deck.id,
+                key=source_key,
+                version="pinned-version",
+                size=len(content),
+                sha256=source_hash,
+                revision=source_revision,
+                deck_id=deck_id,
             ),
             storage,
         )
-        async with db.transaction() as repos:
-            extraction = await repos.extractions.save(
-                owner_id=owner.id, deck_id=deck.id, extraction=metadata.metadata
+        async with db.engine.begin() as connection:
+            # Model a real 0009 database: current ORM mappings include columns introduced
+            # by later migrations, so seed the historical rows using only 0009 columns.
+            await connection.execute(
+                text("INSERT INTO users(id, subject) VALUES (:id, :subject)"),
+                {"id": owner_id, "subject": owner.subject},
             )
-        async with db.sessions() as session, session.begin():
-            old_job = await session.get(ProcessingJob, job.id)
-            old_job.status = "metadata_ready"
-            old_job.stage, old_job.stage_state, old_job.progress = (
-                "pdf_metadata.v1",
-                "succeeded",
-                100,
+            await connection.execute(
+                text(
+                    "INSERT INTO decks(id, owner_id, title, source_key, source_revision, "
+                    "source_sha256, source_size_bytes, source_version_id, source_format) "
+                    "VALUES (:id, :owner_id, :title, :source_key, :source_revision, "
+                    ":source_sha256, :source_size_bytes, :source_version_id, :source_format)"
+                ),
+                {
+                    "id": deck_id,
+                    "owner_id": owner_id,
+                    "title": deck.title,
+                    "source_key": source_key,
+                    "source_revision": source_revision,
+                    "source_sha256": source_hash,
+                    "source_size_bytes": len(content),
+                    "source_version_id": "pinned-version",
+                    "source_format": "pdf",
+                },
             )
-            old_job.attempts = 1
-            old_job.extraction_id = extraction.id
-            old_generation = old_job.generation
+            await connection.execute(
+                text(
+                    "INSERT INTO deck_extractions(id, owner_id, deck_id, source_revision, "
+                    "source_sha256, extractor_version, document) VALUES (:id, :owner_id, "
+                    ":deck_id, :source_revision, :source_sha256, '1', CAST(:document AS jsonb))"
+                ),
+                {
+                    "id": extraction_id,
+                    "owner_id": owner_id,
+                    "deck_id": deck_id,
+                    "source_revision": source_revision,
+                    "source_sha256": source_hash,
+                    "document": json.dumps(metadata.metadata.model_dump(mode="json")),
+                },
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO processing_jobs(id, owner_id, deck_id, status, attempts, "
+                    "source_revision, stage, stage_state, progress, extraction_id) VALUES "
+                    "(:id, :owner_id, :deck_id, 'metadata_ready', 1, :source_revision, "
+                    "'pdf_metadata.v1', 'succeeded', 100, :extraction_id)"
+                ),
+                {
+                    "id": job_id,
+                    "owner_id": owner_id,
+                    "deck_id": deck_id,
+                    "source_revision": source_revision,
+                    "extraction_id": extraction_id,
+                },
+            )
+            old_generation = 0
         await db.close()
 
         # This simulates deploying the analysis worker over a real 0009-completed PDF.
@@ -1061,7 +1127,7 @@ def test_preupgrade_metadata_ready_pdf_is_resumed_into_analysis(database_setting
             assert (migrated.status, migrated.stage, migrated.extraction_id) == (
                 "queued",
                 "pdf_analysis.v1",
-                extraction.id,
+                extraction_id,
             )
             assert migrated.generation == old_generation + 1
             assert migrated.attempts == 0
@@ -1071,16 +1137,126 @@ def test_preupgrade_metadata_ready_pdf_is_resumed_into_analysis(database_setting
             assert (finished.status, finished.attempts, finished.extraction_id) == (
                 "analysis_ready",
                 1,
-                extraction.id,
+                extraction_id,
             )
             assert provider.calls == 1
             async with db.transaction() as repos:
                 analyses = await repos.analyses.list(owner_id=owner.id)
                 assert len(analyses) == 1
                 assert analyses[0].job_id == job.id
-                assert analyses[0].extraction_id == extraction.id
+                assert analyses[0].extraction_id == extraction_id
                 result = await repos.analyses.read(analyses[0].id, owner_id=owner.id)
                 assert result.publication == "published"
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+def test_pdf_validation_resumes_before_deadline_without_regeneration(
+    migrated_database, monkeypatch
+):
+    from types import SimpleNamespace
+
+    import buddy_api.processing.service as service_module
+
+    elapsed = [0.0]
+    monkeypatch.setattr(service_module, "time", SimpleNamespace(perf_counter=lambda: elapsed[0]))
+
+    class Provider:
+        calls = 0
+
+        def analyze(self, content, extraction, deck_id, manifest):
+            self.calls += 1
+            return ModelOutput(
+                presentation=ModelSummary(text="Presentation.", reason=None),
+                slides=tuple(
+                    ModelSlide(
+                        number=i + 1,
+                        text="Page.",
+                        reason=None,
+                        actions=(
+                            ModelAction(
+                                type="zoom_region",
+                                purpose="Focus on the source.",
+                                target_text="Buddy PDF presentation",
+                                x=1,
+                                y=1,
+                                width=1280,
+                                height=720,
+                            ),
+                            ModelAction(
+                                type="highlight_region",
+                                purpose="Mark the source.",
+                                target_text="Buddy PDF presentation",
+                                x=1,
+                                y=1,
+                                width=1280,
+                                height=720,
+                            ),
+                        )
+                        if i == 0
+                        else (),
+                    )
+                    for i, _ in enumerate(extraction.slides)
+                ),
+            )
+
+    class Validator:
+        def __init__(self, deck):
+            self.deck = deck
+            self.calls = []
+
+        async def reconcile(self):
+            pass
+
+        async def validate(self, owner_id, deck_id, key, request, **kwargs):
+            self.calls.append(key)
+            elapsed[0] += 250
+            return StoredResult(
+                id=uuid4(),
+                deck_id=deck_id,
+                evidence=[],
+                result=ProcessResult(
+                    state="rejected",
+                    reasons=["invalid_action_parameters"],
+                    profile=request.profile,
+                    runtime_platform=sys.platform,
+                    source_revision=self.deck.source_revision,
+                    source_sha256=self.deck.source_sha256,
+                    action_sha256=action_digest(request.action),
+                ),
+            )
+
+    async def scenario():
+        db = Database(migrated_database)
+        try:
+            owner, deck, job = await seed(db)
+            queue = SQS()
+            provider = Provider()
+            validator = Validator(deck)
+            worker = make_processor(
+                db,
+                SourceStorage(UPLOADS, S3(PDF.read_bytes())),
+                WORKER.model_copy(update={"runtime_seconds": 300}),
+                queue,
+                provider=provider,
+                validation=validator,
+            )
+            await worker.maintain()
+            await worker.run_message(queue.messages[-1])
+            current = await row(db, job.id)
+            assert current.status == "retry_wait" and current.attempts == 0
+            async with db.sessions() as session, session.begin():
+                current = await session.get(ProcessingJob, job.id)
+                current.not_before = store.now()
+                outbox = await session.get(JobOutbox, job.id)
+                outbox.available_at = store.now()
+            await worker.maintain()
+            await worker.run_message(queue.messages[-1])
+            current = await row(db, job.id)
+            assert current.status == "analysis_ready" and provider.calls == 1
+            assert len(validator.calls) == len(set(validator.calls)) == 2
         finally:
             await db.close()
 

@@ -26,17 +26,26 @@ on reviewed `main`, target `staging`:
    It retains the worker definition/count and rejects worker image input. This is safe
    preparation while no worker can publish the new records, not feature activation.
    Keep the worker paused until the feature rollout succeeds. Retain this healthy API
-   as the immediate rollback reader.
+   as the immediate rollback reader. Because the worker remains stopped on both success
+   and rollback of this API-only phase, its old image is not run against the expanded
+   schema during this preflight; the proof binds the unchanged worker task definition and
+   zero desired count instead.
 3. Dispatch a **separate** run with `rollout_phase=feature`.
    Require a second staging approval. This run must observe the bridge as the immediate
    rollback target. It applies the forward repair through 0008 and promotes the feature
    image. Failed promotion restores the tested bridge without downgrading the database.
 
 During the compatibility phase, do not promote a new worker image: the existing worker
-stays on its current digest and is smoke-tested against the bridge schema. During the
+stays on its current digest and is smoke-tested against the unchanged baseline schema,
+using the bridge's exact base image to apply migrations in the disposable worker test.
+The future feature schema must not be used for this phase. During the
 feature phase, staging builds the worker from that same reviewed revision, smoke-tests the
-candidate and the prior worker image against the feature schema, then promotes API and
-worker together when the Terraform-managed worker service exists. If this is the first
+candidate against the feature schema, then promotes API and worker together when the
+Terraform-managed worker service exists. The prior worker image is also smoke-tested
+against the feature schema if the pre-release worker is active, because a failed rollout
+would resume it during rollback. If it is already paused at desired count zero, rollback
+keeps it paused, so preflight binds its exact image and zero count but does not require it
+to run against the expanded schema. If this is the first
 worker rollout, first create the service paused as described in
 [infrastructure provisioning](infrastructure.md#reproducible-provisioning), then rerun
 the feature promotion. Production promotion retains its separate acceptance policy; this
@@ -79,13 +88,25 @@ application has already rolled back to the bridge. Recovery never infers the dat
 head from an old application. This conservatively forbids restoring the original
 pre-bridge image through explicit rollback, including before expansion. The original image fails this test after
 schema expansion; selecting an old healthy audit cannot bypass it.
+Before any rollback service update, the target API and worker task-definition revisions
+must still exist and be active; the workflow checks them during preflight and again before
+restoring services.
 
 Worker proof uses the exact immutable ECR digest and the same isolated PostgreSQL harness
 as CI's worker smoke. It applies the release schema with the API image, processes a
 permissioned synthetic PDF through the real worker entrypoint, checks persisted results,
-lease recovery, malformed-PDF failure and restart idempotency, and then runs the previous
-worker image against that same schema when one exists. It uses deterministic fakes only at
-the external SQS/S3/provider boundaries; no live queue, user PDF or Bedrock call is used.
+lease recovery, malformed-PDF failure and restart idempotency. The previous worker image
+is also run against that schema only when rollback would resume it. A worker that remains
+paused on rollback is recorded by its exact task definition and desired count instead.
+The smoke uses deterministic fakes only at the external SQS/S3/provider boundaries; no live
+queue, user PDF or Bedrock call is used.
+The feature worker smoke also verifies scanned-PDF grounding. Compatibility and rollback
+smokes run older worker images without importing that feature-only module, while still
+exercising the real worker entrypoint and PDF processing path.
+The profile is selected from rollout intent: an explicitly supplied worker image in a
+feature release uses the feature profile even when its digest equals the live worker;
+bridge, rollback and existing-worker checks use the compatibility profile. The preflight
+records that intent and promotion validates it against the worker smoke evidence.
 
 PR CI builds an old-source fixture from the pinned image's exact source commit and tests
 both phases without AWS credentials. This checks the source contract, not the private

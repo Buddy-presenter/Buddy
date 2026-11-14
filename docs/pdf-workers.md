@@ -9,11 +9,13 @@ the job. Rendered OCR pages are transient, are not sent to another provider or s
 evidence, and are removed with the child scratch directory. Default quote mode does not
 send extracted text; opt-in candidate mode sends its ephemeral text catalogue alongside
 the unchanged original PDF, as described below. Existing
-PPTX upload/storage remains compatible; PPTX analysis and playback are deferred.
+PPTX uploads now use separate PowerPoint inspection/analysis stages in the same durable
+worker lifecycle. See [PowerPoint analysis](powerpoint-analysis.md) for its distinct
+provider representation, catalog, and Windows/Office validation deployment prerequisite.
 
 ## Scheduling and publication
 
-An accepted PDF upload creates its revision-bound job and `job_outbox` row in the same
+An accepted PDF or PPTX upload creates its revision-bound job and `job_outbox` row in the same
 PostgreSQL transaction as the deck. The unique `(deck_id, source_revision)` constraint and
 transaction-scoped admission lock make scheduling idempotent across replicas. The API
 dispatcher also reconciles accepted pre-upgrade PDFs in bounded batches. Scheduling and
@@ -92,17 +94,23 @@ diagnostics.
 
 The global DB admission lock bounds claimed work to two jobs by default, across worker
 replicas. Each worker process executes one job at a time. Its 45-second lease is renewed
-every 10 seconds, but never beyond the 900-second attempt deadline. PDF inspection and
-ephemeral PDFium manifest hashing run in an isolated process with a 120-second deadline,
+every 10 seconds throughout the full job lifecycle, including between short validation
+calls, but never beyond the 900-second attempt deadline. PDF inspection and ephemeral
+PDFium manifest hashing run in an isolated process with a 120-second deadline,
 1 GiB address-space ceiling, 30-second metadata parser limit and no persisted page images.
-Provider calls time out after 90 seconds. The provider boundary accepts at most an 18 MiB,
-100-page PDF, returns at most 12,000 tokens, and is attempted at most three times for a job.
+Provider calls time out after 240 seconds. The provider boundary accepts at most an 18 MiB,
+100-page PDF, returns at most 64,000 tokens, and is attempted at most three times for a job.
 The 18 MiB source limit leaves room for base64 expansion and request metadata under Bedrock's
 25 MiB InvokeModel body quota.
-The model context window and request/output limits bound token spend; generation can produce
-multiple distinct actions per slide, with validation capped at 40 actions per deck and 15 seconds
-per isolated action run. Review warns when all 40 slots are used because additional useful
-actions may have been left out. Generated highlights must quote a visible target phrase and are
+The model context window and request/output limits bound token spend; PDF generation combines
+semantic model targets with source-measured text-line and PDF visual-object candidates, up to
+1,000 actions per analysis. Review warns when inventory bounds are reached. Each action is
+validated in an isolated run with a 15-second limit. New PDF analyses use `buddy.analysis.v2`;
+old clients receive a 409 upgrade response, while compatible clients read
+`/api/v2/analyses/pdf/by-deck/{deck_id}`. Deploy the compatible API and desktop before enabling
+the updated worker; an older API cannot read the expanded stored contract. If validation nears
+the worker deadline, it releases the delivery and resumes already-persisted work rather than
+regenerating the analysis. The PDF semantic visual-QA gate remains separate and unfinished. Generated highlights must quote a visible target phrase and are
 rejected if their rectangle exceeds 6% of page height; this catches paragraph-sized regions but
 does not establish semantic correctness. Fargate independently bounds
 worker CPU/memory to 1 vCPU/2 GiB. SIGTERM drains bounded work, releases the lease and exits;

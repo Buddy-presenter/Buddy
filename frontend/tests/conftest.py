@@ -64,6 +64,7 @@ def desktop_window(qtbot, tmp_path, monkeypatch):
                 and not window.account.runner.busy
                 and not window.library.runner.busy
                 and not window.present.executor.busy
+                and not window.present.session_runner.busy
                 and not window.present.powerpoint_runner.busy
             ),
             timeout=5000,
@@ -110,6 +111,13 @@ def backend() -> Iterator[ThreadingHTTPServer]:
 
         def do_POST(self) -> None:
             self.server.method = "POST"
+            self.server.path = self.path
+            self.server.request_body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            self.server.authorization = self.headers.get("Authorization")
+            self._respond()
+
+        def do_PATCH(self) -> None:
+            self.server.method = "PATCH"
             self.server.path = self.path
             self.server.request_body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
             self.server.authorization = self.headers.get("Authorization")

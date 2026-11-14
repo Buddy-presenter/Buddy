@@ -142,3 +142,48 @@ def test_bridge_rejects_an_untested_intermediate_schema(database_settings, previ
     result = old_app(previous_source, database_settings, "baseline", bridge=True)
     assert result.returncode != 0
     assert "outside the tested compatibility window" in result.stderr
+
+
+def test_image_typed_probe_preserves_the_legacy_source_format(migrated_database, monkeypatch):
+    from backend.scripts.release import rollback_probe
+    from backend.tests.support.analysis import create
+
+    monkeypatch.setattr(rollback_probe.runpy, "run_path", lambda _path: {"create": create})
+
+    async def scenario():
+        db = Database(migrated_database)
+        try:
+            async with db.transaction() as repos:
+                await repos.analyses.session.execute(
+                    text("INSERT INTO users(id,subject) VALUES (:id,'typed-probe-owner')"),
+                    {"id": rollback_probe.OWNER},
+                )
+                await repos.analyses.session.execute(
+                    text("INSERT INTO decks(id,owner_id,title) VALUES (:id,:owner,'Legacy PPTX')"),
+                    {"id": rollback_probe.DECK, "owner": rollback_probe.OWNER},
+                )
+                await repos.analyses.session.execute(
+                    text(
+                        "INSERT INTO analysis_versions(id,owner_id,deck_id,version,graph) "
+                        "VALUES (:id,:owner,:deck,1,'{}'::jsonb)"
+                    ),
+                    {
+                        "id": rollback_probe.ANALYSIS,
+                        "owner": rollback_probe.OWNER,
+                        "deck": rollback_probe.DECK,
+                    },
+                )
+                created = await rollback_probe.typed_probe(repos)
+                result = await repos.analyses.read(created.id, owner_id=rollback_probe.OWNER)
+                assert result.inputs is not None and result.source_format == "pdf"
+                assert result.deck_id != rollback_probe.DECK
+                legacy = await repos.decks.get(rollback_probe.DECK, owner_id=rollback_probe.OWNER)
+                assert legacy.source_format == "pptx"
+                historical = await repos.analyses.read(
+                    rollback_probe.ANALYSIS, owner_id=rollback_probe.OWNER
+                )
+                assert historical.source_format == "pptx" and historical.publication == "legacy"
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())

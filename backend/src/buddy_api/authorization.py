@@ -60,6 +60,19 @@ async def owned_resource(
         raise HTTPException(404)
     if record.owner_id != principal.id:
         raise HTTPException(403)
+    if isinstance(record, Deck):
+        if record.deletion_requested_at is not None:
+            raise HTTPException(404)
+    elif isinstance(record, (AnalysisVersion, RenderedAsset, PresentationSession, ProcessingJob)):
+        deck = await session.scalar(
+            select(Deck.id).where(
+                Deck.id == record.deck_id,
+                Deck.owner_id == principal.id,
+                Deck.deletion_requested_at.is_(None),
+            )
+        )
+        if deck is None:
+            raise HTTPException(404)
     return record
 
 
@@ -92,7 +105,15 @@ def resource_data(record: OwnedRecord) -> dict[str, Any]:
         )
     elif isinstance(record, PresentationSession):
         data.update(
-            deck_id=str(record.deck_id), status=record.status, state_version=record.state_version
+            deck_id=str(record.deck_id),
+            analysis_version_id=str(record.analysis_version_id),
+            status=record.status,
+            state_version=record.state_version,
+            active_slide_id=record.active_slide_id,
+            focus_view=record.focus_view,
+            focus_region=record.focus_region,
+            autonomy_mode=record.autonomy_mode,
+            last_accepted_action_id=record.last_accepted_action_id,
         )
     elif isinstance(record, ProcessingJob):
         data.update(deck_id=str(record.deck_id), status=record.status, attempts=record.attempts)
@@ -127,10 +148,9 @@ async def operate(
                     and update.status is not None
                     and update.title is None
                 ):
-                    if update.state_version != record.state_version or record.status == "ended":
-                        raise HTTPException(409)
-                    record.status = update.status
-                    record.state_version += 1
+                    # Session lifecycle/state changes use /sessions/{id}/... so
+                    # ready-deck and typed-state invariants cannot be bypassed.
+                    raise HTTPException(403)
                 else:
                     raise HTTPException(403)
                 await session.flush()

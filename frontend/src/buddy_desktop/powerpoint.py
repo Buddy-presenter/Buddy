@@ -8,6 +8,7 @@ its canonical source path and is revalidated before Buddy reports it as connecte
 from __future__ import annotations
 
 import importlib
+import math
 import re
 import sys
 import tempfile
@@ -28,6 +29,7 @@ from buddy_desktop.powerpoint_contract import (
 from buddy_desktop.powerpoint_contract import PowerPointError as PowerPointError
 from buddy_desktop.powerpoint_contract import PresentationInfo as PresentationInfo
 from buddy_desktop.powerpoint_contract import canonical_path as canonical_path
+from buddy_desktop.slide_contract import Region
 
 
 class PowerPointAutomation:
@@ -40,11 +42,15 @@ class PowerPointAutomation:
         com_loader: Callable[[], tuple[Any, Any]] | None = None,
         progid_probe: Callable[[], None] | None = None,
         process_probe: Callable[[], bool] | None = None,
+        zoom_factory: Callable[[], Any] | None = None,
     ) -> None:
         self._platform_name = platform_name or sys.platform
         self._com_loader = com_loader
         self._progid_probe = progid_probe
         self._process_probe = process_probe or self._powerpoint_process_running
+        self._zoom_factory = zoom_factory
+        self._zoom_window_id: int | None = None
+        self._magnifier_session: Any | None = None
         # One PowerPointAutomation instance serves a single TaskRunner, so operations are
         # serialized. The slide names themselves survive a Buddy restart while the
         # read-only PowerPoint session remains open; Reset scans by this private prefix.
@@ -162,7 +168,9 @@ class PowerPointAutomation:
         transparency: float,
     ) -> str:
         name = cls._name_shape(shape)
+        shape.Fill.Solid()
         shape.Fill.ForeColor.RGB = color
+        shape.Shadow.Visible = 0
         shape.Fill.Transparency = transparency if filled else 1
         if filled:
             shape.Line.Visible = 0
@@ -170,6 +178,23 @@ class PowerPointAutomation:
             shape.Line.ForeColor.RGB = color
             shape.Line.Weight = 2.25
         return name
+
+    @classmethod
+    def _source_shape(cls, shapes: Any, identifier: int) -> Any:
+        pending = [shapes]
+        visited = 0
+        while pending:
+            collection = pending.pop()
+            for index in range(1, collection.Count + 1):
+                visited += 1
+                if visited > 25000:
+                    raise PowerPointError("The slide exceeds the source object limit.")
+                item = collection.Item(index)
+                if int(getattr(item, "Id", -1)) == identifier:
+                    return item
+                if getattr(item, "Type", None) == 6:  # msoGroup
+                    pending.append(item.GroupItems)
+        raise PowerPointError("The source object is no longer available on this slide.")
 
     @classmethod
     def _create_annotation_shapes(
@@ -181,17 +206,72 @@ class PowerPointAutomation:
         """Create editable slide objects so Buddy can remove each annotation precisely."""
         shapes = slide.Shapes
         r = action.region
+        points = action.points
+        if action.source_shape_id is not None:
+            source = cls._source_shape(shapes, action.source_shape_id)
+            if r is None:
+                r = Region(*map(float, (source.Left, source.Top, source.Width, source.Height)))
+            if getattr(source, "HasTable", False) and action.target_text:
+                from buddy_desktop.powerpoint_table import table_region
+
+                r = table_region(source, action.target_text)
+            elif source.HasTextFrame and source.TextFrame.HasText:
+                if action.kind in {"draw_diamond", "draw_triangle", "draw_hexagon", "draw_star"}:
+                    raise PowerPointError("This geometric outline cannot safely frame text.")
+                tr = source.TextFrame.TextRange
+                if action.target_text:
+                    text = str(tr.Text).replace("\r", "\n").replace("\v", "\n")
+                    if text.count(action.target_text) != 1:
+                        raise PowerPointError("The selected source phrase is missing or ambiguous.")
+                    text_start = text.index(action.target_text)
+                    offset = len(text[:text_start].encode("utf-16-le")) // 2
+                    length = len(action.target_text.encode("utf-16-le")) // 2
+                    tr = tr.Characters(offset + 1, length)
+                x, y, width, height = map(
+                    float, (tr.BoundLeft, tr.BoundTop, tr.BoundWidth, tr.BoundHeight)
+                )
+                if not all(math.isfinite(v) for v in (x, y, width, height)):
+                    raise PowerPointError("PowerPoint could not measure the selected text.")
+                right = min(action.target.slide_width, x + width + 3)
+                bottom = min(action.target.slide_height, y + height + 2)
+                x, y = max(0.0, x - 3), max(0.0, y - 2)
+                if right <= x or bottom <= y:
+                    raise PowerPointError("The selected text is outside the visible slide.")
+                r = Region(x, y, right - x, bottom - y)
+                if action.kind in {"draw_arrow", "draw_line"}:
+                    points = ((r.x, r.y), (r.x + r.width, r.y + r.height))
+            elif action.target_text:
+                raise PowerPointError("The source object no longer contains the selected text.")
+            if action.kind == "draw_arrow" and r is not None:
+                from buddy_desktop.powerpoint_layout import pointer_points
+
+                occupied = []
+                for index in range(1, shapes.Count + 1):
+                    item = shapes.Item(index)
+                    if int(getattr(item, "Id", -1)) == action.source_shape_id:
+                        continue
+                    bounds = tuple(map(float, (item.Left, item.Top, item.Width, item.Height)))
+                    if (
+                        bounds[2] * bounds[3]
+                        >= action.target.slide_width * action.target.slide_height * 0.85
+                    ):
+                        continue
+                    if bounds[2] > 0 and bounds[3] > 0:
+                        occupied.append(Region(*bounds))
+                points = pointer_points(
+                    r, action.target.slide_width, action.target.slide_height, tuple(occupied)
+                )
+            elif action.kind == "draw_line" and r is not None:
+                points = ((r.x, r.y), (r.x + r.width, r.y + r.height))
         created: list[Any] = []
         names: list[str] = []
         try:
             if action.kind in {"draw_line", "draw_arrow", "draw_freehand", "draw_underline"}:
                 if action.kind == "draw_underline" and r is not None:
-                    points: tuple[tuple[float, float], ...] = (
+                    points = (
                         (r.x, r.y + r.height),
                         (r.x + r.width, r.y + r.height),
                     )
-                else:
-                    points = action.points
                 for index, (start, end) in enumerate(zip(points, points[1:], strict=False)):
                     validate_target()
                     line = shapes.AddLine(*start, *end)
@@ -202,9 +282,28 @@ class PowerPointAutomation:
                         arrow=action.kind == "draw_arrow" and index == len(points) - 2,
                     )
                     names.append(name)
-            elif action.kind == "draw_rectangle" and r is not None:
+            elif (
+                action.kind
+                in {
+                    "draw_rectangle",
+                    "draw_rounded_rectangle",
+                    "draw_diamond",
+                    "draw_triangle",
+                    "draw_hexagon",
+                    "draw_star",
+                }
+                and r is not None
+            ):
                 validate_target()
-                shape = shapes.AddShape(1, r.x, r.y, r.width, r.height)  # msoShapeRectangle
+                shape_type = {
+                    "draw_rectangle": 1,
+                    "draw_rounded_rectangle": 5,
+                    "draw_diamond": 4,
+                    "draw_triangle": 7,
+                    "draw_hexagon": 10,
+                    "draw_star": 92,
+                }[action.kind]
+                shape = shapes.AddShape(shape_type, r.x, r.y, r.width, r.height)
                 created.append(shape)
                 names.append(cls._configure_box(shape, action.color, filled=False, transparency=1))
             elif action.kind in {"draw_oval", "filled_oval"} and r is not None:
@@ -228,28 +327,91 @@ class PowerPointAutomation:
                         shape, action.color, filled=True, transparency=action.fill_transparency
                     )
                 )
-            elif action.kind == "text_box" and r is not None:
+            elif action.kind in {"text_box", "callout"} and r is not None:
+                target_region = r
+                if action.auto_place:
+                    from buddy_desktop.powerpoint_layout import annotation_box
+
+                    occupied = []
+                    for index in range(1, shapes.Count + 1):
+                        item = shapes.Item(index)
+                        left, top, width, height = map(
+                            float, (item.Left, item.Top, item.Width, item.Height)
+                        )
+                        is_target = (
+                            abs(left - target_region.x) < 0.1
+                            and abs(top - target_region.y) < 0.1
+                            and abs(width - target_region.width) < 0.1
+                            and abs(height - target_region.height) < 0.1
+                        )
+                        if (
+                            width * height
+                            >= action.target.slide_width * action.target.slide_height * 0.85
+                            and not (item.HasTextFrame and item.TextFrame.HasText)
+                        ):
+                            continue  # Full-slide background artwork is not foreground text.
+                        try:
+                            if item.HasTextFrame and item.TextFrame.HasText:
+                                tr = item.TextFrame.TextRange
+                                left, top, width, height = map(
+                                    float,
+                                    (tr.BoundLeft, tr.BoundTop, tr.BoundWidth, tr.BoundHeight),
+                                )
+                                if is_target and width > 0 and height > 0:
+                                    target_region = Region(left, top, width, height)
+                        except (AttributeError, TypeError):
+                            pass
+                        if width > 0 and height > 0:
+                            occupied.append(Region(left, top, width, height))
+                    r = annotation_box(
+                        target_region,
+                        action.target.slide_width,
+                        action.target.slide_height,
+                        action.text,
+                        tuple(occupied),
+                    )
                 validate_target()
-                shape = shapes.AddTextbox(1, r.x, r.y, r.width, r.height)  # horizontal
+                shape = (
+                    shapes.AddShape(5, r.x, r.y, r.width, r.height)
+                    if action.kind == "callout"
+                    else shapes.AddTextbox(1, r.x, r.y, r.width, r.height)
+                )
                 created.append(shape)
                 names.append(cls._name_shape(shape))
-                shape.Fill.Transparency = 1
-                shape.Line.Visible = 0
-                shape.TextFrame.WordWrap = -1
-                shape.TextFrame.TextRange.Text = action.text
-                shape.TextFrame.TextRange.Font.Color.RGB = action.color
-                shape.TextFrame.TextRange.Font.Size = 20
-            elif action.kind == "callout" and r is not None:
-                validate_target()
-                shape = shapes.AddCallout(2, r.x, r.y, r.width, r.height)  # msoCalloutTwo
-                created.append(shape)
-                names.append(cls._name_shape(shape))
-                shape.Fill.Transparency = 1
-                shape.Callout.Border = True
-                shape.TextFrame.TextRange.Text = action.text
-                shape.TextFrame.TextRange.Font.Color.RGB = action.color
-                shape.TextFrame.TextRange.Font.Size = 18
+                shape.Fill.Solid()
+                shape.Fill.ForeColor.RGB = 0x000000
+                shape.Shadow.Visible = 0
+                shape.Fill.Transparency = 0
+                shape.Line.Visible = -1 if action.kind == "callout" else 0
                 shape.Line.ForeColor.RGB = action.color
+                shape.Line.Weight = 1.5
+                shape.TextFrame.AutoSize = 0
+                shape.TextFrame.WordWrap = -1
+                shape.TextFrame.MarginLeft = shape.TextFrame.MarginRight = 8
+                shape.TextFrame.MarginTop = shape.TextFrame.MarginBottom = 6
+                shape.TextFrame.TextRange.Text = action.text
+                shape.TextFrame.TextRange.Font.Color.RGB = action.color
+                shape.TextFrame.TextRange.Font.Size = 16
+                shape.TextFrame2.WordWrap = -1
+                shape.TextFrame2.VerticalAnchor = 3  # msoAnchorMiddle
+                shape.TextFrame2.AutoSize = 2  # msoAutoSizeTextToFitShape
+                if float(shape.TextFrame2.TextRange.BoundHeight) > r.height - 10:
+                    raise PowerPointError("The annotation text does not fit safely inside its box.")
+                if action.auto_place and action.kind == "callout":
+                    end_x = min(
+                        max(r.x + r.width / 2, target_region.x),
+                        target_region.x + target_region.width,
+                    )
+                    end_y = min(
+                        max(r.y + r.height / 2, target_region.y),
+                        target_region.y + target_region.height,
+                    )
+                    start_x = min(max(end_x, r.x), r.x + r.width)
+                    start_y = min(max(end_y, r.y), r.y + r.height)
+                    validate_target()
+                    leader = shapes.AddLine(start_x, start_y, end_x, end_y)
+                    created.append(leader)
+                    names.append(cls._configure_line(leader, action.color, arrow=True))
             else:
                 raise PowerPointError("Unsupported PowerPoint annotation.")
             return names
@@ -640,7 +802,47 @@ class PowerPointAutomation:
             window = self._target_window(application, action.target)
             info = self._snapshot(window)
             view = window.View
-            if action.kind in {"next_slide", "previous_slide", "go_to_slide"}:
+            if self._zoom_window_id == info.window_id and action.kind not in {
+                "zoom_region",
+                "reset_zoom",
+            }:
+                self.release_zoom()
+                view.GotoSlide(info.slide_index, 0)
+                self._zoom_window_id = None
+            if action.kind in {"zoom_region", "reset_zoom"}:
+                if action.kind == "zoom_region" and action.region is not None:
+                    if action.source_shape_id is not None:
+                        source = self._source_shape(
+                            window.Presentation.Slides.Item(info.slide_index).Shapes,
+                            action.source_shape_id,
+                        )
+                        actual = tuple(
+                            map(float, (source.Left, source.Top, source.Width, source.Height))
+                        )
+                        expected = (
+                            action.region.x,
+                            action.region.y,
+                            action.region.width,
+                            action.region.height,
+                        )
+                        if action.target_text or any(
+                            not math.isfinite(a) or abs(a - b) > 0.5
+                            for a, b in zip(actual, expected, strict=True)
+                        ):
+                            raise PowerPointError(
+                                "The saved zoom target differs from the source object."
+                            )
+                    view.PointerType = 1
+                    # Retain cleanup ownership even if confirmation fails after input.
+                    self._zoom_window_id = info.window_id
+                    self._zoom_driver().zoom(
+                        info, action.region, lambda: self._target_window(application, action.target)
+                    )
+                else:
+                    self.release_zoom()
+                    view.GotoSlide(info.slide_index, 0)
+                    self._zoom_window_id = None
+            elif action.kind in {"next_slide", "previous_slide", "go_to_slide"}:
                 target = (
                     info.slide_index + 1
                     if action.kind == "next_slide"
@@ -711,9 +913,29 @@ class PowerPointAutomation:
         except PowerPointError:
             raise
         except Exception as exc:
+            if action.kind in {"zoom_region", "reset_zoom"}:
+                raise PowerPointError(
+                    "PowerPoint could not confirm zoom. Return to its slideshow, then try "
+                    "Reset zoom. The command was not retried."
+                ) from exc
             raise PowerPointError(
                 "PowerPoint could not finish the action. Check the slide; erase ink if needed. "
                 "The action was not retried."
             ) from exc
         finally:
             self._end_com(pythoncom)
+
+    def _zoom_driver(self) -> Any:
+        from buddy_desktop.powerpoint_zoom import WindowsPowerPointZoom
+
+        driver = (self._zoom_factory or WindowsPowerPointZoom)()
+        if self._zoom_factory is None:
+            if self._magnifier_session is None:
+                self._magnifier_session = driver.magnifier
+            else:
+                driver.magnifier = self._magnifier_session
+        return driver
+
+    def release_zoom(self) -> None:
+        if self._magnifier_session is not None:
+            self._magnifier_session.release()

@@ -1,5 +1,7 @@
 # Development
 
+Ordered live updates and reconnect contracts are documented in [session events](session-events.md).
+
 Buddy has three installable projects: the PySide6 desktop client, the API/backend, and the
 small shared identity package. Use Python 3.12, 3.13, or 3.14. Create one virtual
 environment at the repository root; install only the component(s) you are working on.
@@ -38,6 +40,10 @@ Windows desktop PowerPoint control uses the local Office installation and needs 
 account or backend. See [PowerPoint presentations](powerpoint-presentations.md) for manual
 navigation/annotation steps, coordinate and Office limitations, and the opt-in real-Office
 smoke command (`python frontend/scripts/smoke_powerpoint.py`).
+
+Uploaded PPTX analysis and saved action review are documented in
+[PowerPoint analysis](powerpoint-analysis.md), including the separate Office validator
+runtime, migration, catalog boundaries and real six-action acceptance command.
 
 ## API and database
 
@@ -101,3 +107,11 @@ Durable PDF metadata scheduling, SQS workers, owner job controls and opt-in stag
 verification are documented in [PDF workers](pdf-workers.md).
 
 Desktop navigation and account placement are described in the [usability revision](ui-usability.md).
+
+Microphone setup, session gating, privacy, and real-device checks are documented in
+[microphone capture](microphone.md). Qt Multimedia is installed with the desktop dependencies.
+Provider setup, authenticated streaming, transcript timing, privacy, recovery, and live
+acceptance are documented in [speech recognition](speech-recognition.md).
+
+The ephemeral decision-input window and its capture-time invalidation rules are
+documented in [rolling speech context](transcript-context.md).

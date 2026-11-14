@@ -5,7 +5,8 @@ native PDF-capable InvokeModel API using Claude Sonnet 4.6. It persists exactly 
 outputs: one presentation summary, one ordered content summary per page, and zero or more
 parameterized content actions. Actions are limited to `zoom_region` and
 `highlight_region`; navigation and reset controls come from code. Existing PPTX upload
-and storage remain compatible, while PPTX analysis and playback are deferred.
+and storage feed the separate [PowerPoint analysis path](powerpoint-analysis.md), with its
+own catalog, slide-point geometry, read contracts and real Office validation boundary.
 
 ## Records and version isolation
 
@@ -35,13 +36,26 @@ reject changes to existing content and validation records; only derived publicat
 change on the parent. Deletion is also blocked until a separately reviewed retention
 workflow explicitly handles these immutable records. Sessions keep their original analysis foreign key.
 
-Limits: 500 slides, 100 actions per slide, 1,000 actions total, 8 MiB serialized analysis,
-16,000 characters per summary. Empty action lists are valid. Provider generation and isolated
-execution use a stricter 40-action deck budget so one analysis attempt stays bounded by the
-worker's runtime. A slide may receive multiple distinct actions, including both zoom and
-highlight suggestions. Using all 40 generated-action slots is surfaced in Review as a capacity
-notice. It reports the slot count only and does not imply that actions were omitted or that the
-analysis is semantically complete.
+Limits: 500 slides, 1,000 actions per slide and per PDF analysis, 8 MiB serialized analysis,
+and 16,000 characters per summary. Empty action lists are valid. PDF action generation combines
+the model's semantic suggestions with source-measured visual candidates: each embedded image can
+be focused, and spatially connected vector objects can be focused as a group. The model is
+instructed to cover every visible title, subtitle, heading, informative visual, and people/name
+pair, plus speaker-relevant key facts in prose. It should not create an action for every ordinary
+sentence or visual text line. Prose highlights must identify a complete key sentence; wrapped
+physical lines and sentence fragments are rejected during grounding before an analysis is saved.
+Complete sentences can span multiple PDF lines and are grounded to the tight union of their
+source glyphs. Titles, headings, people, bullets, key numbers/formulas, and visual targets retain
+their distinct target kinds. Rejected fragments never appear in Review as invalid actions. When
+the 1,000-action cap or a source-inventory bound is reached, Review shows that some targets may
+be missing. PPTX retains its separate 100-action capacity.
+
+This is a broad source-visual inventory plus a semantic model pass, not a promise to enumerate
+arbitrary phrases or semantically meaningful subregions inside a flattened image. The model
+selects meaningful text targets and proposes visual subtargets; the PDF parser provides exact
+text-line grounding and PDF-object bounds for those proposals. OCR and visual QA remain
+responsible for scanned content and flattened-image crops. A bounded limit must be visible
+because very dense or pathological documents cannot produce an unlimited list.
 
 ## Summaries, publication and readiness
 

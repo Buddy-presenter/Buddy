@@ -5,6 +5,13 @@ separates them from future policy, residency, and retention work. Issue #36 is c
 privacy settings, policy acknowledgements, and a provider-retention approval workflow are
 not prerequisites or release blockers for Sprint 2.
 
+Issue #128 adds the separate [PowerPoint analysis boundary](powerpoint-analysis.md):
+bounded OOXML model input, an independent action catalog, database-enforced format
+isolation, and version-bound real Office execution reports. Linked/active material is
+never opened by its Office validator. A Linux worker cannot validate PowerPoint actions;
+it keeps them unavailable with an explicit reason. Deployment of a reviewed dedicated
+Windows/Office runtime remains a live-acceptance prerequisite.
+
 ## Source and ownership
 
 - Uploaded PDFs are stored as private, versioned S3 objects with server-side KMS
@@ -48,11 +55,11 @@ API's `store` option; this does not promise a particular provider-side retention
 
 - Original provider input: at most 18 MiB and 100 PDF pages. Oversized documents fail with
   a safe, explicit error; Buddy does not switch representations or silently truncate.
-- The InvokeModel call has a 90-second timeout and a 25 MiB encoded request bound, plus a
-  12,000-token output cap. The input-size bound accounts for base64 expansion. Each job has
+- The InvokeModel call has a 240-second timeout and a 25 MiB encoded request bound, plus a
+  64,000-token output cap. The input-size bound accounts for base64 expansion. Each job has
   at most three lifetime attempts.
-- The generated result is bounded by the existing #11 record limits and at most 40 actions
-  per deck. Every action is independently run by the isolated #49 validator with a
+- The generated PDF result is bounded by the #11 record's 8 MiB serialized limit and at most
+  1,000 actions per deck. Every action is independently run by the isolated #49 validator with a
   15-second execution limit. The whole job has a 900-second deadline, a bounded SQS
   visibility period, worker concurrency, and per-owner active-job quota.
 - These hard request/context/output/attempt bounds constrain token consumption and cost.

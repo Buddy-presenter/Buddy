@@ -6,7 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from buddy_api.analysis.contracts import Manifest
+from buddy_api.analysis.contracts import Manifest, PowerPointManifest
 from buddy_api.extraction.contracts import Extraction
 
 ACTIVE = ("queued", "retry_wait", "running")
@@ -34,8 +34,27 @@ class MetadataOutput(BaseModel):
     manifest: Manifest
 
 
+class PowerPointMetadataOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    stage: Literal["pptx_metadata.v1"] = "pptx_metadata.v1"
+    metadata: Extraction
+    manifest: PowerPointManifest
+
+
 class PDFSource(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+    source_format: Literal["pdf"] = "pdf"
+    key: str = Field(min_length=1, max_length=1024)
+    version: str = Field(min_length=1, max_length=1024)
+    size: int = Field(ge=1, le=64 * 1024 * 1024)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    revision: str = Field(min_length=1, max_length=128)
+    deck_id: UUID
+
+
+class PowerPointSource(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    source_format: Literal["pptx"] = "pptx"
     key: str = Field(min_length=1, max_length=1024)
     version: str = Field(min_length=1, max_length=1024)
     size: int = Field(ge=1, le=64 * 1024 * 1024)

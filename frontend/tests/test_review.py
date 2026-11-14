@@ -232,6 +232,50 @@ def test_review_widget_loads_read_only_saved_page_and_clears_on_signout(
     assert review.action_table.rowCount() == 0
 
 
+def test_near_expiry_account_check_keeps_review_visible(desktop_window, monkeypatch, qtbot):
+    content = b"%PDF-1.7 account refresh review fixture"
+    digest = hashlib.sha256(content).hexdigest()
+    deck_id, payload = analysis_payload(source_sha256=digest)
+    record = parse_analysis(payload, deck_id)
+    monkeypatch.setattr(ReviewService, "analysis", lambda _self, _deck: record)
+    monkeypatch.setattr(
+        ReviewService,
+        "source",
+        lambda _self, _deck: DownloadedPDF(content, str(deck_id), "revision-1"),
+    )
+    image = QImage(100, 100, QImage.Format.Format_ARGB32)
+    image.fill(QColor("white"))
+    monkeypatch.setattr(
+        review_widget,
+        "render",
+        lambda _content, _index: ({"sizes": [[100, 100]]}, image.copy()),
+    )
+    window = desktop_window()
+    window.account.session = SimpleNamespace(
+        tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
+    )
+    window.account.account_id = "same-account"
+    window.account.session_changed.emit()
+    review = window.review
+    review.set_deck(deck_id, "Review fixture")
+    review.activate(True)
+    qtbot.waitUntil(lambda: not review.runner.busy and review.pdf_content is not None)
+
+    window.account.session.tokens = Tokens("near-expiry", "refresh", time.monotonic() + 10)
+    window.account.operation = "check"
+    window.account.activity_changed.emit(True)
+    assert review.analysis is record
+    assert review.pdf_content == content
+    assert not review.content.isHidden()
+
+    window.account.activity_changed.emit(False)
+    window.account.session_changed.emit()
+    assert review.analysis is record
+    assert review.pdf_content == content
+    assert not review.content.isHidden()
+    assert review.signin.isHidden()
+
+
 def test_review_exactly_40_actions_reports_capacity_without_claiming_truncation(
     desktop_window, monkeypatch, qtbot
 ):
@@ -273,10 +317,10 @@ def test_review_exactly_40_actions_reports_capacity_without_claiming_truncation(
     review.activate(True)
     qtbot.waitUntil(lambda: not review.content.isHidden())
 
-    assert review.notice.text() == "All 40 available action slots were used in this analysis."
-    assert "omitted" not in review.notice.text().lower()
-    assert "missing" not in review.notice.text().lower()
-    assert "gap" not in review.notice.text().lower()
+    assert review.notice.text() == (
+        "The PDF action inventory reached a processing limit; some targets may be missing. "
+        "Review every slide before presenting."
+    )
 
 
 def test_review_queues_new_deck_while_stale_load_is_finishing(desktop_window, monkeypatch, qtbot):
@@ -344,3 +388,26 @@ def test_review_queues_new_deck_while_stale_load_is_finishing(desktop_window, mo
     finally:
         release_first.set()
         release_second.set()
+
+
+def test_pdf_review_retries_versioned_contract_on_upgrade(monkeypatch):
+    from buddy_desktop.config import AppConfig
+    from buddy_desktop.review_service import PDFAnalysisUpgradeRequired, ReviewService
+
+    service = ReviewService(AppConfig("http://127.0.0.1:8000"), "token")
+    calls = []
+
+    def get(path, **kwargs):
+        calls.append(path)
+        if len(calls) == 1:
+            raise PDFAnalysisUpgradeRequired("upgrade")
+        return b"{}", None
+
+    monkeypatch.setattr(service, "_get", get)
+    monkeypatch.setattr(
+        "buddy_desktop.review_service.parse_analysis",
+        lambda *_: SimpleNamespace(source_format="pdf"),
+    )
+    deck = uuid4()
+    assert service.analysis(deck).source_format == "pdf"
+    assert calls == [f"/api/v1/analyses/by-deck/{deck}", f"/api/v2/analyses/pdf/by-deck/{deck}"]

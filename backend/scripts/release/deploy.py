@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -18,6 +19,10 @@ from uuid import uuid4
 
 class DeploymentError(Exception):
     pass
+
+
+STAGING_STABILITY_POLL_SECONDS = 5
+STAGING_STABILITY_MAX_POLLS = 24
 
 
 def failure_details(error: Exception, stage: str) -> dict[str, Any]:
@@ -192,6 +197,7 @@ class Deployment:
         before: dict[str, dict[str, Any]],
         *,
         worker_image: str | None = None,
+        expected_worker_profile: str = "compatibility",
     ) -> None:
         """Bind tested container results to the actual immediate rollback target."""
         if self.config["environment"] != "staging":
@@ -227,22 +233,74 @@ class Deployment:
             raise DeploymentError("Rollback image drifted from compatibility evidence.")
         image_digest(self.config, proof["rollback_image"], "api")
         if "worker" in rollback:
-            if not worker_image or not isinstance(worker_compatibility, dict):
+            paused_worker_target = (
+                worker_image is None
+                and rollback["worker"].get("desiredCount") == 0
+                and proof.get("rollback_revision") is not None
+            )
+            paused_reader_preparation = (
+                worker_image is None
+                and rollback["worker"].get("desiredCount") == 0
+                and proof.get("reader_only") is True
+            )
+            if paused_worker_target:
+                if worker_compatibility is not None:
+                    raise DeploymentError(
+                        "Paused rollback target must not execute a worker image during preflight."
+                    )
+                self.require_usable_task_definition(rollback["worker"]["taskDefinition"], "worker")
+            elif paused_reader_preparation:
+                if before["worker"] != rollback["worker"] or worker_compatibility is not None:
+                    raise DeploymentError(
+                        "Paused reader preparation must retain the exact worker state "
+                        "without worker proof."
+                    )
+            elif not worker_image or not isinstance(worker_compatibility, dict):
                 raise DeploymentError(
                     "Staging worker releases require exact-image compatibility evidence."
                 )
-            prior_worker_image = self.task_image(before["worker"]["taskDefinition"], "worker")
-            if (
-                worker_compatibility.get("passed") is not True
-                or worker_compatibility.get("target_image") != worker_image
-                or worker_compatibility.get("previous_image") != prior_worker_image
-                or worker_compatibility.get("schema_image") != proof.get("schema_image")
-            ):
-                raise DeploymentError("Worker image compatibility evidence does not match staging.")
-            image_digest(self.config, worker_image, "worker")
-            image_digest(self.config, prior_worker_image, "worker")
+            else:
+                prior_worker_image = self.task_image(before["worker"]["taskDefinition"], "worker")
+                worker_schema = (
+                    proof["rollback_image"]
+                    if proof.get("future_image")
+                    else proof.get("schema_image")
+                )
+                expected_image_explicit = expected_worker_profile == "feature"
+                if (
+                    worker_compatibility.get("passed") is not True
+                    or worker_compatibility.get("target_image") != worker_image
+                    or worker_compatibility.get("previous_image") != prior_worker_image
+                    or worker_compatibility.get("schema_image") != worker_schema
+                    or worker_compatibility.get("profile") != expected_worker_profile
+                    or worker_compatibility.get("worker_checked") is not True
+                    or worker_compatibility.get("previous_worker_checked")
+                    is not (before["worker"].get("desiredCount", 0) > 0)
+                    or proof.get("worker_image_explicit") is not expected_image_explicit
+                ):
+                    raise DeploymentError(
+                        "Worker image compatibility evidence does not match staging."
+                    )
+                image_digest(self.config, worker_image, "worker")
+                if before["worker"].get("desiredCount", 0) > 0:
+                    image_digest(self.config, prior_worker_image, "worker")
         elif worker_image is not None:
-            raise DeploymentError("Worker compatibility evidence has no matching ECS service.")
+            if (
+                expected_worker_profile != "feature"
+                or not isinstance(worker_compatibility, dict)
+                or worker_compatibility.get("passed") is not True
+                or worker_compatibility.get("target_image") != worker_image
+                or worker_compatibility.get("previous_image") is not None
+                or worker_compatibility.get("schema_image") != proof.get("schema_image")
+                or worker_compatibility.get("profile") != "feature"
+                or worker_compatibility.get("worker_checked") is not True
+                or worker_compatibility.get("previous_worker_checked") is not False
+                or proof.get("worker_image_explicit") is not True
+            ):
+                raise DeploymentError(
+                    "Worker bootstrap requires exact candidate-image compatibility evidence."
+                )
+            image_digest(self.config, worker_image, "worker")
 
     def require_stable_source(self, expected: dict[str, dict[str, Any]]) -> None:
         """Do not migrate while incompatible tasks from an earlier rollout still drain."""
@@ -268,6 +326,85 @@ class Deployment:
                 or deployments[0].get("taskDefinition") != target["taskDefinition"]
             ):
                 raise DeploymentError("Staging must finish its previous rollout before migration.")
+
+    def wait_for_staging_stability(
+        self, expected: dict[str, dict[str, Any]]
+    ) -> dict[str, dict[str, Any]]:
+        """Wait for ECS's exact target deployment to finish after its broad waiter fires.
+
+        The ECS ``services_stable`` waiter only checks running and pending task counts.
+        It may return while an old deployment is still draining. A single strict read
+        immediately afterward can therefore mistake a normal transition for a failed
+        rollout and trigger an unnecessary rollback. Poll the full deployment state
+        for a bounded period. A completed older revision can itself satisfy the
+        broad waiter and may be an eventually consistent pre-update snapshot, so
+        it is not evidence of rollback. Only ECS explicitly marking the target
+        rollout failed is an early terminal signal; otherwise keep polling for
+        the requested revision until it settles or the bounded wait expires.
+        """
+        terminal_observations = 0
+        last_reason = "the service deployment is still settling"
+        for attempt in range(STAGING_STABILITY_MAX_POLLS):
+            response = self.ecs.describe_services(
+                cluster=self.config["cluster"], services=list(expected)
+            )
+            services = response.get("services", [])
+            if response.get("failures") or len(services) != len(expected):
+                terminal_observations = 0
+                last_reason = "the expected service state is temporarily unavailable"
+            else:
+                stable = True
+                terminal = False
+                for service in services:
+                    target = expected[service["serviceName"]]
+                    deployments = service.get("deployments", [])
+                    primary = next(
+                        (
+                            deployment
+                            for deployment in deployments
+                            if deployment.get("status") == "PRIMARY"
+                        ),
+                        None,
+                    )
+                    if (
+                        service.get("taskDefinition") != target["taskDefinition"]
+                        or service.get("desiredCount") != target["desiredCount"]
+                        or service.get("runningCount") != target["desiredCount"]
+                        or service.get("pendingCount") != 0
+                        or len(deployments) != 1
+                        or primary is None
+                        or primary.get("rolloutState") != "COMPLETED"
+                        or primary.get("taskDefinition") != target["taskDefinition"]
+                    ):
+                        stable = False
+                        last_reason = "the service deployment is still settling"
+                        if (
+                            primary
+                            and primary.get("rolloutState") == "FAILED"
+                            and primary.get("taskDefinition") == target["taskDefinition"]
+                        ):
+                            terminal = True
+                            last_reason = "ECS marked the target deployment as failed"
+                if stable:
+                    return {
+                        service["serviceName"]: {
+                            "taskDefinition": service["taskDefinition"],
+                            "desiredCount": service["desiredCount"],
+                        }
+                        for service in services
+                    }
+                terminal_observations = terminal_observations + 1 if terminal else 0
+                if terminal_observations >= 2:
+                    raise DeploymentError(
+                        "Staging did not retain the requested ECS revision: " + last_reason + "."
+                    )
+            if attempt + 1 < STAGING_STABILITY_MAX_POLLS:
+                time.sleep(STAGING_STABILITY_POLL_SECONDS)
+        raise DeploymentError(
+            "Staging ECS services did not converge to the requested stable revision: "
+            + last_reason
+            + "."
+        )
 
     def states(self, services: list[str]) -> dict[str, dict[str, Any]]:
         response = self.ecs.describe_services(cluster=self.config["cluster"], services=services)
@@ -309,6 +446,28 @@ class Deployment:
         if len(containers) != 1 or containers[0].get("name") != service:
             raise DeploymentError("Unexpected ECS task container layout.")
         return containers[0]["image"]
+
+    def require_usable_task_definition(self, task_definition: str, service: str) -> dict[str, Any]:
+        """Require a rollback target revision that ECS can still attach to its service."""
+        try:
+            definition = self.ecs.describe_task_definition(taskDefinition=task_definition)[
+                "taskDefinition"
+            ]
+        except Exception as error:
+            raise DeploymentError(f"Rollback {service} task definition is unavailable.") from error
+        expected_family = f"buddy-{self.config['environment']}-{service}"
+        containers = definition.get("containerDefinitions", [])
+        if (
+            definition.get("taskDefinitionArn") != task_definition
+            or definition.get("family") != expected_family
+            or definition.get("status") != "ACTIVE"
+            or len(containers) != 1
+            or containers[0].get("name") != service
+        ):
+            raise DeploymentError(
+                f"Rollback {service} task definition is not an active, usable revision."
+            )
+        return definition
 
     def task(self, service: str, image: str) -> str:
         arn = self.config["tasks"].get(service, f"buddy-{self.config['environment']}-{service}")
@@ -373,8 +532,10 @@ class Deployment:
             services=list(expected),
             WaiterConfig={"Delay": 15, "MaxAttempts": 80},
         )
-        self.require_stable_source(expected)
-        actual = self.states(list(expected))
+        if self.config["environment"] == "staging":
+            actual = self.wait_for_staging_stability(expected)
+        else:
+            actual = self.states(list(expected))
         if actual != expected:
             raise DeploymentError("Service rolled back or drifted from the expected revision.")
         if expected["api"]["desiredCount"]:
@@ -485,9 +646,18 @@ class Deployment:
             compatibility_worker_image = worker_image or (
                 self.task_image(previous["worker"]["taskDefinition"], "worker")
                 if "worker" in previous
+                and not (reader_only and previous["worker"]["desiredCount"] == 0)
                 else None
             )
-            self.compatible(api_image, previous, previous, worker_image=compatibility_worker_image)
+            self.compatible(
+                api_image,
+                previous,
+                previous,
+                worker_image=compatibility_worker_image,
+                expected_worker_profile=(
+                    "feature" if worker_image is not None else "compatibility"
+                ),
+            )
             audit["compatibility"] = self.compatibility_report
             audit["stage"] = "definition_setup"
             definitions = {"api": self.task("api", api_image)}
@@ -618,6 +788,8 @@ class Deployment:
                 raise DeploymentError("The rollback target requires an unavailable worker service.")
             if set(before) != set(previous):
                 raise DeploymentError("API/worker service set changed since the rollback audit.")
+            for service, state in previous.items():
+                self.require_usable_task_definition(state["taskDefinition"], service)
             audit["target"] = previous
             audit["target_audit_key"] = value.get("audit_key")
             audit["before"] = before
@@ -630,7 +802,7 @@ class Deployment:
                 raise DeploymentError("Rollback requires traced-analysis reader proof.")
             target_worker_image = (
                 self.task_image(previous["worker"]["taskDefinition"], "worker")
-                if "worker" in previous
+                if "worker" in previous and previous["worker"].get("desiredCount", 0) > 0
                 else None
             )
             self.compatible(
@@ -638,6 +810,7 @@ class Deployment:
                 previous,
                 before,
                 worker_image=target_worker_image,
+                expected_worker_profile="compatibility",
             )
             audit["compatibility"] = self.compatibility_report
             if self.states(list(previous)) != before:

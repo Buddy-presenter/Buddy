@@ -50,6 +50,7 @@ class Deck(OwnedRecord):
     __tablename__ = "decks"
     __table_args__ = (
         UniqueConstraint("id", "owner_id"),
+        UniqueConstraint("id", "owner_id", "source_format", name="uq_decks_format_identity"),
         CheckConstraint("length(title) > 0", name="title_nonempty"),
         CheckConstraint("source_format IN ('pptx','pdf')", name="source_format"),
     )
@@ -61,6 +62,9 @@ class Deck(OwnedRecord):
     source_version_id: Mapped[str | None] = mapped_column(String(1024))
     source_slide_count: Mapped[int | None] = mapped_column()
     source_format: Mapped[str] = mapped_column(String(8), server_default="pptx")
+    deletion_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
 
 
 class DeckUpload(OwnedRecord):
@@ -199,7 +203,18 @@ class JobOutbox(Base):
 
 class AnalysisVersion(OwnedRecord):
     __tablename__ = "analysis_versions"
+    source_format: Mapped[str] = mapped_column(String(8), server_default="pdf")
     __table_args__ = (
+        CheckConstraint("source_format IN ('pdf','pptx')", name="source_format"),
+        UniqueConstraint(
+            "id", "owner_id", "source_format", name="uq_analysis_versions_format_identity"
+        ),
+        ForeignKeyConstraint(
+            ["deck_id", "owner_id", "source_format"],
+            ["decks.id", "decks.owner_id", "decks.source_format"],
+            name="fk_analysis_versions_source_format",
+            ondelete="RESTRICT",
+        ),
         ForeignKeyConstraint(
             ["deck_id", "owner_id"], ["decks.id", "decks.owner_id"], ondelete="RESTRICT"
         ),
@@ -278,7 +293,22 @@ class AnalysisSlide(OwnedRecord):
 
 class SlideAction(OwnedRecord):
     __tablename__ = "slide_actions"
+    source_format: Mapped[str] = mapped_column(String(8), server_default="pdf")
     __table_args__ = (
+        CheckConstraint("source_format IN ('pdf','pptx')", name="source_format"),
+        UniqueConstraint(
+            "id", "owner_id", "source_format", name="uq_slide_actions_format_identity"
+        ),
+        ForeignKeyConstraint(
+            ["analysis_id", "owner_id", "source_format"],
+            [
+                "analysis_versions.id",
+                "analysis_versions.owner_id",
+                "analysis_versions.source_format",
+            ],
+            name="fk_slide_actions_source_format",
+            ondelete="RESTRICT",
+        ),
         ForeignKeyConstraint(
             ["slide_record_id", "analysis_id", "deck_id", "owner_id"],
             [
@@ -292,8 +322,19 @@ class SlideAction(OwnedRecord):
         UniqueConstraint("analysis_id", "instance_id"),
         UniqueConstraint("slide_record_id", "position"),
         UniqueConstraint("id", "analysis_id", "deck_id", "owner_id"),
-        CheckConstraint("action_type IN ('zoom_region','highlight_region')", name="content_type"),
-        CheckConstraint("position >= 0 AND position < 100", name="position"),
+        CheckConstraint(
+            "(source_format = 'pdf' AND action_type IN ('zoom_region','highlight_region')) OR "
+            "(source_format = 'pptx' AND action_type IN ('highlight_region','draw_rectangle',"
+            "'draw_oval','draw_underline','draw_arrow','callout','draw_line','filled_rectangle',"
+            "'filled_oval','text_box','draw_rounded_rectangle','draw_diamond','draw_triangle',"
+            "'draw_hexagon','draw_star','zoom_region'))",
+            name="content_type",
+        ),
+        CheckConstraint(
+            "position >= 0 AND ((source_format = 'pdf' AND position < 1000) OR "
+            "(source_format = 'pptx' AND position < 100))",
+            name="position",
+        ),
     )
     slide_record_id: Mapped[UUID] = mapped_column()
     analysis_id: Mapped[UUID] = mapped_column(index=True)
@@ -310,7 +351,15 @@ class SlideAction(OwnedRecord):
 
 class ActionValidation(OwnedRecord):
     __tablename__ = "action_validations"
+    source_format: Mapped[str] = mapped_column(String(8), server_default="pdf")
     __table_args__ = (
+        CheckConstraint("source_format IN ('pdf','pptx')", name="source_format"),
+        ForeignKeyConstraint(
+            ["action_id", "owner_id", "source_format"],
+            ["slide_actions.id", "slide_actions.owner_id", "slide_actions.source_format"],
+            name="fk_action_validations_source_format",
+            ondelete="RESTRICT",
+        ),
         ForeignKeyConstraint(
             ["action_id", "analysis_id", "deck_id", "owner_id"],
             [
@@ -346,10 +395,64 @@ class PresentationSession(OwnedRecord):
             ["analysis_versions.id", "analysis_versions.deck_id", "analysis_versions.owner_id"],
             ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            ["analysis_version_id", "active_slide_id"],
+            ["analysis_slides.analysis_id", "analysis_slides.slide_id"],
+            name="fk_presentation_sessions_active_slide",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["analysis_version_id", "last_accepted_action_id"],
+            ["slide_actions.analysis_id", "slide_actions.instance_id"],
+            name="fk_presentation_sessions_last_action",
+            ondelete="RESTRICT",
+        ),
         CheckConstraint("status IN ('created','active','ended')", name="status"),
         CheckConstraint("state_version >= 0", name="state_version_nonnegative"),
+        CheckConstraint("event_sequence >= 0", name="event_sequence_nonnegative"),
+        CheckConstraint(
+            "focus_view IN ('slide','zoom_region','highlight_region')", name="focus_view"
+        ),
+        CheckConstraint(
+            "(focus_view = 'slide' AND focus_region IS NULL) OR "
+            "(focus_view IN ('zoom_region','highlight_region') AND focus_region IS NOT NULL)",
+            name="focus_region_consistency",
+        ),
+        CheckConstraint(
+            "autonomy_mode IN ('manual','assisted','autonomous')", name="autonomy_mode"
+        ),
     )
     deck_id: Mapped[UUID] = mapped_column(index=True)
     analysis_version_id: Mapped[UUID] = mapped_column(index=True)
     status: Mapped[str] = mapped_column(String(16), server_default="created")
     state_version: Mapped[int] = mapped_column(server_default="0")
+    event_sequence: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    active_slide_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    focus_view: Mapped[str] = mapped_column(String(24), server_default="slide")
+    # None represents the absence of a focused region, so persist it as SQL NULL
+    # for the database's focus_view/focus_region consistency constraint.
+    focus_region: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    autonomy_mode: Mapped[str] = mapped_column(String(16), server_default="manual")
+    last_accepted_action_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+
+class SessionEvent(Base):
+    """Short-lived ordered notifications; never an executable action queue."""
+
+    __tablename__ = "session_events"
+    __table_args__ = (
+        UniqueConstraint("session_id", "sequence", name="uq_session_events_sequence"),
+        UniqueConstraint("session_id", "command_id", name="uq_session_events_command"),
+        CheckConstraint("sequence > 0", name="sequence_positive"),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    session_id: Mapped[UUID] = mapped_column(
+        ForeignKey("presentation_sessions.id", ondelete="CASCADE"), index=True
+    )
+    sequence: Mapped[int] = mapped_column(BigInteger)
+    command_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    command_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    document: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

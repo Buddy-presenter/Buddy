@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import ValidationError
 
-from buddy_api.analysis.contracts import AnalysisInput, ValidationInput, digest
+from buddy_api.analysis.contracts import AnalysisInput, PDFAnalysisInputV2, ValidationInput, digest
 from buddy_api.analysis.provider import (
     ModelAction,
     ModelOutput,
@@ -72,10 +72,10 @@ def test_grounding_trace_survives_binding_and_rejects_changed_geometry():
     assert record.action_sha256 == digest(document.slides[0].actions[0])
     assert record.trace.target_text == "Buddy PDF presentation"
     dumped = document.model_dump(mode="json")
-    assert AnalysisInput.model_validate(dumped) == document
+    assert PDFAnalysisInputV2.model_validate(dumped) == document
     dumped["grounding"][0]["trace"]["resolved_region"]["y"] += 10
     with pytest.raises(ValidationError, match="Grounding does not match"):
-        AnalysisInput.model_validate(dumped)
+        PDFAnalysisInputV2.model_validate(dumped)
 
 
 def test_model_output_is_bound_to_verified_manifest_and_stable_action_ids():
@@ -201,3 +201,20 @@ def test_unsafe_model_action_is_preserved_for_isolated_validation(action_type, x
         manifest.slides[0].source.width + 1 if width == "page_width" else width
     )
     assert all(not slide.actions for slide in document.slides[1:])
+
+
+def test_expanded_pdf_candidate_library_uses_versioned_contract():
+    from backend.tests.analysis.test_grounding import _action, _load, _output
+
+    from buddy_api.analysis.contracts import PDFAnalysisInputV2, parse_analysis_input
+
+    _, extraction, manifest = _load(PDF)
+    generated = _output(extraction, {0: tuple(_action() for _ in range(41))})
+    document = Processor._analysis_document(
+        generated, extraction, manifest, UUID(manifest.deck_id), uuid4(), uuid4()
+    )
+    assert isinstance(document, PDFAnalysisInputV2)
+    assert len(document.slides[0].actions) == 41
+    assert isinstance(parse_analysis_input(document.model_dump(mode="json")), PDFAnalysisInputV2)
+    with pytest.raises(ValidationError):
+        AnalysisInput.model_validate(document.model_dump(mode="json"))

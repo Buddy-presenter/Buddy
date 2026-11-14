@@ -16,15 +16,24 @@ import unicodedata
 from collections.abc import Iterable
 from contextlib import closing
 from dataclasses import dataclass
+from itertools import islice
 
 import pypdfium2 as pdfium  # type: ignore[import-untyped]
 import pypdfium2.raw as raw  # type: ignore[import-untyped]
 
-from buddy_api.analysis.contracts import GroundingMethod, GroundingTrace, Manifest, Region
-from buddy_api.analysis.provider import ModelAction, ModelOutput
+from buddy_api.analysis.contracts import (
+    MAX_GENERATED_ACTIONS_PER_DECK,
+    GroundingMethod,
+    GroundingTrace,
+    Manifest,
+    Region,
+)
+from buddy_api.analysis.provider import ModelAction, ModelOutput, ModelSlide
 from buddy_api.extraction.contracts import Extraction, ExtractionError
 
 MAX_PAGE_OBJECTS = 5000
+MAX_AUTO_ACTIONS_PER_PAGE = 1000
+MAX_AUTO_ACTIONS_PER_DECK = 10_000
 MAX_TAG_NODES = 5000
 MAX_TAG_DEPTH = 32
 MAX_TEXT_CHARACTERS = 2_000_000
@@ -131,6 +140,8 @@ def _matches_text(
     width: int,
     height: int,
     converter: object,
+    *,
+    allow_multiline: bool = False,
 ) -> list[Rect]:
     matches: list[Rect] = []
     with closing(
@@ -147,19 +158,29 @@ def _matches_text(
                 converted = _from_page_points(box, converter, width, height)
                 if converted is not None and converted.area > 0:
                     boxes.append(converted)
-            if (rect := _union(boxes)) is not None and _same_visual_line(boxes):
+            if (rect := _union(boxes)) is not None and (
+                allow_multiline or _same_visual_line(boxes)
+            ):
                 matches.append(rect)
             if len(matches) > 16:
                 break
     if not matches:
         source_text = textpage.get_text_bounded()  # type: ignore[attr-defined]
-        normalized_source = unicodedata.normalize("NFKC", source_text).casefold()
-        normalized_quote = unicodedata.normalize("NFKC", quote).casefold()
+        normalized_quote = " ".join(unicodedata.normalize("NFKC", quote).casefold().split())
+        normalized_source = " ".join(unicodedata.normalize("NFKC", source_text).casefold().split())
         if normalized_quote and (
-            normalized_quote != quote.casefold() or normalized_source != source_text.casefold()
+            allow_multiline
+            or normalized_quote != " ".join(quote.casefold().split())
+            or normalized_source != " ".join(source_text.casefold().split())
         ):
             matches = _matches_normalized_text(
-                textpage, source_text, normalized_quote, width, height, converter
+                textpage,
+                source_text,
+                normalized_quote,
+                width,
+                height,
+                converter,
+                allow_multiline=allow_multiline,
             )
     return matches
 
@@ -171,6 +192,8 @@ def _matches_normalized_text(
     width: int,
     height: int,
     converter: object,
+    *,
+    allow_multiline: bool = False,
 ) -> list[Rect]:
     """Map compatibility-normalized text back to its original source glyphs.
 
@@ -184,7 +207,7 @@ def _matches_normalized_text(
     if len(source_chars) != char_count:
         return []
     normalized_chars: list[str] = []
-    source_indices: list[tuple[int, ...]] = []
+    source_indices: list[tuple[tuple[int, int], ...]] = []
     index = 0
     while index < len(source_chars):
         cluster_end = index + 1
@@ -192,12 +215,20 @@ def _matches_normalized_text(
             cluster_end += 1
         cluster = "".join(source_chars[index:cluster_end])
         normalized_cluster = unicodedata.normalize("NFKC", cluster).casefold()
-        normalized_chars.extend(normalized_cluster)
-        source_indices.extend([(index, cluster_end)] * len(normalized_cluster))
+        if normalized_cluster.isspace():
+            if normalized_chars and normalized_chars[-1] == " ":
+                source_indices[-1] = (*source_indices[-1], (index, cluster_end))
+            else:
+                normalized_chars.append(" ")
+                source_indices.append(((index, cluster_end),))
+        else:
+            normalized_chars.extend(normalized_cluster)
+            source_indices.extend([((index, cluster_end),)] * len(normalized_cluster))
         index = cluster_end
 
     normalized_text = "".join(normalized_chars)
-    if normalized_text != unicodedata.normalize("NFKC", source_text).casefold():
+    expected_source = " ".join(unicodedata.normalize("NFKC", source_text).casefold().split())
+    if normalized_text != expected_source:
         # Defensive consistency check: any unexpected PDFium/source-text mapping
         # prevents guessing at glyph positions.
         return []
@@ -218,7 +249,12 @@ def _matches_normalized_text(
             continue
         source_range = source_indices[start:stop]
         glyph_indices = sorted(
-            {source_index for first, end in source_range for source_index in range(first, end)}
+            {
+                source_index
+                for source_ranges in source_range
+                for first, end in source_ranges
+                for source_index in range(first, end)
+            }
         )
         boxes = []
         for glyph_index in glyph_indices:
@@ -232,7 +268,7 @@ def _matches_normalized_text(
             )
             if converted is not None and converted.area > 0:
                 boxes.append(converted)
-        if (rect := _union(boxes)) is not None and _same_visual_line(boxes):
+        if (rect := _union(boxes)) is not None and (allow_multiline or _same_visual_line(boxes)):
             matches.append(rect)
         if len(matches) > 16:
             break
@@ -368,7 +404,16 @@ def _ocr_words(page: object, width: int, height: int) -> list[OcrWord]:
         return []
 
 
-def _match_ocr(words: list[OcrWord], quote: str) -> list[Rect]:
+def _adjacent_text_flow(previous: Rect, candidate: Rect) -> bool:
+    """Recognize a same-line word or its continuation on the next text line."""
+    if _adjacent_on_visual_line(previous, candidate):
+        return True
+    line_height = max(previous.height, candidate.height)
+    vertical_gap = candidate.y - previous.bottom
+    return 0 <= vertical_gap <= line_height * 2.5 and candidate.x <= previous.x + line_height * 5.0
+
+
+def _match_ocr(words: list[OcrWord], quote: str, *, allow_multiline: bool = False) -> list[Rect]:
     target = _tokens(quote)
     if not target:
         return []
@@ -386,9 +431,13 @@ def _match_ocr(words: list[OcrWord], quote: str) -> list[Rect]:
             if (
                 selected
                 and all(word.confidence >= MIN_OCR_CONFIDENCE for word in selected)
-                and _same_visual_line(selected_rects)
+                and (allow_multiline or _same_visual_line(selected_rects))
                 and all(
-                    _adjacent_on_visual_line(previous.rect, current.rect)
+                    (
+                        _adjacent_text_flow(previous.rect, current.rect)
+                        if allow_multiline
+                        else _adjacent_on_visual_line(previous.rect, current.rect)
+                    )
                     for previous, current in zip(selected, selected[1:], strict=False)
                 )
                 and (rect := _union(selected_rects)) is not None
@@ -418,6 +467,55 @@ def _hint(action: ModelAction, width: int, height: int) -> Rect | None:
     if not all(math.isfinite(v) for v in (action.x, action.y, action.width, action.height)):
         return None
     return _clamp(Rect(action.x, action.y, action.width, action.height), width, height)
+
+
+def _complete_sentence_target(value: str | None) -> bool:
+    """Reject physical-line fragments before they can become saved highlights."""
+    if not value:
+        return False
+    normalized = " ".join(value.split()).strip()
+    terminal = normalized.rstrip("\"'”’)]}»").rstrip()
+    if not terminal or terminal[-1] not in ".!?…。！？":
+        return False
+    first = next((char for char in normalized.lstrip("\"'“‘([{«") if char.isalnum()), "")
+    return bool(first and (first.isupper() or first.isdigit()))
+
+
+def _target_kind_is_consistent(action: ModelAction) -> bool:
+    """Validate model-provided semantic labels at the persistence boundary."""
+    if action.target_kind == "unspecified":
+        return True  # Deterministic/test providers predating the Bedrock contract.
+    if action.type == "zoom_region":
+        return action.target_kind == "visual"
+    if action.target_kind == "visual":
+        return False
+    if action.target_kind == "key_sentence":
+        return _complete_sentence_target(action.target_text)
+    if action.target_kind == "key_number":
+        return bool(action.target_text and any(char.isdigit() for char in action.target_text))
+    if action.target_kind == "key_formula":
+        return _formula_target(action.target_text)
+    return True
+
+
+def _formula_target(value: str | None) -> bool:
+    """Accept symbolic equations without digits while rejecting prose fragments."""
+    if not value:
+        return False
+    normalized = " ".join(value.split())
+    allowed_symbols = "_()[]{}.,+-−×÷*/^%=<>≤≥≈≠∑√π∞|·"
+    if not all(char.isalnum() or char.isspace() or char in allowed_symbols for char in normalized):
+        return False
+    # A meaningful formula needs visible operands around at least one relation or
+    # binary arithmetic operator. This accepts e.g. F = ma and a + b = c without
+    # relying on digits, while rejecting an isolated operator or ordinary text.
+    return (
+        re.search(
+            r"[\w)\]}]\s*(?:<=|>=|!=|==|=|≤|≥|≈|≠|[+−×÷*/^%<>-])\s*[\w([{]",
+            normalized,
+        )
+        is not None
+    )
 
 
 def _padded(rect: Rect, width: int, height: int, *, zoom: bool) -> Rect:
@@ -515,10 +613,132 @@ def _object_rects(
     return output, tagged
 
 
+def _source_visual_inventory_actions(
+    objects: list[tuple[int, Rect]],
+    width: int,
+    height: int,
+    max_actions: int,
+) -> tuple[list[ModelAction], bool]:
+    """Add source-measured visual focus targets without inventing prose actions.
+
+    Semantic text targets must come from the model; text-line geometry is used later
+    only to ground a model-selected phrase. This inventory intentionally cannot
+    decide which visible text is meaningful to a presenter.
+    """
+    limited = False
+    # Every embedded raster object is independently focusable. Vector artwork is
+    # grouped by a bounded spatial index, independently of the semantic model.
+    actions: list[ModelAction] = []
+    has_flattened_page = False
+    for kind, rect in objects:
+        if kind == raw.FPDF_PAGEOBJ_IMAGE:
+            if rect.area > width * height * 0.78:
+                has_flattened_page = True
+            else:
+                actions.append(
+                    ModelAction(
+                        type="zoom_region",
+                        purpose="Show embedded visual",
+                        target_text=None,
+                        x=rect.x,
+                        y=rect.y,
+                        width=rect.width,
+                        height=rect.height,
+                    )
+                )
+    if has_flattened_page:
+        # A single raster covering most of the page hides its internal elements from
+        # PDF object geometry. The model may propose crops, but they need visual QA.
+        limited = True
+    paths = [
+        rect for kind, rect in objects if kind in {raw.FPDF_PAGEOBJ_PATH, raw.FPDF_PAGEOBJ_SHADING}
+    ]
+    diagonal = math.hypot(width, height)
+    tolerance = max(2.0, diagonal * 0.004)
+    cell_size = max(16.0, tolerance * 4)
+    page_area = width * height
+    parents = list(range(len(paths)))
+
+    def root(index: int) -> int:
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    spatial: dict[tuple[int, int], list[int]] = {}
+    for index, rect in enumerate(paths):
+        # Large full-page paths are usually backgrounds or clipping shapes. Avoid
+        # merging them with every nearby object into an unusable page-sized target.
+        if rect.area > page_area * 0.20:
+            continue
+        left = math.floor((rect.x - tolerance) / cell_size)
+        right = math.floor((rect.right + tolerance) / cell_size)
+        top = math.floor((rect.y - tolerance) / cell_size)
+        bottom = math.floor((rect.bottom + tolerance) / cell_size)
+        cells = [
+            (cell_x, cell_y)
+            for cell_x in range(left, right + 1)
+            for cell_y in range(top, bottom + 1)
+        ]
+        if len(cells) > 64:
+            limited = True
+            continue
+        adjacent: set[int] = set()
+        for cell in cells:
+            adjacent.update(spatial.get(cell, ()))
+        for other_index in adjacent:
+            other = paths[other_index]
+            dx = max(0.0, max(rect.x - other.right, other.x - rect.right))
+            dy = max(0.0, max(rect.y - other.bottom, other.y - rect.bottom))
+            if math.hypot(dx, dy) <= tolerance:
+                first, second = root(index), root(other_index)
+                if first != second:
+                    parents[second] = first
+        for cell in cells:
+            spatial.setdefault(cell, []).append(index)
+
+    groups: dict[int, list[Rect]] = {}
+    for index, rect in enumerate(paths):
+        groups.setdefault(root(index), []).append(rect)
+    for group in groups.values():
+        if len(group) < 3:
+            continue
+        cluster_rect = _union(group)
+        if cluster_rect is None:
+            limited = True
+            continue
+        if not page_area * 0.00002 <= cluster_rect.area <= page_area * 0.65:
+            continue
+        actions.append(
+            ModelAction(
+                type="zoom_region",
+                purpose="Show grouped vector graphic",
+                target_text=None,
+                x=cluster_rect.x,
+                y=cluster_rect.y,
+                width=cluster_rect.width,
+                height=cluster_rect.height,
+            )
+        )
+        if len(actions) >= max_actions:
+            limited = True
+            break
+    if len(actions) > max_actions:
+        actions = actions[:max_actions]
+        limited = True
+    return actions, limited
+
+
 def _intersects(a: Rect, b: Rect) -> float:
     width = max(0.0, min(a.right, b.right) - max(a.x, b.x))
     height = max(0.0, min(a.bottom, b.bottom) - max(a.y, b.y))
     return width * height
+
+
+def _rect_iou(a: Rect, b: Rect) -> float:
+    overlap = _intersects(a, b)
+    union = a.area + b.area - overlap
+    return overlap / union if union > 0 else 0.0
 
 
 def _snap_object(
@@ -662,10 +882,10 @@ def ground_actions(
         or len(output.slides) != len(extraction.slides)
         or len(manifest.slides) != len(extraction.slides)
         or [slide.number for slide in output.slides] != list(range(1, len(extraction.slides) + 1))
-        or sum(len(slide.actions) for slide in output.slides) > 40
     ):
         raise ExtractionError("grounding_page_limit")
-    grounded: list[object] = []
+    grounded: list[ModelSlide] = []
+    coverage_limited = output.action_limit_reached
     ocr_cache: dict[int, list[OcrWord]] = {}
     ocr_pages = 0
     total_chars = 0
@@ -677,10 +897,7 @@ def ground_actions(
             for page_index, (_slide, generated) in enumerate(
                 zip(extraction.slides, output.slides, strict=True)
             ):
-                page_actions = []
-                if not generated.actions:
-                    grounded.append(generated)
-                    continue
+                page_actions: list[ModelAction] = []
                 width, height = (
                     manifest.slides[page_index].source.width,
                     manifest.slides[page_index].source.height,
@@ -708,6 +925,34 @@ def ground_actions(
                             raise ExtractionError("page_geometry_mismatch")
                         converter = bitmap.get_posconv(page)
                         objects, tagged_objects = _object_rects(page, converter, width, height)
+                        if (
+                            sum(1 for _ in islice(page.get_objects(), MAX_PAGE_OBJECTS))
+                            >= MAX_PAGE_OBJECTS
+                        ):
+                            coverage_limited = True
+                        inventory_actions: list[ModelAction] = []
+                        if output.source_inventory_enabled:
+                            inventory_actions, inventory_limited = _source_visual_inventory_actions(
+                                objects,
+                                width,
+                                height,
+                                max_actions=max(
+                                    1,
+                                    min(
+                                        MAX_AUTO_ACTIONS_PER_PAGE,
+                                        math.ceil(
+                                            MAX_AUTO_ACTIONS_PER_DECK / len(extraction.slides)
+                                        ),
+                                    ),
+                                ),
+                            )
+                            coverage_limited = coverage_limited or inventory_limited
+                        proposed_actions = (*generated.actions, *inventory_actions)
+                        source_text_targets = {
+                            action.target_id: action
+                            for action in inventory_actions
+                            if action.target_id is not None
+                        }
                         candidate_targets = {}
                         if any(action.target_id is not None for action in generated.actions):
                             from buddy_api.analysis.text_candidates import candidate_page
@@ -718,29 +963,56 @@ def ground_actions(
                                     page, page_index + 1, extraction.source_sha256
                                 )
                             }
-                        for action in generated.actions:
+                        for action in proposed_actions:
+                            if not _target_kind_is_consistent(action):
+                                # These proposals are removed before analysis persistence;
+                                # Review never receives a rejected line-fragment action.
+                                continue
                             hint = _hint(action, width, height)
                             if hint is None:
                                 continue
                             rect: Rect | None = None
                             method: GroundingMethod = "pdf_glyphs"
                             if action.target_id is not None:
-                                target = candidate_targets.get(action.target_id)
-                                if (
-                                    target is None
-                                    or action.type != "highlight_region"
-                                    or action.target_text != target.text
-                                ):
-                                    continue
+                                source_target = source_text_targets.get(action.target_id)
+                                if source_target is not None:
+                                    if (
+                                        action.type != "highlight_region"
+                                        or action.target_text != source_target.target_text
+                                    ):
+                                        continue
+                                    target_rect = Rect(
+                                        source_target.x,
+                                        source_target.y,
+                                        source_target.width,
+                                        source_target.height,
+                                    )
+                                else:
+                                    target = candidate_targets.get(action.target_id)
+                                    if (
+                                        target is None
+                                        or action.type != "highlight_region"
+                                        or action.target_text != target.text
+                                    ):
+                                        continue
+                                    target_rect = Rect(**target.region.model_dump())
                                 method = "pdf_candidate_line"
-                                rect = _padded(
-                                    Rect(**target.region.model_dump()), width, height, zoom=False
-                                )
+                                rect = _padded(target_rect, width, height, zoom=False)
                             elif action.target_text:
+                                allow_multiline = action.target_kind in {
+                                    "key_sentence",
+                                    "bullet",
+                                }
                                 matches = _matches_text(
-                                    page, textpage, action.target_text, width, height, converter
+                                    page,
+                                    textpage,
+                                    action.target_text,
+                                    width,
+                                    height,
+                                    converter,
+                                    allow_multiline=allow_multiline,
                                 )
-                                if not matches:
+                                if not matches and not allow_multiline:
                                     method = "pdf_words"
                                     matches = _matches_text_words(
                                         page,
@@ -756,7 +1028,9 @@ def ground_actions(
                                         ocr_cache[page_index] = _ocr_words(page, width, height)
                                         ocr_pages += 1
                                     matches = _match_ocr(
-                                        ocr_cache.get(page_index, []), action.target_text
+                                        ocr_cache.get(page_index, []),
+                                        action.target_text,
+                                        allow_multiline=allow_multiline,
                                     )
                                 rect = _choose_match(matches, hint, width, height)
                                 if rect is not None:
@@ -777,6 +1051,21 @@ def ground_actions(
                                         action = action.model_copy(
                                             update={"visual_qa_pending": True}
                                         )
+                            if rect is not None and any(
+                                existing.type == action.type
+                                and _rect_iou(
+                                    Rect(
+                                        existing.x,
+                                        existing.y,
+                                        existing.width,
+                                        existing.height,
+                                    ),
+                                    rect,
+                                )
+                                >= 0.90
+                                for existing in page_actions
+                            ):
+                                continue
                             if rect is not None:
                                 page_actions.append(
                                     action.model_copy(
@@ -810,4 +1099,25 @@ def ground_actions(
         raise
     except Exception:
         raise ExtractionError("pdf_action_grounding_failed") from None
-    return output.model_copy(update={"slides": tuple(grounded)})
+    total_actions = sum(len(slide.actions) for slide in grounded)
+    if total_actions > MAX_GENERATED_ACTIONS_PER_DECK:
+        coverage_limited = True
+        # Fairly retain candidates across pages instead of letting an early dense page
+        # consume the complete deck budget.
+        retained: list[list[ModelAction]] = [[] for _ in grounded]
+        retained_count = 0
+        for action_index in range(max(len(slide.actions) for slide in grounded)):
+            for slide_index, slide in enumerate(grounded):
+                if (
+                    action_index < len(slide.actions)
+                    and retained_count < MAX_GENERATED_ACTIONS_PER_DECK
+                ):
+                    retained[slide_index].append(slide.actions[action_index])
+                    retained_count += 1
+        grounded = [
+            slide.model_copy(update={"actions": tuple(actions)})
+            for slide, actions in zip(grounded, retained, strict=True)
+        ]
+    return output.model_copy(
+        update={"slides": tuple(grounded), "action_limit_reached": coverage_limited}
+    )

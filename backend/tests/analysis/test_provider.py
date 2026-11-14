@@ -149,9 +149,27 @@ def test_bedrock_request_submits_exact_pdf_with_native_claude_api(monkeypatch):
     action_schema = schema["properties"]["slides"]["items"]["properties"]["actions"]
     prompt = next(part["text"] for part in content if part["type"] == "text")
     assert "multiple actions on a page" in prompt
-    assert "one visible line or a short phrase only" in prompt
-    assert "exact visible words in target_text" in prompt
-    assert "paragraph or section selection" in prompt
+    assert "distinct meaningful details" in prompt
+    assert "Build a broad candidate library" in prompt
+    assert "MUST provide a usable action for every visible title" in prompt
+    assert "informative image/photo, chart/graph, table, diagram" in prompt
+    assert "each presenter/person's name and associated portrait" in prompt
+    assert "key numbers, formulas, decisions, recommendations" in prompt
+    assert "Do NOT make one action per visual line break" in prompt
+    assert "never split prose mechanically" in prompt
+    assert "target_kind" in action_schema["items"]["properties"]
+    assert "key_sentence" in action_schema["items"]["properties"]["target_kind"]["enum"]
+    assert "quote the complete, concise sentence exactly as printed" in prompt
+    assert "Never turn a wrapped line or a sentence fragment into its own action" in prompt
+    assert "A multi-line sentence may use the tight union of its own glyphs" in prompt
+    assert "Buddy will also add source-measured visual-object candidates" in prompt
+    assert "source-measured text-line" not in prompt
+    assert "not applied all at once" in prompt
+    assert "Do not stop at the first useful target" in prompt
+    assert "Do not fill a quota" in prompt
+    assert "one visible line or a short phrase only" not in prompt
+    assert "line-level cue" not in prompt
+    assert "never highlight a whole paragraph" in prompt
     assert action_schema["items"]["properties"]["type"]["enum"] == [
         "zoom_region",
         "highlight_region",
@@ -188,13 +206,14 @@ def test_provider_accepts_multiple_distinct_actions_on_one_slide(monkeypatch):
         "slides": [
             {
                 "number": 1,
-                "text": "Revenue rose and the outlook remains positive.",
+                "text": "Revenue rose.",
                 "reason": None,
                 "actions": [
                     {
                         "type": "highlight_region",
+                        "target_kind": "key_sentence",
                         "purpose": "Highlight the exact visible phrase “Revenue rose”.",
-                        "target_text": "Revenue rose",
+                        "target_text": "Revenue rose.",
                         "x": 40,
                         "y": 120,
                         "width": 190,
@@ -202,6 +221,7 @@ def test_provider_accepts_multiple_distinct_actions_on_one_slide(monkeypatch):
                     },
                     {
                         "type": "zoom_region",
+                        "target_kind": "visual",
                         "purpose": "Zoom out to show the adjacent outlook chart.",
                         "target_text": None,
                         "x": 620,
@@ -222,6 +242,40 @@ def test_provider_accepts_multiple_distinct_actions_on_one_slide(monkeypatch):
     ]
 
 
+@pytest.mark.parametrize("target_kind", [None, "unspecified"])
+def test_bedrock_rejects_actions_without_explicit_semantic_kind(monkeypatch, target_kind):
+    extraction, manifest = inputs()
+    monkeypatch.setattr(provider, "Session", Session)
+    action = {
+        "type": "highlight_region",
+        "purpose": "Highlight a complete sentence.",
+        "target_text": "designed to connect and control all smart",
+        "x": 40,
+        "y": 120,
+        "width": 190,
+        "height": 24,
+    }
+    if target_kind is not None:
+        action["target_kind"] = target_kind
+    generated = {
+        "presentation": {"text": "Quarterly results overview.", "reason": None},
+        "slides": [
+            {
+                "number": 1,
+                "text": "Revenue rose.",
+                "reason": None,
+                "actions": [action],
+            }
+        ],
+    }
+
+    with pytest.raises(ProviderFailure, match="provider_malformed_output"):
+        BedrockProvider(
+            "eu-central-1",
+            transport=Opener(response_for(output_text=json.dumps(generated))).transport,
+        ).analyze(PDF, extraction, str(DECK_ID), manifest)
+
+
 @pytest.mark.parametrize("server_field", ["visual_qa_pending", "grounding_trace"])
 def test_provider_cannot_assign_server_owned_visual_qa_state(monkeypatch, server_field):
     extraction, manifest = inputs()
@@ -236,6 +290,7 @@ def test_provider_cannot_assign_server_owned_visual_qa_state(monkeypatch, server
                 "actions": [
                     {
                         "type": "zoom_region",
+                        "target_kind": "visual",
                         "purpose": "Focus on this crop.",
                         "target_text": None,
                         server_field: True,
@@ -264,13 +319,14 @@ def test_provider_never_exceeds_the_bounded_deck_action_budget(monkeypatch):
         "slides": [
             {
                 "number": 1,
-                "text": "Revenue rose and the outlook remains positive.",
+                "text": "Revenue rose.",
                 "reason": None,
                 "actions": [
                     {
                         "type": "highlight_region",
+                        "target_kind": "key_sentence",
                         "purpose": "Highlight the exact visible phrase “Revenue rose”.",
-                        "target_text": "Revenue rose",
+                        "target_text": "Revenue rose.",
                         "x": 40,
                         "y": 120,
                         "width": 190,
@@ -278,6 +334,7 @@ def test_provider_never_exceeds_the_bounded_deck_action_budget(monkeypatch):
                     },
                     {
                         "type": "zoom_region",
+                        "target_kind": "visual",
                         "purpose": "Zoom out to show the adjacent outlook chart.",
                         "target_text": None,
                         "x": 620,
@@ -375,6 +432,21 @@ def test_provider_access_denial_is_permanent_and_sanitized(monkeypatch):
     assert str(failure.value) == "provider_access_denied"
 
 
+def test_provider_cannot_enable_buddy_source_inventory():
+    extraction, _ = inputs()
+    payload = {
+        "presentation": {"text": "Summary.", "reason": None},
+        "slides": [{"number": 1, "text": "Page.", "reason": None, "actions": []}],
+        "source_inventory_enabled": True,
+    }
+
+    with pytest.raises(ProviderFailure, match="provider_malformed_output"):
+        BedrockProvider._decode_response(
+            json.dumps(response_for(output_text=json.dumps(payload))).encode(),
+            [(extraction.slides[0].width // 6350, extraction.slides[0].height // 6350)],
+        )
+
+
 def test_async_provider_uses_signed_request_and_returns_validated_output(monkeypatch):
     extraction, manifest = inputs()
     monkeypatch.setattr(provider, "Session", Session)
@@ -395,6 +467,7 @@ def test_async_provider_uses_signed_request_and_returns_validated_output(monkeyp
             PDF, extraction, str(DECK_ID), manifest
         )
         assert result.slides[0].number == 1
+        assert result.source_inventory_enabled
 
     asyncio.run(scenario())
     assert captured["authorization"].startswith("AWS4-HMAC-SHA256 ")

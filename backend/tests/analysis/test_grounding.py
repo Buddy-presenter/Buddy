@@ -10,6 +10,7 @@ import pytest
 from buddy_api.analysis.grounding import (
     OcrWord,
     Rect,
+    _complete_sentence_target,
     _ground_object_target,
     _match_ocr,
     _matches_normalized_text,
@@ -17,6 +18,7 @@ from buddy_api.analysis.grounding import (
     _matches_text_words,
     _snap_object,
     _tagged_content_ids,
+    _target_kind_is_consistent,
     ground_actions,
 )
 from buddy_api.analysis.provider import ModelAction, ModelOutput, ModelSlide, ModelSummary
@@ -56,6 +58,24 @@ def _action(kind="highlight_region", quote="Buddy PDF presentation", *, hint=(0,
     )
 
 
+def test_key_sentence_contract_rejects_wrapped_line_fragments():
+    fragments = (
+        "our new SmartHome Hub, a central device",
+        "designed to connect and control all smart",
+        "home devices seamlessly. Our goal is to",
+        "growing sector.",
+    )
+    assert all(not _complete_sentence_target(fragment) for fragment in fragments)
+    assert _complete_sentence_target(
+        "Our goal is to revolutionize home automation and lead the market."
+    )
+    assert not _target_kind_is_consistent(
+        _action(quote="designed to connect and control all smart").model_copy(
+            update={"target_kind": "key_sentence"}
+        )
+    )
+
+
 def _load(path: Path):
     content = path.read_bytes()
     extraction = extract_pdf(BytesIO(content), source_revision="grounding-test")
@@ -63,12 +83,21 @@ def _load(path: Path):
     return content, extraction, manifest
 
 
-def _two_column_pdf(phrase=b"caf\xe9 results") -> bytes:
+def _two_column_pdf(phrase=b"caf\xe9 results", *, with_visual=False) -> bytes:
     """Build a deterministic WinAnsi source PDF with repeated text in two columns."""
-    content = (
+    visual = (
+        b"q 1 0 0 rg 100 500 30 30 re f 0 1 0 rg 131 500 30 30 re f 0 0 1 rg 162 500 30 30 re f Q "
+        if with_visual
+        else b""
+    )
+    content = visual + (
         b"BT /F1 24 Tf 90 700 Td (" + phrase + b") Tj ET "
         b"BT /F1 24 Tf 390 700 Td (" + phrase + b") Tj ET"
     )
+    return _pdf_with_content(content)
+
+
+def _pdf_with_content(content: bytes) -> bytes:
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
@@ -113,6 +142,70 @@ def test_highlight_is_rebuilt_from_pdfium_glyph_positions_not_model_box():
     assert action.height < page.height / 8
     assert action.x + action.width <= page.width
     assert action.y + action.height <= page.height
+
+
+def test_source_inventory_adds_visuals_but_not_every_text_line():
+    content = _two_column_pdf(with_visual=True)
+    extraction, manifest = _load_bytes(content)
+
+    generated = _output(extraction, {}).model_copy(update={"source_inventory_enabled": True})
+    result = ground_actions(content, extraction, manifest, generated)
+
+    actions = [action for slide in result.slides for action in slide.actions]
+    assert actions
+    assert any(action.grounding_trace for action in actions)
+    assert all(action.type == "zoom_region" for action in actions)
+
+
+def test_source_inventory_does_not_turn_text_only_page_lines_into_actions():
+    content = _two_column_pdf()
+    extraction, manifest = _load_bytes(content)
+
+    generated = _output(extraction, {}).model_copy(update={"source_inventory_enabled": True})
+    result = ground_actions(content, extraction, manifest, generated)
+
+    assert result.slides[0].actions == ()
+
+
+def test_line_fragment_key_sentence_is_removed_before_analysis_is_saved():
+    content = _two_column_pdf()
+    extraction, manifest = _load_bytes(content)
+    fragment = _action(quote="café results").model_copy(update={"target_kind": "key_sentence"})
+
+    result = ground_actions(content, extraction, manifest, _output(extraction, {0: (fragment,)}))
+
+    assert result.slides[0].actions == ()
+
+
+def test_complete_sentence_can_be_grounded_across_wrapped_pdf_lines():
+    content = _pdf_with_content(
+        b"BT /F1 18 Tf 90 700 Td (This is a meaningful sentence) Tj T* "
+        b"(that wraps to its next line.) Tj ET"
+    )
+    extraction, manifest = _load_bytes(content)
+    sentence = "This is a meaningful sentence that wraps to its next line."
+    action = _action(quote=sentence, hint=(100, 150, 700, 100)).model_copy(
+        update={"target_kind": "key_sentence"}
+    )
+
+    result = ground_actions(content, extraction, manifest, _output(extraction, {0: (action,)}))
+
+    assert len(result.slides[0].actions) == 1
+    assert result.slides[0].actions[0].height > 20
+
+
+@pytest.mark.parametrize("formula", ["F = ma", "V = IR", "a + b = c", "5 - 3"])
+def test_symbolic_formula_without_digits_can_be_grounded(formula):
+    content = _pdf_with_content(b"BT /F1 18 Tf 90 700 Td (" + formula.encode("ascii") + b") Tj ET")
+    extraction, manifest = _load_bytes(content)
+    action = _action(quote=formula, hint=(100, 150, 700, 100)).model_copy(
+        update={"target_kind": "key_formula"}
+    )
+
+    result = ground_actions(content, extraction, manifest, _output(extraction, {0: (action,)}))
+
+    assert len(result.slides[0].actions) == 1
+    assert result.slides[0].actions[0].target_text == formula
 
 
 def test_text_grounding_declines_suffixes_inside_longer_words():
@@ -165,7 +258,7 @@ def test_repeated_unicode_quote_in_columns_uses_hint_only_to_disambiguate_source
     assert grounded.height < manifest.slides[0].source.height * 0.05
 
 
-def test_repeated_quote_with_equally_plausible_hint_is_declined():
+def test_repeated_quote_with_equally_plausible_hint_is_declined_without_line_inventory():
     content = _two_column_pdf()
     extraction, manifest = _load_bytes(content)
     action = _action(
@@ -173,9 +266,13 @@ def test_repeated_quote_with_equally_plausible_hint_is_declined():
         hint=(manifest.slides[0].source.width * 0.45, 0, 100, 100),
     )
 
-    result = ground_actions(content, extraction, manifest, _output(extraction, {0: (action,)}))
+    generated = _output(extraction, {0: (action,)}).model_copy(
+        update={"source_inventory_enabled": True}
+    )
+    result = ground_actions(content, extraction, manifest, generated)
 
-    assert result.slides[0].actions == ()
+    repeated = [item for item in result.slides[0].actions if item.target_text == "café results"]
+    assert repeated == []
 
 
 def test_ligature_quote_maps_back_to_the_original_source_glyph():
@@ -207,7 +304,7 @@ def test_missing_text_target_is_dropped_instead_of_using_model_rectangle():
 
     result = ground_actions(content, extraction, manifest, _output(extraction, {0: (action,)}))
 
-    assert result.slides[0].actions == ()
+    assert all(item.target_text != action.target_text for item in result.slides[0].actions)
 
 
 def test_highlight_quote_spanning_adjacent_lines_is_not_bounded_as_one_box():
@@ -219,7 +316,7 @@ def test_highlight_quote_spanning_adjacent_lines_is_not_bounded_as_one_box():
 
     result = ground_actions(content, extraction, manifest, _output(extraction, {0: (action,)}))
 
-    assert result.slides[0].actions == ()
+    assert all(item.target_text != action.target_text for item in result.slides[0].actions)
 
 
 def test_scanned_page_without_ocr_confident_match_is_dropped(monkeypatch):
@@ -401,13 +498,14 @@ def test_grounding_runs_inside_the_bounded_child_process():
 
     result = execute_grounding(content, extraction, manifest, generated, seconds=30)
 
-    assert len(result.slides[0].actions) == 1
-    assert result.slides[0].actions[0].height < manifest.slides[0].source.height / 8
-    trace = result.slides[0].actions[0].grounding_trace
+    grounded = result.slides[0].actions[0]
+    assert grounded.target_text == action.target_text
+    assert grounded.height < manifest.slides[0].source.height / 8
+    trace = grounded.grounding_trace
     assert trace is not None and trace.method == "pdf_glyphs"
     assert trace.target_text == action.target_text
     assert trace.model_region.width == action.width
-    assert trace.resolved_region.width == result.slides[0].actions[0].width
+    assert trace.resolved_region.width == grounded.width
 
 
 def test_unix_child_does_not_use_data_limit_when_address_space_limit_is_unavailable(monkeypatch):

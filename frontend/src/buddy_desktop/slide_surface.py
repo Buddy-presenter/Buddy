@@ -105,7 +105,7 @@ class SlideSurface(QWidget):
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#06090D"))
+        painter.fillRect(self.rect(), QColor("#000000"))
         mapping = self.mapping()
         if mapping is None or self._slide is None:
             return

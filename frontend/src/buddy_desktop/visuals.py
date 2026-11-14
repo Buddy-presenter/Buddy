@@ -1,6 +1,7 @@
 """Buddy's local visual assets, palette and accessible command styling."""
 
 import sys
+from contextlib import suppress
 from importlib.resources import files
 
 from PySide6.QtCore import QByteArray, QRect, QRectF, QSize, Qt, QTimer
@@ -74,18 +75,25 @@ def interface_fonts() -> dict[str, str]:
 
 
 def apply_theme(app: QApplication) -> None:
+    # Auxiliary/local launchers must receive Buddy's taskbar identity as well.
+    if sys.platform == "win32":
+        import ctypes
+
+        with suppress(AttributeError, OSError):
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("org.buddy.desktop")
+    app.setWindowIcon(app_icon())
     palette = QPalette()
     for role, color in (
-        (QPalette.ColorRole.Window, "#0B0C10"),
+        (QPalette.ColorRole.Window, "#000000"),
         (QPalette.ColorRole.WindowText, "#F3F0E9"),
-        (QPalette.ColorRole.Base, "#121318"),
-        (QPalette.ColorRole.AlternateBase, "#18191F"),
+        (QPalette.ColorRole.Base, "#121212"),
+        (QPalette.ColorRole.AlternateBase, "#181818"),
         (QPalette.ColorRole.Text, "#F3F0E9"),
-        (QPalette.ColorRole.Button, "#202128"),
+        (QPalette.ColorRole.Button, "#202020"),
         (QPalette.ColorRole.ButtonText, "#F3F0E9"),
         (QPalette.ColorRole.Highlight, "#A94427"),
         (QPalette.ColorRole.HighlightedText, "#FFFFFF"),
-        (QPalette.ColorRole.ToolTipBase, "#25262E"),
+        (QPalette.ColorRole.ToolTipBase, "#252525"),
         (QPalette.ColorRole.ToolTipText, "#F3F0E9"),
         (QPalette.ColorRole.PlaceholderText, "#95959F"),
     ):

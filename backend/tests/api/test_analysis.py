@@ -2,13 +2,14 @@
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
 from alembic import command
 from backend.tests.support.analysis import FIXTURE, create, prepare
 from pydantic import ValidationError
-from sqlalchemy import select, text
+from sqlalchemy import delete, func, select, text
 
 from buddy_api.analysis.catalog import CATALOG, general_controls, generation_schema
 from buddy_api.analysis.contracts import AnalysisInput, ValidationInput, digest
@@ -21,6 +22,7 @@ from buddy_api.persistence.models import (
     ActionValidation,
     AnalysisSlide,
     AnalysisVersion,
+    Deck,
     LegacyAnalysisPayload,
     SlideAction,
 )
@@ -28,6 +30,73 @@ from buddy_api.persistence.models import (
 
 def sample():
     return json.loads(FIXTURE.read_text())
+
+
+@pytest.mark.postgres
+def test_pdf_and_powerpoint_reads_preserve_their_distinct_validation_gates(migrated_database):
+    from backend.tests.support.powerpoint import manifest, output, source
+
+    from buddy_api.analysis.powerpoint import analysis_document
+
+    async def scenario():
+        db = Database(migrated_database)
+        try:
+            async with db.transaction() as repos:
+                owner = await repos.users.create("cross-format-reader")
+                for source_format in ("pdf", "pptx"):
+                    deck = await repos.decks.create(
+                        owner_id=owner.id, title=source_format, source_format=source_format
+                    )
+                    if source_format == "pdf":
+                        document = await prepare(repos, owner_id=owner.id, deck_id=deck.id)
+                    else:
+                        _, extracted = source()
+                        job = await repos.jobs.create(owner_id=owner.id, deck_id=deck.id)
+                        saved_extraction = await repos.extractions.save(
+                            owner_id=owner.id, deck_id=deck.id, extraction=extracted
+                        )
+                        document = analysis_document(
+                            output(extracted),
+                            extracted,
+                            manifest(extracted, str(deck.id)),
+                            deck.id,
+                            job_id=job.id,
+                            extraction_id=saved_extraction.id,
+                        )
+                    saved = await repos.analyses.create(
+                        owner_id=owner.id, deck_id=deck.id, version=1, document=document
+                    )
+                    candidate = await repos.analyses.read(saved.id, owner_id=owner.id)
+                    assert not candidate.slides[0].actions[0].usable
+                    action = document.slides[0].actions[0]
+                    checked = await repos.analyses.record_validation(
+                        owner_id=owner.id,
+                        result=ValidationInput(
+                            source_format=source_format,
+                            runtime_version="Office-16-test" if source_format == "pptx" else None,
+                            validation_id=uuid4(),
+                            analysis_id=saved.id,
+                            analysis_sha256=candidate.analysis_sha256,
+                            instance_id=action.instance_id,
+                            action_sha256=digest(action),
+                            validator_version=document.validator_version,
+                            renderer_version=document.renderer_version,
+                            display_profile=document.display_profile,
+                            state="validated",
+                            evidence=({"id": uuid4(), "kind": "report", "sha256": "b" * 64},),
+                        ),
+                    )
+                    result = checked.slides[0].actions[0]
+                    assert result.usable == (source_format == "pptx")
+                    if source_format == "pdf":
+                        assert not result.semantic_verified
+                    else:
+                        assert "semantic_verified" not in result.model_dump()
+                        assert "visual_qa_pending_instance_ids" not in checked.inputs.model_dump()
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(
@@ -411,6 +480,58 @@ def test_owner_lineage_stale_evidence_and_immutable_database_rows(migrated_datab
 
 
 @pytest.mark.postgres
+def test_tombstoned_deck_allows_immutable_analysis_cleanup(migrated_database):
+    """The real migrated triggers allow deck cleanup, but still reject ordinary deletes."""
+
+    async def scenario():
+        db = Database(migrated_database)
+        try:
+            async with db.transaction() as repos:
+                owner = await repos.users.create("deletion-owner")
+                deck = await repos.decks.create(owner_id=owner.id, title="Analyzed deck")
+                inputs = await prepare(repos, owner_id=owner.id, deck_id=deck.id, actions=True)
+                analysis = await repos.analyses.create(
+                    owner_id=owner.id, deck_id=deck.id, version=1, document=inputs
+                )
+                # Exercise the legacy child table as well as the typed revision tree.
+                repos.analyses.session.add(
+                    LegacyAnalysisPayload(analysis_id=analysis.id, payload={"legacy": True})
+                )
+                await repos.analyses.session.flush()
+                deck_id, analysis_id = deck.id, analysis.id
+
+            async with db.sessions() as session, session.begin():
+                deck = await session.get(Deck, deck_id)
+                deck.deletion_requested_at = datetime.now(UTC)
+                await session.flush()
+                await session.execute(
+                    delete(ActionValidation).where(ActionValidation.deck_id == deck_id)
+                )
+                await session.execute(delete(SlideAction).where(SlideAction.deck_id == deck_id))
+                await session.execute(delete(AnalysisSlide).where(AnalysisSlide.deck_id == deck_id))
+                await session.execute(
+                    delete(LegacyAnalysisPayload).where(
+                        LegacyAnalysisPayload.analysis_id == analysis_id
+                    )
+                )
+                await session.execute(
+                    delete(AnalysisVersion).where(AnalysisVersion.deck_id == deck_id)
+                )
+
+            async with db.sessions() as session:
+                for model in (ActionValidation, SlideAction, AnalysisSlide, AnalysisVersion):
+                    count = await session.scalar(
+                        select(func.count()).select_from(model).where(model.deck_id == deck_id)
+                    )
+                    assert count == 0
+                assert await session.get(LegacyAnalysisPayload, analysis_id) is None
+        finally:
+            await db.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.postgres
 def test_concurrent_idempotent_creation_and_conflicting_rerun(migrated_database):
     async def scenario():
         db = Database(migrated_database)
@@ -579,4 +700,81 @@ def test_typed_api_auth_restart_no_public_validation_writes(
             path, json={"state": "validated"}, headers={"Authorization": "Bearer owner"}
         ).status_code
         == 405
+    )
+
+
+@pytest.mark.postgres
+def test_expanded_pdf_actions_persist_with_versioned_contract(
+    migrated_database, monkeypatch, api_client_factory
+):
+    from buddy_api.analysis.contracts import ContentAction, PDFAnalysisInputV2, PDFAnalysisResultV2
+
+    async def scenario():
+        db = Database(migrated_database)
+        try:
+            async with db.transaction() as repos:
+                owner = await repos.users.create("expanded-pdf-owner")
+                deck = await repos.decks.create(
+                    owner_id=owner.id, title="Expanded", source_format="pdf"
+                )
+                original = await prepare(repos, owner_id=owner.id, deck_id=deck.id)
+                data = original.model_dump(mode="json")
+                data["schema_version"] = "buddy.analysis.v2"
+                template = data["slides"][0]["actions"][0]
+                # Position is zero-based; 101 actions exercise the first position
+                # previously rejected by the database constraint (position == 100).
+                data["slides"][0]["actions"] = [
+                    dict(template, instance_id=f"action-{i}") for i in range(101)
+                ]
+                data["grounding"] = [
+                    {
+                        "instance_id": action["instance_id"],
+                        "action_sha256": digest(ContentAction.model_validate(action)),
+                        "trace": {
+                            "method": "pdf_glyphs",
+                            "target_text": "Synthetic target",
+                            "model_region": action["params"]["region"],
+                            "resolved_region": action["params"]["region"],
+                        },
+                    }
+                    for action in data["slides"][0]["actions"]
+                ]
+                data["visual_qa_pending_instance_ids"] = [
+                    action["instance_id"] for action in data["slides"][0]["actions"]
+                ]
+                expanded = PDFAnalysisInputV2.model_validate(data)
+                saved = await repos.analyses.create(
+                    owner_id=owner.id, deck_id=deck.id, version=1, document=expanded
+                )
+                result = await repos.analyses.read(saved.id, owner_id=owner.id)
+                assert isinstance(result, PDFAnalysisResultV2)
+                assert len(result.slides[0].actions) == 101
+                assert len(result.inputs.grounding) == 101
+                assert len(result.visual_qa_pending_instance_ids) == 101
+                assert all(not action.usable for action in result.slides[0].actions)
+                return deck.id
+        finally:
+            await db.close()
+
+    deck_id = asyncio.run(scenario())
+    from backend.tests.api.test_library import CONFIG
+
+    monkeypatch.setattr(
+        CognitoVerifier,
+        "verify",
+        lambda self, token: VerifiedIdentity(token, "verified@example.test"),
+    )
+    client = api_client_factory(
+        Settings(Environment.TEST, ("testserver",), database=migrated_database, identity=CONFIG)
+    )
+    headers = {"Authorization": "Bearer expanded-pdf-owner"}
+    assert client.get(f"/api/v1/analyses/by-deck/{deck_id}", headers=headers).status_code == 409
+    response = client.get(f"/api/v2/analyses/pdf/by-deck/{deck_id}", headers=headers)
+    assert response.status_code == 200
+    assert len(response.json()["data"]["slides"][0]["actions"]) == 101
+    assert (
+        client.get(
+            f"/api/v2/analyses/pdf/by-deck/{deck_id}", headers={"Authorization": "Bearer other"}
+        ).status_code
+        == 403
     )

@@ -108,13 +108,14 @@ class MainWindow(QMainWindow):
         self.profile.controls_requested.connect(self._show_account_controls)
         self.library = LibraryWidget(config, self.account)
         self.review = ReviewWidget(config, self.account)
-        self.present = PresentWidget()
+        self.present = PresentWidget(config, settings)
         self._private_presentation = False
         self.library.present_requested.connect(self._open_saved_pdf)
         self.library.review_requested.connect(self._open_review)
         self.review.back_requested.connect(lambda: self.navigation.setCurrentRow(1))
         self.review.signin_requested.connect(self._show_account_controls)
         self.library.private_invalidated.connect(self._clear_private_pdf)
+        self.library.deck_deleted.connect(self._deck_deleted)
         self.present.executor.completed.connect(self._presentation_completed)
         self.present.executor.idle.connect(self._present_idle)
         self.present.powerpoint_runner.idle.connect(self._powerpoint_idle)
@@ -212,6 +213,7 @@ class MainWindow(QMainWindow):
         menu.addWidget(self.account)
         popover_layout.addLayout(menu)
         self.account.session_changed.connect(self._account_identity)
+        self.present.session_access_expired.connect(self.account.expire_session)
         self.account.profile_loaded.connect(self._profile_identity)
         self._account_identity()
         self.library.signin_requested.connect(self._show_account_controls)
@@ -270,15 +272,37 @@ class MainWindow(QMainWindow):
         self.navigation.setCurrentRow(3)
         self.present.load_pdf(result.content, deck_id=result.deck_id, revision=result.revision)
 
-    def _open_review(self, deck_id: object, title: str, status: str) -> None:
+    def _open_review(
+        self, deck_id: object, title: str, status: str, source_format: str = "pdf"
+    ) -> None:
         if not isinstance(deck_id, UUID):
             return
-        self.review.set_deck(deck_id, title, status)
+        self.review.set_deck(deck_id, title, status, source_format)
         self.navigation.setCurrentRow(2)
 
     def _clear_private_pdf(self) -> None:
         if self._private_presentation:
             self._private_presentation = False
+            self.present.clear_session_binding()
+            if self.present.fullscreen is not None:
+                self.present.fullscreen.close()
+            self.present.executor.clear()
+            self.present.counter.setText("No slides loaded")
+            self.home.workspace_state.hide()
+            self.present._refresh()
+
+    def _deck_deleted(self, identifier: object) -> None:
+        if not isinstance(identifier, UUID):
+            return
+        if self.review.deck_id == identifier:
+            self.review.clear_private()
+            self.review.state.show_state(
+                "Presentation removed",
+                "Its saved review is no longer available. Buddy is finishing permanent cleanup.",
+            )
+        if self.present._session_deck_id == str(identifier):
+            self._private_presentation = False
+            self.present.clear_session_binding()
             if self.present.fullscreen is not None:
                 self.present.fullscreen.close()
             self.present.executor.clear()
@@ -341,6 +365,11 @@ class MainWindow(QMainWindow):
 
     def _account_identity(self) -> None:
         signed_in = bool(self.account.account_id)
+        tokens = self.account.session.tokens if self.account.session is not None else None
+        self.present.set_account_identity(
+            self.account.account_id if signed_in else None,
+            tokens.access if signed_in and tokens is not None else None,
+        )
         self.profile_action.setVisible(signed_in)
         self.account_divider.setVisible(signed_in)
         # Never retain an email across sign-out, expiry, or backend changes.
@@ -470,7 +499,7 @@ class MainWindow(QMainWindow):
         self.cancel_auth_button.setVisible(
             busy and self.account.operation in {"signin", "signup", "recovery"}
         )
-        if busy and self.account.operation != "profile":
+        if busy and self.account.operation not in {"check", "profile"}:
             self._verified_profile = None
             self.account_button.setToolTip("Account operation in progress")
             self.account_title.setText("Checking account…")
@@ -545,6 +574,7 @@ class MainWindow(QMainWindow):
             or self.account.runner.busy
             or self.library.runner.busy
             or self.review.runner.busy
+            or self.review.cleanup_runner.busy
             or self._closing
             or self.environment_override
         ):
@@ -566,6 +596,7 @@ class MainWindow(QMainWindow):
         self.account.configure(url)
         self.library.configure(self.config)
         self.review.configure(self.config)
+        self.present.configure(self.config)
         self.preferences.url.setText(url)
         self.preferences.set_endpoint(url)
         self.connection_status.setText("Connection not checked")
@@ -595,6 +626,8 @@ class MainWindow(QMainWindow):
             or self.library.runner.busy
             or self.review.runner.busy
             or self.present.executor.busy
+            or self.present.session_runner.busy
+            or self.review.cleanup_runner.busy
             or self.present.powerpoint_runner.busy
         ):
             self._closing = True

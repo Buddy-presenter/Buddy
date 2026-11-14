@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import Field, model_validator
 
 from buddy_api.analysis.contracts import Digest, Identifier, Model, Region
+from buddy_api.validation.powerpoint import PowerPointProcessResult
 
 type Profile = Literal["wide-1x", "standard-1x", "portrait-1x", "wide-2x"]
 type Precision = Literal["standard", "line"]
@@ -100,6 +101,13 @@ class StoredResult(Model):
     id: UUID
     deck_id: UUID
     result: ProcessResult
+    evidence: list[ArtifactReference] = Field(max_length=3)
+
+
+class PowerPointStoredResult(Model):
+    id: UUID
+    deck_id: UUID
+    result: PowerPointProcessResult
     evidence: list[ArtifactReference] = Field(max_length=3)
 
 

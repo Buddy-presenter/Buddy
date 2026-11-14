@@ -23,7 +23,7 @@ type GroundingMethod = Literal[
     "pdf_candidate_line",
 ]
 type Publication = Literal["legacy", "partial", "awaiting_validation", "published"]
-MAX_GENERATED_ACTIONS_PER_DECK = 40
+MAX_GENERATED_ACTIONS_PER_DECK = 1000
 
 
 class Model(BaseModel):
@@ -83,6 +83,9 @@ class ActionGrounding(Model):
 
 
 class ContentAction(Model):
+    # Existing PDF action digests remain stable; the persistent record and response
+    # envelope carry the format. Explicit mismatched inputs still fail validation.
+    source_format: Literal["pdf"] = Field(default="pdf", exclude=True)
     version: Literal["1.1"]
     instance_id: Identifier
     purpose: Annotated[str, Field(min_length=1, max_length=512, pattern=r"\S")]
@@ -95,7 +98,10 @@ class ContentAction(Model):
     @model_validator(mode="before")
     @classmethod
     def catalog(cls, value: object) -> object:
-        validate_catalog(value)
+        checked = dict(value) if isinstance(value, dict) else value
+        if isinstance(checked, dict) and checked.get("source_format") == "pdf":
+            checked.pop("source_format")
+        validate_catalog(checked)
         return value
 
 
@@ -155,7 +161,14 @@ class SlideOutput(Model):
     actions: Annotated[tuple[ContentAction, ...], Field(max_length=100)] = ()
 
 
+class PDFSlideOutputV2(SlideOutput):
+    actions: Annotated[
+        tuple[ContentAction, ...], Field(max_length=MAX_GENERATED_ACTIONS_PER_DECK)
+    ] = ()
+
+
 class AnalysisInput(Model):
+    source_format: Literal["pdf"] = Field(default="pdf", exclude=True)
     schema_version: Literal["buddy.analysis.v1"] = "buddy.analysis.v1"
     extraction_id: UUID
     extraction_schema_version: Literal["buddy.extraction.v1"] = "buddy.extraction.v1"
@@ -231,6 +244,166 @@ class AnalysisInput(Model):
         return self
 
 
+class PDFAnalysisInputV2(AnalysisInput):
+    """Expanded PDF action provenance; v1 remains bounded at 40 for old clients."""
+
+    schema_version: Literal["buddy.analysis.v2"] = "buddy.analysis.v2"  # type: ignore[assignment]
+    slides: Annotated[tuple[PDFSlideOutputV2, ...], Field(min_length=1, max_length=500)]
+    grounding: Annotated[
+        tuple[ActionGrounding, ...],
+        Field(max_length=MAX_GENERATED_ACTIONS_PER_DECK, exclude_if=lambda value: not value),
+    ] = ()
+    visual_qa_pending_instance_ids: Annotated[
+        tuple[Identifier, ...], Field(max_length=MAX_GENERATED_ACTIONS_PER_DECK, exclude=True)
+    ] = ()
+    # Omit false to keep hashes stable for v2 records created before this field existed.
+    action_limit_reached: bool = Field(default=False, exclude_if=lambda value: not value)
+
+
+class PowerPointParameters(Model):
+    region: Region
+    text: Annotated[str, Field(max_length=300)] = ""
+    source_shape_id: Annotated[int, Field(strict=True, gt=0)] | None = None
+    target_text: Annotated[str, Field(max_length=300)] = ""
+
+
+class PowerPointContentActionV2(Model):
+    source_format: Literal["pptx"] = "pptx"
+    version: Literal["powerpoint-2"] = "powerpoint-2"
+    instance_id: Identifier
+    purpose: Annotated[str, Field(min_length=1, max_length=512, pattern=r"\S")]
+    deck_id: Identifier
+    render_id: Identifier
+    slide_id: Identifier
+    type: Literal[
+        "highlight_region",
+        "draw_rectangle",
+        "draw_oval",
+        "draw_underline",
+        "draw_arrow",
+        "callout",
+        "draw_line",
+        "filled_rectangle",
+        "filled_oval",
+        "text_box",
+        "draw_rounded_rectangle",
+        "draw_diamond",
+        "draw_triangle",
+        "draw_hexagon",
+        "draw_star",
+        "zoom_region",
+    ]
+    params: PowerPointParameters
+
+    @model_validator(mode="after")
+    def annotation(self) -> Self:
+        if self.type == "zoom_region" and (
+            self.params.source_shape_id is None or self.params.target_text
+        ):
+            raise ValueError("Zoom requires a source object and uses its complete bounds.")
+        if min(self.params.region.width, self.params.region.height) < 12:
+            raise ValueError("PowerPoint annotations require a minimum 12-point region.")
+        if self.type in {"callout", "text_box"}:
+            if not self.params.text.strip() or any(
+                ord(c) < 32 and c not in "\t\n" for c in self.params.text
+            ):
+                raise ValueError("A callout requires bounded annotation text.")
+        elif self.params.text:
+            raise ValueError("Only callouts and text boxes accept annotation text.")
+        return self
+
+
+class PowerPointPlane(Model):
+    width: float = Field(gt=0, le=100000)
+    height: float = Field(gt=0, le=100000)
+    units: Literal["slide_points"] = "slide_points"
+    origin: Literal["top_left"] = "top_left"
+
+
+class PowerPointManifestSlide(Model):
+    slide_id: Identifier
+    native_slide_id: int = Field(strict=True, gt=0)
+    source: PowerPointPlane
+
+
+class PowerPointManifest(Model):
+    source_format: Literal["pptx"] = "pptx"
+    version: Literal["powerpoint-2"] = "powerpoint-2"
+    deck_id: Identifier
+    # This identifies extracted source geometry, not a fabricated rendered image.
+    render_id: Identifier
+    slides: Annotated[tuple[PowerPointManifestSlide, ...], Field(min_length=1, max_length=100)]
+
+    @model_validator(mode="after")
+    def unique(self) -> Self:
+        if len({s.slide_id for s in self.slides}) != len(self.slides) or len(
+            {s.native_slide_id for s in self.slides}
+        ) != len(self.slides):
+            raise ValueError("Duplicate PowerPoint slide identity.")
+        return self
+
+
+class PowerPointSlideOutputV2(Model):
+    slide_id: Identifier
+    summary: Summary
+    actions: Annotated[tuple[PowerPointContentActionV2, ...], Field(max_length=40)] = ()
+
+
+class PowerPointAnalysisInputV2(Model):
+    schema_version: Literal["buddy.powerpoint.analysis.v2"] = "buddy.powerpoint.analysis.v2"
+    source_format: Literal["pptx"] = "pptx"
+    extraction_id: UUID
+    extraction_schema_version: Literal["buddy.extraction.v1"] = "buddy.extraction.v1"
+    extractor_version: Literal["1"] = "1"
+    source_revision: Annotated[
+        str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
+    ]
+    source_sha256: Digest
+    office_safe: bool = False
+    representation: Literal["bounded_ooxml_extraction"] = "bounded_ooxml_extraction"
+    job_id: UUID
+    catalog_version: Literal["powerpoint-2"] = "powerpoint-2"
+    renderer_version: Literal["desktop-powerpoint-2"] = "desktop-powerpoint-2"
+    display_profile: Literal["windows-powerpoint-2"] = "windows-powerpoint-2"
+    validator_version: Literal["powerpoint-executor-2"] = "powerpoint-executor-2"
+    manifest: PowerPointManifest
+    presentation_summary: Summary
+    slides: Annotated[tuple[PowerPointSlideOutputV2, ...], Field(min_length=1, max_length=100)]
+
+    @property
+    def visual_qa_pending_instance_ids(self) -> tuple[str, ...]:
+        return ()
+
+    @model_validator(mode="after")
+    def references(self) -> Self:
+        if [s.slide_id for s in self.slides] != [s.slide_id for s in self.manifest.slides]:
+            raise ValueError("PowerPoint slides must match source order exactly.")
+        ids: set[str] = set()
+        for slide, source in zip(self.slides, self.manifest.slides, strict=True):
+            for action in slide.actions:
+                r = action.params.region
+                if action.instance_id in ids or (
+                    action.deck_id,
+                    action.render_id,
+                    action.slide_id,
+                ) != (self.manifest.deck_id, self.manifest.render_id, slide.slide_id):
+                    raise ValueError("Duplicate or stale PowerPoint action reference.")
+                if r.x + r.width > source.source.width or r.y + r.height > source.source.height:
+                    raise ValueError("PowerPoint action extends beyond its source slide.")
+                ids.add(action.instance_id)
+        if len(ids) > 100 or len(self.model_dump_json().encode()) > 8 * 1024 * 1024:
+            raise ValueError("PowerPoint analysis exceeds its budget.")
+        return self
+
+
+def parse_analysis_input(value: object) -> AnalysisInput | PowerPointAnalysisInputV2:
+    if isinstance(value, dict) and value.get("source_format") == "pptx":
+        return PowerPointAnalysisInputV2.model_validate(value)
+    if isinstance(value, dict) and value.get("schema_version") == "buddy.analysis.v2":
+        return PDFAnalysisInputV2.model_validate(value)
+    return AnalysisInput.model_validate(value)
+
+
 def digest(value: BaseModel) -> str:
     return hashlib.sha256(
         json.dumps(
@@ -246,6 +419,8 @@ class EvidenceReference(Model):
 
 
 class ValidationInput(Model):
+    source_format: Literal["pdf", "pptx"] = "pdf"
+    runtime_version: Identifier | None = None
     schema_version: Literal["buddy.validation.v1"] = "buddy.validation.v1"
     validation_id: UUID
     analysis_id: UUID
@@ -266,6 +441,8 @@ class ValidationInput(Model):
 
     @model_validator(mode="after")
     def consistent(self) -> Self:
+        if self.source_format == "pptx" and self.state == "validated" and not self.runtime_version:
+            raise ValueError("PowerPoint validation requires the actual Office runtime version.")
         if self.state == "validated" and (not self.evidence or self.reasons):
             raise ValueError("Validated results need evidence and no failure reasons.")
         if self.state in {"rejected", "needs-review"} and not self.reasons:
@@ -302,6 +479,7 @@ class SlideResult(Model):
 
 
 class AnalysisResult(Model):
+    source_format: Literal["pdf"] = "pdf"
     id: UUID
     deck_id: UUID
     version: int
@@ -316,9 +494,56 @@ class AnalysisResult(Model):
     ] = ()
 
 
-def publication(summary: Summary, slides: tuple[SlideResult, ...]) -> Publication:
+class PowerPointActionResultV2(Model):
+    action: PowerPointContentActionV2
+    state: ValidationState
+    usable: bool
+    validation: ValidationInput | None
+
+
+class PowerPointSlideResultV2(Model):
+    slide_id: Identifier
+    summary: Summary
+    actions: tuple[PowerPointActionResultV2, ...]
+
+
+class PDFAnalysisResultV2(AnalysisResult):
+    inputs: PDFAnalysisInputV2 | None
+    visual_qa_pending_instance_ids: Annotated[
+        tuple[Identifier, ...], Field(max_length=MAX_GENERATED_ACTIONS_PER_DECK, exclude=True)
+    ] = ()
+
+
+class PowerPointAnalysisResultV2(Model):
+    source_format: Literal["pptx"] = "pptx"
+    id: UUID
+    deck_id: UUID
+    version: int
+    publication: Publication
+    action_limit_reached: bool = False
+    analysis_sha256: Digest | None
+    inputs: PowerPointAnalysisInputV2 | None
+    slides: tuple[PowerPointSlideResultV2, ...]
+
+    @property
+    def visual_qa_pending_instance_ids(self) -> tuple[str, ...]:
+        return ()
+
+
+def publication(
+    summary: Summary, slides: tuple[SlideResult, ...] | tuple[PowerPointSlideResultV2, ...]
+) -> Publication:
     if summary.status != "available" or any(s.summary.status != "available" for s in slides):
         return "partial"
     if any(a.state == "candidate" for s in slides for a in s.actions):
         return "awaiting_validation"
     return "published"
+
+
+# Existing internal imports retain their names; only v2 HTTP responses expose zoom.
+PowerPointContentAction = PowerPointContentActionV2
+PowerPointSlideOutput = PowerPointSlideOutputV2
+PowerPointAnalysisInput = PowerPointAnalysisInputV2
+PowerPointActionResult = PowerPointActionResultV2
+PowerPointSlideResult = PowerPointSlideResultV2
+PowerPointAnalysisResult = PowerPointAnalysisResultV2

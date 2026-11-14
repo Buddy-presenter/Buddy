@@ -156,7 +156,19 @@ class AccountWidget(QWidget):
                 if action == "signout":
                     return session.sign_out()
                 if action == "check":
-                    return session.account()
+                    try:
+                        account_id = session.account()
+                    except SessionExpired as exc:
+                        return ProfileFailure(str(exc), True)
+                    except IdentityError:
+                        return ProfileFailure(
+                            "Account could not be verified. Check your connection; "
+                            "Buddy will retry.",
+                            False,
+                        )
+                    if expected_id is not None and account_id != expected_id:
+                        return ProfileFailure("Account changed. Please sign in again.", True)
+                    return account_id
                 return session.sign_in(action)
             except IdentityError as exc:
                 raise ServiceError(str(exc)) from None
@@ -166,6 +178,26 @@ class AccountWidget(QWidget):
     def completed(self, _identifier: int, result: object) -> None:
         if self.closing or (self.session and self.session.cancelled.is_set()):
             self.message.setText("Sign-in was cancelled.")
+            return
+        if self.operation == "check":
+            if isinstance(result, str) and (self.account_id is None or result == self.account_id):
+                self.account_id = result
+                self.message.setText("")
+            elif isinstance(result, ProfileFailure):
+                if result.expired:
+                    self.account_id = None
+                    if self.session:
+                        self.session.tokens = None
+                    self.session_changed.emit()
+                self.message.setText(result.message)
+            else:
+                self.account_id = None
+                if self.session:
+                    self.session.tokens = None
+                self.session_changed.emit()
+                self.message.setText("Account could not be verified. Please sign in again.")
+            if self.session and self.session.tokens:
+                self.timer.start()
             return
         if self.operation == "profile":
             if isinstance(result, AccountProfile) and result.id == self.account_id:
@@ -201,6 +233,14 @@ class AccountWidget(QWidget):
             self.account_id = None
 
     def failed(self, _identifier: int, message: str) -> None:
+        if self.operation == "check":
+            # Only a confirmed SessionExpired result clears the account. Network
+            # and service failures are returned as ProfileFailure by the check
+            # worker, so this path is reserved for unexpected non-auth failures.
+            self.message.setText("Account could not be verified. Buddy will retry.")
+            if self.session and self.session.tokens:
+                self.timer.start()
+            return
         if self.operation == "profile":
             self.profile_failed.emit(_identifier, "Profile unavailable. Please try again.")
             if self.session and self.session.tokens:

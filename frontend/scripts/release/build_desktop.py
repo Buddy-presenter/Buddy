@@ -124,8 +124,14 @@ def register_macos_callback(bundle: Path, signing_identity: str | None = None) -
             "CFBundleTypeRole": "Viewer",
         }
     ]
+    data["NSMicrophoneUsageDescription"] = (
+        "Buddy uses the microphone only when you enable it during a presentation."
+    )
     info.write_bytes(plistlib.dumps(data))
+    entitlements = bundle.parent / "buddy-entitlements.plist"
+    entitlements.write_bytes(plistlib.dumps({"com.apple.security.device.audio-input": True}))
     command = ["codesign", "--force", "--sign", signing_identity or "-"]
+    command += ["--entitlements", str(entitlements)]
     if signing_identity:
         command += ["--options", "runtime", "--timestamp"]
     subprocess.run([*command, str(bundle)], check=True)
@@ -214,8 +220,17 @@ def build(
         if signing_identity:
             command += ["--codesign-identity", signing_identity]
     elif sys.platform == "win32":
+        # Generate and collect UIA interfaces at build time. Frozen apps must not
+        # need a writable site-packages directory on first native zoom.
+        import importlib
+
+        importlib.import_module("comtypes.client").GetModule("UIAutomationCore.dll")
         # COM automation modules are imported at runtime to keep the macOS build clean.
         command += [
+            "--hidden-import",
+            "sounddevice",
+            "--collect-all",
+            "_sounddevice_data",
             "--hidden-import",
             "pythoncom",
             "--hidden-import",
@@ -223,7 +238,13 @@ def build(
             "--hidden-import",
             "win32com.client",
             "--hidden-import",
+            "win32api",
+            "--hidden-import",
+            "comtypes.gen.UIAutomationClient",
+            "--hidden-import",
             "win32gui",
+            "--hidden-import",
+            "win32ui",
             "--hidden-import",
             "win32process",
         ]

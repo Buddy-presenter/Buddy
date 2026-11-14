@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -5,8 +6,47 @@ from types import SimpleNamespace
 import pytest
 
 from buddy_desktop.powerpoint import PowerPointAutomation, PowerPointError
-from buddy_desktop.powerpoint_contract import PowerPointAction
+from buddy_desktop.powerpoint_contract import PowerPointAction, PresentationInfo
 from buddy_desktop.slide_contract import Region
+
+
+def test_generated_highlight_uses_exact_text_bounds_and_unicode_offsets():
+    shapes = FakeShapes()
+    calls = []
+    text = "🚀 Revenue grew 12%."
+
+    def characters(start, length):
+        calls.append((start, length))
+        return SimpleNamespace(BoundLeft=120, BoundTop=220, BoundWidth=35, BoundHeight=18)
+
+    shapes.items.append(
+        SimpleNamespace(
+            Id=99,
+            HasTextFrame=True,
+            TextFrame=SimpleNamespace(
+                HasText=True, TextRange=SimpleNamespace(Text=text, Characters=characters)
+            ),
+        )
+    )
+    action = PowerPointAction(
+        "highlight_region",
+        PresentationInfo("test.pptx", "test.pptx", 1, 1, 1, 256, 960, 540),
+        region=Region(50, 55, 850, 300),
+        source_shape_id=99,
+        target_text="12%",
+    )
+    PowerPointAutomation._create_annotation_shapes(
+        SimpleNamespace(Shapes=shapes), action, lambda: None
+    )
+    assert calls == [(len(text[: text.index("12%")].encode("utf-16-le")) // 2 + 1, 3)]
+    assert shapes.items[-1].args == (1, 117.0, 218.0, 41.0, 22.0)
+    assert shapes.items[0].TextFrame.TextRange.Text == text
+    from dataclasses import replace
+
+    with pytest.raises(PowerPointError, match="cannot safely frame text"):
+        PowerPointAutomation._create_annotation_shapes(
+            SimpleNamespace(Shapes=shapes), replace(action, kind="draw_star"), lambda: None
+        )
 
 
 class FakePythonCom:
@@ -51,7 +91,10 @@ class FakeShape:
             self.Width, self.Height = abs(x2 - x1), abs(y2 - y1)
         else:
             _, self.Left, self.Top, self.Width, self.Height = args
-        self.Fill = SimpleNamespace(ForeColor=SimpleNamespace(RGB=0), Transparency=0)
+        self.Fill = SimpleNamespace(
+            ForeColor=SimpleNamespace(RGB=0), Transparency=0, Solid=lambda: None
+        )
+        self.Shadow = SimpleNamespace(Visible=-1)
         self.Line = SimpleNamespace(
             ForeColor=SimpleNamespace(RGB=0),
             Weight=0,
@@ -65,6 +108,12 @@ class FakeShape:
             ),
         )
         self.Callout = SimpleNamespace(Border=False)
+        self.TextFrame2 = SimpleNamespace(
+            AutoSize=0,
+            WordWrap=0,
+            VerticalAnchor=0,
+            TextRange=SimpleNamespace(BoundHeight=0, BoundWidth=0),
+        )
 
     def Delete(self):
         self.collection.items.remove(self)
@@ -677,6 +726,70 @@ def test_powerpoint_navigation_boundaries_and_absolute_jumps(control_automation)
     assert pythoncom.initialized == pythoncom.uninitialized
 
 
+def test_zoom_and_reset_preserve_annotations_and_bind_the_live_slide(control_automation):
+    service, file, _, app, _, window = control_automation
+    info = service.status(file)
+    calls = []
+
+    class Zoom:
+        def reset(self, current, validate):
+            validate()
+
+        def zoom(self, current, region, validate):
+            validate()
+            calls.append((current, region))
+
+    service._zoom_factory = Zoom
+    service.execute(PowerPointAction("draw_rectangle", info, region=Region(20, 30, 40, 50)))
+    names = [shape.Name for shape in app.presentation.Slides.Item(1).Shapes.items]
+    service.execute(PowerPointAction("zoom_region", info, region=Region(20, 30, 40, 50)))
+    service.execute(PowerPointAction("reset_zoom", info))
+    assert len(calls) == 1
+    assert window.View.jumps == [(1, 0)]
+    assert [shape.Name for shape in app.presentation.Slides.Item(1).Shapes.items] == names
+    assert window.View.erases == 0
+    stale = replace(info, slide_id=999)
+    with pytest.raises(PowerPointError, match="slideshow changed"):
+        service.execute(PowerPointAction("zoom_region", stale, region=Region(20, 30, 40, 50)))
+    assert len(calls) == 1
+
+
+def test_navigation_after_buddy_zoom_restores_view_before_changing_slides(control_automation):
+    service, file, _, _, _, window = control_automation
+    info = service.status(file)
+    service._zoom_window_id = info.window_id
+    result = service.execute(PowerPointAction("next_slide", info))
+    assert result.info.slide_index == 2
+    assert window.View.jumps == [(1, 0), (2, 0)]
+    assert service._zoom_window_id is None
+
+
+def test_generated_zoom_rejects_changed_source_bounds_before_native_input(
+    control_automation, monkeypatch
+):
+    service, file, _, _, _, _ = control_automation
+    info = service.status(file)
+    monkeypatch.setattr(
+        service,
+        "_source_shape",
+        lambda *_args: SimpleNamespace(
+            Left=20,
+            Top=30,
+            Width=40,
+            Height=50,
+        ),
+    )
+    command = PowerPointAction(
+        "zoom_region",
+        info,
+        region=Region(100, 30, 40, 50),
+        source_shape_id=2,
+    )
+    with pytest.raises(PowerPointError, match="differs from the source"):
+        service.execute(command)
+    assert service._zoom_window_id is None
+
+
 def test_managed_line_and_highlight_shapes_erase_without_stale_ink(control_automation):
     service, file, _, app, _, window = control_automation
     info = service.status(file)
@@ -721,7 +834,7 @@ def test_managed_line_and_highlight_shapes_erase_without_stale_ink(control_autom
         (
             "callout",
             {"region": Region(20, 30, 120, 50), "text": "Key point"},
-            "callout",
+            "shape",
         ),
     ],
 )

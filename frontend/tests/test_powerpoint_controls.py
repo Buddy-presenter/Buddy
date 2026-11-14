@@ -75,6 +75,29 @@ def test_navigation_emits_typed_requests_without_resetting_edited_target(control
     assert controls.previous.isEnabled()
 
 
+def test_zoom_uses_the_shared_selection_and_never_emits_annotation_reset(controls):
+    actions = []
+    controls.action_requested.connect(actions.append)
+    assert not controls.zoom.isEnabled()
+    for name, value in {"x1": 120, "y1": 80, "x2": 400, "y2": 260}.items():
+        controls.fields[name].setValue(value)
+    assert controls.zoom.isEnabled()
+    controls.zoom.click()
+    assert actions[-1].kind == "zoom_region"
+    assert actions[-1].region.x == 120
+    controls.completed(PowerPointActionResult(actions[-1], info()))
+    assert "zoom applied" in controls.feedback.text().lower()
+    controls.reset_zoom.click()
+    assert actions[-1].kind == "reset_zoom"
+    assert actions[-1].region is None
+    controls.completed(PowerPointActionResult(actions[-1], info()))
+    assert "Annotations were kept" in controls.feedback.text()
+    controls.busy = True
+    controls.refresh()
+    assert not controls.zoom.isEnabled()
+    assert not controls.reset_zoom.isEnabled()
+
+
 def test_annotation_selection_bounds_and_confirmation(controls, qtbot):
     actions = []
     controls.action_requested.connect(actions.append)
