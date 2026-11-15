@@ -2039,7 +2039,7 @@ class PresentWidget(Page):
             if self.microphone_device.count() == 0
             else "Wait for the saved presentation session to connect and sync the current slide."
             if self._powerpoint_binding is not None and not mic_available
-            else ""
+            else "Start or stop microphone capture"
         )
         self.microphone_button.setText(
             "Stop microphone" if self.microphone.enabled else "Start microphone"
