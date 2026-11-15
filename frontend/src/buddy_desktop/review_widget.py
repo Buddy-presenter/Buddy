@@ -189,6 +189,8 @@ class ReviewWidget(Page):
     activity_changed = Signal(bool)
     signin_requested = Signal()
     back_requested = Signal()
+    powerpoint_present_requested = Signal(object)
+    powerpoint_invalidated = Signal()
 
     def __init__(self, config: AppConfig, account: AccountWidget) -> None:
         super().__init__(
@@ -293,6 +295,10 @@ class ReviewWidget(Page):
         self.open_powerpoint = QPushButton("Open saved PowerPoint")
         command(self.open_powerpoint, "external-link")
         self.open_powerpoint.clicked.connect(self.open_saved_powerpoint)
+        self.present_powerpoint = QPushButton("Present with Buddy")
+        command(self.present_powerpoint, "presentation")
+        self.present_powerpoint.clicked.connect(self.present_saved_powerpoint)
+        self.present_powerpoint.setEnabled(False)
         self.reset_powerpoint_zoom = QPushButton("Reset zoom")
         command(self.reset_powerpoint_zoom, "refresh-cw")
         self.reset_powerpoint_zoom.clicked.connect(self.reset_saved_powerpoint_zoom)
@@ -302,7 +308,7 @@ class ReviewWidget(Page):
         self.run_powerpoint.setAccessibleName("Run selected action in PowerPoint")
         command(self.run_powerpoint, "arrow-right", primary=True)
         self.run_powerpoint.clicked.connect(self.run_selected_powerpoint_action)
-        for button in (self.open_powerpoint, self.run_powerpoint):
+        for button in (self.open_powerpoint, self.present_powerpoint, self.run_powerpoint):
             button.hide()
         powerpoint_row.addWidget(self.open_powerpoint)
         powerpoint_row.addWidget(self.reset_powerpoint_zoom)
@@ -511,6 +517,7 @@ class ReviewWidget(Page):
                 self.load()
 
     def clear_private(self, *, keep_deck: bool = False) -> None:
+        self.powerpoint_invalidated.emit()
         self._close_evidence()
         self.details_toggle.setChecked(False)
         if self._pptx_session is not None:
@@ -539,6 +546,7 @@ class ReviewWidget(Page):
         self.run_powerpoint.setEnabled(False)
         self.reset_powerpoint_zoom.setEnabled(False)
         self.open_powerpoint.setEnabled(False)
+        self.present_powerpoint.setEnabled(False)
         self.refresh_checks_button.setEnabled(False)
         self.pending_load = False
         if not keep_deck:
@@ -706,6 +714,7 @@ class ReviewWidget(Page):
             self._expand_summary(False)
             powerpoint = self.source_format == "pptx"
             self.open_powerpoint.setVisible(powerpoint)
+            self.present_powerpoint.setVisible(powerpoint)
             self.reset_powerpoint_zoom.setVisible(powerpoint)
             self.run_powerpoint.setVisible(powerpoint)
             self.open_powerpoint.setEnabled(
@@ -728,6 +737,13 @@ class ReviewWidget(Page):
         elif isinstance(result, RenderedPage):
             self.page_index, self.image = result.index, result.image
             self._display_page()
+            self.present_powerpoint.setEnabled(
+                self.source_format == "pptx"
+                and self._pptx_session is not None
+                and getattr(self._pptx_session, "binding", None) is not None
+                and self.analysis is not None
+                and self.analysis.publication == "published"
+            )
             if operation == "powerpoint_action":
                 self.notice.setText(
                     "PowerPoint action completed on the saved source. Execution validation "
@@ -833,6 +849,22 @@ class ReviewWidget(Page):
                 index, powerpoint_image(session.open(content, analysis, index).png)
             )
         )
+
+    def present_saved_powerpoint(self) -> None:
+        session = self._pptx_session
+        binding = getattr(session, "binding", None)
+        if (
+            self.runner.busy
+            or self.closing
+            or not self.token()
+            or binding is None
+            or self.analysis is None
+            or self.analysis.publication != "published"
+            or binding.analysis_id != str(self.analysis.id)
+            or binding.deck_id != str(self.deck_id)
+        ):
+            return
+        self.powerpoint_present_requested.emit(binding)
 
     def run_selected_powerpoint_action(self) -> None:
         row = self.action_table.currentRow()
