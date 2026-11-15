@@ -309,6 +309,26 @@ def test_unexpected_provider_failure_logs_safe_type_only(speech_client, caplog):
     assert "provider-secret" not in caplog.text
 
 
+def test_provider_close_code_is_diagnostic_but_close_reason_is_private(speech_client, caplog):
+    from websockets.exceptions import ConnectionClosedError
+    from websockets.frames import Close
+
+    client, provider = speech_client
+
+    async def failed_receive():
+        raise ConnectionClosedError(Close(1011, "private transcript provider-secret"), None)
+
+    provider.recv = failed_receive
+    with client.websocket_connect(
+        f"/api/v1/sessions/{uuid4()}/speech", headers={"Authorization": "Bearer owner"}
+    ) as socket:
+        assert start(socket)["type"] == "ready"
+        assert socket.receive_json()["code"] == "connection_lost"
+    assert "provider_close_code=1011" in caplog.text
+    assert "exception_type=ConnectionClosedError" in caplog.text
+    assert "private transcript" not in caplog.text and "provider-secret" not in caplog.text
+
+
 def test_duplicate_stream_is_rejected(speech_client):
     client, provider = speech_client
     url = f"/api/v1/sessions/{uuid4()}/speech"

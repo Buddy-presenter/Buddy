@@ -29,6 +29,21 @@ gaps is discarded, never replayed as current speech. Status explains the gap. Pe
 configuration/access errors require stopping and restarting the microphone after repair.
 Manual presentation remains available throughout.
 
+The native client now transmits 16 kHz mono PCM16, while hardware continues capturing at
+its native rate. Older supported 8–96 kHz protocol clients remain compatible. The API
+keeps receiving disconnects independently of upstream writes: a bounded eight-packet
+queue prevents a stalled provider from hiding client disconnects or accumulating an
+unbounded audio backlog. A full queue returns retryable `audio_backlog`; the old stream
+and queued audio are discarded. This removes the additional upstream-send wait before
+cleanup, while preserving bounded provider close and owner admission.
+
+A valid recognition result over five seconds behind capture is discarded and uses the
+existing reconnect budget, clearing decision context rather than treating stale text as current on the desktop.
+The API may already have journaled that provider result under its existing five-minute
+retention policy. This is not a silence timer: ordinary silence does not reconnect or erase
+context. No retries beyond the existing three, relaxed authorization or replayed audio
+are introduced.
+
 Local-only PDF viewing and Windows PowerPoint do not have the authenticated saved PDF
 session required by this endpoint. PowerPoint microphone capture stays local and its
 status explicitly says transcription is unavailable. No backend session is fabricated
@@ -67,7 +82,8 @@ Speech stream failures are written to the API log at warning level so they remai
 visible with the deployed API's warning-level runtime configuration. The bounded
 `speech_stream` event records a random `diagnostic_id`, failure outcome, processing
 stage, duration, upstream HTTP status when supplied by Deepgram, and exception class
-for unexpected failures. A stream ended after repeated invalid provider results also
+for failures. A numeric `provider_close_code` is included when the upstream supplies a
+valid close code; free-form close reasons are never logged. A stream ended after repeated invalid provider results also
 records the bounded `invalid_result_count`. The same opaque ID is returned with an error
 so an operator can find the exact event. It never records exception messages, provider response bodies,
 credentials, bearer tokens, audio, or transcript text. A normal client close is not
@@ -93,7 +109,7 @@ nondeleted session lookup. The session must be active. Cookies do not authentica
 The first text message, within five seconds after authentication, is:
 
 ```json
-{"version":1,"language":"en-US","sample_rate":48000}
+{"version":1,"language":"en-US","sample_rate":16000}
 ```
 
 An error response contains `type: error`, a bounded `code`, `retryable`, and a random
@@ -219,3 +235,24 @@ Before claiming staging acceptance, repeat with the deployed backend and a signe
 human speaker using the real microphone. Verify text/timing, mute/pause/resume/stop,
 device loss, account/session end, provider outage, reconnect gaps, and manual navigation.
 Record provider/model, language, sanitized timing/accuracy evidence, and deployed revision.
+
+
+## Reliability repair acceptance (#180)
+
+A deterministic stalled-provider reproduction showed that the previous upload loop could
+not observe a native disconnect while awaiting provider.send. The new receiver/uploader
+split passes that reproduction and a bounded-queue regression. A cross-component test
+limits upstream capacity to 40 kB/s: native 48 kHz audio fills the bound and is rejected,
+whereas the same input normalized to 16 kHz is delivered without backlog. This tests a
+mitigation under a defined constraint, not an assertion about the user's network speed.
+
+Real Deepgram EU acceptance used generated natural speech, the production capture-worker
+packetizer/resampler, native Qt WebSocket, API and PostgreSQL. A roughly 80-second stream
+containing repeated payment, correction and privacy passages plus pauses produced all
+14 final segments without reconnecting; measured result delays were 179–2654 ms. An
+additional local-only hardware check opened the exact Intel microphone in compatibility
+mode, reported 16 kHz, produced 108 ordered packets (at most 1608 bytes each) and stopped
+cleanly. No hardware audio was saved or sent to a provider in that check. These checks
+are not human-voice or deployed-staging acceptance, a P95 guarantee, or proof that every
+upstream outage has been eliminated. The original intermittent provider/network cause
+remains uncertain; delayed/stalled connections now have tested bounded recovery.
