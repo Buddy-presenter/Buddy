@@ -789,7 +789,13 @@ class PowerPointAutomation:
         finally:
             self._end_com(pythoncom)
 
-    def execute(self, action: PowerPointAction) -> PowerPointActionResult:
+    def execute(
+        self,
+        action: PowerPointAction,
+        *,
+        expected_runtime: str | None = None,
+        commit_guard: Callable[[], bool] | None = None,
+    ) -> PowerPointActionResult:
         """The only action entry point; caller strings never become COM method names."""
         if not isinstance(action, PowerPointAction):
             raise PowerPointError("Unsupported PowerPoint action.")
@@ -799,7 +805,19 @@ class PowerPointAutomation:
         pythoncom, client = self._start_com()
         try:
             application = client.Dispatch("PowerPoint.Application")
-            window = self._target_window(application, action.target)
+            if expected_runtime is not None and (
+                f"{application.Version}.{application.Build}" != expected_runtime
+            ):
+                raise PowerPointError("Office changed since validation. Revalidate this action.")
+
+            def verified_window() -> Any:
+                if commit_guard is not None and not commit_guard():
+                    raise PowerPointError(
+                        "The presentation changed before this action could apply."
+                    )
+                return self._target_window(application, action.target)
+
+            window = verified_window()
             info = self._snapshot(window)
             view = window.View
             if self._zoom_window_id == info.window_id and action.kind not in {
@@ -835,9 +853,7 @@ class PowerPointAutomation:
                     view.PointerType = 1
                     # Retain cleanup ownership even if confirmation fails after input.
                     self._zoom_window_id = info.window_id
-                    self._zoom_driver().zoom(
-                        info, action.region, lambda: self._target_window(application, action.target)
-                    )
+                    self._zoom_driver().zoom(info, action.region, verified_window)
                 else:
                     self.release_zoom()
                     view.GotoSlide(info.slide_index, 0)

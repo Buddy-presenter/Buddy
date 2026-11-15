@@ -8,6 +8,11 @@ session state, publish an applied-action event, or enable autonomous transitions
 and the policy-to-executor connection. Model confidence is not a calibrated probability
 and is never execution permission.
 
+The separate opt-in [transition policy](transition-policy.md) now connects accepted PDF
+proposals to the player after fresh server/local checks. Suggestions remain manual by
+default. Its PowerPoint integration and independent release evidence are still pending;
+this does not change the agent endpoint's proposal-only contract.
+
 ## Local setup and manual check
 
 Apply migrations through `0022_agent_request_window`. Set backend-only
@@ -193,6 +198,10 @@ are logged. Evidence indexes/confidence live in the no-store response, not ordin
 Failures return safe finite status/reason codes; they do not cause slide movement.
 
 ## Verification
+
+See [presentation replay evaluation](presentation-replay.md) for deterministic corpus
+replay, candidate allowlist gates, captured execution scoring and recording permission.
+Synthetic contract gates are separate from real service/policy release evidence.
 
 Component tests use real PostgreSQL/session state and a substituted provider boundary.
 They cover owner denial, no action, valid selection, authoritative region geometry,

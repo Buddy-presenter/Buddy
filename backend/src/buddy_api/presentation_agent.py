@@ -91,6 +91,35 @@ class Target(Model):
     region: Region | None = None
 
 
+class TransitionCheck(Model):
+    expected_state_version: int = Field(ge=0, strict=True)
+    analysis_id: UUID
+    target: Target
+
+
+class TransitionApproval(Model):
+    session_id: UUID
+    analysis_id: UUID
+    state_version: int
+    target: Target
+
+
+async def transition_input(request: Request) -> TransitionCheck:
+    body = bytearray()
+    try:
+        async with asyncio.timeout(3):
+            async for chunk in request.stream():
+                body.extend(chunk)
+                if len(body) > 16384:
+                    raise HTTPException(413, "Transition input is too large.")
+    except TimeoutError:
+        raise HTTPException(408, "Transition input timed out.") from None
+    try:
+        return TransitionCheck.model_validate_json(bytes(body))
+    except (ValueError, ValidationError):
+        raise HTTPException(422, "Invalid transition input.") from None
+
+
 type AgentReason = (
     Literal["explicit", "topic", "correction", "stay", "uncertain", "disabled"] | FailureReason
 )
@@ -287,6 +316,63 @@ def checked_selection(
     return targets[index]
 
 
+def decision_passage(
+    source: AgentInput, values: AgentRequest, descriptions: list[dict[str, object]]
+) -> dict[str, object]:
+    """The production provider input, also used by permissioned offline replay."""
+    current_slide = next(
+        s for s in candidate_slides(source.analysis) if s.slide_id == source.current
+    )
+    return {
+        "segments": [s.text for s in values.segments],
+        "latest_segment": len(values.segments) - 1,
+        "current_view": {
+            "slide": source.current,
+            "slide_number": next(
+                i + 1
+                for i, s in enumerate(candidate_slides(source.analysis))
+                if s.slide_id == source.current
+            ),
+            "slide_count": len(source.analysis.slides),
+            "focus": source.focus,
+            "summary": (current_slide.summary.text or "")[:1200],
+            "focused_purpose": next(
+                (
+                    a.action.purpose
+                    for a in current_slide.actions
+                    if candidate_action_eligible(a)
+                    and a.action.type == source.focus
+                    and a.action.params.region == source.focus_region
+                ),
+                None,
+            ),
+        },
+        "options": descriptions,
+    }
+
+
+def navigation_selection(
+    targets: tuple[Target, ...], candidates: tuple[Candidate, ...], segment_count: int
+) -> Selection:
+    neighbor = next((c.slide_id for c in candidates if c.reason == "explicit_navigation"), None)
+    choice = next(
+        (
+            i
+            for i, target in enumerate(targets)
+            if target.slide_id == neighbor and target.tool in {"next_slide", "previous_slide"}
+        ),
+        0,
+    )
+    return Selection.model_validate(
+        {
+            "choice": f"c{choice}",
+            "reason": "explicit" if choice else "stay",
+            "confidence": 1.0,
+            "evidence": [segment_count - 1],
+        }
+    )
+
+
 class AgentRuntime:
     def __init__(self, settings: AgentSettings, provider: DecisionProvider):
         self.settings, self.provider = settings, provider
@@ -342,6 +428,85 @@ class AgentRuntime:
 
 def agent_router() -> APIRouter:
     router = APIRouter(prefix="/api/v1/sessions", tags=["presentation agent"])
+
+    transition_schema = TransitionCheck.model_json_schema(
+        ref_template="#/components/schemas/{model}"
+    )
+    # Target and Region components are registered by the typed approval response.
+    transition_schema.pop("$defs", None)
+
+    @router.post(
+        "/{identifier}/transition-check",
+        response_model=TransitionApproval,
+        openapi_extra={
+            "requestBody": {
+                "required": True,
+                "content": {"application/json": {"schema": transition_schema}},
+            }
+        },
+    )
+    async def transition_check(
+        identifier: UUID,
+        values: Annotated[TransitionCheck, Depends(transition_input)],
+        request: Request,
+        response: Response,
+        principal: Annotated[Principal, Depends(authenticated)],
+    ) -> TransitionApproval:
+        """Recheck eligibility immediately before local policy execution; no model call.
+
+        This is not a policy grant or evidence of player completion. The presenter
+        still owns manual control and must fence its capture/source at dispatch.
+        """
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            async with asyncio.timeout(3), request.app.state.database.sessions() as db, db.begin():
+                await db.connection(execution_options={"isolation_level": "REPEATABLE READ"})
+                session = await owned_session(db, principal, identifier)
+                if (
+                    session.status != "active"
+                    or session.autonomy_mode != "autonomous"
+                    or session.state_version != values.expected_state_version
+                    or session.analysis_version_id != values.analysis_id
+                ):
+                    raise HTTPException(409, "Automatic transition state changed.")
+                deck = await db.get(Deck, session.deck_id)
+                if deck is None:
+                    raise HTTPException(404)
+                record, _ = await current_ready_analysis(db, deck, principal.id)
+                if record.id != values.analysis_id or record.source_format not in {"pdf", "pptx"}:
+                    raise HTTPException(409, "This source has no compatible live agent runtime.")
+                analysis = await request.app.state.candidate_analyses.read(db, record, principal.id)
+                source = AgentInput(
+                    analysis,
+                    session.active_slide_id or "",
+                    session.focus_view,
+                    "transition",
+                    Region.model_validate(session.focus_region) if session.focus_region else None,
+                )
+                target = values.target
+                if target.tool == "no_action":
+                    raise HTTPException(422, "No action cannot execute a transition.")
+                candidate = Candidate(
+                    kind=target.tool
+                    if target.tool in {"zoom_region", "highlight_region"}
+                    else "slide",
+                    slide_id=target.slide_id,
+                    action_id=target.action_id,
+                    reason="topic",
+                    score=0,
+                )
+                allowed, _ = options(source, (candidate,))
+                if target not in allowed:
+                    raise HTTPException(409, "The action is no longer eligible.")
+                return TransitionApproval(
+                    session_id=identifier,
+                    analysis_id=record.id,
+                    state_version=session.state_version,
+                    target=target,
+                )
+        except (TimeoutError, SQLAlchemyError, PersistenceError, OSError):
+            raise HTTPException(503, "Transition check unavailable; continue manually.") from None
+
     input_schema = AgentRequest.model_json_schema()
     # Manual bounded body receipt must still publish resolvable OpenAPI schemas.
     input_schema.pop("$defs", None)
@@ -405,27 +570,7 @@ def agent_router() -> APIRouter:
                             source.analysis, source.current, values.text, values.latest_utterance
                         )
                         targets, _ = options(source, candidates)
-                        neighbor = next(
-                            (c.slide_id for c in candidates if c.reason == "explicit_navigation"),
-                            None,
-                        )
-                        choice = next(
-                            (
-                                i
-                                for i, t in enumerate(targets)
-                                if t.slide_id == neighbor
-                                and t.tool in {"next_slide", "previous_slide"}
-                            ),
-                            0,
-                        )
-                        selection = Selection.model_validate(
-                            {
-                                "choice": f"c{choice}",
-                                "reason": "explicit" if choice else "stay",
-                                "confidence": 1.0,
-                                "evidence": [len(values.segments) - 1],
-                            }
-                        )
+                        selection = navigation_selection(targets, candidates, len(values.segments))
                     else:
                         # Reserve first: exhausted/fast clients cannot spend query quota.
                         await runtime.reserve(request.app.state.database)
@@ -448,39 +593,9 @@ def agent_router() -> APIRouter:
                             )
                         )
                         targets, descriptions = options(source, candidates)
-                        current_slide = next(
-                            s
-                            for s in candidate_slides(source.analysis)
-                            if s.slide_id == source.current
-                        )
                         phase = "selection"
                         selection = await runtime.provider.select(
-                            {
-                                "segments": [s.text for s in values.segments],
-                                "latest_segment": len(values.segments) - 1,
-                                "current_view": {
-                                    "slide": source.current,
-                                    "slide_number": next(
-                                        i + 1
-                                        for i, s in enumerate(candidate_slides(source.analysis))
-                                        if s.slide_id == source.current
-                                    ),
-                                    "slide_count": len(source.analysis.slides),
-                                    "focus": source.focus,
-                                    "summary": (current_slide.summary.text or "")[:1200],
-                                    "focused_purpose": next(
-                                        (
-                                            a.action.purpose
-                                            for a in current_slide.actions
-                                            if candidate_action_eligible(a)
-                                            and a.action.type == source.focus
-                                            and a.action.params.region == source.focus_region
-                                        ),
-                                        None,
-                                    ),
-                                },
-                                "options": descriptions,
-                            }
+                            decision_passage(source, values, descriptions)
                         )
                         decision_source = "model"
                     target = checked_selection(selection, targets, len(values.segments))
