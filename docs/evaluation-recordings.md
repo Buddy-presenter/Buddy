@@ -1,4 +1,27 @@
-# Preparing private evaluation recordings
+# Evaluation inputs and scripted app measurements
+
+The requester has authorized proceeding without human recordings. Scripted generated-input
+app measurements are the current validation path. Independent real-world calibration and
+holdout accuracy remain unmeasured; they do not block this authorized development work.
+The private recording preparation below is optional future evaluation work.
+
+Run the opt-in local measurement on interactive Windows with installed PowerPoint:
+
+```powershell
+python frontend/scripts/smoke_transition_policy.py --output replay-artifacts/scripted-live-new
+```
+
+It generates a PDF and PPTX, drives the actual PDF renderer/player and native Office
+policy adapter, checks completion, duplicate suppression and undo, and saves aggregate
+timings, player events and file-backed test states locally. No microphone is recorded
+and no provider is called. Eligibility HTTP and session transport are explicit local test
+substitutes; this does not replace the PostgreSQL/API integration checks in CI.
+Office animation timing remains unknown and is not reported as zero.
+
+Reports must retain `scope: scripted_live_players`, generated input provenance, substituted
+boundaries, and `independent_holdout: false`. Never mark them as consented human recordings
+or production model calibration. Use a new output directory for every run.
+
 
 Put private inputs in `tests/fixtures/replay/private/` (ignored by Git). Never commit
 recordings, transcripts, deck contents, consent documents or calibrated profiles.

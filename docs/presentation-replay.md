@@ -233,3 +233,22 @@ outside gates or lacks real policy evidence. It prints only aggregate failures. 
 instructions are in [evaluation recordings](evaluation-recordings.md). Independent calibration,
 permissioned holdout measurements and real Office acceptance remain outstanding until the
 operator supplies and runs those recordings; no recording results are bundled here.
+
+
+## Authorized scripted verification scope
+
+The requester has authorized continuing without human recordings or independent
+measurements. Generated-input live-player verification is the delivery acceptance
+scope; the separate consented holdout release gate remains available for future
+benchmarking and is not a required check for this authorized delivery. Do not relabel
+scripted traces as independent holdout evidence or relax calibrated model admission.
+
+`frontend/scripts/smoke_transition_policy.py` records actual PDF and Office policy
+completion events, local completion/undo timings and file-backed test-state writes.
+The speech input and eligibility/session transport are explicit test substitutes.
+The measured aggregate report is in `docs/verification/scripted-policy-2026-11-15.json`.
+The run found and verified a native preview/undo scheduling fix. Real Office manual
+navigation/annotation/reconnect also passed in wide and standard generated decks.
+No live provider/model accuracy, production backend admission or Office animation
+duration result is claimed by those scripted checks; backend contracts remain covered
+by current-head PostgreSQL CI. Private report/event artifacts stay in `replay-artifacts/`.
