@@ -13,7 +13,8 @@ Synthetic tests cover native admission, completion, persistence, undo and change
 source/partial/manual/disconnect rejection with Office substituted at its boundary.
 They do not establish actual Office behavior, animation timing or real-world accuracy.
 No permissioned recordings, measured production calibration or independent holdout
-results are supplied. Those acceptance requirements remain open; use
+results are supplied. The requester has authorized scripted app verification without human recordings.
+Independent calibration/holdout claims remain out of scope for this delivery; use
 [evaluation recording preparation](evaluation-recordings.md) to collect the inputs.
 
 ## Presenter controls
@@ -156,3 +157,25 @@ Trace recording/export is explicit evaluation work and must follow recording per
 
 Native Office acceptance must still separately verify the Windows interactive runtime, exact
 PPTX source/native slide identities, Office version and eligible typed actions on an interactive Office installation. Passing PDF or format-agnostic rule tests cannot stand in for it.
+
+
+## Scripted live-player verification
+
+`frontend/scripts/smoke_transition_policy.py` generates its own PDF/PPTX and uses the
+actual app policy, PDF rendering and Office execution/undo. It records measured completion
+latency and player events, with speech, eligibility HTTP and versioned session transport
+explicitly substituted locally. It never enables uncalibrated model movement. A live run
+also guards the native preview/undo race: undo retains its saved state and queues until
+Office work becomes idle. Manual intent invalidates a queued undo.
+
+Use `docs/evaluation-recordings.md` for the command and provenance rules. No independent
+real-world model accuracy or Office animation-duration claim follows from these checks.
+
+
+Measured generated-input sample (2026-11-15, Office 16.0.20527): PDF navigation/undo
+239/291 ms; PPTX navigation/undo 279/979 ms. Each is one local sample, not P95 or an
+accuracy benchmark. Both formats suppressed the duplicate decision and saved the
+observed state to the file-backed test transport. Real Office all-tool navigation,
+annotations, erase, reconnect and unchanged-source checks also passed on generated
+960x540 and 720x540 decks. Aggregate report:
+[scripted policy results](verification/scripted-policy-2026-11-15.json).

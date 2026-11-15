@@ -367,3 +367,43 @@ def test_native_policy_rechecks_delayed_admission(native_player, qtbot, monkeypa
     qtbot.waitUntil(lambda: not page.session_runner.busy and page._session_pending_state is None)
     assert not calls
     assert not any(s.active_slide_id == "slide-2" for s in persisted)
+
+
+@pytest.mark.parametrize("manual_override", [False, True])
+def test_native_undo_waits_for_preview_without_losing_saved_state(
+    native_player, qtbot, monkeypatch, manual_override
+):
+    page, proposal, _, persisted, _, calls, _ = native_player
+    page._agent_proposed(proposal)
+    qtbot.waitUntil(lambda: "next_slide" in calls and not page.powerpoint_runner.busy)
+    qtbot.waitUntil(lambda: not page.session_runner.busy and bool(persisted))
+    # This fixture suppresses normal preview dispatch. Restore the production idle
+    # handler for this regression and substitute only the external Office preview.
+    page._queued_powerpoint_preview = None
+    monkeypatch.setattr(page, "_powerpoint_idle", type(page)._powerpoint_idle.__get__(page))
+    monkeypatch.setattr(page.powerpoint, "preview", lambda _info: None)
+    entered, release = Event(), Event()
+
+    def preview():
+        entered.set()
+        assert release.wait(5)
+
+    page.powerpoint_runner.submit(preview)
+    qtbot.waitUntil(entered.is_set)
+    try:
+        page.policy_undo_button.click()
+        assert page._pending_native_undo and page._policy_undo is not None
+        assert not page.policy.enabled
+        if manual_override:
+            page._native_manual_intent()
+    finally:
+        release.set()
+    if manual_override:
+        qtbot.waitUntil(lambda: not page.powerpoint_runner.busy and not page.session_runner.busy)
+        assert calls == ["next_slide"]
+    else:
+        qtbot.waitUntil(lambda: not page.powerpoint_runner.busy and "reset_zoom" in calls)
+        qtbot.waitUntil(
+            lambda: not page.session_runner.busy and persisted[-1].active_slide_id == "slide-1"
+        )
+    assert not page._pending_native_undo and page._policy_undo is None

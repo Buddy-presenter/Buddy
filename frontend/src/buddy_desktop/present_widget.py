@@ -226,6 +226,7 @@ class PresentWidget(Page):
         self._policy_before: SessionState | None = None
         self._policy_undo: tuple[str, str, SessionState] | None = None
         self._policy_undo_restoring = False
+        self._pending_native_undo = False
         self._accepted_action_id: str | None = None
         self._agent_session_id: str | None = None
         self._context_connected = False
@@ -903,6 +904,7 @@ class PresentWidget(Page):
         )
 
     def _native_manual_intent(self) -> None:
+        self._pending_native_undo = False
         if not hasattr(self, "policy"):
             return
         self._native_guard.clear()
@@ -1386,6 +1388,18 @@ class PresentWidget(Page):
 
     @Slot()
     def _undo_policy_move(self) -> None:
+        if (
+            self._powerpoint_binding is not None
+            and self._native_present is not None
+            and self.powerpoint_runner.busy
+            and self._policy_undo is not None
+        ):
+            # Preview/status work may still be finishing after a successful move.
+            # Keep the saved state until the native worker can actually restore it.
+            self._pending_native_undo = True
+            self.policy_enabled.setChecked(False)
+            return
+        self._pending_native_undo = False
         undo, self._policy_undo = self._policy_undo, None
         self.policy_undo_button.setEnabled(False)
         self.policy_enabled.setChecked(False)
@@ -2219,6 +2233,9 @@ class PresentWidget(Page):
     @Slot()
     def _powerpoint_idle(self) -> None:
         if self._closing or self.powerpoint_runner.busy:
+            return
+        if self._pending_native_undo:
+            self._undo_policy_move()
             return
         if self._queued_powerpoint_operation is not None:
             operation, path = self._queued_powerpoint_operation
