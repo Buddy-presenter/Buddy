@@ -547,7 +547,9 @@ class PresentWidget(Page):
         self.generated_reload.clicked.connect(lambda: self._load_generated(None))
         self.generated_apply = QPushButton("Apply saved action")
         self.generated_apply.setAccessibleName("Apply selected saved action")
-        self.generated_apply.setToolTip("Apply the selected validated action to the current presentation")
+        self.generated_apply.setToolTip(
+            "Apply the selected validated action to the current presentation"
+        )
         self.generated_apply.clicked.connect(self._apply_generated)
         self.generated_actions.currentIndexChanged.connect(lambda _: self._refresh_generated())
         generated_row.addWidget(self.generated_reload)
