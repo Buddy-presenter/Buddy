@@ -35,7 +35,7 @@ from buddy_api.presentation_agent import (
     navigation_selection,
     options,
 )
-from buddy_api.presentation_candidates import Candidate, navigation_step, resolve
+from buddy_api.presentation_candidates import Candidate, navigation_intent, resolve
 
 MAX_FILE_BYTES = 8 * 1024 * 1024
 TAGS = {"hesitation", "digression", "return", "silence", "ambiguity", "asr_error"}
@@ -267,7 +267,7 @@ async def replay(corpus: Corpus, digest: str, live: LiveProvider | None = None) 
             usage_complete = True
             if frame.request is not None:
                 values = frame.request
-                if navigation_step(values.latest_utterance) is not None:
+                if navigation_intent(values.latest_utterance) is not None:
                     # Production fast path always uses the authoritative lexical neighbors.
                     candidates = resolve(
                         session.analysis, frame.current, values.text, values.latest_utterance
@@ -373,7 +373,7 @@ def score(
     for key, observation in observations.items():
         session, frame = frames[key]
         source, candidates = frame_options(session, frame)
-        if frame.request and navigation_step(frame.request.latest_utterance) is not None:
+        if frame.request and navigation_intent(frame.request.latest_utterance) is not None:
             candidates = resolve(
                 session.analysis, frame.current, frame.request.text, frame.request.latest_utterance
             )
@@ -495,7 +495,7 @@ async def run_live(corpus: Corpus, digest: str, max_calls: int) -> Trace:
     if not 1 <= max_calls <= 1000:
         raise ValueError("Live request limit must be between 1 and 1000")
     calls = sum(
-        f.request is not None and navigation_step(f.request.latest_utterance) is None
+        f.request is not None and navigation_intent(f.request.latest_utterance) is None
         for s in corpus.sessions
         for f in s.frames
     )

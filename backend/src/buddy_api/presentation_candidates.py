@@ -220,6 +220,100 @@ def navigation_step(text: str) -> int | None:
     return None
 
 
+def _spoken_slide_number(tokens_: list[str]) -> int | None:
+    """Parse English cardinals from 0 through 999 without guessing malformed speech."""
+    if len(tokens_) == 1 and re.fullmatch(r"[+-]?\d+", tokens_[0]):
+        digits = tokens_[0].lstrip("+-")
+        return int(tokens_[0]) if len(digits) <= 9 else None
+
+    small = {
+        "zero": 0,
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+        "eleven": 11,
+        "twelve": 12,
+        "thirteen": 13,
+        "fourteen": 14,
+        "fifteen": 15,
+        "sixteen": 16,
+        "seventeen": 17,
+        "eighteen": 18,
+        "nineteen": 19,
+    }
+    tens = {
+        "twenty": 20,
+        "thirty": 30,
+        "forty": 40,
+        "fifty": 50,
+        "sixty": 60,
+        "seventy": 70,
+        "eighty": 80,
+        "ninety": 90,
+    }
+
+    def under_hundred(parts: list[str]) -> int | None:
+        if len(parts) == 1:
+            return small.get(parts[0], tens.get(parts[0]))
+        if len(parts) == 2 and parts[0] in tens and parts[1] in small:
+            unit = small[parts[1]]
+            return tens[parts[0]] + unit if 1 <= unit <= 9 else None
+        return None
+
+    if "hundred" not in tokens_:
+        return under_hundred(tokens_)
+    if tokens_.count("hundred") != 1 or not tokens_ or tokens_[0] not in small:
+        return None
+    hundreds = small[tokens_[0]]
+    if not 1 <= hundreds <= 9 or tokens_[1] != "hundred":
+        return None
+    remainder = tokens_[2:]
+    if remainder[:1] == ["and"]:
+        remainder = remainder[1:]
+    if not remainder:
+        return hundreds * 100
+    value = under_hundred(remainder)
+    return hundreds * 100 + value if value is not None and value > 0 else None
+
+
+def navigation_intent(text: str) -> tuple[Literal["relative", "absolute"], int] | None:
+    """Recognize exact English slide commands; ambiguous speech stays semantic."""
+    text = unicodedata.normalize("NFKC", text).casefold().strip()
+    text = re.sub(r"\blet['’]s\b", "let us", text)
+    if any(c in text for c in "?？\"'“”‘’«»"):
+        return None
+    step = navigation_step(text)
+    if step is not None:
+        return ("relative", step)
+
+    # Keep a numeric sign attached until it has been validated. Stripping `-`
+    # first would turn an invalid negative destination into a positive slide jump.
+    words = re.findall(r"[+-]?\d+|[^\W\d_]+", text)
+    normalized = " ".join(words)
+    prefixes = (
+        r"(?:please )?(?:let us )?(?:go|move|jump|navigate|switch|turn) "
+        r"(?:to|over to) (?:the )?(?:slide|page) (?:number )?",
+        r"(?:please )?show (?:me )?(?:the )?(?:slide|page) (?:number )?",
+        r"(?:please )?take me to (?:the )?(?:slide|page) (?:number )?",
+        r"(?:please )?i want to (?:go|move|jump) to (?:the )?(?:slide|page) (?:number )?",
+    )
+    for prefix in prefixes:
+        match = re.fullmatch(prefix + r"(.+?)(?: please)?", normalized)
+        if match is not None:
+            number_words = match[1].split()
+            number = _spoken_slide_number(number_words)
+            if number is not None:
+                return ("absolute", number)
+    return None
+
+
 def resolve(
     analysis: AnalysisResult | PowerPointAnalysisResult,
     current: str,
@@ -237,7 +331,21 @@ def resolve(
     ]
     query = tokens(text)
     # Commands are whole utterances, not substrings in slide discussion or negation.
-    step = navigation_step(latest_utterance if latest_utterance is not None else text)
+    intent = navigation_intent(latest_utterance if latest_utterance is not None else text)
+    if intent is not None and intent[0] == "absolute":
+        requested = intent[1] - 1
+        if 0 <= requested < len(slides) and requested != position:
+            result.append(
+                Candidate(
+                    kind="slide",
+                    slide_id=identifiers[requested],
+                    reason="explicit_navigation",
+                    score=0,
+                )
+            )
+        # A recognized numbered command must never fall through to topic matching.
+        return tuple(result)
+    step = intent[1] if intent is not None else None
     target = position + (step or 0)
     if 0 <= target < len(slides) and target != position:
         result.append(

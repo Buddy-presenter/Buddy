@@ -334,7 +334,7 @@ def test_replay_uses_format_specific_production_navigation(sample, source_format
     else:
         parsed = corpus
     # Keep only navigation and silence: their requests never need recorded model replies.
-    from buddy_api.presentation_candidates import navigation_step
+    from buddy_api.presentation_candidates import navigation_intent
 
     sessions = tuple(
         s.model_copy(
@@ -342,7 +342,8 @@ def test_replay_uses_format_specific_production_navigation(sample, source_format
                 "frames": tuple(
                     f
                     for f in s.frames
-                    if f.request is None or navigation_step(f.request.latest_utterance) is not None
+                    if f.request is None
+                    or navigation_intent(f.request.latest_utterance) is not None
                 )
             }
         )

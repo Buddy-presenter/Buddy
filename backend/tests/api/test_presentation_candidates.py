@@ -374,6 +374,47 @@ def test_relative_navigation_requires_a_complete_unambiguous_instruction(utteran
     assert navigation_step(utterance) == step
 
 
+@pytest.mark.parametrize(
+    "utterance,expected",
+    [
+        ("Go to slide 8.", ("absolute", 8)),
+        ("Go to slide -8.", ("absolute", -8)),
+        ("Go to slide 500.", ("absolute", 500)),
+        ("Go to slide five hundred.", ("absolute", 500)),
+        ("Please go to slide twenty-one.", ("absolute", 21)),
+        ("Let's jump to page one hundred and twenty-five.", ("absolute", 125)),
+        ("Show me slide 3", ("absolute", 3)),
+        ("Take me to the slide number 42, please.", ("absolute", 42)),
+        ("I want to go to slide six.", ("absolute", 6)),
+        ("Let's go to the next slide.", ("relative", 1)),
+        ("Should I go to slide 8?", None),
+        ('She said "go to slide 8".', None),
+        ("Do not go to slide 8.", None),
+        ("If we go to slide 8, we lose context.", None),
+        ("Go to slide eight after the chart.", None),
+        ("Slide 8 explains the results.", None),
+    ],
+)
+def test_navigation_intent_accepts_exact_numbered_commands_only(utterance, expected):
+    from buddy_api.presentation_candidates import navigation_intent
+
+    assert navigation_intent(utterance) == expected
+
+
+def test_numbered_navigation_targets_the_exact_slide_and_invalid_number_does_not_topic_match():
+    deck = analysis("market overview", "revenue", "security", "pricing")
+    target = resolve(deck, "slide-0", "Go to slide four.")
+    assert [(c.slide_id, c.reason) for c in target if c.reason == "explicit_navigation"] == [
+        ("slide-3", "explicit_navigation")
+    ]
+    invalid = resolve(deck, "slide-0", "Go to slide 99.")
+    assert {c.slide_id for c in invalid} == {"slide-0"}
+    negative = resolve(deck, "slide-0", "Go to slide -8.")
+    assert {c.slide_id for c in negative} == {"slide-0"}
+    current = resolve(deck, "slide-1", "Show me slide 2")
+    assert not any(c.reason == "explicit_navigation" for c in current)
+
+
 @pytest.mark.parametrize("latest", ["", "   ", "x" * 4097, "different utterance"])
 def test_latest_utterance_contract_is_bounded_and_part_of_context(latest):
     with pytest.raises(ValueError):

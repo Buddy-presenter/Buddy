@@ -179,12 +179,16 @@ after their last recorded call during upgrade; inactive keys are unaffected. Use
 existing compatibility-bridge/worker rollout for the new schema head, not a live schema
 downgrade. No cloud deployment is performed by this change.
 
-The relative-command path accepts complete instructions such as “Let's go to the next
-slide” and “Move forward by one page”; quoted, negated, conditional and question forms
-stay on the semantic path. It always derives exactly one neighbor from persisted state,
-including no action at boundaries. Other natural phrasing and content-driven matching
-still use semantic retrieval and the model. The model receives the current page number
-and deck size and is instructed to prioritize the latest navigation intent over old topics.
+The deterministic navigation path accepts complete next/previous instructions and
+numbered destinations such as “go to slide 8”, “show me page twenty-one” and “take me to
+slide 125”. It supports every numbered destination within Buddy's 500-slide deck limit,
+using digits or English cardinal words. Numbered commands outside the deck or for the
+current slide safely propose no action; they never fall through to a potentially unrelated
+semantic match. Quoted, negated, conditional, question and embedded-command forms are not
+treated as navigation. Exact navigation commands bypass embedding and chat provider calls.
+Other natural phrasing and content-driven matching still use semantic retrieval and the
+model. The model receives the current page number and deck size and is instructed to
+prioritize the latest navigation intent over old topics.
 
 ## Privacy and decision traces
 
