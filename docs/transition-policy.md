@@ -82,7 +82,10 @@ session writes detect/reconcile that conflict. No distributed execution lease is
 
 ## Calibration and independent evaluation
 
-Prepare permissioned, independently labelled **development** observations:
+Prepare permissioned, independently labelled **development** observations. Include only
+actionable model proposals; abstentions and deterministic navigation must not inflate the
+model-action precision counts. `correct` means the complete target matches an independent
+reference, not that the provider or executor reported success:
 
 ```json
 {
@@ -105,7 +108,7 @@ The example is a schema illustration, not a usable calibration. Choose the thres
 development data, then freeze the output **before** independent holdout evaluation:
 
 ```sh
-python -m buddy_desktop.transition_calibration private/development.json --threshold 0.90 --output private/policy-profile-v1.json
+python -m buddy_desktop.transition_calibration policy-artifacts/development.json --threshold 0.90 --output policy-artifacts/policy-profile-v1.json
 ```
 
 The command refuses holdout input, malformed/duplicate observations and overwrites. It
@@ -122,7 +125,8 @@ thresholds on holdout failures. Changed models, prompts, retrieval, eligibility 
 settings require a new development calibration and independent holdout run; this version
 does not attest or automatically detect every upstream prompt change.
 
-Keep input recordings, profiles and output outside Git. Follow #25's consent, cloud
+Keep input recordings, profiles and output outside Git; `policy-artifacts/` is ignored.
+Follow #25's consent, cloud
 processing, restricted access, withdrawal and retention rules. Consent references and
 `consented` flags are operator assertions; they are not proof of consent. Expiration blocks
 use but does not delete source recordings or backups. No paid calls or recording collection
