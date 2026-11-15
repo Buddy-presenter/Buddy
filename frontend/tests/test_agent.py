@@ -215,11 +215,13 @@ def test_loop_coalesces_and_invalidates_corrections_manual_changes_and_disable(q
         current[0] = replace(current[0], segments=(replace(context.segments[0], final=False),))
         clock[0] += 4
         loop.update("token", session, current[0])
-        assert len(service.calls) == 2
+        qtbot.waitUntil(lambda: not loop.runner.busy)
+        assert len(service.calls) == 3  # New epoch admitted immediately; partial was not sent.
+        assert received[-1] is None  # Its now-obsolete completed result was discarded.
         loop.set_enabled(False)
         assert loop._current is None and loop._submitted is None
         loop.update("token", session, context)
-        assert len(service.calls) == 2
+        assert len(service.calls) == 3
     finally:
         service.release.set()
         loop.wait_for_shutdown()
@@ -359,5 +361,37 @@ def test_unspent_admission_is_deferred_without_losing_latest_input(
             clock[0] += 10
             loop.update("token", session, context)
             assert len(service.calls) == 3  # At most two unspent admission retries.
+    finally:
+        loop.wait_for_shutdown()
+
+
+def test_new_command_does_not_inherit_previous_input_pacing(qtbot, monkeypatch):
+    session, context = inputs()
+    monkeypatch.setattr("buddy_desktop.agent_loop.time.monotonic", lambda: 100.0)
+
+    class Paced(Service):
+        def propose(self, access, session, snapshot, *, current_context):
+            self.calls.append(snapshot)
+            return {"reason": "paced", "retry_after_ms": 3200}
+
+    service = Paced()
+    loop = AgentLoop(service)
+    loop._prepared_for = session.id
+    loop.set_enabled(True)
+    try:
+        loop.update("token", session, context)
+        qtbot.waitUntil(lambda: not loop.runner.busy)
+        loop.update("token", session, context)
+        assert len(service.calls) == 1
+        command = replace(
+            context,
+            segments=(
+                replace(context.segments[0], sequence=2, text="Let's go to the next slide."),
+            ),
+        )
+        loop.update("token", session, command)
+        qtbot.waitUntil(lambda: not loop.runner.busy)
+        assert len(service.calls) == 2
+        assert service.calls[-1].segments[-1].text == "Let's go to the next slide."
     finally:
         loop.wait_for_shutdown()

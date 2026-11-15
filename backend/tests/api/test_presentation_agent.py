@@ -240,6 +240,41 @@ def test_exact_navigation_boundary_does_not_spend_provider_allowance(agent_api, 
     assert phrase not in json.dumps(traces)
 
 
+@pytest.mark.postgres
+@pytest.mark.parametrize(
+    "phrase", ["Let's go to the next slide.", "Let’s move forward by one page."]
+)
+def test_natural_relative_command_overrides_prior_topic_and_exhausted_quota(agent_api, phrase):
+    client, ids, provider = agent_api
+    runtime = client.app.state.presentation_agent
+
+    async def exhaust():
+        await runtime.reserve(client.app.state.database)
+        async with client.app.state.database.sessions() as db, db.begin():
+            row = await db.scalar(select(AgentQuota))
+            row.calls = runtime.settings.monthly_limit
+
+    client.portal.call(exhaust)
+    text = "Earlier we discussed a distant slide about pricing. " + phrase
+    reply = client.post(
+        f"/api/v1/sessions/{ids['sessions']}/agent",
+        headers={"Authorization": "Bearer owner"},
+        json=payload(
+            text=text,
+            latest_utterance=phrase,
+            sequence=2,
+            segments=[
+                {"sequence": 1, "text": "Earlier we discussed a distant slide about pricing."},
+                {"sequence": 2, "text": phrase},
+            ],
+        ),
+    )
+    assert reply.status_code == 200, reply.text
+    assert reply.json()["target"]["tool"] == "next_slide"
+    assert reply.json()["decision_source"] == "navigation"
+    assert not provider.calls
+
+
 @pytest.mark.parametrize(
     "choice,evidence,reason",
     [

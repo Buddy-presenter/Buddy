@@ -89,6 +89,10 @@ class AgentLoop(QObject):
             # not another long-lived copy of private transcript text.
             tuple((s.segment_id, s.sequence) for s in context.segments),
         )
+        if revision != self._deferred_revision:
+            # A server wait applies to that input, not a new command. The API
+            # enforces the shared model budget; free navigation must not wait.
+            self._not_before = float("-inf")
         if (
             self.runner.busy
             or revision == self._last_revision
@@ -96,7 +100,7 @@ class AgentLoop(QObject):
         ):
             return
         self._last_revision, self._submitted = revision, context
-        self._not_before, self._request_generation = time.monotonic() + 3.2, self._generation
+        self._request_generation = self._generation
         self.status.emit("Considering your latest speech…")
 
         def current() -> ContextSnapshot:

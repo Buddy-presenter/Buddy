@@ -167,14 +167,29 @@ def tokens(text: str) -> frozenset[str]:
 
 
 def navigation_step(text: str) -> int | None:
-    """Only complete explicit commands, including when the deck has no neighbor."""
-    normalized = " ".join(re.findall(r"[^\W_]+", unicodedata.normalize("NFKC", text).casefold()))
-    return {
-        "next slide": 1,
-        "please go to the next slide": 1,
-        "previous slide": -1,
-        "please go to the previous slide": -1,
-    }.get(normalized)
+    """Whole, unambiguous relative commands; other speech stays on the semantic path."""
+    text = unicodedata.normalize("NFKC", text).casefold().strip()
+    # Keep questions/quoted examples out of the fast path. Apostrophes are allowed
+    # only in the contraction below; stripping punctuation first loses this intent.
+    text = re.sub(r"\blet['’]s\b", "let us", text)
+    if any(c in text for c in "?？\"'“”‘’«»"):
+        return None
+    normalized = " ".join(re.findall(r"[^\W_]+", text))
+    direct = re.fullmatch(
+        r"(?:please )?(?:let us )?(?:(?:go|move|switch|advance) to (?:the )?)?"
+        r"(next|previous) (?:slide|page)(?: please)?",
+        normalized,
+    )
+    if direct:
+        return 1 if direct[1] == "next" else -1
+    relative = re.fullmatch(
+        r"(?:please )?(?:let us )?(?:go|move) (forward|back|backward) "
+        r"(?:by )?one (?:slide|page)(?: please)?",
+        normalized,
+    )
+    if relative:
+        return 1 if relative[1] == "forward" else -1
+    return None
 
 
 def resolve(

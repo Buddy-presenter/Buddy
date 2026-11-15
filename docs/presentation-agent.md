@@ -104,8 +104,11 @@ work 4.5 seconds, and native HTTP six seconds; stale capture still wins over a s
 otherwise valid result. Embeddings retain their own bounded adapter and allowance.
 
 The Qt scheduler runs off the GUI thread, with one in-flight operation, newest-only
-coalescing, no queue of old transcripts, no fixed post-final wait, and at least 3.2
-seconds between admitted attempts. Unspent admission deferrals follow the server wait.
+coalescing, no queue of old transcripts and no fixed post-final wait. The server spaces
+model attempts at least 3.2 seconds apart for the trial Chat rate limit; this is an
+admission interval, not an added delay after every request. Unspent admission deferrals
+follow the server wait for that revision only. New completed speech can be checked
+immediately, so a navigation command does not inherit an earlier model admission wait.
 New completed revisions can trigger requests; the same
 revision is not automatically retried after a provider failure. A `paced` response
 includes bounded `retry_after_ms`: since no provider attempt was spent, the latest
@@ -116,7 +119,7 @@ stays off the GUI thread; shutdown waits for bounded work after the event loop e
 
 An atomic PostgreSQL row per API-key hash shares the 100-attempt monthly cap and
 3.2-second pacing across API replicas/restarts. The DB clock sets UTC month boundaries.
-Exact whole-utterance next/previous commands reuse the validated deterministic path,
+Unambiguous whole-utterance next/previous commands reuse the validated deterministic path,
 including no action at deck boundaries, without spending Chat/embedding allowance.
 Other admission reserves before embeddings too, so an exhausted or rapid caller cannot spend
 query allowance. Failed admitted attempts count conservatively, even if Chat is never
@@ -124,6 +127,18 @@ reached. At most one decision per owner and sixteen owners are in flight per pro
 The 750 embedding plus 100 agent caps leave a buffer below the documented 1000-call
 trial allowance; outside key use and disposable diagnostic schemas are not counted by
 this database. This is a development allowance, not unlimited presentation time.
+The 100-attempt agent allocation is Buddy's conservative trial safeguard, not Cohere's
+own monthly Chat cap. At the maximum admission cadence it lasts only about five minutes;
+these development settings are not adequate for sustained production presentations.
+Higher production allowances and throughput need the corresponding provider plan and
+an explicit application budget change, not simply removal of the trial safeguards.
+
+The relative-command path accepts complete instructions such as “Let's go to the next
+slide” and “Move forward by one page”; quoted, negated, conditional and question forms
+stay on the semantic path. It always derives exactly one neighbor from persisted state,
+including no action at boundaries. Other natural phrasing and content-driven matching
+still use semantic retrieval and the model. The model receives the current page number
+and deck size and is instructed to prioritize the latest navigation intent over old topics.
 
 ## Privacy and decision traces
 

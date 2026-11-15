@@ -433,6 +433,12 @@ def agent_router() -> APIRouter:
                                 "latest_segment": len(values.segments) - 1,
                                 "current_view": {
                                     "slide": source.current,
+                                    "slide_number": next(
+                                        i + 1
+                                        for i, s in enumerate(source.analysis.slides)
+                                        if s.slide_id == source.current
+                                    ),
+                                    "slide_count": len(source.analysis.slides),
                                     "focus": source.focus,
                                     "summary": (current_slide.summary.text or "")[:1200],
                                     "focused_purpose": next(

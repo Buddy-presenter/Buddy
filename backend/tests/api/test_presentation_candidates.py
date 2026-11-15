@@ -283,6 +283,31 @@ def test_latest_utterance_keeps_negation_and_embedded_command_guards(utterance):
     assert not any(c.reason == "explicit_navigation" for c in result)
 
 
+@pytest.mark.parametrize(
+    "utterance,step",
+    [
+        ("Let's go to the next slide.", 1),
+        ("Let’s move to the previous page, please.", -1),
+        ("Please switch to the next page.", 1),
+        ("Let us move forward by one page.", 1),
+        ("Go back one slide.", -1),
+        ("Do not go to the next slide.", None),
+        ("Should we go to the next slide?", None),
+        ('He said "next slide".', None),
+        ("“Next slide”", None),
+        ("'next slide'", None),
+        ("Next slide?", None),
+        ("If we go to the next slide, we lose context.", None),
+        ("Let's go to the next slide. Actually, stay here.", None),
+        ("The next slide describes refunds.", None),
+    ],
+)
+def test_relative_navigation_requires_a_complete_unambiguous_instruction(utterance, step):
+    from buddy_api.presentation_candidates import navigation_step
+
+    assert navigation_step(utterance) == step
+
+
 @pytest.mark.parametrize("latest", ["", "   ", "x" * 4097, "different utterance"])
 def test_latest_utterance_contract_is_bounded_and_part_of_context(latest):
     with pytest.raises(ValueError):
