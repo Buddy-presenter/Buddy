@@ -28,6 +28,7 @@ from buddy_desktop.config import AppConfig
 from buddy_desktop.library_service import LibraryAccessExpired
 from buddy_desktop.pdf_document import render
 from buddy_desktop.powerpoint_review import PowerPointReviewSession
+from buddy_desktop.powerpoint_session_binding import PowerPointSessionBinding
 from buddy_desktop.review_service import (
     ReviewAction,
     ReviewAnalysis,
@@ -857,11 +858,13 @@ class ReviewWidget(Page):
             self.runner.busy
             or self.closing
             or not self.token()
-            or binding is None
+            or not isinstance(binding, PowerPointSessionBinding)
             or self.analysis is None
             or self.analysis.publication != "published"
             or binding.analysis_id != str(self.analysis.id)
             or binding.deck_id != str(self.deck_id)
+            or binding.source_revision != self.analysis.source_revision
+            or binding.source_sha256 != self.analysis.source_sha256
         ):
             return
         self.powerpoint_present_requested.emit(binding)
