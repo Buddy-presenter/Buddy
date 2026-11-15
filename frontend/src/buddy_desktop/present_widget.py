@@ -809,7 +809,18 @@ class PresentWidget(Page):
         self.policy_enabled.setEnabled(available and self.agent_enabled.isChecked())
         if not available or not self.agent_enabled.isChecked():
             self.policy_enabled.setChecked(False)
-        self.agent.update(self._session_access, session, self.transcript_context.snapshot())
+        # A new local view can exist before its saved version is acknowledged.
+        # Do not query the agent against the previous server view in that gap.
+        syncing = (
+            self.executor.busy
+            or self._session_pending_state is not None
+            or self._session_restore_state is not None
+        )
+        self.agent.update(
+            self._session_access, None if syncing else session, self.transcript_context.snapshot()
+        )
+        if syncing and self.agent.enabled:
+            self.agent.status.emit("Syncing presentation position; waiting for fresh speech…")
 
     @Slot(bool)
     def _suggestions_toggled(self, enabled: bool) -> None:

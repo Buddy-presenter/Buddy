@@ -197,6 +197,27 @@ provider responses, evidence text, secret keys, action coordinates or exception 
 are logged. Evidence indexes/confidence live in the no-store response, not ordinary logs.
 Failures return safe finite status/reason codes; they do not cause slide movement.
 
+## Recoverable conflicts
+
+The player does not submit new suggestions while local navigation, saved-position
+synchronization or view restoration is pending. Manual controls remain available and
+the suggestion opt-in is preserved. After acknowledgement, the changed state version
+invalidates old speech; only fresh completed speech can trigger another request.
+
+HTTP 409 is a freshness/session conflict, not a provider failure. The native client
+shows recovery guidance and does not replay the rejected speech or turn off manual
+controls. Agent conflicts add a finite `X-Buddy-Agent-Conflict` response header:
+`clock_ahead`, `speech_expired`, `session_changed`, `analysis_changed`, or
+`presentation_unavailable`. The body retains the normal redacted error contract.
+Unknown/missing headers receive generic guidance, never raw server text.
+
+The `presentation_agent_conflict` log contains only the finite reason and generated
+request ID. Match the response's `X-Request-ID` to that log when investigating repeats.
+A future timestamp needs a computer-clock check; expired speech can indicate transit
+delay or a slow client clock. Changed analysis requires reopening the analyzed
+presentation. Timestamp/version checks remain enforced. The original screenshot alone
+does not establish which condition rejected that user's request.
+
 ## Verification
 
 See [presentation replay evaluation](presentation-replay.md) for deterministic corpus

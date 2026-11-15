@@ -6,6 +6,7 @@ import time
 from dataclasses import replace
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -395,3 +396,90 @@ def test_new_command_does_not_inherit_previous_input_pacing(qtbot, monkeypatch):
         assert service.calls[-1].segments[-1].text == "Let's go to the next slide."
     finally:
         loop.wait_for_shutdown()
+
+
+def test_player_waits_for_saved_position_before_querying_new_speech(
+    desktop_window, qtbot, monkeypatch
+):
+    window = desktop_window()
+    page = window.present
+    page.load_manifest(Path(__file__).parent / "fixtures/slide_actions/manifest.json")
+    qtbot.waitUntil(lambda: not page.executor.busy)
+    session, context = inputs()
+    page._session = session
+    page._session_access = "test-token"
+    page._agent_session_id = session.id
+    page.agent._prepared_for = session.id
+
+    class StayingService(Service):
+        def propose(self, access, session, context, *, current_context):
+            super().propose(access, session, context, current_context=current_context)
+            return {"target": {"tool": "no_action", "slide_id": "slide"}, "reason": "stay"}
+
+    service = StayingService()
+    service.release.set()
+    page.agent.service = service
+    current = [context]
+    monkeypatch.setattr(page.transcript_context, "snapshot", lambda: current[0])
+    page.agent.current_context = lambda: current[0]
+    monkeypatch.setattr(page.session_events, "bind", lambda *args: None)
+    page.agent_enabled.setChecked(True)
+    # The visible view has changed but its save still uses the older version.
+    page._session_pending_state = SessionState("next-slide")
+    page._update_agent()
+    assert not service.calls and not page.agent.runner.busy
+    assert page.agent_enabled.isChecked()  # Opt-in survives the normal sync gap.
+    page._session_restore_state = SessionState("next-slide")
+    page._session_pending_state = None
+    page._update_agent()
+    assert not service.calls
+    # Acknowledgement changes the context version. Only new speech is eligible.
+    page._session_restore_state = None
+    page._session = replace(session, state_version=4)
+    current[0] = replace(context, state_version=4, epoch=2, fresh=False)
+    page._update_agent()
+    assert not service.calls
+    current[0] = replace(
+        current[0], fresh=True, segments=(replace(context.segments[0], sequence=2),)
+    )
+    page._update_agent()
+    qtbot.waitUntil(lambda: not page.agent.runner.busy)
+    assert len(service.calls) == 1 and service.calls[0].state_version == 4
+
+
+@pytest.mark.parametrize(
+    "reason,expected",
+    [
+        ("session_changed", "Waiting for fresh speech"),
+        ("clock_ahead", "date and time"),
+        ("speech_expired", "arrived too late"),
+        ("analysis_changed", "Reopen it from Library"),
+        ("untrusted-private-text", "Waiting for fresh speech"),
+    ],
+)
+def test_conflict_feedback_is_recoverable_and_only_uses_finite_headers(reason, expected):
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(409)
+            self.send_header("X-Buddy-Agent-Conflict", reason)
+            self.end_headers()
+            self.wfile.write(b'{"error":{"message":"private response content"}}')
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        session, context = inputs()
+        service = AgentService(AppConfig(f"http://127.0.0.1:{server.server_port}"))
+        with pytest.raises(ServiceError) as error:
+            service.propose("test-token", session, context, current_context=lambda: context)
+        assert expected in str(error.value)
+        assert "private" not in str(error.value) and "untrusted" not in str(error.value)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()

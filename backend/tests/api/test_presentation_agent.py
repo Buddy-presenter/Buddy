@@ -634,3 +634,67 @@ def test_actual_provider_rate_limit_blocks_new_speech_across_instances(agent_api
         await runtime.reserve(database)
 
     client.portal.call(check)
+
+
+@pytest.mark.postgres
+@pytest.mark.parametrize("kind", ["clock_ahead", "speech_expired", "session_changed"])
+def test_conflicts_have_finite_private_diagnostics_without_calling_provider(
+    agent_api, capsys, kind
+):
+    client, ids, provider = agent_api
+    changes = (
+        {"expected_state_version": 0}
+        if kind == "session_changed"
+        else {
+            "sent_at": (
+                datetime.now(UTC) + timedelta(seconds=10 if kind == "clock_ahead" else -10)
+            ).isoformat()
+        }
+    )
+    reply = client.post(
+        f"/api/v1/sessions/{ids['sessions']}/agent",
+        headers={"Authorization": "Bearer owner"},
+        json=payload(**changes),
+    )
+    assert reply.status_code == 409
+    assert reply.headers["X-Buddy-Agent-Conflict"] == kind
+    traces = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith('{"event":"presentation_agent_conflict"')
+    ]
+    assert traces == [
+        {
+            "event": "presentation_agent_conflict",
+            "reason": kind,
+            "request_id": reply.headers["X-Request-ID"],
+        }
+    ]
+    assert "private speech" not in json.dumps(traces)
+    assert not provider.calls
+
+
+@pytest.mark.postgres
+@pytest.mark.parametrize("kind", ["analysis_changed", "presentation_unavailable"])
+def test_analysis_conflicts_are_diagnosable_without_exposing_internal_detail(
+    agent_api, monkeypatch, kind
+):
+    from starlette.exceptions import HTTPException
+
+    client, ids, provider = agent_api
+
+    async def changed(*args):
+        if kind == "presentation_unavailable":
+            raise HTTPException(409, "private internal data")
+        return SimpleNamespace(id=uuid4()), ()
+
+    monkeypatch.setattr("buddy_api.presentation_agent.current_ready_analysis", changed)
+    reply = client.post(
+        f"/api/v1/sessions/{ids['sessions']}/agent",
+        headers={"Authorization": "Bearer owner"},
+        json=payload(),
+    )
+    assert reply.status_code == 409
+    assert reply.headers["X-Buddy-Agent-Conflict"] == kind
+    assert "private internal" not in reply.text
+    assert not provider.calls

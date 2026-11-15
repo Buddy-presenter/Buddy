@@ -169,6 +169,35 @@ class AgentInput:
     focus_region: Region | None = None
 
 
+def agent_conflict(
+    request: Request,
+    code: Literal[
+        "clock_ahead",
+        "speech_expired",
+        "session_changed",
+        "analysis_changed",
+        "presentation_unavailable",
+    ],
+) -> HTTPException:
+    # Only server-selected finite reasons and the generated request id. Never
+    # include the rejected speech, session identity, provider reply or token.
+    trace = {
+        "event": "presentation_agent_conflict",
+        "request_id": request.state.request_id,
+        "reason": code,
+    }
+    try:
+        sys.stdout.write(json.dumps(trace, separators=(",", ":")) + "\n")
+        sys.stdout.flush()
+    except OSError:
+        pass
+    return HTTPException(
+        409,
+        "Agent input conflicts with the current presentation.",
+        headers={"X-Buddy-Agent-Conflict": code},
+    )
+
+
 async def read_input(
     request: Request, principal: Principal, identifier: UUID, values: AgentRequest
 ) -> AgentInput:
@@ -177,14 +206,24 @@ async def read_input(
         await db.connection(execution_options={"isolation_level": "REPEATABLE READ"})
         session = await owned_session(db, principal, identifier)
         if session.status != "active" or session.state_version != values.expected_state_version:
-            raise HTTPException(409, "Session changed; wait for fresh speech.")
+            raise agent_conflict(request, "session_changed")
         deck = await db.get(Deck, session.deck_id)
         if deck is None:
             raise HTTPException(404)
-        record, _ = await current_ready_analysis(db, deck, principal.id)
+        try:
+            record, _ = await current_ready_analysis(db, deck, principal.id)
+        except HTTPException as exc:
+            if exc.status_code == 409:
+                raise agent_conflict(request, "presentation_unavailable") from None
+            raise
         if record.id != session.analysis_version_id:
-            raise HTTPException(409, "Analysis changed; reconnect.")
-        analysis = await request.app.state.candidate_analyses.read(db, record, principal.id)
+            raise agent_conflict(request, "analysis_changed")
+        try:
+            analysis = await request.app.state.candidate_analyses.read(db, record, principal.id)
+        except HTTPException as exc:
+            if exc.status_code == 409:
+                raise agent_conflict(request, "presentation_unavailable") from None
+            raise
         # Include all validation eligibility/geometry, even if the analysis id is unchanged.
         identity = hashlib.sha256(
             (
@@ -542,8 +581,11 @@ def agent_router() -> APIRouter:
             values = AgentRequest.model_validate_json(bytes(body))
         except (ValidationError, ValueError):
             raise HTTPException(422, "Invalid completed speech context.") from None
-        if not -2 <= (datetime.now(UTC) - values.sent_at).total_seconds() <= 5:
-            raise HTTPException(409, "Speech context expired.")
+        age = (datetime.now(UTC) - values.sent_at).total_seconds()
+        if age < -2:
+            raise agent_conflict(request, "clock_ahead")
+        if age > 5:
+            raise agent_conflict(request, "speech_expired")
         started = time.monotonic()
         runtime: AgentRuntime | None = request.app.state.presentation_agent
         admitted = False

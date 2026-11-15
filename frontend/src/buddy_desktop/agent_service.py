@@ -236,7 +236,26 @@ class AgentService:
             return result
         except HTTPError as exc:
             status = exc.code
+            conflict = exc.headers.get("X-Buddy-Agent-Conflict", "") if exc.headers else ""
             exc.close()
+            if status == 409:
+                messages = {
+                    "clock_ahead": (
+                        "Check your computer's date and time, then restart the microphone."
+                    ),
+                    "speech_expired": "Speech arrived too late. Waiting for fresh speech.",
+                    "session_changed": "Presentation changed. Waiting for fresh speech.",
+                    "analysis_changed": "Presentation analysis changed. Reopen it from Library.",
+                    "presentation_unavailable": (
+                        "Refresh Library and reopen the analyzed presentation."
+                    ),
+                }
+                raise ServiceError(
+                    messages.get(
+                        conflict,
+                        "Presentation changed or speech arrived late. Waiting for fresh speech.",
+                    )
+                ) from None
             raise ServiceError(
                 f"Suggestions unavailable ({status}); continue presenting manually."
             ) from None
