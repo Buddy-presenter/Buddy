@@ -107,9 +107,7 @@ def test_saved_powerpoint_review_routes_verified_binding_to_present(desktop_wind
     review.source_format = "pptx"
     review.deck_id = deck
     review.analysis = analysis
-    review._pptx_session = SimpleNamespace(
-        binding=binding, cancelled=Event(), close=lambda: None
-    )
+    review._pptx_session = SimpleNamespace(binding=binding, cancelled=Event(), close=lambda: None)
     routed = []
     monkeypatch.setattr(window.present, "bind_saved_powerpoint", routed.append)
     review.present_saved_powerpoint()

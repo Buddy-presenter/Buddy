@@ -87,13 +87,17 @@ def test_present_syncs_verified_powerpoint_slide_and_rejects_foreign_show(
     monkeypatch.setattr(present, "_ensure_session", lambda **_kwargs: None)
     present._attach_powerpoint_info(info)
     assert present._current_local_state() == SessionState("slide-1")
-    present._agent_proposed(
-        {"target": {"tool": "go_to_slide", "slide_id": "slide-2"}}
-    )
+    present._agent_proposed({"target": {"tool": "go_to_slide", "slide_id": "slide-2"}})
     assert present.agent_proposal.text() == "Suggested: Go to slide 2"
     present._session = PresentationSession(
-        str(uuid4()), str(uuid4()), binding.deck_id, binding.analysis_id,
-        "active", 1, SessionState("slide-1"), datetime.now(UTC)
+        str(uuid4()),
+        str(uuid4()),
+        binding.deck_id,
+        binding.analysis_id,
+        "active",
+        1,
+        SessionState("slide-1"),
+        datetime.now(UTC),
     )
     next_info = replace(info, slide_index=2, slide_id=102)
     present._attach_powerpoint_info(next_info)

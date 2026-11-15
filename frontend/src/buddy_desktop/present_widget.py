@@ -657,8 +657,7 @@ class PresentWidget(Page):
             and (
                 self._powerpoint_binding is None
                 or (
-                    self._powerpoint_verified
-                    and self._session.state == self._current_local_state()
+                    self._powerpoint_verified and self._session.state == self._current_local_state()
                 )
             )
         ):
@@ -704,14 +703,12 @@ class PresentWidget(Page):
             and session is not None
             and session.status == "active"
             and self._session_access is not None
-            and (self._powerpoint_info is None or (
-                self._powerpoint_binding is not None and self._powerpoint_verified
-            ))
-            and self._session_pending_state is None
             and (
-                self._powerpoint_binding is None
-                or session.state == self._current_local_state()
+                self._powerpoint_info is None
+                or (self._powerpoint_binding is not None and self._powerpoint_verified)
             )
+            and self._session_pending_state is None
+            and (self._powerpoint_binding is None or session.state == self._current_local_state())
         )
         self.agent_enabled.setEnabled(available)
         if not available:
@@ -902,8 +899,10 @@ class PresentWidget(Page):
     def _ensure_session(self, *, force: bool = False) -> None:
         manifest = self.executor.manifest
         binding = self._powerpoint_binding
-        deck_id = binding.deck_id if binding is not None else (
-            manifest.deck_id if manifest is not None and manifest.account_bound else None
+        deck_id = (
+            binding.deck_id
+            if binding is not None
+            else (manifest.deck_id if manifest is not None and manifest.account_bound else None)
         )
         if (
             self._closing
