@@ -5,6 +5,7 @@ from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from threading import Event
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -229,3 +230,41 @@ def test_provider_failure_breaks_a_model_confirmation_chain(player):
     proposal.update(decision_id=str(uuid4()), sequence=2)
     page._agent_proposed(proposal)
     assert not checks and page.executor.current_index == 0
+
+
+def test_final_partial_agreeing_final_restarts_model_confirmation_before_scheduler_tick(
+    player, monkeypatch
+):
+    from buddy_desktop.transition_policy import Calibration
+
+    page, proposal, current, persisted, checks = player
+    page.policy.calibration = Calibration("pdf", 0.9, 200, 200, "a" * 64, date(2099, 1, 1), True)
+    proposal.update(decision_source="model", reason="topic", confidence=0.99)
+    page._agent_proposed(proposal)
+    assert not checks
+    # Both events arrive before AgentLoop.update can emit an invalidated proposal.
+    # Only the ASR event boundary is substituted; use the real transcript slot/policy.
+    monkeypatch.setattr(page.transcript_context, "accept", lambda event: None)
+    partial = replace(current[0].segments[0], segment_id="b", sequence=2, final=False)
+    current[0] = replace(current[0], segments=(*current[0].segments, partial))
+    event = {
+        "final": False,
+        "start_seconds": 1.0,
+        "end_seconds": 2.0,
+        "latency_ms": 0,
+        "text": "Explain the sales comparison.",
+    }
+    page._speech_transcript(event)
+    # Give the agreeing final enough elapsed persistence time to expose the bug.
+    import buddy_desktop.present_widget as present_module
+
+    later = current[0].segments[0].capture_end_ns + 900_000_000
+    monkeypatch.setattr(present_module, "time", SimpleNamespace(monotonic_ns=lambda: later))
+    final = replace(partial, sequence=3, final=True, capture_end_ns=later)
+    current[0] = replace(current[0], segments=(final,))
+    page._speech_transcript({**event, "final": True})
+    proposal.update(decision_id=str(uuid4()), sequence=3)
+    page._agent_proposed(proposal)
+    assert not checks and not page.policy_runner.busy
+    assert page.executor.current_index == 0 and not persisted
+    assert page.policy_status.text() == "Waiting for a sustained, consistent reference."

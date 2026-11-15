@@ -1011,6 +1011,10 @@ class PresentWidget(Page):
 
     @Slot(object)
     def _speech_transcript(self, event: dict[str, object]) -> None:
+        if not event["final"]:
+            # Break sustained evidence at capture delivery, even if a final arrives
+            # before the scheduler observes this unfinished thought.
+            self.policy.clear_pending()
         if (
             self._session is not None
             and self._context_connected
