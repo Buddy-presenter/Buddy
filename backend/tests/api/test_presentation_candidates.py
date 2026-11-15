@@ -378,6 +378,7 @@ def test_relative_navigation_requires_a_complete_unambiguous_instruction(utteran
     "utterance,expected",
     [
         ("Go to slide 8.", ("absolute", 8)),
+        ("Go to slide -8.", ("absolute", -8)),
         ("Go to slide 500.", ("absolute", 500)),
         ("Go to slide five hundred.", ("absolute", 500)),
         ("Please go to slide twenty-one.", ("absolute", 21)),
@@ -408,6 +409,8 @@ def test_numbered_navigation_targets_the_exact_slide_and_invalid_number_does_not
     ]
     invalid = resolve(deck, "slide-0", "Go to slide 99.")
     assert {c.slide_id for c in invalid} == {"slide-0"}
+    negative = resolve(deck, "slide-0", "Go to slide -8.")
+    assert {c.slide_id for c in negative} == {"slide-0"}
     current = resolve(deck, "slide-1", "Show me slide 2")
     assert not any(c.reason == "explicit_navigation" for c in current)
 

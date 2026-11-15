@@ -222,8 +222,9 @@ def navigation_step(text: str) -> int | None:
 
 def _spoken_slide_number(tokens_: list[str]) -> int | None:
     """Parse English cardinals from 0 through 999 without guessing malformed speech."""
-    if len(tokens_) == 1 and tokens_[0].isdigit():
-        return int(tokens_[0]) if len(tokens_[0]) <= 9 else None
+    if len(tokens_) == 1 and re.fullmatch(r"[+-]?\d+", tokens_[0]):
+        digits = tokens_[0].lstrip("+-")
+        return int(tokens_[0]) if len(digits) <= 9 else None
 
     small = {
         "zero": 0,
@@ -292,7 +293,9 @@ def navigation_intent(text: str) -> tuple[Literal["relative", "absolute"], int] 
     if step is not None:
         return ("relative", step)
 
-    words = re.findall(r"[^\W_]+", text)
+    # Keep a numeric sign attached until it has been validated. Stripping `-`
+    # first would turn an invalid negative destination into a positive slide jump.
+    words = re.findall(r"[+-]?\d+|[^\W\d_]+", text)
     normalized = " ".join(words)
     prefixes = (
         r"(?:please )?(?:let us )?(?:go|move|jump|navigate|switch|turn) "
