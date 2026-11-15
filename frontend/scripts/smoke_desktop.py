@@ -9,6 +9,7 @@ from PySide6.QtCore import QSettings, QTimer
 from PySide6.QtWidgets import QApplication
 
 from buddy_desktop.config import AppConfig
+from buddy_desktop.speech_audio import PCM16Resampler
 from buddy_desktop.visuals import apply_theme
 from buddy_desktop.window import MainWindow
 
@@ -28,6 +29,14 @@ def main() -> int:
         def verify() -> None:
             if not window.isVisible() or window.pages.currentIndex() != 0:
                 failures.append("Shell did not open on Home.")
+            # Exercise the compiled resampler in installed/frozen packages too;
+            # an import-only smoke would miss missing native libraries.
+            try:
+                resampler = PCM16Resampler(48000)
+                if not resampler.encode(b"\0" * 9600):
+                    failures.append("Speech resampler produced no output.")
+            except Exception:
+                failures.append("Speech resampler could not initialize.")
             if args.screenshot:
                 args.screenshot.parent.mkdir(parents=True, exist_ok=True)
                 if not window.grab().save(str(args.screenshot)):
