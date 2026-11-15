@@ -199,6 +199,10 @@ Failures return safe finite status/reason codes; they do not cause slide movemen
 
 ## Verification
 
+See [presentation replay evaluation](presentation-replay.md) for deterministic corpus
+replay, candidate allowlist gates, captured execution scoring and recording permission.
+Synthetic contract gates are separate from real service/policy release evidence.
+
 Component tests use real PostgreSQL/session state and a substituted provider boundary.
 They cover owner denial, no action, valid selection, authoritative region geometry,
 malformed/extra/tool/truncated output, finite confidence/evidence, stale state after
