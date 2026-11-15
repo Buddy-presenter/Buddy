@@ -104,6 +104,11 @@ def test_bridge_preserves_old_reads_writes_sessions_and_new_readiness(
     assert baseline.returncode == 0, baseline.stderr
     asyncio.run(upgrade(database_settings, "0008_rollback_compatibility"))
     assert old_app(previous_source, database_settings, "read", bridge=True).returncode == 0
+    # Prove the agent's additive window migration explicitly, not just the
+    # historical schema or a moving latest-head constant.
+    asyncio.run(upgrade(database_settings, "0022_agent_request_window"))
+    window_compatible = old_app(previous_source, database_settings, "read", bridge=True)
+    assert window_compatible.returncode == 0, window_compatible.stderr
     asyncio.run(upgrade(database_settings, "head"))
     # The original immutable image remains an invalid rollback target; the
     # compatibility release must become the recorded previous app first.
