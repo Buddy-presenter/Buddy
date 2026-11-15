@@ -312,6 +312,7 @@ class ReviewWidget(Page):
         for button in (self.open_powerpoint, self.present_powerpoint, self.run_powerpoint):
             button.hide()
         powerpoint_row.addWidget(self.open_powerpoint)
+        powerpoint_row.addWidget(self.present_powerpoint)
         powerpoint_row.addWidget(self.reset_powerpoint_zoom)
         powerpoint_row.addStretch(1)
         content_layout.addLayout(powerpoint_row)

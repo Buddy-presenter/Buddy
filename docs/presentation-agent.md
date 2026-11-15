@@ -51,6 +51,13 @@ Terraform `enable_presentation_agent` defaults false and requires
 `enable_semantic_candidates` for the existing API-only secret. It injects the enable flag
 only into the API, not workers or migrations. Staging requires a separately reviewed
 deployment and operator-populated secret.
+The existing staging worker runs on Linux. It cannot perform Office validation, so
+PowerPoint regions from that worker remain unavailable for action suggestions unless
+an isolated Windows/Office validation route completes its independent checks. A
+published PowerPoint analysis can still support slide-level retrieval and suggestions.
+Before calling staging end to end ready, confirm the deployed API image, database
+migration, feature flags, Cohere secret and Deepgram secret; merging code does not
+enable those services.
 This issue does not apply cloud infrastructure or distribute credentials. Because API
 and workers use strict schema readiness, use the existing compatibility-bridge and
 paused-worker rollout for the additive table. Never downgrade the live database as an
