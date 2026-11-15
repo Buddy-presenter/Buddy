@@ -715,15 +715,31 @@ class PresentWidget(Page):
                 result["reason"], "No suggestion available; continue presenting manually."
             )
         else:
+            manifest = self.executor.manifest
+            page = (
+                next(
+                    (
+                        index
+                        for index, slide in enumerate(manifest.slides, 1)
+                        if slide.slide_id == target["slide_id"]
+                    ),
+                    None,
+                )
+                if manifest is not None
+                else None
+            )
+            if page is None:
+                self.agent_proposal.setText("Suggestion unavailable; reopen the presentation.")
+                return
             labels = {
-                "next_slide": "Next slide",
-                "previous_slide": "Previous slide",
-                "go_to_slide": "Go to slide",
-                "zoom_region": "Focus region",
-                "highlight_region": "Highlight region",
-                "reset_view": "Show the full slide",
+                "next_slide": f"Next slide (slide {page})",
+                "previous_slide": f"Previous slide (slide {page})",
+                "go_to_slide": f"Go to slide {page}",
+                "zoom_region": f"Focus region on slide {page}",
+                "highlight_region": f"Highlight region on slide {page}",
+                "reset_view": f"Show slide {page} in full",
             }
-            message = f"Suggested: {labels[tool]} • {target['slide_id']}"
+            message = f"Suggested: {labels[tool]}"
         self.agent_proposal.setText(message)
 
     @Slot(object)
