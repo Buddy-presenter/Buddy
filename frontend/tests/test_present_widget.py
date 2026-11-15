@@ -28,6 +28,28 @@ def region_fields(page, region):
         page.fields[name].setValue(value)
 
 
+def test_presenter_can_pause_and_resume_from_the_current_manual_slide(present, qtbot, monkeypatch):
+    _window, page = present
+    page._agent_tick.stop()
+    monkeypatch.setattr(page, "_queue_session_state", lambda: None)
+    page.policy_enabled.setEnabled(True)
+    page.policy_pause_button.setEnabled(True)
+    page.policy_pause_button.click()
+    assert page.policy.enabled
+
+    page.policy_pause_button.click()
+    assert not page.policy.enabled
+    assert "paused" in page.policy_status.text()
+    page.next_button.click()
+    qtbot.waitUntil(lambda: page.executor.current_index == 1 and not page.executor.busy)
+
+    page.policy_enabled.setEnabled(True)
+    page.policy_pause_button.setEnabled(True)
+    page.policy_pause_button.click()
+    assert page.policy.enabled
+    assert page.executor.current_index == 1
+
+
 def test_open_dialog_and_all_six_buttons(desktop_window, qtbot, monkeypatch):
     window = desktop_window()
     window.navigation.setCurrentRow(3)

@@ -526,8 +526,16 @@ class PresentWidget(Page):
         command(self.policy_profile_button, "folder-open")
         self.policy_profile_button.clicked.connect(self._load_policy_profile)
         policy_row.addWidget(self.policy_profile_button)
+        self.policy_pause_button = QPushButton("Resume automatic moves")
+        self.policy_pause_button.setAccessibleName("Resume automatic moves")
+        self.policy_pause_button.setToolTip("Resume automatic moves (Ctrl+Shift+P)")
+        self.policy_pause_button.setShortcut("Ctrl+Shift+P")
+        self.policy_pause_button.setEnabled(False)
+        self.policy_pause_button.clicked.connect(self._toggle_policy_pause)
+        microphone_layout.addWidget(self.policy_pause_button, alignment=Qt.AlignmentFlag.AlignLeft)
         self.policy_undo_button = QPushButton("Undo automatic move")
         command(self.policy_undo_button, "rotate-ccw")
+        self.policy_undo_button.setShortcut("Ctrl+Shift+Z")
         self.policy_undo_button.setEnabled(False)
         self.policy_undo_button.clicked.connect(self._undo_policy_move)
         policy_row.addWidget(self.policy_undo_button)
@@ -793,7 +801,7 @@ class PresentWidget(Page):
             self._policy_undo = None
             self._accepted_action_id = None
             self.policy_undo_button.setEnabled(False)
-        available = (
+        connected = (
             not self._closing
             and session is not None
             and session.status == "active"
@@ -802,16 +810,28 @@ class PresentWidget(Page):
                 self._powerpoint_info is None
                 or (self._powerpoint_binding is not None and self._powerpoint_verified)
             )
+        )
+        synced = (
+            connected
+            and session is not None
             and self._session_pending_state is None
             and (self._powerpoint_binding is None or session.state == self._current_local_state())
         )
-        self.agent_enabled.setEnabled(available)
-        if not available:
+        self.agent_enabled.setEnabled(connected)
+        if not connected:
             self.agent_enabled.setChecked(False)
-        self.policy_enabled.setEnabled(available and self.agent_enabled.isChecked())
-        if not available or not self.agent_enabled.isChecked():
+        self.policy_enabled.setEnabled(
+            (synced or self.policy.enabled) and self.agent_enabled.isChecked()
+        )
+        if not connected or not self.agent_enabled.isChecked():
             self.policy_enabled.setChecked(False)
-        self.agent.update(self._session_access, session, self.transcript_context.snapshot())
+        self.policy_pause_button.setEnabled(self.policy.enabled or self.policy_enabled.isEnabled())
+        context = self.transcript_context.snapshot()
+        self.agent.update(
+            self._session_access if synced else None,
+            session,
+            context if synced else replace(context, fresh=False),
+        )
 
     @Slot(bool)
     def _suggestions_toggled(self, enabled: bool) -> None:
@@ -820,6 +840,10 @@ class PresentWidget(Page):
 
     @Slot(bool)
     def _policy_toggled(self, enabled: bool) -> None:
+        label = "Pause automatic moves" if enabled else "Resume automatic moves"
+        self.policy_pause_button.setText(label)
+        self.policy_pause_button.setAccessibleName(label)
+        self.policy_pause_button.setToolTip(f"{label} (Ctrl+Shift+P)")
         self._native_guard.clear()
         self.policy.set_enabled(enabled)
         self._policy_check = None
@@ -830,9 +854,16 @@ class PresentWidget(Page):
             "Automatic transitions on. Exact next/previous commands are available; "
             "model-driven moves require a current calibration."
             if enabled
-            else "Automatic transitions off"
+            else "Automatic transitions paused. Manual controls are available."
         )
         self._queue_session_state()
+
+    @Slot()
+    def _toggle_policy_pause(self) -> None:
+        if self.policy.enabled:
+            self.policy_enabled.setChecked(False)
+        elif self.policy_enabled.isEnabled():
+            self.policy_enabled.setChecked(True)
 
     @Slot()
     def _load_policy_profile(self) -> None:
