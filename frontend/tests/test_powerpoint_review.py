@@ -110,7 +110,9 @@ def test_saved_powerpoint_review_routes_verified_binding_to_present(desktop_wind
     review._pptx_session = SimpleNamespace(binding=binding, cancelled=Event(), close=lambda: None)
     routed = []
     monkeypatch.setattr(window.present, "bind_saved_powerpoint", routed.append)
-    review.present_saved_powerpoint()
+    assert review.present_powerpoint.parentWidget() is review.open_powerpoint.parentWidget()
+    review.present_powerpoint.setEnabled(True)
+    review.present_powerpoint.click()
     assert routed == [binding]
     assert window.navigation.currentRow() == 3
 
