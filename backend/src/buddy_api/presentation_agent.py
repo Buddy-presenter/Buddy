@@ -84,6 +84,19 @@ class Target(Model):
     region: Region | None = None
 
 
+class TransitionCheck(Model):
+    expected_state_version: int = Field(ge=0, strict=True)
+    analysis_id: UUID
+    target: Target
+
+
+class TransitionApproval(Model):
+    session_id: UUID
+    analysis_id: UUID
+    state_version: int
+    target: Target
+
+
 type AgentReason = (
     Literal["explicit", "topic", "correction", "stay", "uncertain", "disabled"] | FailureReason
 )
@@ -337,6 +350,70 @@ class AgentRuntime:
 
 def agent_router() -> APIRouter:
     router = APIRouter(prefix="/api/v1/sessions", tags=["presentation agent"])
+
+    @router.post("/{identifier}/transition-check", response_model=TransitionApproval)
+    async def transition_check(
+        identifier: UUID,
+        values: TransitionCheck,
+        request: Request,
+        response: Response,
+        principal: Annotated[Principal, Depends(authenticated)],
+    ) -> TransitionApproval:
+        """Recheck eligibility immediately before local policy execution; no model call.
+
+        This is not a policy grant or evidence of player completion. The presenter
+        still owns manual control and must fence its capture/source at dispatch.
+        """
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            async with asyncio.timeout(3), request.app.state.database.sessions() as db, db.begin():
+                await db.connection(execution_options={"isolation_level": "REPEATABLE READ"})
+                session = await owned_session(db, principal, identifier)
+                if (
+                    session.status != "active"
+                    or session.autonomy_mode != "autonomous"
+                    or session.state_version != values.expected_state_version
+                    or session.analysis_version_id != values.analysis_id
+                ):
+                    raise HTTPException(409, "Automatic transition state changed.")
+                deck = await db.get(Deck, session.deck_id)
+                if deck is None:
+                    raise HTTPException(404)
+                record, _ = await current_ready_analysis(db, deck, principal.id)
+                if record.id != values.analysis_id or record.source_format != "pdf":
+                    raise HTTPException(409, "This source has no compatible live agent runtime.")
+                analysis = await request.app.state.candidate_analyses.read(db, record, principal.id)
+                source = AgentInput(
+                    analysis,
+                    session.active_slide_id or "",
+                    session.focus_view,
+                    "transition",
+                    Region.model_validate(session.focus_region) if session.focus_region else None,
+                )
+                target = values.target
+                if target.tool == "no_action":
+                    raise HTTPException(422, "No action cannot execute a transition.")
+                candidate = Candidate(
+                    kind=target.tool
+                    if target.tool in {"zoom_region", "highlight_region"}
+                    else "slide",
+                    slide_id=target.slide_id,
+                    action_id=target.action_id,
+                    reason="topic",
+                    score=0,
+                )
+                allowed, _ = options(source, (candidate,))
+                if target not in allowed:
+                    raise HTTPException(409, "The action is no longer eligible.")
+                return TransitionApproval(
+                    session_id=identifier,
+                    analysis_id=record.id,
+                    state_version=session.state_version,
+                    target=target,
+                )
+        except (TimeoutError, SQLAlchemyError, PersistenceError, OSError):
+            raise HTTPException(503, "Transition check unavailable; continue manually.") from None
+
     input_schema = AgentRequest.model_json_schema()
     # Manual bounded body receipt must still publish resolvable OpenAPI schemas.
     input_schema.pop("$defs", None)

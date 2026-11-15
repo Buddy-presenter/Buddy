@@ -50,6 +50,48 @@ class AgentService:
     def prepare(self, access: str, session: PresentationSession) -> None:
         CandidateService(self.config).prepare(access, session)
 
+    def check_transition(
+        self,
+        access: str,
+        session: PresentationSession,
+        target: dict[str, object],
+    ) -> dict[str, object]:
+        request = Request(
+            self.config.api_url + f"/api/v1/sessions/{UUID(session.id)}/transition-check",
+            method="POST",
+            data=json.dumps(
+                {
+                    "expected_state_version": session.state_version,
+                    "analysis_id": session.analysis_version_id,
+                    "target": target,
+                },
+                allow_nan=False,
+            ).encode(),
+            headers={"Authorization": "Bearer " + access, "Content-Type": "application/json"},
+        )
+        try:
+            with build_opener(NoRedirects()).open(request, timeout=4) as response:
+                raw = response.read(8193)
+                if len(raw) > 8192 or response.headers.get_content_type() != "application/json":
+                    raise ValueError
+                result = json.loads(raw)
+            expected = {
+                "session_id": session.id,
+                "analysis_id": session.analysis_version_id,
+                "state_version": session.state_version,
+                "target": target,
+            }
+            if result != expected or type(result["state_version"]) is not int:
+                raise ValueError
+            return expected
+        except HTTPError as exc:
+            exc.close()
+            raise ServiceError("Automatic movement stopped. Sync the session and retry.") from None
+        except (URLError, OSError, TimeoutError, ValueError, TypeError, KeyError):
+            raise ServiceError(
+                "Automatic movement stopped. Continue presenting manually."
+            ) from None
+
     def propose(
         self,
         access: str,

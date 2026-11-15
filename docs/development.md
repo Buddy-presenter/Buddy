@@ -121,3 +121,6 @@ The versioned, owner-scoped candidate resolver is documented in
 
 The opt-in decision loop, constrained tools, provider setup and manual suggestion check
 are documented in [presentation agent](presentation-agent.md).
+
+Presenter-owned opt-in execution, measured calibration, undo and the remaining PowerPoint
+dependency are documented in [transition policy](transition-policy.md).

@@ -115,6 +115,7 @@ class MainWindow(QMainWindow):
         self.present.executor.completed.connect(self._presentation_completed)
         self.present.executor.idle.connect(self._present_idle)
         self.present.powerpoint_runner.idle.connect(self._powerpoint_idle)
+        self.present.policy_runner.idle.connect(self._powerpoint_idle)
         self.library.activity_changed.connect(self._library_activity)
         self.review.activity_changed.connect(self._review_activity)
         self.home.route_requested.connect(self._select_route)
@@ -618,6 +619,7 @@ class MainWindow(QMainWindow):
             or self.present.session_runner.busy
             or self.review.cleanup_runner.busy
             or self.present.powerpoint_runner.busy
+            or self.present.policy_runner.busy
         ):
             self._closing = True
             self.runner.stop()

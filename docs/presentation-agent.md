@@ -8,6 +8,11 @@ session state, publish an applied-action event, or enable autonomous transitions
 and the policy-to-executor connection. Model confidence is not a calibrated probability
 and is never execution permission.
 
+The separate opt-in [transition policy](transition-policy.md) now connects accepted PDF
+proposals to the player after fresh server/local checks. Suggestions remain manual by
+default. Its PowerPoint integration and independent release evidence are still pending;
+this does not change the agent endpoint's proposal-only contract.
+
 ## Local setup and manual check
 
 Apply migrations through `0022_agent_request_window`. Set backend-only
