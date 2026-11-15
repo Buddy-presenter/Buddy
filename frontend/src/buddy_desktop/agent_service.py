@@ -41,6 +41,44 @@ REASONS = {
     "stale",
     "candidates_unavailable",
 }
+CONFLICT_MESSAGES = {
+    "speech_context_expired": "Speech context expired; wait for fresh speech.",
+    "session_inactive": "Presentation session ended; reopen it.",
+    "session_state_changed": "Presentation changed; wait for sync, then speak again.",
+    "analysis_changed": "Saved analysis changed; reopen the presentation.",
+    "analysis_unavailable": (
+        "Saved analysis unavailable for live suggestions; reopen the presentation."
+    ),
+}
+
+
+def conflict_error(exc: HTTPError) -> ServiceError:
+    """Translate only known safe 409 fields; never surface arbitrary server text."""
+    request_id = exc.headers.get("X-Request-ID") if exc.headers else None
+    message = "Operation conflicted; wait for fresh speech and try again."
+    try:
+        raw = exc.read(8193)
+        if len(raw) > 8192:
+            raise ValueError
+        payload = json.loads(raw)
+        error = payload.get("error") if isinstance(payload, dict) else None
+        code = error.get("code") if isinstance(error, dict) else None
+        if isinstance(code, str) and code in CONFLICT_MESSAGES:
+            message = CONFLICT_MESSAGES[code]
+        body_request_id = payload.get("request_id") if isinstance(payload, dict) else None
+        if request_id is None and isinstance(body_request_id, str):
+            request_id = body_request_id
+    except (ValueError, TypeError, json.JSONDecodeError):
+        pass
+    finally:
+        exc.close()
+    try:
+        validated_id = str(UUID(request_id)) if isinstance(request_id, str) else None
+    except (ValueError, AttributeError):
+        validated_id = None
+    if validated_id is not None:
+        message += f" Reference: {validated_id}."
+    return ServiceError(message)
 
 
 class AgentService:
@@ -236,6 +274,8 @@ class AgentService:
             return result
         except HTTPError as exc:
             status = exc.code
+            if status == 409:
+                raise conflict_error(exc) from None
             exc.close()
             raise ServiceError(
                 f"Suggestions unavailable ({status}); continue presenting manually."

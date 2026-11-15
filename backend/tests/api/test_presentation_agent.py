@@ -407,7 +407,7 @@ def test_manual_request_schema_has_no_dangling_local_definitions():
 
 
 @pytest.mark.postgres
-def test_owner_gates_no_store_read_only_and_disabled(ready_session_api, caplog):
+def test_owner_gates_no_store_read_only_and_disabled(ready_session_api, caplog, capsys):
     client, ids, *_ = ready_session_api
     path = f"/api/v1/sessions/{ids['sessions']}"
     headers = {"Authorization": "Bearer owner"}
@@ -425,20 +425,33 @@ def test_owner_gates_no_store_read_only_and_disabled(ready_session_api, caplog):
             assert reply.json()["reason"] == "disabled"
     assert client.get(path, headers=headers).json()["data"] == before
     assert "private speech" not in caplog.text
-    assert (
-        client.post(
-            path + "/agent", headers=headers, json=payload(expected_state_version=1)
-        ).status_code
-        == 409
+    stale_version = client.post(
+        path + "/agent", headers=headers, json=payload(expected_state_version=1)
     )
-    assert (
-        client.post(
-            path + "/agent",
-            headers=headers,
-            json=payload(sent_at=(datetime.now(UTC) - timedelta(seconds=6)).isoformat()),
-        ).status_code
-        == 409
+    assert stale_version.status_code == 409
+    assert stale_version.json()["error"]["code"] == "session_state_changed"
+    assert stale_version.json()["request_id"] == stale_version.headers["x-request-id"]
+    expired = client.post(
+        path + "/agent",
+        headers=headers,
+        json=payload(sent_at=(datetime.now(UTC) - timedelta(seconds=6)).isoformat()),
     )
+    assert expired.status_code == 409
+    assert expired.json()["error"]["code"] == "speech_context_expired"
+    assert expired.json()["request_id"] == expired.headers["x-request-id"]
+    conflict_events = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if '"event":"presentation_agent_rejected"' in line
+    ]
+    assert [event["reason"] for event in conflict_events] == [
+        "session_state_changed",
+        "speech_context_expired",
+    ]
+    assert conflict_events[0]["expected_state_version"] == 1
+    assert conflict_events[0]["current_state_version"] == 3
+    assert conflict_events[1]["speech_age_ms"] >= 5000
+    assert "private speech" not in json.dumps(conflict_events)
     assert client.post(path + "/agent", headers=headers, content=b"x" * 65537).status_code == 413
     assert (
         client.post(
