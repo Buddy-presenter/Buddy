@@ -449,7 +449,7 @@ def test_owner_gates_no_store_read_only_and_disabled(ready_session_api, caplog, 
         "speech_context_expired",
     ]
     assert conflict_events[0]["expected_state_version"] == 1
-    assert conflict_events[0]["current_state_version"] == 3
+    assert conflict_events[0]["current_state_version"] == before["state_version"]
     assert conflict_events[1]["speech_age_ms"] >= 5000
     assert "private speech" not in json.dumps(conflict_events)
     assert client.post(path + "/agent", headers=headers, content=b"x" * 65537).status_code == 413
