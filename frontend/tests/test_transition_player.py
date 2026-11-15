@@ -146,6 +146,7 @@ def test_delayed_check_cannot_move_after_context_or_controller_changes(
     finally:
         release.set()
     qtbot.waitUntil(lambda: not page.policy_runner.busy)
+    qtbot.waitUntil(lambda: not page.session_runner.busy and page._session_pending_state is None)
     assert page.executor.current_index == 0
     assert not any(s.active_slide_id == proposal["target"]["slide_id"] for s in persisted)
 
@@ -175,14 +176,18 @@ def test_new_partial_while_loading_cannot_commit_or_report_an_applied_action(
     qtbot.waitUntil(lambda: not page.executor.busy)
     assert page.executor.current_index == 0 and not observed
     assert not page.policy.enabled
+    qtbot.waitUntil(lambda: not page.session_runner.busy and page._session_pending_state is None)
 
 
-def test_powerpoint_without_saved_agent_session_cannot_enable_automation(player):
+def test_powerpoint_without_saved_agent_session_cannot_enable_automation(player, qtbot):
+    from buddy_desktop.powerpoint_contract import PresentationInfo
+
     page, _, _, _, checks = player
-    page._powerpoint_info = object()
+    page._powerpoint_info = PresentationInfo("local.pptx", "Local deck", 1, 3)
     page._update_agent()
     assert not page.policy_enabled.isEnabled() and not page.policy.enabled
     assert not checks
+    qtbot.waitUntil(lambda: not page.session_runner.busy and page._session_pending_state is None)
 
 
 @pytest.mark.parametrize("fail_at", [1, 2])
