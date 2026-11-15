@@ -112,6 +112,47 @@ def test_uncalibrated_and_low_quality_calibration_never_move_model_targets():
         assert consider(policy, inputs()) == "uncalibrated"
 
 
+@pytest.mark.parametrize("source_format", ["pdf", "pptx"])
+def test_request_watermark_can_differ_from_latest_utterance_without_false_confirmation(
+    source_format,
+):
+    policy = calibrated(source_format)
+    prediction, context, view = inputs(source_format=source_format)
+    latest = context.segments[-1]
+    earlier = replace(
+        latest,
+        segment_id="earlier",
+        sequence=2,
+        start_seconds=0,
+        end_seconds=1,
+        capture_end_ns=NOW - 1_000_000_000,
+    )
+    context = replace(context, segments=(earlier, latest))
+    prediction = replace(prediction, sequence=2)
+    assert consider(policy, (prediction, context, view)) == "awaiting_evidence"
+
+    # A newer revision/watermark elsewhere in the window is not new latest evidence.
+    revised = replace(context, segments=(replace(earlier, sequence=3), latest))
+    repeated = replace(prediction, decision_id=str(uuid4()), sequence=3)
+    assert consider(policy, (repeated, revised, view), NOW + 900_000_000) == "awaiting_evidence"
+
+    new = inputs(4, NOW + 1_800_000_000, source_format=source_format)
+    assert consider(policy, new, NOW + 1_800_000_000) == "accepted"
+
+
+def test_wrong_request_watermark_still_rejects_and_clears_pending_evidence():
+    policy = calibrated()
+    assert consider(policy, inputs()) == "awaiting_evidence"
+    prediction, context, view = inputs(2, NOW + 900_000_000)
+    assert (
+        consider(policy, (replace(prediction, sequence=3), context, view), NOW + 900_000_000)
+        == "stale"
+    )
+    assert (
+        consider(policy, inputs(3, NOW + 1_800_000_000), NOW + 1_800_000_000) == "awaiting_evidence"
+    )
+
+
 @pytest.mark.parametrize(
     "change",
     [

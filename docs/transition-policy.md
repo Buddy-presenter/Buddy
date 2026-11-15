@@ -50,6 +50,9 @@ manual hold and hysteresis without modifying the decision provider.
 - Reject partials, silence, no-action, missing/latest-evidence mismatches, unknown targets,
   current focus and busy/disconnected players. No-action or contradictory predictions
   clear pending persistence; replaying the same completed evidence cannot confirm itself.
+  The request sequence is the maximum revision watermark across the completed window,
+  which can differ from the chronologically latest utterance's sequence. Advancing an
+  earlier utterance's revision never counts as a new latest-utterance confirmation.
 - Model proposals need a format-matched, unexpired calibration, finite confidence over
   its measured threshold, at least 700 ms of completed speech and more than a brief keyword.
   Two distinct completed evidence revisions must agree for at least 800 ms, with no gap

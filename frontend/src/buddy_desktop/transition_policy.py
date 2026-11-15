@@ -288,7 +288,7 @@ class TransitionPolicy:
             != (view.session_id, view.analysis_id, view.state_version)
             or (context.session_id, context.state_version, context.epoch, context.stream_id)
             != (view.session_id, view.state_version, prediction.epoch, prediction.stream_id)
-            or prediction.sequence != segments[-1].sequence
+            or prediction.sequence != max(segment.sequence for segment in segments)
         ):
             return reject("stale")
         binding = (
@@ -355,9 +355,12 @@ class TransitionPolicy:
             ):
                 self.clear_pending()
                 self._pending, self._first_ns = target, now_ns
-            if prediction.sequence <= self._sequence:
+            # The request watermark may advance when an earlier utterance completes.
+            # Only a new latest completed utterance can confirm the current target.
+            evidence_sequence = segments[-1].sequence
+            if evidence_sequence <= self._sequence:
                 return "awaiting_evidence"
-            self._sequence, self._last_ns = prediction.sequence, now_ns
+            self._sequence, self._last_ns = evidence_sequence, now_ns
             self._count += 1
             if (
                 self._count < self.settings.confirmations + int(switching)
