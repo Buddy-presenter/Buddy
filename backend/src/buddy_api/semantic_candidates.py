@@ -113,11 +113,12 @@ def balanced_shortlist(
 
 
 class SemanticCandidates:
-    def __init__(self, database: Database, provider: CohereEmbeddings, call_limit: int = 750):
+    def __init__(
+        self, database: Database, provider: CohereEmbeddings, call_limit: int | None = None
+    ):
         self.database, self.provider, self.call_limit = database, provider, call_limit
         self._preparing: set[UUID] = set()
         self._queries: set[UUID] = set()
-        self._last_call: dict[UUID, float] = {}
         self._cache: dict[tuple[UUID, UUID, str], tuple[float, tuple[tuple[float, ...], ...]]] = {}
 
     async def _embed(self, texts: list[str], kind: str) -> tuple[tuple[float, ...], ...]:
@@ -128,7 +129,9 @@ class SemanticCandidates:
             reservation = statement.on_conflict_do_update(
                 index_elements=[EmbeddingQuota.key_hash, EmbeddingQuota.month],
                 set_={"calls": EmbeddingQuota.calls + 1},
-                where=EmbeddingQuota.calls < self.call_limit,
+                where=EmbeddingQuota.calls < self.call_limit
+                if self.call_limit is not None
+                else None,
             ).returning(EmbeddingQuota.calls)
             if await db.scalar(reservation) is None:
                 raise EmbeddingFailure("embedding_budget_exhausted")
@@ -205,15 +208,13 @@ class SemanticCandidates:
         )
         now = time.monotonic()
         self._cache = {k: v for k, v in self._cache.items() if now - v[0] <= 5}
-        self._last_call = {k: v for k, v in self._last_call.items() if now - v <= 2}
         cached = self._cache.get(cache_key)
         if cached:
             queries = cached[1]
         else:
-            if owner in self._queries or owner in self._last_call or len(self._queries) >= 16:
+            if owner in self._queries or len(self._queries) >= 16:
                 raise EmbeddingFailure("embedding_query_busy")
             self._queries.add(owner)
-            self._last_call[owner] = now
             try:
                 # Keep contextual references and the newest topic as independent
                 # retrieval evidence; batch both inputs in one provider request.

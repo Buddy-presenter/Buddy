@@ -7,7 +7,7 @@ import math
 import sys
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
@@ -288,7 +288,7 @@ class AgentRuntime:
         self.active: set[UUID] = set()
 
     async def reserve(self, database: Database) -> None:
-        # DB clock + row lock share pacing and conservative attempts across replicas/restarts.
+        # DB clock + row lock share a rolling provider window across replicas/restarts.
         key = hashlib.sha256(self.settings.api_key.encode()).hexdigest()
         async with database.sessions() as db, db.begin():
             await db.execute(
@@ -302,17 +302,37 @@ class AgentRuntime:
             assert row is not None
             now = await db.scalar(select(func.clock_timestamp()))
             assert now is not None
+            if row.blocked_until is not None and row.blocked_until > now:
+                remaining = (row.blocked_until - now).total_seconds()
+                raise AgentFailure("paced", min(5000, math.ceil(remaining * 1000)))
             month = now.strftime("%Y-%m")
-            if row.last_called_at is not None:
-                remaining = 3.2 - (now - row.last_called_at).total_seconds()
-                if remaining > 0:
-                    raise AgentFailure("paced", min(5000, math.ceil(remaining * 1000) + 50))
+            cutoff = now.timestamp() - 60
+            times = sorted(t for t in row.request_times if t > cutoff)
+            if len(times) >= self.settings.requests_per_minute:
+                # If an operator lowered the rate, enough older attempts must
+                # expire before the next request, rather than just the first.
+                remaining = times[-self.settings.requests_per_minute] + 60 - now.timestamp()
+                raise AgentFailure("paced", min(5000, max(1, math.ceil(remaining * 1000) + 50)))
             if row.month != month:
                 row.month, row.calls = month, 0
-            if row.calls >= self.settings.monthly_limit:
+            if self.settings.monthly_limit is not None and row.calls >= self.settings.monthly_limit:
                 raise AgentFailure("budget")
             row.calls += 1
             row.last_called_at = now
+            row.request_times = [*times, now.timestamp()]
+
+    async def provider_limited(self, database: Database) -> None:
+        # Other users of the credential and provider-specific windows are outside
+        # our counter. A real 429 wins; do not hammer the service on new finals.
+        key = hashlib.sha256(self.settings.api_key.encode()).hexdigest()
+        async with database.sessions() as db, db.begin():
+            row = await db.scalar(
+                select(AgentQuota).where(AgentQuota.key_hash == key).with_for_update()
+            )
+            assert row is not None  # Every model request first reserves an attempt.
+            now = await db.scalar(select(func.clock_timestamp()))
+            assert now is not None
+            row.blocked_until = now + timedelta(seconds=60)
 
 
 def agent_router() -> APIRouter:
@@ -483,6 +503,11 @@ def agent_router() -> APIRouter:
             target = Target(tool="no_action", slide_id=source.current)
             selection = None
             decision_source = "fallback"
+            if isinstance(exc, AgentFailure) and exc.code == "rate_limited" and runtime is not None:
+                try:
+                    await runtime.provider_limited(request.app.state.database)
+                except (SQLAlchemyError, OSError, TimeoutError):
+                    raise HTTPException(503, "Agent temporarily unavailable.") from None
             if isinstance(exc, AgentFailure) and exc.code == "paced":
                 retry_after_ms = exc.retry_after_ms or 3200
             if isinstance(exc, EmbeddingFailure):

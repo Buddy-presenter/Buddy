@@ -231,7 +231,6 @@ def test_identical_views_embed_once_and_latest_view_changes_query_cache(ready_se
     )
     assert provider.inputs[-1] == [passage]
     # A different segmentation changes the focused view even with identical passage text.
-    engine._last_call.clear()
     assert (
         client.post(
             path + "/candidates",
@@ -242,6 +241,29 @@ def test_identical_views_embed_once_and_latest_view_changes_query_cache(ready_se
     )
     assert provider.inputs[-1] == [passage, "Its signature needs checking."]
     assert provider.calls == [("document", 2), ("query", 1), ("query", 2)]
+
+
+@pytest.mark.postgres
+def test_default_queries_have_no_two_second_wait_or_750_call_budget(ready_session_api):
+    client, ids, *_ = ready_session_api
+    provider = FakeProvider()
+    engine = SemanticCandidates(client.app.state.database, provider)
+    client.app.state.semantic_candidates = engine
+    path = f"/api/v1/sessions/{ids['sessions']}"
+    headers = {"Authorization": "Bearer owner"}
+    assert client.post(path + "/candidates/prepare", headers=headers).status_code == 200
+
+    async def previous_usage():
+        async with client.app.state.database.sessions() as db, db.begin():
+            (await db.scalar(select(EmbeddingQuota))).calls = 750
+
+    client.portal.call(previous_usage)
+    for text in ("The first completed explanation.", "A corrected explanation."):
+        reply = client.post(
+            path + "/candidates", headers=headers, json=payload(text=text, latest_utterance=text)
+        )
+        assert reply.status_code == 200, reply.text
+    assert provider.calls == [("document", 2), ("query", 1), ("query", 1)]
 
 
 def test_duplicate_region_documents_cannot_consume_all_reserved_slide_slots():

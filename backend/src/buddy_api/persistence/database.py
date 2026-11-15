@@ -84,7 +84,8 @@ class Database:
                     SessionEvent.id,
                     CandidateIndex.analysis_id,
                     EmbeddingQuota.key_hash,
-                    AgentQuota.key_hash,
+                    AgentQuota.request_times,
+                    AgentQuota.blocked_until,
                     PDFProcessingCheckpoint.job_id,
                 ):
                     await connection.execute(select(identifier).limit(0))

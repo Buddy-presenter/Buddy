@@ -142,11 +142,15 @@ class Settings:
             try:
                 agent = AgentSettings(
                     values.get("BUDDY_COHERE_API_KEY", ""),
-                    int(values.get("BUDDY_AGENT_MONTHLY_LIMIT", "100")),
+                    int(values["BUDDY_AGENT_MONTHLY_LIMIT"])
+                    if values.get("BUDDY_AGENT_MONTHLY_LIMIT")
+                    else None,
+                    int(values.get("BUDDY_AGENT_REQUESTS_PER_MINUTE", "20")),
                 )
             except ValueError:
                 raise ConfigurationError(
-                    "Agent requires a Cohere key and allowance from 1 to 100."
+                    "Agent requires a Cohere key, optional positive monthly budget "
+                    "and rate from 1 to 500 requests per minute."
                 ) from None
         return cls(
             environment,

@@ -10,9 +10,13 @@ and is never execution permission.
 
 ## Local setup and manual check
 
-Apply migration `0021_agent_quotas` after `0020_pdf_checkpoints`. Set backend-only
-`BUDDY_COHERE_API_KEY` and `BUDDY_AGENT_ENABLED=true`. Optional
-`BUDDY_AGENT_MONTHLY_LIMIT` reduces the default 100 attempted decisions/month (1–100).
+Apply migrations through `0022_agent_request_window`. Set backend-only
+`BUDDY_COHERE_API_KEY` and `BUDDY_AGENT_ENABLED=true`.
+`BUDDY_AGENT_REQUESTS_PER_MINUTE` defaults to the trial model allowance of 20;
+increase it only to match the credential's actual plan (maximum 500).
+There is no default Buddy monthly decision cap. An optional positive
+`BUDDY_AGENT_MONTHLY_LIMIT` sets an operator-selected monthly budget; unset it to disable
+that application budget. Usage is still counted and provider quotas still apply.
 No key belongs in the desktop, Git, logs, command arguments or Terraform values.
 Backend opt-in defaults false. Existing embeddings setup/index preparation is reused.
 
@@ -101,12 +105,12 @@ The supported Cohere schema subset omits numeric/array ranges; Buddy still valid
 confidence in [0,1], finite values and at most eight unique valid evidence indexes.
 Responses are bounded to 64 KiB. Chat has a three-second deadline, total backend decision
 work 4.5 seconds, and native HTTP six seconds; stale capture still wins over a slow
-otherwise valid result. Embeddings retain their own bounded adapter and allowance.
+otherwise valid result. Embeddings retain their own bounded adapter.
 
 The Qt scheduler runs off the GUI thread, with one in-flight operation, newest-only
-coalescing, no queue of old transcripts and no fixed post-final wait. The server spaces
-model attempts at least 3.2 seconds apart for the trial Chat rate limit; this is an
-admission interval, not an added delay after every request. Unspent admission deferrals
+coalescing, no queue of old transcripts and no fixed post-final wait. The server admits
+model work immediately while its rolling 60-second provider window has capacity,
+rather than spacing requests 3.2 seconds apart. Unspent admission deferrals
 follow the server wait for that revision only. New completed speech can be checked
 immediately, so a navigation command does not inherit an earlier model admission wait.
 New completed revisions can trigger requests; the same
@@ -117,21 +121,29 @@ changed input is discarded rather than retried. New partials invalidate prior re
 not themselves submitted. Preparation has its existing 125-second client bound and
 stays off the GUI thread; shutdown waits for bounded work after the event loop exits.
 
-An atomic PostgreSQL row per API-key hash shares the 100-attempt monthly cap and
-3.2-second pacing across API replicas/restarts. The DB clock sets UTC month boundaries.
+An atomic PostgreSQL row per API-key hash shares the rolling provider window and any
+explicit operator budget across API replicas/restarts. The DB clock sets UTC month
+boundaries and window expiration; at most 500 timestamps are retained. Lowering the rate
+does not forget prior reservations. A real Chat 429 causes a shared 60-second cooldown,
+including across restarts; no automatic provider retry is issued. External uses of the
+key and provider-specific enforcement windows remain outside Buddy's accounting, so
+local admission cannot guarantee provider acceptance. The provider's limits win.
 Unambiguous whole-utterance next/previous commands reuse the validated deterministic path,
 including no action at deck boundaries, without spending Chat/embedding allowance.
-Other admission reserves before embeddings too, so an exhausted or rapid caller cannot spend
-query allowance. Failed admitted attempts count conservatively, even if Chat is never
+Other admission reserves before embeddings too, so a caller beyond the model allowance
+cannot spend query calls. Failed admitted attempts count conservatively, even if Chat is never
 reached. At most one decision per owner and sixteen owners are in flight per process.
-The 750 embedding plus 100 agent caps leave a buffer below the documented 1000-call
-trial allowance; outside key use and disposable diagnostic schemas are not counted by
-this database. This is a development allowance, not unlimited presentation time.
-The 100-attempt agent allocation is Buddy's conservative trial safeguard, not Cohere's
-own monthly Chat cap. At the maximum admission cadence it lasts only about five minutes;
-these development settings are not adequate for sustained production presentations.
-Higher production allowances and throughput need the corresponding provider plan and
-an explicit application budget change, not simply removal of the trial safeguards.
+The former default 100-decision and 750-embedding monthly caps are removed. This does
+not remove Cohere's trial monthly allowance, token/input limits or rate enforcement.
+The two-second per-owner embedding interval is also removed; in-flight concurrency
+and identical-input caching remain. These changes remove scheduling delays, not the
+network/model processing time of a single decision.
+
+Migration 0022 is additive and preserves usage counts. Because the old row has no
+complete request window, existing credentials are conservatively blocked until 60 seconds
+after their last recorded call during upgrade; inactive keys are unaffected. Use the
+existing compatibility-bridge/worker rollout for the new schema head, not a live schema
+downgrade. No cloud deployment is performed by this change.
 
 The relative-command path accepts complete instructions such as “Let's go to the next
 slide” and “Move forward by one page”; quoted, negated, conditional and question forms

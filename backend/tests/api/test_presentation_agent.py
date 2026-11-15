@@ -247,6 +247,7 @@ def test_exact_navigation_boundary_does_not_spend_provider_allowance(agent_api, 
 def test_natural_relative_command_overrides_prior_topic_and_exhausted_quota(agent_api, phrase):
     client, ids, provider = agent_api
     runtime = client.app.state.presentation_agent
+    runtime.settings = replace(runtime.settings, monthly_limit=100)
 
     async def exhaust():
         await runtime.reserve(client.app.state.database)
@@ -504,22 +505,25 @@ def test_persistent_quota_atomic_pacing_reset_and_budget(agent_api):
     client, _, _ = agent_api
     database = client.app.state.database
     runtime = client.app.state.presentation_agent
+    runtime.settings = replace(runtime.settings, requests_per_minute=3, monthly_limit=100)
 
     async def check():
         results = await asyncio.gather(
             *(runtime.reserve(database) for _ in range(5)), return_exceptions=True
         )
-        assert sum(result is None for result in results) == 1
+        assert sum(result is None for result in results) == 3
         assert all(
             result is None or isinstance(result, AgentFailure) and result.code == "paced"
             for result in results
         )
         async with database.sessions() as db, db.begin():
             quota = await db.scalar(select(AgentQuota))
-            assert quota.calls == 1
-            quota.last_called_at -= timedelta(seconds=4)
+            assert quota.calls == 3
+            quota.request_times = [t - 61 for t in quota.request_times]
             quota.calls = 100
-        restarted = AgentRuntime(AgentSettings("test-key"), Provider())
+        restarted = AgentRuntime(
+            AgentSettings("test-key", monthly_limit=100, requests_per_minute=3), Provider()
+        )
         with pytest.raises(AgentFailure, match="budget"):
             await restarted.reserve(database)
         async with database.sessions() as db, db.begin():
@@ -535,6 +539,7 @@ def test_persistent_quota_atomic_pacing_reset_and_budget(agent_api):
 @pytest.mark.postgres
 def test_paced_admission_includes_wait_and_spends_no_additional_quota(agent_api):
     client, ids, provider = agent_api
+    client.app.state.presentation_agent.settings = AgentSettings("test-key", requests_per_minute=1)
     path = f"/api/v1/sessions/{ids['sessions']}/agent"
     headers = {"Authorization": "Bearer owner"}
     assert client.post(path, headers=headers, json=payload()).status_code == 200
@@ -542,7 +547,7 @@ def test_paced_admission_includes_wait_and_spends_no_additional_quota(agent_api)
     assert reply.status_code == 200
     assert reply.json()["reason"] == "paced"
     assert reply.json()["decision_source"] == "fallback"
-    assert 1 <= reply.json()["retry_after_ms"] <= 3250
+    assert 1 <= reply.json()["retry_after_ms"] <= 5000
     assert len(provider.calls) == 1
 
     async def count():
@@ -550,3 +555,82 @@ def test_paced_admission_includes_wait_and_spends_no_additional_quota(agent_api)
             return (await db.scalar(select(AgentQuota))).calls
 
     assert client.portal.call(count) == 1
+
+
+@pytest.mark.postgres
+def test_new_speech_is_admitted_without_fixed_wait_or_default_monthly_cap(agent_api):
+    client, ids, provider = agent_api
+    runtime = client.app.state.presentation_agent
+    database = client.app.state.database
+
+    async def previous_usage():
+        await runtime.reserve(database)
+        async with database.sessions() as db, db.begin():
+            row = await db.scalar(select(AgentQuota))
+            row.calls = 100
+
+    client.portal.call(previous_usage)
+    for sequence in (1, 2, 3):
+        phrase = f"Completed presentation passage {sequence}."
+        reply = client.post(
+            f"/api/v1/sessions/{ids['sessions']}/agent",
+            headers={"Authorization": "Bearer owner"},
+            json=payload(
+                sequence=sequence,
+                text=phrase,
+                latest_utterance=phrase,
+                segments=[{"sequence": sequence, "text": phrase}],
+            ),
+        )
+        assert reply.status_code == 200, reply.text
+        assert reply.json()["decision_source"] == "model"
+    assert len(provider.calls) == 3
+
+
+@pytest.mark.postgres
+def test_rolling_window_survives_restart_and_expires_only_old_attempts(agent_api):
+    client, _, _ = agent_api
+    database = client.app.state.database
+    runtime = client.app.state.presentation_agent
+    runtime.settings = replace(runtime.settings, requests_per_minute=2)
+
+    async def check():
+        await runtime.reserve(database)
+        await runtime.reserve(database)
+        restarted = AgentRuntime(runtime.settings, Provider())
+        with pytest.raises(AgentFailure, match="paced"):
+            await restarted.reserve(database)
+        async with database.sessions() as db, db.begin():
+            row = await db.scalar(select(AgentQuota))
+            row.request_times = [row.request_times[0] - 61, row.request_times[1]]
+        await restarted.reserve(database)
+        with pytest.raises(AgentFailure, match="paced"):
+            await runtime.reserve(database)
+        async with database.sessions() as db:
+            row = await db.scalar(select(AgentQuota))
+            assert row.calls == 3 and len(row.request_times) == 2
+
+    client.portal.call(check)
+
+
+@pytest.mark.postgres
+def test_actual_provider_rate_limit_blocks_new_speech_across_instances(agent_api):
+    client, ids, provider = agent_api
+    provider.answer = AgentFailure("rate_limited")
+    path = f"/api/v1/sessions/{ids['sessions']}/agent"
+    headers = {"Authorization": "Bearer owner"}
+    assert client.post(path, headers=headers, json=payload()).json()["reason"] == "rate_limited"
+    assert client.post(path, headers=headers, json=payload()).json()["reason"] == "paced"
+    assert len(provider.calls) == 1
+
+    async def check():
+        runtime = AgentRuntime(AgentSettings("test-key"), Provider())
+        database = client.app.state.database
+        with pytest.raises(AgentFailure, match="paced"):
+            await runtime.reserve(database)
+        async with database.sessions() as db, db.begin():
+            row = await db.scalar(select(AgentQuota))
+            row.blocked_until -= timedelta(seconds=61)
+        await runtime.reserve(database)
+
+    client.portal.call(check)

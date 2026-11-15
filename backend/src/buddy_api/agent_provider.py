@@ -49,14 +49,19 @@ class DecisionProvider(Protocol):
 @dataclass(frozen=True)
 class AgentSettings:
     api_key: str = field(repr=False)
-    # Separate from the 750 embedding attempts: leave a shared trial allowance buffer.
-    monthly_limit: int = 100
+    # Optional operator budget. Provider allowances are independent of this counter.
+    monthly_limit: int | None = None
+    requests_per_minute: int = 20
 
     def __post_init__(self) -> None:
         if not self.api_key or len(self.api_key) > 4096 or any(c.isspace() for c in self.api_key):
             raise ValueError("Invalid agent credentials")
-        if type(self.monthly_limit) is not int or not 1 <= self.monthly_limit <= 100:
-            raise ValueError("Agent allowance must be between 1 and 100")
+        if self.monthly_limit is not None and (
+            type(self.monthly_limit) is not int or self.monthly_limit < 1
+        ):
+            raise ValueError("Agent budget must be a positive integer or unset")
+        if type(self.requests_per_minute) is not int or not 1 <= self.requests_per_minute <= 500:
+            raise ValueError("Agent rate must be between 1 and 500 requests per minute")
 
 
 SYSTEM = """You select a presentation suggestion. Return only JSON matching the schema.

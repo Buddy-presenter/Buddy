@@ -520,3 +520,5 @@ class AgentQuota(Base):
     month: Mapped[str] = mapped_column(String(7))
     calls: Mapped[int] = mapped_column(default=0)
     last_called_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    request_times: Mapped[list[float]] = mapped_column(JSONB, default=list, server_default="[]")
+    blocked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
