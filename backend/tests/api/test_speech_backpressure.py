@@ -110,15 +110,17 @@ def test_short_socket_burst_drains_without_restart():
 
         class Socket:
             sequence = 0
+            stamp = 0
 
             async def receive(self):
                 if self.sequence < 24:
                     self.sequence += 1
+                    self.stamp = max(time.monotonic_ns(), self.stamp + 1)
                     # A short burst after scheduler/network jitter, below the
                     # existing one-second ingress grace and PCM size limit.
                     return {
                         "type": "websocket.receive",
-                        "bytes": struct.pack(">Q", time.monotonic_ns()) + b"\0" * 640,
+                        "bytes": struct.pack(">Q", self.stamp) + b"\0" * 640,
                     }
                 await completed.wait()
                 return {"type": "websocket.disconnect"}
