@@ -33,12 +33,37 @@ a second smoke partition with minor wording differences, not an independent huma
 recording benchmark. A passing result is not a natural-language accuracy, latency,
 PowerPoint, semantic retrieval, or autonomous-transition release claim.
 
-Replay reads no microphone, credentials, database, or remote service. The HTTP transport
+Offline replay reads no microphone, credentials, database, or remote service. The HTTP transport
 boundary supplies frozen raw responses; reference targets are used only by the scorer,
 never by the runtime. A recorded response is bound to the SHA-256 of the exact outgoing
 provider request, including the current system prompt. Prompt drift fails replay instead
 of silently replaying answers to an obsolete request. Normal agent requests use the
 same extracted `decision_passage` and `navigation_selection` functions.
+
+## Fresh provider evaluation
+
+To measure new decisions instead of replaying recorded responses, explicitly opt in:
+
+```sh
+python -m buddy_api.replay tests/fixtures/replay/private/development-v1.json --gates tests/fixtures/replay/private/development-v1-gates.json --live-provider --max-provider-calls 20 --output replay-artifacts/fresh-provider-v1
+```
+
+Set backend-only `BUDDY_COHERE_API_KEY` through your secret environment, never a command
+argument. This mode makes paid calls to the existing fixed Cohere endpoint using the
+production adapter, timeout, response validation and allowlist. It measures actual
+request latency and billed input/output tokens; references are never passed to the model.
+The entire call count is checked against the explicit limit before any request; there
+are no retries. Shared deployed-service quota admission is outside this direct provider
+benchmark; respect the provider's plan/rate limits. Missing billing (including an
+unmeasured failed request) makes the cost gate fail with `billing_usage_unknown`.
+
+Use a permissioned evaluation corpus with independent semantic references. The transport
+fault fixtures in the checked-in smoke partitions test deliberately malformed **recorded**
+responses and are not a fresh-model benchmark. Consented corpora additionally require
+`permission.provider_processing: true`, backed by the actual cloud-processing consent.
+Fresh runs are marked `captured_provider`, use the frozen candidate/analysis snapshots,
+and do not measure live embeddings, database admission or policy application. Consequently
+they cannot pass `--release`, which requires captured service/player evidence.
 
 ## Corpus contract and clocks
 

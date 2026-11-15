@@ -3,9 +3,11 @@
 import asyncio
 import hashlib
 import json
+import math
 from datetime import date
 from pathlib import Path
 
+import httpx
 import pytest
 
 from buddy_api.presentation_agent import Target
@@ -13,11 +15,13 @@ from buddy_api.replay import (
     AppliedAction,
     Corpus,
     Gates,
+    LiveProvider,
     Permission,
     Trace,
     load_corpus,
     main,
     replay,
+    run_live,
     score,
 )
 
@@ -139,7 +143,13 @@ def policy_trace(corpus, trace):
         applied = (
             ()
             if frame.expected.tool == "no_action"
-            else (AppliedAction(target=frame.expected, at_ms=frame.at_ms + 100, animated=True),)
+            else (
+                AppliedAction(
+                    target=frame.expected,
+                    at_ms=frame.at_ms + math.ceil(observation.elapsed_ms) + 10,
+                    animated=True,
+                ),
+            )
         )
         observations.append(observation.model_copy(update={"applied": applied}))
     return trace.model_copy(
@@ -241,3 +251,64 @@ def test_cli_writes_reproducible_private_artifacts_and_refuses_overwrite(tmp_pat
     with pytest.raises(SystemExit) as error:
         main(args)
     assert error.value.code == 2
+
+
+@pytest.mark.parametrize("billing", [True, False])
+def test_fresh_provider_uses_real_adapter_and_measured_billing(sample, billing):
+    corpus, digest, gates, _ = sample
+    requests = []
+
+    def respond(request):
+        requests.append(json.loads(request.content))
+        body = {
+            "finish_reason": "COMPLETE",
+            "message": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            {"choice": "c0", "reason": "stay", "confidence": 0.9, "evidence": []}
+                        ),
+                    }
+                ]
+            },
+        }
+        if billing:
+            body["usage"] = {"billed_units": {"input_tokens": 12, "output_tokens": 3}}
+        return httpx.Response(200, json=body)
+
+    async def evaluate():
+        live = LiveProvider("test-only", httpx.MockTransport(respond))
+        try:
+            return await replay(corpus, digest, live)
+        finally:
+            await live.aclose()
+
+    trace = asyncio.run(evaluate())
+    assert trace.provenance == "captured_provider"
+    assert len(requests) == 16  # Silence and deterministic navigation never call the model.
+    assert sum(o.input_tokens for o in trace.observations) == (192 if billing else 0)
+    assert sum(o.output_tokens for o in trace.observations) == (48 if billing else 0)
+    report = score(corpus, digest, trace, gates, release=False)
+    assert ("billing_usage_unknown" in report["failures"]) == (not billing)
+    assert all(o.proposed in o.allowed for o in trace.observations)
+    assert all(o.elapsed_ms >= 0 for o in trace.observations)
+    # The real adapter receives current input/candidates, never the reference answer.
+    assert "expected" not in json.dumps(requests)
+
+
+def test_live_limits_permission_and_missing_key_prevent_calls(sample, monkeypatch):
+    corpus, digest, *_ = sample
+    monkeypatch.delenv("BUDDY_COHERE_API_KEY", raising=False)
+    for limit in (0, 1, 1001, 20):
+        with pytest.raises(ValueError):
+            asyncio.run(run_live(corpus, digest, limit))
+    real = corpus.model_copy(
+        update={
+            "permission": Permission(
+                kind="consented", reference="consent-1", expires=date(2099, 1, 1)
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="permission"):
+        asyncio.run(run_live(real, digest, 20))
