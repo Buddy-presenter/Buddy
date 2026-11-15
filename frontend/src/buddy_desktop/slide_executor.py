@@ -21,6 +21,13 @@ from buddy_desktop.slide_contract import (
 from buddy_desktop.slide_surface import SlideSurface
 
 
+def _guard_allows(guard: Callable[[], bool] | None) -> bool:
+    try:
+        return guard is None or guard()
+    except Exception:
+        return False  # Callback failure cannot grant an automatic player commit.
+
+
 def load_image(manifest: Manifest, slide: Slide) -> QImage:
     """Read one immutable, digest-verified PNG beneath the manifest directory."""
     if manifest.pdf_content is not None:
@@ -176,7 +183,7 @@ class SlideExecutor(QObject):
             # Reset is always available, even while an image is loading.
             if self.busy and action.type != "reset_view":
                 raise ContractError("Executor is busy; retry after idle.")
-            if commit_guard is not None and not commit_guard():
+            if not _guard_allows(commit_guard):
                 raise ContractError("The automatic transition expired before execution.")
         except ContractError as exc:
             self._finish(request, instance, "rejected", str(exc))
@@ -209,7 +216,7 @@ class SlideExecutor(QObject):
         guard, self._commit_guard = self._commit_guard, None
         if pending is not None:
             _, instance, action = pending
-            if guard is not None and not guard():
+            if not _guard_allows(guard):
                 # A stale automatic load leaves the last committed view untouched.
                 self._finish(request, instance, "rejected", "The automatic transition expired.")
             elif error:

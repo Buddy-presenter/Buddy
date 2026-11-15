@@ -183,3 +183,27 @@ def test_powerpoint_without_saved_agent_session_cannot_enable_automation(player)
     page._update_agent()
     assert not page.policy_enabled.isEnabled() and not page.policy.enabled
     assert not checks
+
+
+@pytest.mark.parametrize("fail_at", [1, 2])
+def test_guard_exception_fails_closed_with_one_terminal_completion(player, qtbot, fail_at):
+    from buddy_desktop.transition_policy import Target
+
+    page, proposal, _, persisted, _ = player
+    calls, completions = [], []
+    page.executor.completed.connect(completions.append)
+
+    def guard():
+        calls.append(True)
+        if len(calls) == fail_at:
+            raise RuntimeError("private callback details")
+        return True
+
+    page.executor.dispatch(
+        page._policy_command(Target.parse(proposal["target"])), commit_guard=guard
+    )
+    qtbot.waitUntil(lambda: not page.executor.busy)
+    assert page.executor.current_index == 0
+    assert len(completions) == 1 and completions[0].status == "rejected"
+    assert "private callback details" not in completions[0].message
+    assert not persisted

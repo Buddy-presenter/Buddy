@@ -3628,31 +3628,6 @@
         "title": "TransitionApproval",
         "type": "object"
       },
-      "TransitionCheck": {
-        "additionalProperties": false,
-        "properties": {
-          "analysis_id": {
-            "format": "uuid",
-            "title": "Analysis Id",
-            "type": "string"
-          },
-          "expected_state_version": {
-            "minimum": 0.0,
-            "title": "Expected State Version",
-            "type": "integer"
-          },
-          "target": {
-            "$ref": "#/components/schemas/Target"
-          }
-        },
-        "required": [
-          "expected_state_version",
-          "analysis_id",
-          "target"
-        ],
-        "title": "TransitionCheck",
-        "type": "object"
-      },
       "UpdateSessionState": {
         "additionalProperties": false,
         "properties": {
@@ -7904,7 +7879,29 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/TransitionCheck"
+                "additionalProperties": false,
+                "properties": {
+                  "analysis_id": {
+                    "format": "uuid",
+                    "title": "Analysis Id",
+                    "type": "string"
+                  },
+                  "expected_state_version": {
+                    "minimum": 0,
+                    "title": "Expected State Version",
+                    "type": "integer"
+                  },
+                  "target": {
+                    "$ref": "#/components/schemas/Target"
+                  }
+                },
+                "required": [
+                  "expected_state_version",
+                  "analysis_id",
+                  "target"
+                ],
+                "title": "TransitionCheck",
+                "type": "object"
               }
             }
           },

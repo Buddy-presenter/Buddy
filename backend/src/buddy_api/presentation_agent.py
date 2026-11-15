@@ -97,6 +97,22 @@ class TransitionApproval(Model):
     target: Target
 
 
+async def transition_input(request: Request) -> TransitionCheck:
+    body = bytearray()
+    try:
+        async with asyncio.timeout(3):
+            async for chunk in request.stream():
+                body.extend(chunk)
+                if len(body) > 16384:
+                    raise HTTPException(413, "Transition input is too large.")
+    except TimeoutError:
+        raise HTTPException(408, "Transition input timed out.") from None
+    try:
+        return TransitionCheck.model_validate_json(bytes(body))
+    except (ValueError, ValidationError):
+        raise HTTPException(422, "Invalid transition input.") from None
+
+
 type AgentReason = (
     Literal["explicit", "topic", "correction", "stay", "uncertain", "disabled"] | FailureReason
 )
@@ -351,10 +367,25 @@ class AgentRuntime:
 def agent_router() -> APIRouter:
     router = APIRouter(prefix="/api/v1/sessions", tags=["presentation agent"])
 
-    @router.post("/{identifier}/transition-check", response_model=TransitionApproval)
+    transition_schema = TransitionCheck.model_json_schema(
+        ref_template="#/components/schemas/{model}"
+    )
+    # Target and Region components are registered by the typed approval response.
+    transition_schema.pop("$defs", None)
+
+    @router.post(
+        "/{identifier}/transition-check",
+        response_model=TransitionApproval,
+        openapi_extra={
+            "requestBody": {
+                "required": True,
+                "content": {"application/json": {"schema": transition_schema}},
+            }
+        },
+    )
     async def transition_check(
         identifier: UUID,
-        values: TransitionCheck,
+        values: Annotated[TransitionCheck, Depends(transition_input)],
         request: Request,
         response: Response,
         principal: Annotated[Principal, Depends(authenticated)],

@@ -10,6 +10,15 @@ from backend.tests.support.database import database_settings as database_setting
 from buddy_api.persistence.models import PresentationSession
 
 
+def test_transition_input_is_bounded_and_errors_omit_private_values(api_client):
+    path = f"/api/v1/sessions/{uuid4()}/transition-check"
+    response = api_client.post(path, content=b"x" * 16385)
+    assert response.status_code == 413
+    response = api_client.post(path, json={"private_field": "do-not-echo-this-value"})
+    assert response.status_code == 422
+    assert "do-not-echo-this-value" not in response.text
+
+
 @pytest.mark.postgres
 def test_transition_requires_opt_in_owner_current_state_and_authoritative_target(ready_session_api):
     client, ids, *_ = ready_session_api
