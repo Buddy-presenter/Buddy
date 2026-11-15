@@ -293,3 +293,12 @@ context/client, local API/PostgreSQL and real Cohere with v4. All seven intended
 were shortlisted, four ranked first, with 505–1087 ms HTTP requests. A preceding replay
 had stopped on a recoverable 503; the final seven-request run succeeded without automatic
 retries. These are small acceptance samples, not service-availability or P95 guarantees.
+
+
+The speech reliability repair from PR #181 is merged into this branch. Combined testing
+also exposed an integration edge: immediate queue rejection treated a short healthy
+socket burst as a stalled provider. The relay now permits a bounded 250 ms drain wait,
+while rejecting packets queued over 500 ms and preserving disconnect responsiveness.
+The regression sends a 24-packet, 480 ms burst through a healthy provider; it previously
+restarted the stream and now drains completely. Sustained/stalled bandwidth regressions
+continue to reject backlog. No queue-size, freshness or retry-budget increase was made.
