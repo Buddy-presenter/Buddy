@@ -47,6 +47,20 @@ class CohereEmbeddings:
         self.settings, self.transport = settings, transport
         self._client: httpx.AsyncClient | None = None
 
+    @property
+    def client(self) -> httpx.AsyncClient:
+        """Reuse the fixed Cohere connection pool for retrieval and bounded decisions."""
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                transport=self.transport,
+                follow_redirects=False,
+                timeout=15,
+                limits=httpx.Limits(
+                    max_connections=16, max_keepalive_connections=8, keepalive_expiry=120
+                ),
+            )
+        return self._client
+
     async def aclose(self) -> None:
         if self._client is not None:
             await self._client.aclose()
@@ -67,16 +81,7 @@ class CohereEmbeddings:
         }
         try:
             async with asyncio.timeout(20 if kind == "document" else 2):
-                if self._client is None:
-                    self._client = httpx.AsyncClient(
-                        transport=self.transport,
-                        follow_redirects=False,
-                        timeout=15,
-                        limits=httpx.Limits(
-                            max_connections=16, max_keepalive_connections=8, keepalive_expiry=120
-                        ),
-                    )
-                async with self._client.stream(
+                async with self.client.stream(
                     "POST",
                     "https://api.cohere.com/v2/embed",
                     json=payload,

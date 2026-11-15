@@ -36,6 +36,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from buddy_desktop.agent_loop import AgentLoop
+from buddy_desktop.agent_service import AgentService
 from buddy_desktop.config import AppConfig
 from buddy_desktop.fullscreen import FullscreenPresentation
 from buddy_desktop.library_service import LibraryAccessExpired
@@ -189,6 +191,8 @@ class PresentWidget(Page):
         self.microphone = MicrophoneController(self)
         self.speech = SpeechController(self)
         self.transcript_context = TranscriptContext()
+        self.agent = AgentLoop(AgentService(config), self, self.transcript_context.snapshot)
+        self._agent_session_id: str | None = None
         self._context_connected = False
         self._context_expiry = QTimer(self)
         self._context_expiry.setInterval(1000)
@@ -439,6 +443,33 @@ class PresentWidget(Page):
         self.microphone.status_changed.connect(self._microphone_status_changed)
         self.microphone.devices_changed.connect(self._microphone_devices_changed)
         self.body.addWidget(self.microphone_panel)
+        self.agent_enabled = QCheckBox("Live suggestions")
+        self.agent_enabled.setAccessibleName("Enable live presentation suggestions")
+        self.agent_enabled.toggled.connect(self.agent.set_enabled)
+        microphone_layout.addWidget(self.agent_enabled)
+        agent_privacy = QLabel(
+            "When enabled, recognized speech and slide summaries are sent to Cohere. "
+            "Suggestions only; you control slide changes."
+        )
+        agent_privacy.setWordWrap(True)
+        agent_privacy.setObjectName("muted")
+        microphone_layout.addWidget(agent_privacy)
+        self.agent_status = QLabel("Suggestions off")
+        self.agent_status.setWordWrap(True)
+        self.agent_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.agent_status.setAccessibleName("Live suggestion status")
+        microphone_layout.addWidget(self.agent_status)
+        self.agent_proposal = QLabel("")
+        self.agent_proposal.setWordWrap(True)
+        self.agent_proposal.setTextFormat(Qt.TextFormat.PlainText)
+        self.agent_proposal.setAccessibleName("Latest presentation suggestion")
+        microphone_layout.addWidget(self.agent_proposal)
+        self.agent.status.connect(self.agent_status.setText)
+        self.agent.proposed.connect(self._agent_proposed)
+        self._agent_tick = QTimer(self)
+        self._agent_tick.setInterval(100)
+        self._agent_tick.timeout.connect(self._update_agent)
+        self._agent_tick.start()
         self.powerpoint_open_button = QPushButton("Open PowerPoint…")
         command(self.powerpoint_open_button, "presentation")
         self.powerpoint_open_button.setAccessibleName("Open a PowerPoint presentation")
@@ -645,6 +676,55 @@ class PresentWidget(Page):
         if generation == self.session_events.generation:
             self._context_connected = state == "connected"
             self.transcript_context.invalidate()
+
+    @Slot()
+    def _update_agent(self) -> None:
+        session = self._session if isinstance(self._session, PresentationSession) else None
+        identifier = session.id if session is not None else None
+        if identifier != self._agent_session_id:
+            self._agent_session_id = identifier
+            self.agent_enabled.setChecked(False)
+        available = (
+            not self._closing
+            and session is not None
+            and session.status == "active"
+            and self._session_access is not None
+            and self._powerpoint_info is None
+        )
+        self.agent_enabled.setEnabled(available)
+        if not available:
+            self.agent_enabled.setChecked(False)
+        self.agent.update(self._session_access, session, self.transcript_context.snapshot())
+
+    @Slot(object)
+    def _agent_proposed(self, result: object) -> None:
+        if not isinstance(result, dict):
+            self.agent_proposal.clear()
+            return
+        target = result["target"]
+        tool = target["tool"]
+        if tool == "no_action":
+            messages = {
+                "budget": "Suggestion allowance reached; continue presenting manually.",
+                "disabled": "Suggestions are not enabled on this server.",
+                "paced": "Waiting for the next suggestion opportunity.",
+                "stay": "Keep the current view.",
+                "uncertain": "Keep the current view.",
+            }
+            message = messages.get(
+                result["reason"], "No suggestion available; continue presenting manually."
+            )
+        else:
+            labels = {
+                "next_slide": "Next slide",
+                "previous_slide": "Previous slide",
+                "go_to_slide": "Go to slide",
+                "zoom_region": "Focus region",
+                "highlight_region": "Highlight region",
+                "reset_view": "Show the full slide",
+            }
+            message = f"Suggested: {labels[tool]} • {target['slide_id']}"
+        self.agent_proposal.setText(message)
 
     @Slot(object)
     def _speech_transcript(self, event: dict[str, object]) -> None:
@@ -1844,10 +1924,13 @@ class PresentWidget(Page):
         # A hidden presentation must not keep a microphone running out of view.
         if hasattr(self, "microphone") and not getattr(self, "_closing", False):
             self.microphone.stop()
+            self.agent_enabled.setChecked(False)
         super().hideEvent(event)
 
     def shutdown(self) -> None:
         self._closing = True
+        self._agent_tick.stop()
+        self.agent.stop()
         self.session_events.stop()
         self._powerpoint_verification.stop()
         self.speech.stop()
@@ -1866,6 +1949,7 @@ class PresentWidget(Page):
         self._refresh()
 
     def clear_session_binding(self) -> None:
+        self.agent_enabled.setChecked(False)
         self.microphone.stop()
         self._session_generation += 1
         self._account_id = None

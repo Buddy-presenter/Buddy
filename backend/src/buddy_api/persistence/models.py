@@ -509,3 +509,14 @@ class EmbeddingQuota(Base):
     key_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
     month: Mapped[str] = mapped_column(String(7), primary_key=True)
     calls: Mapped[int] = mapped_column(default=0)
+
+
+class AgentQuota(Base):
+    """Provider attempts only; no transcripts, presentation content or raw credentials."""
+
+    __tablename__ = "agent_quotas"
+    __table_args__ = (CheckConstraint("calls >= 0", name="calls_nonnegative"),)
+    key_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    month: Mapped[str] = mapped_column(String(7))
+    calls: Mapped[int] = mapped_column(default=0)
+    last_called_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

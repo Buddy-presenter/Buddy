@@ -38,3 +38,18 @@ def test_startup_missing_configuration_exits_before_binding(monkeypatch, capsys)
     monkeypatch.delenv("BUDDY_ENVIRONMENT", raising=False)
     assert main() == 2
     assert "BUDDY_ENVIRONMENT" in capsys.readouterr().err
+
+
+def test_agent_is_opt_in_and_credentials_are_backend_only():
+    base = {"BUDDY_ENVIRONMENT": "development", "BUDDY_COHERE_API_KEY": "private-key"}
+    assert Settings.from_environment(base).agent is None
+    enabled = Settings.from_environment({**base, "BUDDY_AGENT_ENABLED": "true"})
+    assert enabled.agent.monthly_limit == 100
+    assert "private-key" not in repr(enabled)
+    for values in (
+        {"BUDDY_AGENT_ENABLED": "yes"},
+        {"BUDDY_AGENT_ENABLED": "true", "BUDDY_COHERE_API_KEY": ""},
+        {"BUDDY_AGENT_ENABLED": "true", "BUDDY_AGENT_MONTHLY_LIMIT": "101"},
+    ):
+        with pytest.raises(ConfigurationError):
+            Settings.from_environment({**base, **values})
