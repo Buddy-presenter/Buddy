@@ -134,6 +134,11 @@ def test_index_persists_queries_cache_and_budget_is_enforced(ready_session_api):
     navigation = client.post(path + "/candidates", headers=headers, json=payload(text="next slide"))
     assert navigation.status_code == 200, navigation.text
     assert any(c["reason"] == "explicit_navigation" for c in navigation.json()["candidates"])
+    numbered = client.post(
+        path + "/candidates", headers=headers, json=payload(text="Go to slide 2.")
+    )
+    assert numbered.status_code == 200, numbered.text
+    assert any(c["reason"] == "explicit_navigation" for c in numbered.json()["candidates"])
     # At the last slide an explicit next command still avoids the provider and
     # cannot turn the older topic into a spurious non-linear destination.
     from buddy_api.analysis.store import Analyses

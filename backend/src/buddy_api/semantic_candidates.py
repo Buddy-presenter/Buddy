@@ -189,10 +189,10 @@ class SemanticCandidates:
         latest: str,
         recent: str,
     ) -> tuple["Candidate", ...]:
-        from buddy_api.presentation_candidates import Candidate, navigation_step, resolve
+        from buddy_api.presentation_candidates import Candidate, navigation_intent, resolve
 
         base = resolve(analysis, current, "", latest)
-        if navigation_step(latest) is not None:
+        if navigation_intent(latest) is not None:
             return base
         items = documents(analysis)
         async with self.database.sessions() as db:

@@ -22,6 +22,7 @@ from buddy_api.presentation_agent import (
     AgentRuntime,
     Target,
     checked_selection,
+    navigation_selection,
     options,
 )
 from buddy_api.presentation_candidates import Candidate
@@ -165,6 +166,22 @@ def test_natural_navigation_options_do_not_depend_on_semantic_shortlist():
     assert {t.tool for t in at_start} == {"no_action", "next_slide"}
 
 
+def test_numbered_navigation_can_select_a_nonadjacent_slide_without_a_provider():
+    from backend.tests.api.test_presentation_candidates import analysis
+
+    deck = analysis(*(f"Summary {i}" for i in range(10)))
+    source = AgentInput(deck, "slide-0", "slide", "hash")
+    candidates = (
+        Candidate(kind="no_change", slide_id="slide-0", reason="stay", score=0),
+        Candidate(kind="slide", slide_id="slide-7", reason="explicit_navigation", score=0),
+    )
+    targets, _ = options(source, candidates)
+    selection = navigation_selection(targets, candidates, segment_count=1)
+    assert checked_selection(selection, targets, segment_count=1) == Target(
+        tool="go_to_slide", slide_id="slide-7"
+    )
+
+
 def test_neighbor_reservation_preserves_every_retrieved_alternative_within_ten_options():
     from backend.tests.api.test_presentation_candidates import analysis
 
@@ -238,6 +255,26 @@ def test_exact_navigation_boundary_does_not_spend_provider_allowance(agent_api, 
     assert len(traces) == 1
     assert traces[0]["decision_id"] == reply.json()["decision_id"]
     assert phrase not in json.dumps(traces)
+
+
+@pytest.mark.postgres
+@pytest.mark.parametrize("phrase", ["Go to slide 2.", "Show me page two."])
+def test_numbered_navigation_is_deterministic_and_does_not_call_provider(agent_api, phrase):
+    client, ids, provider = agent_api
+    reply = client.post(
+        f"/api/v1/sessions/{ids['sessions']}/agent",
+        headers={"Authorization": "Bearer owner"},
+        json=payload(
+            text=phrase,
+            latest_utterance=phrase,
+            segments=[{"sequence": 1, "text": phrase}],
+        ),
+    )
+    assert reply.status_code == 200, reply.text
+    assert reply.json()["target"]["tool"] == "next_slide"
+    assert reply.json()["target"]["slide_id"] == "slide-b"
+    assert reply.json()["decision_source"] == "navigation"
+    assert not provider.calls
 
 
 @pytest.mark.postgres

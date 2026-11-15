@@ -38,7 +38,9 @@ boundary supplies frozen raw responses; reference targets are used only by the s
 never by the runtime. A recorded response is bound to the SHA-256 of the exact outgoing
 provider request, including the current system prompt. Prompt drift fails replay instead
 of silently replaying answers to an obsolete request. Normal agent requests use the
-same extracted `decision_passage` and `navigation_selection` functions.
+same extracted `decision_passage` and `navigation_selection` functions. Exact relative
+and numbered slide-navigation commands use the production deterministic path and do not
+consume frozen/live provider replies.
 
 ## Fresh provider evaluation
 

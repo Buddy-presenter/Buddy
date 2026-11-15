@@ -37,7 +37,7 @@ from buddy_api.presentation_candidates import (
     CandidateRequest,
     candidate_action_eligible,
     candidate_slides,
-    navigation_step,
+    navigation_intent,
     resolve,
 )
 from buddy_api.presentation_sessions import current_ready_analysis, owned_session, snapshot
@@ -194,6 +194,7 @@ class AgentProposal(Model):
             "no_action",
             "next_slide",
             "previous_slide",
+            "go_to_slide",
         }:
             raise ValueError("Deterministic navigation cannot select another tool")
         return self
@@ -427,12 +428,13 @@ def decision_passage(
 def navigation_selection(
     targets: tuple[Target, ...], candidates: tuple[Candidate, ...], segment_count: int
 ) -> Selection:
-    neighbor = next((c.slide_id for c in candidates if c.reason == "explicit_navigation"), None)
+    destination = next((c.slide_id for c in candidates if c.reason == "explicit_navigation"), None)
     choice = next(
         (
             i
             for i, target in enumerate(targets)
-            if target.slide_id == neighbor and target.tool in {"next_slide", "previous_slide"}
+            if target.slide_id == destination
+            and target.tool in {"next_slide", "previous_slide", "go_to_slide"}
         ),
         0,
     )
@@ -642,8 +644,8 @@ def agent_router() -> APIRouter:
                         raise AgentFailure("busy")
                     runtime.active.add(principal.id)
                     admitted = True
-                    step = navigation_step(values.latest_utterance)
-                    if step is not None:
+                    intent = navigation_intent(values.latest_utterance)
+                    if intent is not None:
                         decision_source = "navigation"
                         candidates = resolve(
                             source.analysis, source.current, values.text, values.latest_utterance

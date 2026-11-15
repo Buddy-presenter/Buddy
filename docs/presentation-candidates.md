@@ -50,8 +50,10 @@ Positive-cosine matches form a ranked shortlist of at
 most seven slide destinations including current (five when region slots are reserved),
 plus eligible region options and no change,
 with eight candidates maximum. Similarity is a ranking signal, not a calibrated
-confidence probability. Exact whole-utterance next/previous navigation keeps a
-validated no-model fast path, including a no-change result at deck boundaries.
+confidence probability. Exact whole-utterance next/previous and numbered slide/page
+navigation keep a validated no-model fast path. Numbered destinations support digits and
+English cardinal words across the 500-slide deck limit. Invalid or already-current
+destinations return no change rather than falling through to semantic matching.
 #20 owns decisions, abstention and execution policy.
 
 ### Limits and usage accounting
@@ -188,11 +190,13 @@ and removes a small English stop-word set. It scans at most the validated 500-sl
 and the bounded saved action list. Scoring counts distinct overlapping words in available
 summaries and usable action purposes. A unique highest positive match may propose an
 earlier/later slide; a tie abstains from non-linear navigation. Current-slide and explicit
-no-change candidates are always present. Whole-utterance English next/previous commands from `latest_utterance` (or the full
-text for older requests)
-produce a valid adjacent target except at deck boundaries. Negated or embedded command
-phrases are not interpreted as navigation commands. At most two matching usable region
-views from the shortlisted slides are included, with stable ordering and at most eight
+no-change candidates are always present. Whole-utterance English next/previous and
+numbered slide/page commands from `latest_utterance` (or the full text for older requests)
+produce an authoritative target. Numbered commands support digits and English cardinal
+words; out-of-range/current slides return no change. Quoted, questioned, negated,
+conditional or embedded command phrases are not interpreted as navigation commands. At
+most two matching usable region views from the shortlisted slides are included, with
+stable ordering and at most eight
 candidates overall. PDF actions require validated, usable and semantic-verified results.
 No rejected, pending or execution-only region action becomes eligible.
 
