@@ -15,6 +15,7 @@ from buddy_desktop.transcript_context import ContextSnapshot
 class AgentLoop(QObject):
     status = Signal(str)
     proposed = Signal(object)
+    unavailable = Signal()
 
     def __init__(
         self,
@@ -147,6 +148,7 @@ class AgentLoop(QObject):
         if self._preparing_for is not None:
             self._prepare_failed_for, self._preparing_for = self._preparing_for, None
         if self.enabled and self._request_generation == self._generation:
+            self.unavailable.emit()
             self.proposed.emit(None)
             self.status.emit(message)
 

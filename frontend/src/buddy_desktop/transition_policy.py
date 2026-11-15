@@ -1,0 +1,391 @@
+"""Deterministic presenter-owned transition admission, independent of Qt and providers.
+
+This module never executes a target or treats model confidence as a probability.
+The caller supplies current authoritative eligibility and observes actual completion.
+"""
+
+import hashlib
+import json
+import math
+from dataclasses import asdict, dataclass
+from datetime import date
+from pathlib import Path
+from typing import Any, Literal
+
+from buddy_desktop.transcript_context import ContextSnapshot
+
+VERSION = "transition-policy-1"
+MODEL = "command-a-03-2025"
+
+
+@dataclass(frozen=True)
+class Target:
+    tool: str
+    slide_id: str
+    action_id: str | None = None
+    region: tuple[float, float, float, float] | None = None
+
+    @classmethod
+    def parse(cls, value: dict[str, Any]) -> "Target":
+        region = value.get("region")
+        return cls(
+            value["tool"],
+            value["slide_id"],
+            value.get("action_id"),
+            (
+                float(region["x"]),
+                float(region["y"]),
+                float(region["width"]),
+                float(region["height"]),
+            )
+            if region is not None
+            else None,
+        )
+
+
+@dataclass(frozen=True)
+class Calibration:
+    source_format: Literal["pdf", "pptx"]
+    threshold: float
+    samples: int
+    successes: int
+    reference: str
+    expires: date
+    # Synthetic calibration is useful for deterministic tests, never live admission.
+    consented: bool
+
+    @property
+    def lower_precision(self) -> float:
+        """95% Wilson lower bound, not the provider's self-reported confidence."""
+        n, z = self.samples, 1.96
+        if n <= 0:
+            return 0
+        p = self.successes / n
+        return (p + z * z / (2 * n) - z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))) / (
+            1 + z * z / n
+        )
+
+    def usable(self, source_format: str, today: date) -> bool:
+        return (
+            self.consented
+            and self.source_format == source_format
+            and today <= self.expires
+            and self.samples >= 100
+            and self.lower_precision >= 0.95
+        )
+
+
+def load_calibration(path: Path) -> Calibration:
+    """Read only aggregate, format/model-bound calibration, with bounded strict input."""
+    with path.open("rb") as handle:
+        data = handle.read(65537)
+    if len(data) > 65536:
+        raise ValueError("Calibration exceeds its size limit.")
+    raw = json.loads(data)
+    if (
+        not isinstance(raw, dict)
+        or set(raw)
+        != {
+            "protocol",
+            "model",
+            "source_format",
+            "threshold",
+            "samples",
+            "successes",
+            "development_sha256",
+            "permission",
+        }
+        or raw["protocol"] != VERSION
+        or raw["model"] != MODEL
+    ):
+        raise ValueError("Unsupported policy calibration.")
+    n, correct, threshold, permission = (
+        raw["samples"],
+        raw["successes"],
+        raw["threshold"],
+        raw["permission"],
+    )
+    reference = raw["development_sha256"]
+    if (
+        raw["source_format"] not in {"pdf", "pptx"}
+        or type(n) is not int
+        or not 1 <= n <= 1_000_000
+        or type(correct) is not int
+        or not 0 <= correct <= n
+        or type(threshold) not in {int, float}
+        or not math.isfinite(threshold)
+        or not 0.5 <= threshold <= 1
+        or not isinstance(reference, str)
+        or len(reference) != 64
+        or any(c not in "0123456789abcdef" for c in reference)
+        or not isinstance(permission, dict)
+        or set(permission) != {"kind", "reference", "expires"}
+        or permission["kind"] not in {"synthetic", "consented"}
+        or not isinstance(permission["reference"], str)
+        or not 1 <= len(permission["reference"]) <= 256
+    ):
+        raise ValueError("Invalid calibration evidence.")
+    return Calibration(
+        raw["source_format"],
+        float(threshold),
+        n,
+        correct,
+        reference,
+        date.fromisoformat(permission["expires"]),
+        permission["kind"] == "consented",
+    )
+
+
+@dataclass(frozen=True)
+class Settings:
+    confirmations: int = 2
+    persistence_ms: int = 800
+    max_gap_ms: int = 4000
+    cooldown_ms: int = 2500
+    manual_hold_ms: int = 5000
+    switch_margin: float = 0.05
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.confirmations) is not int
+            or not 2 <= self.confirmations <= 10
+            or any(
+                type(v) is not int or not 0 <= v <= 60000
+                for v in (
+                    self.persistence_ms,
+                    self.max_gap_ms,
+                    self.cooldown_ms,
+                    self.manual_hold_ms,
+                )
+            )
+            or not 100 <= self.persistence_ms <= self.max_gap_ms
+            or not math.isfinite(self.switch_margin)
+            or not 0 <= self.switch_margin <= 0.2
+        ):
+            raise ValueError("Invalid transition policy settings.")
+
+
+@dataclass(frozen=True)
+class Prediction:
+    decision_id: str
+    target: Target
+    source: str
+    reason: str
+    confidence: float | None
+    evidence_sequences: tuple[int, ...]
+    session_id: str
+    analysis_id: str
+    state_version: int
+    epoch: int
+    stream_id: str
+    sequence: int
+
+    @classmethod
+    def from_validated(cls, value: dict[str, Any], context: ContextSnapshot) -> "Prediction":
+        segments = context.candidate_segments
+        return cls(
+            value["decision_id"],
+            Target.parse(value["target"]),
+            value["decision_source"],
+            value["reason"],
+            value["confidence"],
+            tuple(segments[i].sequence for i in value["evidence"]),
+            value["session_id"],
+            value["analysis_id"],
+            value["state_version"],
+            value["context_epoch"],
+            value["stream_id"],
+            value["sequence"],
+        )
+
+
+@dataclass(frozen=True)
+class View:
+    session_id: str
+    analysis_id: str
+    source_identity: str
+    source_format: str
+    state_version: int
+    current: Target
+    # Recomputed from saved source/native contracts, never provider-supplied tools.
+    eligible: tuple[Target, ...]
+    busy: bool = False
+    connected: bool = True
+
+
+class TransitionPolicy:
+    def __init__(self, settings: Settings | None = None):
+        self.settings = settings or Settings()
+        self.enabled = False
+        self.calibration: Calibration | None = None
+        self._binding: tuple[object, ...] | None = None
+        self._pending: Target | None = None
+        self._first_ns = self._last_ns = 0
+        self._sequence = 0
+        self._count = 0
+        self._hold_until = 0
+        self._inflight: str | None = None
+        self._seen: set[str] = set()
+
+    def clear_pending(self) -> None:
+        self._pending = None
+        self._count = self._sequence = 0
+
+    def reset(self, *, manual: bool = False, now_ns: int = 0) -> None:
+        self.clear_pending()
+        self._binding = None
+        if manual:
+            self._hold_until = max(
+                self._hold_until, now_ns + self.settings.manual_hold_ms * 1_000_000
+            )
+
+    def set_enabled(self, enabled: bool) -> None:
+        self.enabled = enabled
+        self._inflight = None
+        self.reset()
+
+    def completed(self, decision_id: str, *, success: bool, now_ns: int) -> None:
+        if decision_id != self._inflight:
+            return
+        self._inflight = None
+        self.reset()
+        self._hold_until = (
+            now_ns
+            + (self.settings.cooldown_ms if success else self.settings.manual_hold_ms) * 1_000_000
+        )
+        if not success:
+            self.enabled = False
+
+    def consider(
+        self,
+        prediction: Prediction,
+        context: ContextSnapshot,
+        view: View,
+        *,
+        now_ns: int,
+        today: date,
+    ) -> str:
+        """Return a finite reason. Only 'accepted' authorizes one immediate dispatch."""
+
+        def reject(reason: str) -> str:
+            self.clear_pending()
+            return reason
+
+        if not self.enabled:
+            return reject("disabled")
+        if view.source_format not in {"pdf", "pptx"}:
+            return reject("unsupported_format")
+        if view.busy or self._inflight is not None:
+            return reject("busy")
+        segments = context.candidate_segments
+        if (
+            not view.connected
+            or not context.fresh
+            or not segments
+            or context.segments != segments  # An unfinished partial blocks the whole window.
+            or not 0 <= now_ns - segments[-1].capture_end_ns <= 5_000_000_000
+            or (prediction.session_id, prediction.analysis_id, prediction.state_version)
+            != (view.session_id, view.analysis_id, view.state_version)
+            or (context.session_id, context.state_version, context.epoch, context.stream_id)
+            != (view.session_id, view.state_version, prediction.epoch, prediction.stream_id)
+            or prediction.sequence != max(segment.sequence for segment in segments)
+        ):
+            return reject("stale")
+        binding = (
+            view.session_id,
+            view.analysis_id,
+            view.source_identity,
+            view.source_format,
+            view.state_version,
+            context.epoch,
+            context.stream_id,
+            context.language,
+        )
+        if binding != self._binding:
+            self.reset()
+            self._binding = binding
+        target = prediction.target
+        if target.tool == "no_action":
+            return reject("no_action")
+        if target not in view.eligible:
+            return reject("ineligible")
+        if (
+            (target.slide_id, target.tool, target.region)
+            == (view.current.slide_id, view.current.tool, view.current.region)
+            or target.tool == "reset_view"
+            and view.current.tool == "slide"
+        ):
+            return reject("current_focus")
+        if prediction.decision_id in self._seen:
+            return reject("duplicate")
+        if now_ns < self._hold_until:
+            return reject("cooldown")
+        if (
+            prediction.source not in {"model", "navigation"}
+            or prediction.reason not in {"explicit", "topic", "correction"}
+            or segments[-1].sequence not in prediction.evidence_sequences
+        ):
+            return reject("weak_evidence")
+        if prediction.source == "navigation":
+            if prediction.reason != "explicit" or target.tool not in {
+                "next_slide",
+                "previous_slide",
+            }:
+                return reject("weak_evidence")
+        else:
+            calibration = self.calibration
+            if calibration is None or not calibration.usable(view.source_format, today):
+                return reject("uncalibrated")
+            confidence = prediction.confidence
+            switching = view.current.tool != "slide"
+            threshold = min(
+                1.0, calibration.threshold + (self.settings.switch_margin if switching else 0)
+            )
+            if (
+                confidence is None
+                or not math.isfinite(confidence)
+                or not threshold <= confidence <= 1
+                or segments[-1].end_seconds - segments[-1].start_seconds < 0.7
+                or len(segments[-1].text.strip()) < 12
+            ):
+                return reject("weak_evidence")
+            if (
+                target != self._pending
+                or now_ns - self._last_ns > self.settings.max_gap_ms * 1_000_000
+            ):
+                self.clear_pending()
+                self._pending, self._first_ns = target, now_ns
+            # The request watermark may advance when an earlier utterance completes.
+            # Only a new latest completed utterance can confirm the current target.
+            evidence_sequence = segments[-1].sequence
+            if evidence_sequence <= self._sequence:
+                return "awaiting_evidence"
+            self._sequence, self._last_ns = evidence_sequence, now_ns
+            self._count += 1
+            if (
+                self._count < self.settings.confirmations + int(switching)
+                or now_ns - self._first_ns < self.settings.persistence_ms * 1_000_000
+            ):
+                return "awaiting_evidence"
+        self._seen.add(prediction.decision_id)
+        # Bounded to this presenter lifetime; no transcript, provider answer or coordinates.
+        if len(self._seen) > 2048:
+            self.enabled = False
+            return reject("decision_limit")
+        self._inflight = prediction.decision_id
+        self.clear_pending()
+        return "accepted"
+
+    @property
+    def calibration_sha256(self) -> str | None:
+        return (
+            hashlib.sha256(repr(self.calibration).encode()).hexdigest()
+            if self.calibration
+            else None
+        )
+
+    @property
+    def settings_sha256(self) -> str:
+        return hashlib.sha256(
+            json.dumps(asdict(self.settings), sort_keys=True).encode()
+        ).hexdigest()

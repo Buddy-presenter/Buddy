@@ -26,13 +26,20 @@ from buddy_api.agent_provider import (
     FailureReason,
     Selection,
 )
-from buddy_api.analysis.contracts import AnalysisResult, Model, Region
+from buddy_api.analysis.contracts import AnalysisResult, Model, PowerPointAnalysisResult, Region
 from buddy_api.auth import Principal, authenticated
 from buddy_api.embeddings import EmbeddingFailure
 from buddy_api.persistence.database import Database
 from buddy_api.persistence.errors import PersistenceError
 from buddy_api.persistence.models import AgentQuota, Deck
-from buddy_api.presentation_candidates import Candidate, CandidateRequest, navigation_step, resolve
+from buddy_api.presentation_candidates import (
+    Candidate,
+    CandidateRequest,
+    candidate_action_eligible,
+    candidate_slides,
+    navigation_step,
+    resolve,
+)
 from buddy_api.presentation_sessions import current_ready_analysis, owned_session, snapshot
 
 
@@ -84,6 +91,35 @@ class Target(Model):
     region: Region | None = None
 
 
+class TransitionCheck(Model):
+    expected_state_version: int = Field(ge=0, strict=True)
+    analysis_id: UUID
+    target: Target
+
+
+class TransitionApproval(Model):
+    session_id: UUID
+    analysis_id: UUID
+    state_version: int
+    target: Target
+
+
+async def transition_input(request: Request) -> TransitionCheck:
+    body = bytearray()
+    try:
+        async with asyncio.timeout(3):
+            async for chunk in request.stream():
+                body.extend(chunk)
+                if len(body) > 16384:
+                    raise HTTPException(413, "Transition input is too large.")
+    except TimeoutError:
+        raise HTTPException(408, "Transition input timed out.") from None
+    try:
+        return TransitionCheck.model_validate_json(bytes(body))
+    except (ValueError, ValidationError):
+        raise HTTPException(422, "Invalid transition input.") from None
+
+
 type AgentReason = (
     Literal["explicit", "topic", "correction", "stay", "uncertain", "disabled"] | FailureReason
 )
@@ -126,7 +162,7 @@ class AgentProposal(Model):
 
 @dataclass(frozen=True)
 class AgentInput:
-    analysis: AnalysisResult
+    analysis: AnalysisResult | PowerPointAnalysisResult
     current: str
     focus: str
     identity: str
@@ -173,7 +209,7 @@ async def read_input(
 def options(
     source: AgentInput, candidates: tuple[Candidate, ...]
 ) -> tuple[tuple[Target, ...], list[dict[str, object]]]:
-    slides = list(source.analysis.slides)
+    slides = list(candidate_slides(source.analysis))
     positions = {s.slide_id: i for i, s in enumerate(slides)}
     if source.current not in positions:
         raise AgentFailure("candidates_unavailable")
@@ -212,9 +248,7 @@ def options(
                     a
                     for a in slide.actions
                     if a.action.instance_id == candidate.action_id
-                    and a.usable
-                    and a.state == "validated"
-                    and a.semantic_verified
+                    and candidate_action_eligible(a)
                     and a.action.type == candidate.kind
                 ),
                 None,
@@ -222,7 +256,7 @@ def options(
             if action is None:
                 continue
             target = Target(
-                tool=action.action.type,
+                tool=candidate.kind,
                 slide_id=slide.slide_id,
                 action_id=action.action.instance_id,
                 region=action.action.params.region,
@@ -337,6 +371,85 @@ class AgentRuntime:
 
 def agent_router() -> APIRouter:
     router = APIRouter(prefix="/api/v1/sessions", tags=["presentation agent"])
+
+    transition_schema = TransitionCheck.model_json_schema(
+        ref_template="#/components/schemas/{model}"
+    )
+    # Target and Region components are registered by the typed approval response.
+    transition_schema.pop("$defs", None)
+
+    @router.post(
+        "/{identifier}/transition-check",
+        response_model=TransitionApproval,
+        openapi_extra={
+            "requestBody": {
+                "required": True,
+                "content": {"application/json": {"schema": transition_schema}},
+            }
+        },
+    )
+    async def transition_check(
+        identifier: UUID,
+        values: Annotated[TransitionCheck, Depends(transition_input)],
+        request: Request,
+        response: Response,
+        principal: Annotated[Principal, Depends(authenticated)],
+    ) -> TransitionApproval:
+        """Recheck eligibility immediately before local policy execution; no model call.
+
+        This is not a policy grant or evidence of player completion. The presenter
+        still owns manual control and must fence its capture/source at dispatch.
+        """
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            async with asyncio.timeout(3), request.app.state.database.sessions() as db, db.begin():
+                await db.connection(execution_options={"isolation_level": "REPEATABLE READ"})
+                session = await owned_session(db, principal, identifier)
+                if (
+                    session.status != "active"
+                    or session.autonomy_mode != "autonomous"
+                    or session.state_version != values.expected_state_version
+                    or session.analysis_version_id != values.analysis_id
+                ):
+                    raise HTTPException(409, "Automatic transition state changed.")
+                deck = await db.get(Deck, session.deck_id)
+                if deck is None:
+                    raise HTTPException(404)
+                record, _ = await current_ready_analysis(db, deck, principal.id)
+                if record.id != values.analysis_id or record.source_format not in {"pdf", "pptx"}:
+                    raise HTTPException(409, "This source has no compatible live agent runtime.")
+                analysis = await request.app.state.candidate_analyses.read(db, record, principal.id)
+                source = AgentInput(
+                    analysis,
+                    session.active_slide_id or "",
+                    session.focus_view,
+                    "transition",
+                    Region.model_validate(session.focus_region) if session.focus_region else None,
+                )
+                target = values.target
+                if target.tool == "no_action":
+                    raise HTTPException(422, "No action cannot execute a transition.")
+                candidate = Candidate(
+                    kind=target.tool
+                    if target.tool in {"zoom_region", "highlight_region"}
+                    else "slide",
+                    slide_id=target.slide_id,
+                    action_id=target.action_id,
+                    reason="topic",
+                    score=0,
+                )
+                allowed, _ = options(source, (candidate,))
+                if target not in allowed:
+                    raise HTTPException(409, "The action is no longer eligible.")
+                return TransitionApproval(
+                    session_id=identifier,
+                    analysis_id=record.id,
+                    state_version=session.state_version,
+                    target=target,
+                )
+        except (TimeoutError, SQLAlchemyError, PersistenceError, OSError):
+            raise HTTPException(503, "Transition check unavailable; continue manually.") from None
+
     input_schema = AgentRequest.model_json_schema()
     # Manual bounded body receipt must still publish resolvable OpenAPI schemas.
     input_schema.pop("$defs", None)
@@ -444,7 +557,9 @@ def agent_router() -> APIRouter:
                         )
                         targets, descriptions = options(source, candidates)
                         current_slide = next(
-                            s for s in source.analysis.slides if s.slide_id == source.current
+                            s
+                            for s in candidate_slides(source.analysis)
+                            if s.slide_id == source.current
                         )
                         phase = "selection"
                         selection = await runtime.provider.select(
@@ -455,7 +570,7 @@ def agent_router() -> APIRouter:
                                     "slide": source.current,
                                     "slide_number": next(
                                         i + 1
-                                        for i, s in enumerate(source.analysis.slides)
+                                        for i, s in enumerate(candidate_slides(source.analysis))
                                         if s.slide_id == source.current
                                     ),
                                     "slide_count": len(source.analysis.slides),
@@ -465,9 +580,7 @@ def agent_router() -> APIRouter:
                                         (
                                             a.action.purpose
                                             for a in current_slide.actions
-                                            if a.usable
-                                            and a.state == "validated"
-                                            and a.semantic_verified
+                                            if candidate_action_eligible(a)
                                             and a.action.type == source.focus
                                             and a.action.params.region == source.focus_region
                                         ),

@@ -108,6 +108,8 @@ class MainWindow(QMainWindow):
         self._private_presentation = False
         self.library.present_requested.connect(self._open_saved_pdf)
         self.library.review_requested.connect(self._open_review)
+        self.review.powerpoint_present_requested.connect(self._present_saved_powerpoint)
+        self.review.powerpoint_invalidated.connect(self.present.invalidate_saved_powerpoint)
         self.review.back_requested.connect(lambda: self.navigation.setCurrentRow(1))
         self.review.signin_requested.connect(self._show_account_controls)
         self.library.private_invalidated.connect(self._clear_private_pdf)
@@ -115,6 +117,8 @@ class MainWindow(QMainWindow):
         self.present.executor.completed.connect(self._presentation_completed)
         self.present.executor.idle.connect(self._present_idle)
         self.present.powerpoint_runner.idle.connect(self._powerpoint_idle)
+        self.present.policy_runner.idle.connect(self._powerpoint_idle)
+        self.present.generated_runner.idle.connect(self._powerpoint_idle)
         self.library.activity_changed.connect(self._library_activity)
         self.review.activity_changed.connect(self._review_activity)
         self.home.route_requested.connect(self._select_route)
@@ -268,6 +272,16 @@ class MainWindow(QMainWindow):
             return
         self.review.set_deck(deck_id, title, status, source_format)
         self.navigation.setCurrentRow(2)
+
+    def _present_saved_powerpoint(self, binding: object) -> None:
+        from buddy_desktop.powerpoint_session_binding import PowerPointSessionBinding
+
+        if not isinstance(binding, PowerPointSessionBinding):
+            return
+        if not self.account.account_id or not self.review.token():
+            return
+        self.navigation.setCurrentRow(3)
+        self.present.bind_saved_powerpoint(binding)
 
     def _clear_private_pdf(self) -> None:
         if self._private_presentation:
@@ -618,6 +632,8 @@ class MainWindow(QMainWindow):
             or self.present.session_runner.busy
             or self.review.cleanup_runner.busy
             or self.present.powerpoint_runner.busy
+            or self.present.policy_runner.busy
+            or self.present.generated_runner.busy
         ):
             self._closing = True
             self.runner.stop()
