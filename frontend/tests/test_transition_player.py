@@ -2,7 +2,7 @@
 
 import time
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from threading import Event
 from uuid import uuid4
@@ -207,3 +207,20 @@ def test_guard_exception_fails_closed_with_one_terminal_completion(player, qtbot
     assert len(completions) == 1 and completions[0].status == "rejected"
     assert "private callback details" not in completions[0].message
     assert not persisted
+
+
+def test_provider_failure_breaks_a_model_confirmation_chain(player):
+    from buddy_desktop.transition_policy import Calibration
+
+    page, proposal, current, _, checks = player
+    page.policy.calibration = Calibration("pdf", 0.9, 200, 200, "a" * 64, date(2099, 1, 1), True)
+    proposal.update(decision_source="model", reason="topic", confidence=0.99)
+    page._agent_proposed(proposal)
+    assert not checks
+    page.agent._request_generation = page.agent._generation
+    page.agent._failed(0, "Suggestions unavailable")
+    segment = replace(current[0].segments[0], segment_id="b", sequence=2)
+    current[0] = replace(current[0], segments=(segment,))
+    proposal.update(decision_id=str(uuid4()), sequence=2)
+    page._agent_proposed(proposal)
+    assert not checks and page.executor.current_index == 0

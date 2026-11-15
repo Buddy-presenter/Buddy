@@ -210,6 +210,7 @@ class PresentWidget(Page):
         self.transcript_context = TranscriptContext()
         self.agent = AgentLoop(AgentService(config), self, self.transcript_context.snapshot)
         self.policy = TransitionPolicy()
+        self.agent.unavailable.connect(self.policy.clear_pending)
         self.policy_runner = TaskRunner(self)
         self.policy_runner.succeeded.connect(self._policy_checked)
         self.policy_runner.failed.connect(self._policy_failed)
@@ -993,6 +994,7 @@ class PresentWidget(Page):
                 else None
             )
             if page is None:
+                self.policy.clear_pending()
                 self.agent_proposal.setText("Suggestion unavailable; reopen the presentation.")
                 return
             labels = {
