@@ -21,6 +21,13 @@ from buddy_desktop.slide_contract import (
 from buddy_desktop.slide_surface import SlideSurface
 
 
+def _guard_allows(guard: Callable[[], bool] | None) -> bool:
+    try:
+        return guard is None or guard()
+    except Exception:
+        return False  # Callback failure cannot grant an automatic player commit.
+
+
 def load_image(manifest: Manifest, slide: Slide) -> QImage:
     """Read one immutable, digest-verified PNG beneath the manifest directory."""
     if manifest.pdf_content is not None:
@@ -107,6 +114,7 @@ class SlideExecutor(QObject):
         self.pool.setMaxThreadCount(1)
         self._worker: _Work | None = None
         self._pending: tuple[int, str | None, Action | None] | None = None
+        self._commit_guard: Callable[[], bool] | None = None
         self._sequence = 0
         self._closed = False
 
@@ -164,7 +172,7 @@ class SlideExecutor(QObject):
         )
         return request
 
-    def dispatch(self, value: object) -> int:
+    def dispatch(self, value: object, *, commit_guard: Callable[[], bool] | None = None) -> int:
         request = self._request()
         instance: str | None = None
         try:
@@ -175,6 +183,8 @@ class SlideExecutor(QObject):
             # Reset is always available, even while an image is loading.
             if self.busy and action.type != "reset_view":
                 raise ContractError("Executor is busy; retry after idle.")
+            if not _guard_allows(commit_guard):
+                raise ContractError("The automatic transition expired before execution.")
         except ContractError as exc:
             self._finish(request, instance, "rejected", str(exc))
             return request
@@ -195,6 +205,7 @@ class SlideExecutor(QObject):
                 action,
                 lambda: load_image(manifest, manifest.slides[action.target_index]),
             )
+            self._commit_guard = commit_guard
         return request
 
     @Slot(int, object, str)
@@ -202,9 +213,13 @@ class SlideExecutor(QObject):
         self.surface.check_thread()
         self._worker = None
         pending, self._pending = self._pending, None
+        guard, self._commit_guard = self._commit_guard, None
         if pending is not None:
             _, instance, action = pending
-            if error:
+            if not _guard_allows(guard):
+                # A stale automatic load leaves the last committed view untouched.
+                self._finish(request, instance, "rejected", "The automatic transition expired.")
+            elif error:
                 self.surface.reset()
                 self._finish(request, instance, "failed", error)
             elif action is None:
@@ -226,6 +241,7 @@ class SlideExecutor(QObject):
     def cancel(self) -> None:
         self.surface.check_thread()
         pending, self._pending = self._pending, None
+        self._commit_guard = None
         self.surface.reset()
         if pending is not None:
             self._finish(pending[0], pending[1], "cancelled")

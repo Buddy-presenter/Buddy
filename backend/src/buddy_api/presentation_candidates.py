@@ -7,7 +7,7 @@ import time
 import unicodedata
 from collections import OrderedDict
 from datetime import UTC, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -17,7 +17,15 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.exceptions import HTTPException
 
-from buddy_api.analysis.contracts import AnalysisResult, Model
+from buddy_api.analysis.contracts import (
+    ActionResult,
+    AnalysisResult,
+    Model,
+    PowerPointActionResult,
+    PowerPointAnalysisResult,
+    PowerPointSlideResult,
+    SlideResult,
+)
 from buddy_api.analysis.store import Analyses
 from buddy_api.auth import Principal, authenticated
 from buddy_api.embeddings import EmbeddingFailure
@@ -61,6 +69,24 @@ STOP = frozenset(
         "i",
     ]
 )
+
+
+def candidate_slides(
+    analysis: AnalysisResult | PowerPointAnalysisResult,
+) -> tuple[SlideResult | PowerPointSlideResult, ...]:
+    return cast(tuple[SlideResult | PowerPointSlideResult, ...], analysis.slides)
+
+
+def candidate_action_eligible(action: ActionResult | PowerPointActionResult) -> bool:
+    """Require independent semantic evidence, not only successful Office execution."""
+    if not action.usable or action.state != "validated":
+        return False
+    if action.action.type not in {"zoom_region", "highlight_region"}:
+        return False
+    if hasattr(action, "semantic_verified"):
+        return bool(action.semantic_verified)
+    evidence = getattr(action, "validation", None)
+    return bool(evidence is not None and evidence.semantic_verified)
 
 
 class CandidateRequest(Model):
@@ -119,11 +145,13 @@ class CandidateAnalyses:
     """Briefly reuse region-free typed reads; never cache authorization or usable regions."""
 
     def __init__(self) -> None:
-        self._entries: OrderedDict[tuple[UUID, UUID, str, int], tuple[float, AnalysisResult]] = (
-            OrderedDict()
-        )
+        self._entries: OrderedDict[
+            tuple[UUID, UUID, str, int], tuple[float, AnalysisResult | PowerPointAnalysisResult]
+        ] = OrderedDict()
 
-    async def read(self, db: AsyncSession, record: AnalysisVersion, owner: UUID) -> AnalysisResult:
+    async def read(
+        self, db: AsyncSession, record: AnalysisVersion, owner: UUID
+    ) -> AnalysisResult | PowerPointAnalysisResult:
         # Both callers use REPEATABLE READ. Validation history is append-only:
         # its count identifies the same eligibility snapshot as the canonical read.
         revision = int(
@@ -151,8 +179,8 @@ class CandidateAnalyses:
             self._entries.move_to_end(key)
             return cached[1]
         analysis = await Analyses(db).read(record.id, owner_id=owner)
-        if not isinstance(analysis, AnalysisResult):
-            raise HTTPException(409, "Saved PDF analysis is required.")
+        if not isinstance(analysis, (AnalysisResult, PowerPointAnalysisResult)):
+            raise HTTPException(409, "Saved presentation analysis is required.")
         # A cached read can propose slides only. Any positively usable region always
         # takes the canonical path, including its current evidence and hash checks.
         if record.content_sha256 and not any(a.usable for s in analysis.slides for a in s.actions):
@@ -193,9 +221,12 @@ def navigation_step(text: str) -> int | None:
 
 
 def resolve(
-    analysis: AnalysisResult, current: str, text: str, latest_utterance: str | None = None
+    analysis: AnalysisResult | PowerPointAnalysisResult,
+    current: str,
+    text: str,
+    latest_utterance: str | None = None,
 ) -> tuple[Candidate, ...]:
-    slides = analysis.slides
+    slides = candidate_slides(analysis)
     identifiers = [slide.slide_id for slide in slides]
     if current not in identifiers or not 1 <= len(slides) <= 500:
         raise HTTPException(409, "The session slide map is unavailable.")
@@ -223,9 +254,7 @@ def resolve(
                         (slide.summary.text or "")
                         + " "
                         + " ".join(
-                            a.action.purpose
-                            for a in slide.actions
-                            if a.usable and a.state == "validated" and a.semantic_verified
+                            a.action.purpose for a in slide.actions if candidate_action_eligible(a)
                         )
                     )
                 ),
@@ -249,7 +278,9 @@ def resolve(
         if slide.slide_id not in selected:
             continue
         for action in slide.actions:
-            if not action.usable or action.state != "validated" or not action.semantic_verified:
+            if not candidate_action_eligible(action):
+                continue
+            if action.action.type not in {"zoom_region", "highlight_region"}:
                 continue
             score = len(query & tokens(action.action.purpose))
             if score:

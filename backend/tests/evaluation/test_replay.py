@@ -312,3 +312,65 @@ def test_live_limits_permission_and_missing_key_prevent_calls(sample, monkeypatc
     )
     with pytest.raises(ValueError, match="permission"):
         asyncio.run(run_live(real, digest, 20))
+
+
+@pytest.mark.parametrize("source_format", ["pdf", "pptx"])
+def test_replay_uses_format_specific_production_navigation(sample, source_format):
+    from buddy_api.analysis.contracts import PowerPointAnalysisResult
+
+    corpus, digest, gates, _ = sample
+    raw = corpus.model_dump(mode="json")
+    if source_format == "pptx":
+        for session in raw["sessions"]:
+            analysis = session["analysis"]
+            analysis["source_format"] = "pptx"
+            # Use the real PPTX result contract. Navigation needs summaries only;
+            # regional native eligibility is covered separately by the runtime tests.
+            analysis["inputs"] = None
+            for slide in analysis["slides"]:
+                slide["actions"] = []
+        parsed = Corpus.model_validate(raw)
+        assert isinstance(parsed.sessions[0].analysis, PowerPointAnalysisResult)
+    else:
+        parsed = corpus
+    # Keep only navigation and silence: their requests never need recorded model replies.
+    from buddy_api.presentation_candidates import navigation_step
+
+    sessions = tuple(
+        s.model_copy(
+            update={
+                "frames": tuple(
+                    f
+                    for f in s.frames
+                    if f.request is None or navigation_step(f.request.latest_utterance) is not None
+                )
+            }
+        )
+        for s in parsed.sessions
+    )
+    parsed = parsed.model_copy(update={"sessions": sessions})
+    trace = asyncio.run(replay(parsed, digest))
+    assert trace.observations
+    for observation in trace.observations:
+        assert observation.proposed in observation.allowed
+        assert observation.proposed.tool in {"no_action", "next_slide", "previous_slide"}
+
+
+def test_unknown_office_animation_cannot_pass_policy_gate(sample):
+    corpus, digest, gates, trace = sample
+    trace = policy_trace(corpus, trace)
+    observations = list(trace.observations)
+    i = next(i for i, o in enumerate(observations) if o.applied)
+    observations[i] = observations[i].model_copy(
+        update={"applied": (observations[i].applied[0].model_copy(update={"animated": None}),)}
+    )
+    report = score(
+        corpus,
+        digest,
+        trace.model_copy(update={"observations": tuple(observations)}),
+        gates,
+        release=False,
+    )
+    assert not report["passed"]
+    assert "animation_measurement_required" in report["failures"]
+    assert report["metrics"]["animation_unknown_actions"] == 1

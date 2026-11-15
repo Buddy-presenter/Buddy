@@ -71,7 +71,8 @@ they cannot pass `--release`, which requires captured service/player evidence.
 are bounded to 8 MiB; extra fields, nonfinite numbers, empty corpora, duplicate frame/session
 IDs, missing slides and unordered/out-of-duration frame clocks are rejected.
 
-Each session contains its saved `AnalysisResult`, explicit duration and ordered frames.
+Each session contains its saved PDF `AnalysisResult` or native `PowerPointAnalysisResult`,
+explicit duration and ordered frames.
 Each frame contains `current`, `focus`, `focus_region`, capture-relative `at_ms`, the
 original validated `AgentRequest`, optional saved semantic `candidates`, recorded provider
 HTTP status/body/billed usage and elapsed time, independent `expected` target and scenario
@@ -126,9 +127,9 @@ or applied targets fail every gate, even if the final visible state later become
 Trace provenance is an operator assertion, not a cryptographic attestation; retain the
 private original service/player evidence and have an independent reviewer verify it.
 
-The current agent runtime is proposal-only; #21 owns the autonomous transition policy
-and executor connection. This harness does not supply a substitute policy. Until that
-real integration and permissioned recording evidence exist, `--release` fails closed.
+The decision service remains proposal-only; the integrated #21 desktop policy owns
+admission and execution. The capture adapter below records actual completion signals.
+Until permissioned independent recording evidence exists, release acceptance remains open.
 An imported trace can exercise the full scorer now. Unit-test policy traces are explicitly
 synthetic and are never shipped as real execution evidence.
 
@@ -187,3 +188,48 @@ or in ignored `tests/fixtures/replay/private/` and `replay-artifacts/`. Never up
 recordings as public CI artifacts. Keep consent evidence separately and use only its
 opaque reference in the corpus. Synthetic corpus permission is declared explicitly and
 does not authorize future human recordings or provider calls.
+
+
+## Two-format capture and release acceptance
+
+`Session.analysis` accepts the production PDF or PowerPoint analysis result. Native
+regional targets retain PowerPoint actions and their validation evidence; a PDF analysis
+must never be relabelled as a PowerPoint recording. Both use the production candidate,
+prompt, navigation and allowlist functions. Proposal replay still measures proposals only.
+
+For explicit private player capture, create `buddy_desktop.transition_capture.TransitionCapture`
+with the frozen corpus digest and the correct provenance, policy/model identifiers. For
+each frame, call `arm` with the actual decision identifier, proposal observation (including
+its production allowed targets), local capture clock and corpus frame time. Connect
+`PresentWidget.transition_observed` to `capture.completed`. Export `capture.document()`
+to a new private trace file after capture. Silence/abstention frames must also be armed;
+without a completion signal their applied list stays empty. The recorder rejects duplicate,
+unbound and inferred completions. A mocked microphone, provider or Office boundary uses
+`synthetic_contract`, never `captured_service`.
+
+CI exercises actual Qt PDF commits and the production native adapter with Office substituted,
+including persistence and undo tests. These deterministic tests cover implementation regressions.
+They cannot substitute for permissioned holdout acceptance or interactive Office execution.
+Office completion currently reports unknown animation timing (`animated: null`); the scorer
+fails `animation_measurement_required` until that observation is independently measured.
+Do not replace an unknown measurement with false just to pass a gate.
+
+A dedicated opt-in **Recorded policy release acceptance** workflow scores private evidence
+on a preconfigured interactive Windows runner labelled `replay-acceptance`. Configure the
+`replay-acceptance` environment and `BUDDY_REPLAY_EVIDENCE_ROOT` variable. Install the backend's
+pinned dependencies on that runner. No private artifacts are uploaded or printed. Protect
+that runner/environment from untrusted refs and require operator review before dispatch.
+No hosted CI run is described as a passed recording gate in its absence.
+
+The evidence root must contain `pdf/` and `pptx/`, each with `holdout.json`,
+`holdout-gates.json` and `service-policy-trace.json`. Run locally with:
+
+```sh
+python scripts/check_replay_release.py --evidence-root tests/fixtures/replay/private/release-v1
+```
+
+The command fails if either format is missing, mislabelled, expired, synthetic, incomplete,
+outside gates or lacks real policy evidence. It prints only aggregate failures. Preparation
+instructions are in [evaluation recordings](evaluation-recordings.md). Independent calibration,
+permissioned holdout measurements and real Office acceptance remain outstanding until the
+operator supplies and runs those recordings; no recording results are bundled here.

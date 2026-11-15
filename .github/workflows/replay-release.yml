@@ -1,0 +1,29 @@
+name: Recorded policy release acceptance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  recorded-policy:
+    # Dedicated interactive Windows/Office runner. Private data stays on that host.
+    # Configure this environment with required reviewers; never run fork PR code here.
+    environment: replay-acceptance
+    runs-on: [self-hosted, Windows, replay-acceptance]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Require permissioned evidence for both formats
+        shell: powershell
+        env:
+          PYTHONPATH: backend/src
+          BUDDY_REPLAY_EVIDENCE_ROOT: ${{ vars.BUDDY_REPLAY_EVIDENCE_ROOT }}
+        run: |
+          if (-not $env:BUDDY_REPLAY_EVIDENCE_ROOT) {
+            throw "Configure the private evidence root on the acceptance runner."
+          }
+          python scripts/check_replay_release.py --evidence-root "$env:BUDDY_REPLAY_EVIDENCE_ROOT"

@@ -23,3 +23,7 @@ backend.hcl
 # External sample decks stay in Drive or local-only fixture storage, never in Git.
 tests/fixtures/slides/*.pptx
 !tests/fixtures/slides/Buddy_Extraction_Geometry.pptx
+# Private evaluation inputs and local player traces.
+replay-artifacts/
+policy-artifacts/
+tests/fixtures/replay/private/

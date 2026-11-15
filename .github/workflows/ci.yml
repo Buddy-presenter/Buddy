@@ -148,6 +148,8 @@ jobs:
               exit 1
             fi
           fi
+      - name: Capture actual PDF and native-adapter policy completions
+        run: python -m pytest tests/integration/test_policy_replay_capture.py -q
       - name: Cross-component desktop, API and PostgreSQL integration
         run: python scripts/test.py integration
       - run: python -m build backend

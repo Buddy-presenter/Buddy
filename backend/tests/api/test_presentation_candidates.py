@@ -162,6 +162,72 @@ def test_unusable_region_is_never_a_candidate():
     )
 
 
+def test_powerpoint_slide_summaries_are_searchable_without_promoting_office_actions():
+    from buddy_api.analysis.contracts import (
+        PowerPointAnalysisResult,
+        PowerPointSlideResult,
+        Summary,
+    )
+    from buddy_api.semantic_candidates import documents
+
+    deck = PowerPointAnalysisResult(
+        id=uuid4(),
+        deck_id=uuid4(),
+        version=1,
+        publication="published",
+        analysis_sha256=None,
+        inputs=None,
+        slides=(
+            PowerPointSlideResult(
+                slide_id="slide-0", summary=Summary(status="available", text="Intro"), actions=()
+            ),
+            PowerPointSlideResult(
+                slide_id="slide-1",
+                summary=Summary(status="available", text="Revenue growth"),
+                actions=(),
+            ),
+        ),
+    )
+    assert [item.slide_id for item in documents(deck)] == ["slide-0", "slide-1"]
+    assert any(item.slide_id == "slide-1" for item in resolve(deck, "slide-0", "revenue growth"))
+
+
+def test_powerpoint_execution_validation_alone_does_not_promote_region():
+    from buddy_api.semantic_candidates import documents
+
+    deck = analysis("revenue", "security")
+    deck.slides[0].actions = (
+        SimpleNamespace(
+            usable=True,
+            state="validated",
+            action=SimpleNamespace(
+                instance_id="region-1", type="highlight_region", purpose="revenue"
+            ),
+        ),
+    )
+    assert all(item.action_id is None for item in documents(deck))
+    assert all(item.kind in {"no_change", "slide"} for item in resolve(deck, "slide-0", "revenue"))
+
+
+def test_powerpoint_region_requires_semantic_evidence_and_supported_tool():
+    from buddy_api.presentation_candidates import candidate_action_eligible
+
+    action = SimpleNamespace(
+        usable=True,
+        state="validated",
+        action=SimpleNamespace(type="zoom_region"),
+        validation=SimpleNamespace(semantic_verified=False),
+    )
+    assert not candidate_action_eligible(action)
+    action.validation.semantic_verified = True
+    assert candidate_action_eligible(action)
+    action.action.type = "draw_star"
+    assert not candidate_action_eligible(action)
+    action.action.type = "zoom_region"
+    action.usable = False
+    assert not candidate_action_eligible(action)
+
+
 def payload(**changes):
     return {
         "expected_state_version": 4,

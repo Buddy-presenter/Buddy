@@ -25,7 +25,7 @@ from buddy_api.agent_provider import (
     CohereDecisionProvider,
     Selection,
 )
-from buddy_api.analysis.contracts import AnalysisResult, Model, Region
+from buddy_api.analysis.contracts import AnalysisResult, Model, PowerPointAnalysisResult, Region
 from buddy_api.presentation_agent import (
     AgentInput,
     AgentRequest,
@@ -96,7 +96,7 @@ class Frame(Model):
 class Session(Model):
     id: str = Field(min_length=1, max_length=128)
     duration_ms: int = Field(gt=0, le=86400000, strict=True)
-    analysis: AnalysisResult
+    analysis: AnalysisResult | PowerPointAnalysisResult
     frames: tuple[Frame, ...] = Field(min_length=1, max_length=10000)
 
     @model_validator(mode="after")
@@ -131,7 +131,7 @@ class Corpus(Model):
 class AppliedAction(Model):
     target: Target
     at_ms: int = Field(ge=0, strict=True)
-    animated: bool
+    animated: bool | None
 
 
 class Observation(Model):
@@ -367,6 +367,7 @@ def score(
     if len(observations) != len(trace.observations) or frames.keys() != observations.keys():
         raise ValueError("Trace must contain each corpus frame exactly once")
     policy = trace.policy_version is not None
+    unknown_animations = 0
     correct = abstain_expected = abstain_actual = abstain_correct = false = animations = outside = 0
     latencies = []
     for key, observation in observations.items():
@@ -396,12 +397,13 @@ def score(
                     raise ValueError("Applied action is outside its session/frame clock")
                 if action.at_ms < frame.at_ms + observation.elapsed_ms:
                     raise ValueError("Applied action cannot precede its completed decision")
+                unknown_animations += int(action.animated is None)
                 outside += int(action.target not in targets)
                 identity = action.target.model_dump_json()
                 unnecessary = action.target != frame.expected or identity in seen
                 false += int(unnecessary and action.target.tool != "no_action")
                 animations += int(
-                    action.animated and (unnecessary or action.target.tool == "no_action")
+                    action.animated is True and (unnecessary or action.target.tool == "no_action")
                 )
                 seen.add(identity)
             if observation.applied:
@@ -436,6 +438,7 @@ def score(
         "cost_usd": cost,
         "usage_incomplete_observations": sum(not o.usage_complete for o in trace.observations),
         "outside_candidate_set": outside,
+        "animation_unknown_actions": unknown_animations,
     }
     failures = []
     for name, threshold, minimum in (
@@ -453,6 +456,8 @@ def score(
         failures.append("outside_candidate_set")
     if metrics["usage_incomplete_observations"]:
         failures.append("billing_usage_unknown")
+    if policy and unknown_animations:
+        failures.append("animation_measurement_required")
     if policy and animations > gates.unnecessary_animations_max:
         failures.append("unnecessary_animations")
     tags = {tag for s in corpus.sessions for f in s.frames for tag in f.tags}

@@ -6,6 +6,8 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from backend.tests.support.database import database_settings as database_settings
+from backend.tests.support.database import migrate
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from starlette.exceptions import HTTPException
@@ -27,8 +29,6 @@ from buddy_api.persistence.models import (
 )
 from buddy_api.presentation_sessions import current_ready_analysis
 from buddy_identity.config import IdentityConfig, SessionExpired
-from tests.api.test_database import database_settings as database_settings
-from tests.api.test_database import migrate
 
 CONFIG = IdentityConfig(
     "eu-central-1",
