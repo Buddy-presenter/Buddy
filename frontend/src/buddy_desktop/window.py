@@ -107,6 +107,7 @@ class MainWindow(QMainWindow):
         self.present = PresentWidget(config, settings)
         self._private_presentation = False
         self.library.present_requested.connect(self._open_saved_pdf)
+        self.library.powerpoint_present_requested.connect(self._open_saved_powerpoint)
         self.library.review_requested.connect(self._open_review)
         self.review.powerpoint_present_requested.connect(self._present_saved_powerpoint)
         self.review.powerpoint_invalidated.connect(self.present.invalidate_saved_powerpoint)
@@ -272,6 +273,11 @@ class MainWindow(QMainWindow):
             return
         self.review.set_deck(deck_id, title, status, source_format)
         self.navigation.setCurrentRow(2)
+
+    def _open_saved_powerpoint(self, deck_id: object, title: str, status: str) -> None:
+        if isinstance(deck_id, UUID):
+            self.review.set_deck(deck_id, title, status, "pptx", present=True)
+            self.navigation.setCurrentRow(2)
 
     def _present_saved_powerpoint(self, binding: object) -> None:
         from buddy_desktop.powerpoint_session_binding import PowerPointSessionBinding

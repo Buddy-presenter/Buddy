@@ -210,6 +210,7 @@ class ReviewWidget(Page):
         )
         self._cleanup_queue: list[PowerPointReviewSession] = []
         self._pptx_session: PowerPointReviewSession | None = None
+        self._present_on_load = False
         self._evidence_dialog: QDialog | None = None
         self.source_format = "pdf"
         self.generation = 0
@@ -452,19 +453,28 @@ class ReviewWidget(Page):
         self.account_changed()
 
     def set_deck(
-        self, deck_id: UUID, title: str, status: str = "uploaded", source_format: str = "pdf"
+        self,
+        deck_id: UUID,
+        title: str,
+        status: str = "uploaded",
+        source_format: str = "pdf",
+        *,
+        present: bool = False,
     ) -> None:
         if source_format not in {"pdf", "pptx"}:
             raise ServiceError("Unsupported presentation source format.")
         self.source_format = source_format
         self.deck_id, self.deck_title, self.deck_status = deck_id, title, status
         self.clear_private(keep_deck=True)
+        self._present_on_load = present
         self.pending_load = True
         if self.active:
             self.load()
 
     def activate(self, active: bool) -> None:
         self.active = active
+        if not active:
+            self._present_on_load = False
         if active and self.deck_id is not None and self.token() and self.pdf_content is None:
             if self.runner.busy:
                 if self.request_generation != self.generation:
@@ -519,6 +529,7 @@ class ReviewWidget(Page):
                 self.load()
 
     def clear_private(self, *, keep_deck: bool = False) -> None:
+        self._present_on_load = False
         self.powerpoint_invalidated.emit()
         self._close_evidence()
         self.details_toggle.setChecked(False)
@@ -779,6 +790,7 @@ class ReviewWidget(Page):
         if self.closing or identifier < 1 or self.request_generation != self.generation:
             return
         operation, self.pending_operation = self.pending_operation, ""
+        self._present_on_load = False
         if operation == "evidence":
             self.notice.setText("Validation evidence unavailable: " + message)
             self.open_evidence.setEnabled(self.evidence_choice.count() > 0)
@@ -817,6 +829,26 @@ class ReviewWidget(Page):
             return
         if self.source_format == "pptx" and self.action_rows:
             self.action_selected()
+        if self._present_on_load and self.active and not self.runner.busy:
+            if self.present_powerpoint.isEnabled():
+                self._present_on_load = False
+                self.present_saved_powerpoint()
+            elif (
+                self.open_powerpoint.isEnabled()
+                and self._pptx_session is None
+                and self.analysis is not None
+                and self.analysis.publication == "published"
+                and self.pdf_content
+                and self.token()
+            ):
+                self.open_saved_powerpoint()
+                return
+            else:
+                self._present_on_load = False
+                self.notice.setText(
+                    "Present requires a published analysis and a saved source "
+                    "that PowerPoint can open."
+                )
         self.activity_changed.emit(self.cleanup_runner.busy)
 
     def _cleanup_idle(self) -> None:

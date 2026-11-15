@@ -597,4 +597,21 @@ def test_poll_keeps_rows_selectable_and_preserves_latest_selection(
     qtbot.waitUntil(lambda: not library.runner.busy)
     assert library.table.currentRow() == 1  # First deck moved to row 1 in the refreshed data.
     assert rows[0].title in library.detail.toPlainText()
-    assert "Open saved PowerPoint" in library.open_button.toolTip()
+    assert "desktop PowerPoint" in library.open_button.toolTip()
+    assert not library.open_button.isEnabled()
+
+
+def test_present_ready_powerpoint_from_library(desktop_window, monkeypatch, qtbot):
+    from types import SimpleNamespace
+
+    import buddy_desktop.library_widget as library_module
+
+    monkeypatch.setattr(library_module, "sys", SimpleNamespace(platform="win32"))
+    deck = DeckSummary(uuid4(), "Saved PowerPoint", datetime.now(UTC), "ready", 1)
+    monkeypatch.setattr(LibraryService, "list", lambda *_a, **_kw: LibraryPage((deck,), 1, 1, 20))
+    library = signed_in(desktop_window())
+    qtbot.waitUntil(library.open_button.isEnabled)
+    library.powerpoint_present_requested.disconnect()
+    with qtbot.waitSignal(library.powerpoint_present_requested) as signal:
+        library.open_button.click()
+    assert signal.args == [deck.id, deck.title, deck.status]

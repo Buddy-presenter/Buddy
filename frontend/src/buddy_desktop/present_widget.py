@@ -802,6 +802,8 @@ class PresentWidget(Page):
                 self._powerpoint_info is None
                 or (self._powerpoint_binding is not None and self._powerpoint_verified)
             )
+            and self._session_pending_state is None
+            and (self._powerpoint_binding is None or session.state == self._current_local_state())
         )
         self.agent_enabled.setEnabled(available)
         if not available:
@@ -2839,6 +2841,13 @@ class PresentWidget(Page):
         self.microphone_device.setEnabled(bool(mic_available) and not self.microphone.enabled)
         self.microphone_button.setEnabled(
             bool(mic_available) and self.microphone_device.count() > 0
+        )
+        self.microphone_button.setToolTip(
+            "No microphone was detected."
+            if self.microphone_device.count() == 0
+            else "Wait for the saved presentation session to connect and sync the current slide."
+            if self._powerpoint_binding is not None and not mic_available
+            else "Start or stop microphone capture"
         )
         self.microphone_button.setText(
             "Stop microphone" if self.microphone.enabled else "Start microphone"
