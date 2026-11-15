@@ -104,8 +104,7 @@ when independent visual checks are unavailable, PowerPoint still offers slide-le
 retrieval and navigation suggestions without unsafe regional actions.
 
 After selection, a new transaction rechecks session/version/source/analysis and action
-eligibility/geometry. Changed state, analysis content or eligibility becomes no action. Ownership failures remain 401/403/404 and stale session
-input returns 409. No authorization decision is cached. The native client validates
+eligibility/geometry. Changed state, analysis content or eligibility becomes no action. Ownership failures remain 401/403/404. A request rejected before provider selection returns 409 with a stable, safe reason code and request ID: `speech_context_expired`, `session_inactive`, `session_state_changed`, `analysis_changed`, or `analysis_unavailable`. The API emits a `presentation_agent_rejected` structured log containing only the request ID, reason, request age when relevant, and expected/current state versions when relevant. It never logs transcript text, tokens, or credentials. The native client shows a specific recovery hint and request reference for these known conflicts; unknown conflicts remain generic. Fresh speech is required after a stale request; rejected input is never replayed. No authorization decision is cached. The native client validates
 the response and rechecks the complete live snapshot both after HTTP and at GUI
 consumption, including changes that occur before the next scheduling timer.
 

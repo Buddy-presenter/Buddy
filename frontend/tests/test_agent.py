@@ -5,19 +5,49 @@ import threading
 import time
 from dataclasses import replace
 from datetime import UTC, datetime
+from email.message import Message
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from io import BytesIO
 from types import SimpleNamespace
+from urllib.error import HTTPError
 from uuid import uuid4
 
 import pytest
 from PySide6.QtWidgets import QLabel
 
 from buddy_desktop.agent_loop import AgentLoop
-from buddy_desktop.agent_service import AgentService
+from buddy_desktop.agent_service import AgentService, conflict_error
 from buddy_desktop.config import AppConfig
 from buddy_desktop.presentation_session_service import PresentationSession, SessionState
 from buddy_desktop.services import ServiceError
 from buddy_desktop.transcript_context import ContextSegment, ContextSnapshot, TranscriptContext
+
+
+@pytest.mark.parametrize(
+    ("code", "visible"),
+    [
+        ("speech_context_expired", "Speech context expired"),
+        ("session_state_changed", "Presentation changed"),
+        ("unknown_private_detail", "Operation conflicted"),
+    ],
+)
+def test_conflict_response_is_safe_and_correlated(code, visible):
+    reference = str(uuid4())
+    headers = Message()
+    headers["X-Request-ID"] = reference
+    body = json.dumps(
+        {
+            "error": {"code": code, "message": "private transcript must not be shown"},
+            "request_id": reference,
+        }
+    ).encode()
+    error = HTTPError("https://buddy.invalid/agent", 409, "Conflict", headers, BytesIO(body))
+
+    with pytest.raises(ServiceError) as raised:
+        raise conflict_error(error)
+    assert visible in str(raised.value)
+    assert reference in str(raised.value)
+    assert "private transcript" not in str(raised.value)
 
 
 def inputs():
