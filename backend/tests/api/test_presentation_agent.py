@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
@@ -137,8 +138,53 @@ def test_options_derive_navigation_and_only_usable_authoritative_regions():
     selected = Selection(choice="c5", reason="topic", confidence=0.9, evidence=(0,))
     assert checked_selection(selected, targets, 1) == targets[-1]
     assert [d["id"] for d in descriptions] == [f"c{i}" for i in range(6)]
+    assert not descriptions[-1]["is_current_view"]
+    focused = replace(source, focus_region=action.action.params.region)
+    assert options(focused, candidates)[1][-1]["is_current_view"]
     action.semantic_verified = False
     assert "zoom_region" not in {t.tool for t in options(source, candidates)[0]}
+
+
+def test_natural_navigation_options_do_not_depend_on_semantic_shortlist():
+    from backend.tests.api.test_presentation_candidates import analysis
+
+    deck = analysis("introduction", "sales", "reliability", "pricing")
+    source = AgentInput(deck, "slide-1", "slide", "hash")
+    candidates = (
+        Candidate(kind="no_change", slide_id="slide-1", reason="stay", score=0),
+        Candidate(kind="slide", slide_id="slide-3", reason="topic", score=1),
+    )
+    targets, _ = options(source, candidates)
+    assert {(t.tool, t.slide_id) for t in targets} == {
+        ("no_action", "slide-1"),
+        ("go_to_slide", "slide-3"),
+        ("previous_slide", "slide-0"),
+        ("next_slide", "slide-2"),
+    }
+    at_start, _ = options(replace(source, current="slide-0"), ())
+    assert {t.tool for t in at_start} == {"no_action", "next_slide"}
+
+
+def test_neighbor_reservation_preserves_every_retrieved_alternative_within_ten_options():
+    from backend.tests.api.test_presentation_candidates import analysis
+
+    from buddy_api.analysis.contracts import Region
+
+    deck = analysis(*(f"Summary {i}" for i in range(10)))
+    source = AgentInput(deck, "slide-5", "zoom_region", "hash", Region(x=1, y=2, width=3, height=4))
+    candidates = (
+        Candidate(kind="no_change", slide_id="slide-5", reason="stay", score=0),
+        *(
+            Candidate(kind="slide", slide_id=f"slide-{i}", reason="topic", score=1)
+            for i in (5, 0, 1, 2, 7, 8, 9)
+        ),
+    )
+    targets, descriptions = options(source, candidates)
+    assert len(targets) == len(descriptions) == 10
+    assert {f"slide-{i}" for i in (0, 1, 2, 7, 8, 9)} <= {t.slide_id for t in targets}
+    assert descriptions[-1]["id"] == "c9"
+    selection = Selection(choice="c9", reason="explicit", confidence=0.9, evidence=(0,))
+    assert checked_selection(selection, targets, 1).tool == "next_slide"
 
 
 @pytest.mark.postgres

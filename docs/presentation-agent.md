@@ -53,12 +53,17 @@ sent by the desktop. Bodies are bounded to 64 KiB and five seconds.
 
 The server reads active session, current source/job/analysis and canonical region
 eligibility in a short repeatable-read transaction. It closes the transaction before
-embeddings or Chat, builds at most eight options including no action, and resolves the
-provider's opaque `c0`–`c7` choice back to a server-owned target. Missing options,
+embeddings or Chat, builds at most ten options including no action, and resolves the
+provider's opaque `c0`–`c9` choice back to a server-owned target. Missing options,
 invented ids, invalid evidence, malformed JSON, tools/code, truncation and nonfinite
 confidence are rejected. Region geometry is taken from the saved validated action,
 never the provider. Options contain bounded summaries/purposes and current-view context;
-the provider does not receive the whole deck or arbitrary callable tools.
+the provider does not receive the whole deck or arbitrary callable tools. Up to eight #19
+candidates are retained, with at most two authoritative adjacent slides added; semantic
+hits are not evicted to make room. Natural navigation therefore does not depend on four
+English command spellings or whether a neighbor was semantically shortlisted. Current
+focused purpose/current-view markers distinguish an already visible validated region;
+unknown manual focus is not assigned an invented semantic label.
 
 Tools are `no_action`, `next_slide`, `previous_slide`, `go_to_slide`, `reset_view`,
 `zoom_region`, and `highlight_region`. Targets contain slide_id, optional action_id,

@@ -130,6 +130,7 @@ class AgentInput:
     current: str
     focus: str
     identity: str
+    focus_region: Region | None = None
 
 
 async def read_input(
@@ -158,7 +159,15 @@ async def read_input(
                 + str(deck.source_version_id)
             ).encode()
         ).hexdigest()
-        return AgentInput(analysis, session.active_slide_id or "", session.focus_view, identity)
+        return AgentInput(
+            analysis,
+            session.active_slide_id or "",
+            session.focus_view,
+            identity,
+            Region.model_validate(session.focus_region)
+            if session.focus_region is not None
+            else None,
+        )
 
 
 def options(
@@ -170,7 +179,12 @@ def options(
         raise AgentFailure("candidates_unavailable")
     targets = [Target(tool="no_action", slide_id=source.current)]
     descriptions: list[dict[str, object]] = [
-        {"id": "c0", "tool": "no_action", "content": "Keep the current view"}
+        {
+            "id": "c0",
+            "tool": "no_action",
+            "content": "Keep the current view",
+            "is_current_view": True,
+        }
     ]
     for candidate in candidates:
         slide = next((s for s in slides if s.slide_id == candidate.slide_id), None)
@@ -222,10 +236,36 @@ def options(
                 "tool": target.tool,
                 "slide_number": positions[slide.slide_id] + 1,
                 "content": content,
+                "is_current_view": target.slide_id == source.current
+                and target.tool == source.focus
+                and target.region == source.focus_region,
             }
         )
         targets.append(target)
-    return tuple(targets[:8]), descriptions[:8]
+    # Natural or multilingual navigation may not resemble any slide summary.
+    # Preserve all retrieved alternatives and add the two authoritative neighbors,
+    # rather than requiring English command spellings or evicting semantic hits.
+    for offset, tool in ((-1, "previous_slide"), (1, "next_slide")):
+        position = positions[source.current] + offset
+        if not 0 <= position < len(slides):
+            continue
+        neighbor = slides[position]
+        target = Target.model_validate({"tool": tool, "slide_id": neighbor.slide_id})
+        if target in targets:
+            continue
+        descriptions.append(
+            {
+                "id": f"c{len(targets)}",
+                "tool": tool,
+                "slide_number": position + 1,
+                "content": (neighbor.summary.text or "")[:1200],
+                "is_current_view": False,
+            }
+        )
+        targets.append(target)
+    if len(targets) > 10:
+        raise AgentFailure("candidates_unavailable")
+    return tuple(targets), descriptions
 
 
 def checked_selection(
@@ -395,6 +435,18 @@ def agent_router() -> APIRouter:
                                     "slide": source.current,
                                     "focus": source.focus,
                                     "summary": (current_slide.summary.text or "")[:1200],
+                                    "focused_purpose": next(
+                                        (
+                                            a.action.purpose
+                                            for a in current_slide.actions
+                                            if a.usable
+                                            and a.state == "validated"
+                                            and a.semantic_verified
+                                            and a.action.type == source.focus
+                                            and a.action.params.region == source.focus_region
+                                        ),
+                                        None,
+                                    ),
                                 },
                                 "options": descriptions,
                             }
