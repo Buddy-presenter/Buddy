@@ -26,13 +26,20 @@ from buddy_api.agent_provider import (
     FailureReason,
     Selection,
 )
-from buddy_api.analysis.contracts import AnalysisResult, Model, Region
+from buddy_api.analysis.contracts import AnalysisResult, Model, PowerPointAnalysisResult, Region
 from buddy_api.auth import Principal, authenticated
 from buddy_api.embeddings import EmbeddingFailure
 from buddy_api.persistence.database import Database
 from buddy_api.persistence.errors import PersistenceError
 from buddy_api.persistence.models import AgentQuota, Deck
-from buddy_api.presentation_candidates import Candidate, CandidateRequest, navigation_step, resolve
+from buddy_api.presentation_candidates import (
+    Candidate,
+    CandidateRequest,
+    candidate_action_eligible,
+    candidate_slides,
+    navigation_step,
+    resolve,
+)
 from buddy_api.presentation_sessions import current_ready_analysis, owned_session, snapshot
 
 
@@ -126,7 +133,7 @@ class AgentProposal(Model):
 
 @dataclass(frozen=True)
 class AgentInput:
-    analysis: AnalysisResult
+    analysis: AnalysisResult | PowerPointAnalysisResult
     current: str
     focus: str
     identity: str
@@ -173,7 +180,7 @@ async def read_input(
 def options(
     source: AgentInput, candidates: tuple[Candidate, ...]
 ) -> tuple[tuple[Target, ...], list[dict[str, object]]]:
-    slides = list(source.analysis.slides)
+    slides = list(candidate_slides(source.analysis))
     positions = {s.slide_id: i for i, s in enumerate(slides)}
     if source.current not in positions:
         raise AgentFailure("candidates_unavailable")
@@ -212,9 +219,7 @@ def options(
                     a
                     for a in slide.actions
                     if a.action.instance_id == candidate.action_id
-                    and a.usable
-                    and a.state == "validated"
-                    and a.semantic_verified
+                    and candidate_action_eligible(a)
                     and a.action.type == candidate.kind
                 ),
                 None,
@@ -222,7 +227,7 @@ def options(
             if action is None:
                 continue
             target = Target(
-                tool=action.action.type,
+                tool=candidate.kind,
                 slide_id=slide.slide_id,
                 action_id=action.action.instance_id,
                 region=action.action.params.region,
@@ -444,7 +449,9 @@ def agent_router() -> APIRouter:
                         )
                         targets, descriptions = options(source, candidates)
                         current_slide = next(
-                            s for s in source.analysis.slides if s.slide_id == source.current
+                            s
+                            for s in candidate_slides(source.analysis)
+                            if s.slide_id == source.current
                         )
                         phase = "selection"
                         selection = await runtime.provider.select(
@@ -455,7 +462,7 @@ def agent_router() -> APIRouter:
                                     "slide": source.current,
                                     "slide_number": next(
                                         i + 1
-                                        for i, s in enumerate(source.analysis.slides)
+                                        for i, s in enumerate(candidate_slides(source.analysis))
                                         if s.slide_id == source.current
                                     ),
                                     "slide_count": len(source.analysis.slides),
@@ -465,9 +472,7 @@ def agent_router() -> APIRouter:
                                         (
                                             a.action.purpose
                                             for a in current_slide.actions
-                                            if a.usable
-                                            and a.state == "validated"
-                                            and a.semantic_verified
+                                            if candidate_action_eligible(a)
                                             and a.action.type == source.focus
                                             and a.action.params.region == source.focus_region
                                         ),
