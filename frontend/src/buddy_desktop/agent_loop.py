@@ -33,7 +33,9 @@ class AgentLoop(QObject):
         self._current: ContextSnapshot | None = None
         self._submitted: ContextSnapshot | None = None
         self._last_revision: tuple[object, ...] | None = None
-        self._last_sent = float("-inf")
+        self._not_before = float("-inf")
+        self._deferred_revision: tuple[object, ...] | None = None
+        self._deferrals = 0
         self._request_generation = -1
         self._prepared_for: str | None = None
         self._preparing_for: str | None = None
@@ -44,6 +46,8 @@ class AgentLoop(QObject):
             self.enabled = enabled
             self._generation += 1
             self._last_revision = None
+            self._deferred_revision = None
+            self._deferrals = 0
             self._current = None
             self._prepare_failed_for = None
             self.proposed.emit(None)
@@ -85,11 +89,11 @@ class AgentLoop(QObject):
         if (
             self.runner.busy
             or revision == self._last_revision
-            or time.monotonic() - self._last_sent < 3.2
+            or time.monotonic() < self._not_before
         ):
             return
         self._last_revision, self._submitted = revision, context
-        self._last_sent, self._request_generation = time.monotonic(), self._generation
+        self._not_before, self._request_generation = time.monotonic() + 3.2, self._generation
         self.status.emit("Considering your latest speech…")
 
         def current() -> ContextSnapshot:
@@ -115,6 +119,18 @@ class AgentLoop(QObject):
             and current is not None
             and self._submitted.matches(current)
         ):
+            if isinstance(result, dict) and result.get("reason") == "paced":
+                # No provider attempt was spent. Retain only the live latest input.
+                if self._deferred_revision != self._last_revision:
+                    self._deferred_revision, self._deferrals = self._last_revision, 0
+                self._deferrals += 1
+                delay = result.get("retry_after_ms")
+                if self._deferrals <= 2 and type(delay) is int and 1 <= delay <= 5000:
+                    self._last_revision = None
+                    self._not_before = time.monotonic() + delay / 1000
+                    self.proposed.emit(None)
+                    self.status.emit("Waiting for the shared suggestion allowance…")
+                    return
             self.proposed.emit(result)
             self.status.emit("Suggestion ready • slide controls remain manual")
 

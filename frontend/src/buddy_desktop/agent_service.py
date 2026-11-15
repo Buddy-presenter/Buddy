@@ -91,6 +91,7 @@ class AgentService:
                 "confidence",
                 "evidence",
                 "elapsed_ms",
+                "retry_after_ms",
             }:
                 raise ValueError
             for key, value in (
@@ -118,6 +119,12 @@ class AgentService:
             ):
                 raise ValueError
             confidence = result["confidence"]
+            retry_after = result["retry_after_ms"]
+            if result["reason"] == "paced":
+                if type(retry_after) is not int or not 1 <= retry_after <= 5000:
+                    raise ValueError
+            elif retry_after is not None:
+                raise ValueError
             if confidence is not None and (
                 type(confidence) not in {int, float}
                 or not math.isfinite(confidence)
@@ -179,5 +186,14 @@ class AgentService:
             raise ServiceError(
                 f"Suggestions unavailable ({status}); continue presenting manually."
             ) from None
-        except (URLError, OSError, TimeoutError, ValueError, TypeError, KeyError, AttributeError):
+        except (
+            URLError,
+            OSError,
+            TimeoutError,
+            ValueError,
+            TypeError,
+            KeyError,
+            AttributeError,
+            RecursionError,
+        ):
             raise ServiceError("Suggestions unavailable; continue presenting manually.") from None

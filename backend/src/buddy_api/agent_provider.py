@@ -27,8 +27,9 @@ type FailureReason = Literal[
 class AgentFailure(Exception):
     """Contains a finite public reason only, never provider messages."""
 
-    def __init__(self, code: FailureReason):
+    def __init__(self, code: FailureReason, retry_after_ms: int | None = None):
         self.code = code
+        self.retry_after_ms = retry_after_ms
         super().__init__(code)
 
 
@@ -186,5 +187,5 @@ class CohereDecisionProvider:
             raise AgentFailure("deadline") from None
         except httpx.HTTPError:
             raise AgentFailure("provider_unavailable") from None
-        except (ValueError, KeyError, TypeError, AttributeError, IndexError):
+        except (ValueError, KeyError, TypeError, AttributeError, IndexError, RecursionError):
             raise AgentFailure("invalid_output") from None

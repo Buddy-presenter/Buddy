@@ -438,3 +438,23 @@ def test_persistent_quota_atomic_pacing_reset_and_budget(agent_api):
             assert (await db.scalar(select(AgentQuota))).calls == 1
 
     client.portal.call(check)
+
+
+@pytest.mark.postgres
+def test_paced_admission_includes_wait_and_spends_no_additional_quota(agent_api):
+    client, ids, provider = agent_api
+    path = f"/api/v1/sessions/{ids['sessions']}/agent"
+    headers = {"Authorization": "Bearer owner"}
+    assert client.post(path, headers=headers, json=payload()).status_code == 200
+    reply = client.post(path, headers=headers, json=payload())
+    assert reply.status_code == 200
+    assert reply.json()["reason"] == "paced"
+    assert reply.json()["decision_source"] == "fallback"
+    assert 1 <= reply.json()["retry_after_ms"] <= 3250
+    assert len(provider.calls) == 1
+
+    async def count():
+        async with client.app.state.database.sessions() as db:
+            return (await db.scalar(select(AgentQuota))).calls
+
+    assert client.portal.call(count) == 1

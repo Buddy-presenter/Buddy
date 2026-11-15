@@ -172,6 +172,19 @@
           "reason": {
             "$ref": "#/components/schemas/AgentReason"
           },
+          "retry_after_ms": {
+            "anyOf": [
+              {
+                "maximum": 5000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry After Ms"
+          },
           "sequence": {
             "title": "Sequence",
             "type": "integer"

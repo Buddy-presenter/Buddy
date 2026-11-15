@@ -101,7 +101,10 @@ otherwise valid result. Embeddings retain their own bounded adapter and allowanc
 The Qt scheduler runs off the GUI thread, with one in-flight operation, newest-only
 coalescing, no queue of old transcripts, no fixed post-final wait, and at least 3.2
 seconds between requests. New completed revisions can trigger requests; the same
-revision is not automatically retried. New partials invalidate prior results but are
+revision is not automatically retried after a provider failure. A `paced` response
+includes bounded `retry_after_ms`: since no provider attempt was spent, the latest
+still-fresh revision can be deferred at most twice without entering a FIFO. Expired or
+changed input is discarded rather than retried. New partials invalidate prior results but are
 not themselves submitted. Preparation has its existing 125-second client bound and
 stays off the GUI thread; shutdown waits for bounded work after the event loop exits.
 
@@ -125,7 +128,8 @@ or zero-retention processing. Agent requests/results are not persisted as speech
 The existing five-minute speech journal is unchanged, as are its backup limitations.
 
 The `presentation_agent_decision` operational log contains only decision_id, request_id, finite tool,
-finite reason, decision_source, elapsed_ms and fixed model id. No transcripts, summaries, prompts, raw
+finite reason, decision_source, elapsed_ms, operation phase, a whitelisted dependency
+failure code and fixed model id. No transcripts, summaries, prompts, raw
 provider responses, evidence text, secret keys, action coordinates or exception messages
 are logged. Evidence indexes/confidence live in the no-store response, not ordinary logs.
 Failures return safe finite status/reason codes; they do not cause slide movement.

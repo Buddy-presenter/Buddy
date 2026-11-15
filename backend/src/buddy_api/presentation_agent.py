@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import math
 import sys
 import time
 from dataclasses import dataclass
@@ -104,6 +105,7 @@ class AgentProposal(Model):
     confidence: float | None = Field(default=None, ge=0, le=1)
     evidence: tuple[int, ...] = ()
     elapsed_ms: int = Field(ge=0)
+    retry_after_ms: int | None = Field(default=None, ge=1, le=5000)
 
 
 @dataclass(frozen=True)
@@ -245,8 +247,10 @@ class AgentRuntime:
             now = await db.scalar(select(func.clock_timestamp()))
             assert now is not None
             month = now.strftime("%Y-%m")
-            if row.last_called_at is not None and (now - row.last_called_at).total_seconds() < 3.2:
-                raise AgentFailure("paced")
+            if row.last_called_at is not None:
+                remaining = 3.2 - (now - row.last_called_at).total_seconds()
+                if remaining > 0:
+                    raise AgentFailure("paced", min(5000, math.ceil(remaining * 1000) + 50))
             if row.month != month:
                 row.month, row.calls = month, 0
             if row.calls >= self.settings.monthly_limit:
@@ -297,6 +301,9 @@ def agent_router() -> APIRouter:
         started = time.monotonic()
         runtime: AgentRuntime | None = request.app.state.presentation_agent
         admitted = False
+        retry_after_ms = None
+        phase = "session"
+        failure_detail = None
         try:
             async with asyncio.timeout(4.5):
                 source = await read_input(request, principal, identifier, values)
@@ -305,6 +312,7 @@ def agent_router() -> APIRouter:
                 decision_source: Literal["model", "navigation", "fallback"] = "fallback"
                 selection = None
                 if runtime is not None:
+                    phase = "admission"
                     if principal.id in runtime.active or len(runtime.active) >= 16:
                         raise AgentFailure("busy")
                     runtime.active.add(principal.id)
@@ -340,6 +348,7 @@ def agent_router() -> APIRouter:
                     else:
                         # Reserve first: exhausted/fast clients cannot spend query quota.
                         await runtime.reserve(request.app.state.database)
+                        phase = "retrieval"
                         semantic = request.app.state.semantic_candidates
                         candidates = (
                             await semantic.retrieve(
@@ -361,6 +370,7 @@ def agent_router() -> APIRouter:
                         current_slide = next(
                             s for s in source.analysis.slides if s.slide_id == source.current
                         )
+                        phase = "selection"
                         selection = await runtime.provider.select(
                             {
                                 "segments": [s.text for s in values.segments],
@@ -382,6 +392,7 @@ def agent_router() -> APIRouter:
                     )
                     if (datetime.now(UTC) - values.sent_at).total_seconds() > 5:
                         raise AgentFailure("stale")
+                    phase = "validation"
                     try:
                         fresh = await read_input(request, principal, identifier, values)
                     except HTTPException as exc:
@@ -398,6 +409,22 @@ def agent_router() -> APIRouter:
             target = Target(tool="no_action", slide_id=source.current)
             selection = None
             decision_source = "fallback"
+            if isinstance(exc, AgentFailure) and exc.code == "paced":
+                retry_after_ms = exc.retry_after_ms or 3200
+            if isinstance(exc, EmbeddingFailure):
+                known = {
+                    "embedding_document_limit",
+                    "embedding_budget_exhausted",
+                    "embedding_preparation_busy",
+                    "embedding_index_not_ready",
+                    "embedding_invalid_index",
+                    "embedding_query_busy",
+                    "embedding_invalid_response",
+                    "embedding_input_limit",
+                    "embedding_provider_unavailable",
+                    "embedding_rate_limited",
+                }
+                failure_detail = exc.code if exc.code in known else "other"
         except TimeoutError:
             if "source" not in locals():
                 raise HTTPException(503, "Session unavailable.") from None
@@ -427,6 +454,7 @@ def agent_router() -> APIRouter:
             confidence=selection.confidence if selection else None,
             evidence=selection.evidence if selection else (),
             elapsed_ms=round((time.monotonic() - started) * 1000),
+            retry_after_ms=retry_after_ms,
         )
         # Raw structured event, like existing EMF events: independent of Uvicorn's
         # warning-only logger. Only locally typed finite fields reach this boundary.
@@ -439,6 +467,8 @@ def agent_router() -> APIRouter:
             "elapsed_ms": proposal.elapsed_ms,
             "model": MODEL if runtime else "disabled",
             "decision_source": proposal.decision_source,
+            "phase": phase,
+            "failure_detail": failure_detail,
         }
         try:
             sys.stdout.write(json.dumps(trace, separators=(",", ":")) + "\n")

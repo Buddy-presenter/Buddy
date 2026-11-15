@@ -47,10 +47,26 @@ def inputs():
 
 @pytest.mark.parametrize(
     "corrupt",
-    [None, "state", "tool", "evidence", "region", "confidence", "extra", "expired", "partial"],
+    [
+        None,
+        "state",
+        "tool",
+        "evidence",
+        "region",
+        "confidence",
+        "extra",
+        "expired",
+        "partial",
+        "retry",
+        "capture_expired",
+    ],
 )
-def test_real_http_validates_proposals_and_context(corrupt):
+def test_real_http_validates_proposals_and_context(corrupt, monkeypatch):
     session, context = inputs()
+    clock = [context.observed_ns]
+    # Server startup/OS trust-store work is not elapsed microphone capture time.
+    # Keep this transport fixture deterministic on slower macOS runners.
+    monkeypatch.setattr("buddy_desktop.candidate_service.time.monotonic_ns", lambda: clock[0])
     current = [context]
     seen = []
 
@@ -73,6 +89,7 @@ def test_real_http_validates_proposals_and_context(corrupt):
                 "sequence": 1,
                 "input_sha256": "a" * 64,
                 "elapsed_ms": 50,
+                "retry_after_ms": None,
                 "target": {
                     "tool": "next_slide",
                     "slide_id": "next",
@@ -96,8 +113,13 @@ def test_real_http_validates_proposals_and_context(corrupt):
                 answer["confidence"] = float("nan")
             if corrupt == "extra":
                 answer["code"] = "bad"
+            if corrupt == "retry":
+                answer["reason"] = "paced"
+                answer["retry_after_ms"] = True
             if corrupt == "expired":
                 current[0] = replace(context, fresh=False)
+            if corrupt == "capture_expired":
+                clock[0] += 5_000_000_001
             if corrupt == "partial":
                 current[0] = replace(
                     context,
@@ -284,5 +306,52 @@ def test_natural_pause_pronoun_correction_and_topic_change_keep_only_live_work(q
         loop.update("token", session, context.snapshot())
         assert not context.snapshot().segments
         assert len(service.calls) == 5
+    finally:
+        loop.wait_for_shutdown()
+
+
+@pytest.mark.parametrize("expire,always_paced", [(False, False), (True, False), (False, True)])
+def test_unspent_admission_is_deferred_without_losing_latest_input(
+    qtbot, monkeypatch, expire, always_paced
+):
+    import buddy_desktop.agent_loop as module
+
+    session, context = inputs()
+    clock = [100.0]
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    class Paced(Service):
+        def propose(self, access, session, snapshot, *, current_context):
+            self.calls.append(snapshot)
+            if always_paced or len(self.calls) == 1:
+                return {"reason": "paced", "retry_after_ms": 100}
+            return {"reason": "topic", "sequence": snapshot.segments[-1].sequence}
+
+    service = Paced()
+    current = [context]
+    loop = AgentLoop(service, current_context=lambda: current[0])
+    loop._prepared_for = session.id
+    loop.set_enabled(True)
+    try:
+        loop.update("token", session, context)
+        qtbot.waitUntil(lambda: not loop.runner.busy)
+        assert len(service.calls) == 1
+        clock[0] += 0.09
+        loop.update("token", session, current[0])
+        assert len(service.calls) == 1
+        if expire:
+            current[0] = replace(context, fresh=False)
+        clock[0] += 0.02
+        loop.update("token", session, current[0])
+        qtbot.waitUntil(lambda: not loop.runner.busy)
+        assert len(service.calls) == (1 if expire else 2)
+        if always_paced:
+            clock[0] += 0.2
+            loop.update("token", session, context)
+            qtbot.waitUntil(lambda: not loop.runner.busy)
+            assert len(service.calls) == 3
+            clock[0] += 10
+            loop.update("token", session, context)
+            assert len(service.calls) == 3  # At most two unspent admission retries.
     finally:
         loop.wait_for_shutdown()
