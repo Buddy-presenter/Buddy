@@ -268,3 +268,102 @@ def test_final_partial_agreeing_final_restarts_model_confirmation_before_schedul
     assert not checks and not page.policy_runner.busy
     assert page.executor.current_index == 0 and not persisted
     assert page.policy_status.text() == "Waiting for a sustained, consistent reference."
+
+
+@pytest.fixture
+def native_player(player, tmp_path, monkeypatch):
+    from frontend.tests.test_powerpoint_session_binding import example
+
+    from buddy_desktop.powerpoint_contract import PowerPointActionResult
+    from buddy_desktop.powerpoint_present import PowerPointPresent
+    from buddy_desktop.powerpoint_session_binding import PowerPointSessionBinding
+
+    page, proposal, context, persisted, checks = player
+    analysis, content, info = example()
+    path = tmp_path / "saved.pptx"
+    path.write_bytes(content)
+    info = replace(info, path=str(path))
+    binding = PowerPointSessionBinding.create(analysis, content, info)
+    page._powerpoint_binding = binding
+    page._native_present = PowerPointPresent(binding)
+    page._powerpoint_info = info
+    page._powerpoint_verified = True
+    page._session = replace(
+        page._session,
+        deck_id=binding.deck_id,
+        analysis_version_id=binding.analysis_id,
+        state=SessionState("slide-1", autonomy_mode="autonomous"),
+    )
+    proposal["analysis_id"] = binding.analysis_id
+    proposal["target"]["slide_id"] = "slide-2"
+    calls = []
+
+    def execute(command, **kwargs):
+        guard = kwargs.get("commit_guard")
+        if guard is not None:
+            assert guard()
+        calls.append(command.kind)
+        index = command.slide_number or (
+            2 if command.kind == "next_slide" else command.target.slide_index
+        )
+        return PowerPointActionResult(
+            command, replace(info, slide_index=index, slide_id=100 + index)
+        )
+
+    monkeypatch.setattr(page.powerpoint, "execute", execute)
+    monkeypatch.setattr(page, "_powerpoint_idle", lambda: None)
+    # Do not request a preview/status from real Office after the substituted native boundary.
+    monkeypatch.setattr(page._powerpoint_poll, "start", lambda: None)
+    return page, proposal, context, persisted, checks, calls, path
+
+
+def test_native_policy_observes_completion_persists_and_undoes(native_player, qtbot):
+    page, proposal, _, persisted, checks, calls, _ = native_player
+    observed = []
+    page.transition_observed.connect(observed.append)
+    page._agent_proposed(proposal)
+    qtbot.waitUntil(
+        lambda: not page.policy_runner.busy and not page.powerpoint_runner.busy and bool(observed)
+    )
+    qtbot.waitUntil(lambda: not page.session_runner.busy and bool(persisted))
+    assert calls == ["next_slide"] and len(checks) == 1
+    assert persisted[-1].active_slide_id == "slide-2"
+    assert observed[0]["source_format"] == "pptx"
+    assert observed[0]["animated"] is None  # Office animation has not been measured.
+    page.policy_undo_button.click()
+    qtbot.waitUntil(lambda: not page.powerpoint_runner.busy and "reset_zoom" in calls)
+    qtbot.waitUntil(
+        lambda: not page.session_runner.busy and persisted[-1].active_slide_id == "slide-1"
+    )
+    assert not page.policy.enabled
+    assert persisted[-1].autonomy_mode == "manual"
+
+
+@pytest.mark.parametrize("change", ["source", "partial", "manual", "disconnect"])
+def test_native_policy_rechecks_delayed_admission(native_player, qtbot, monkeypatch, change):
+    page, proposal, context, persisted, _, calls, path = native_player
+    entered, release = Event(), Event()
+
+    def delayed(*args):
+        entered.set()
+        assert release.wait(5)
+        return {}
+
+    monkeypatch.setattr(page.agent.service, "check_transition", delayed)
+    page._agent_proposed(proposal)
+    qtbot.waitUntil(entered.is_set)
+    try:
+        if change == "source":
+            path.write_bytes(b"changed")
+        elif change == "partial":
+            context[0] = replace(context[0], fresh=False)
+        elif change == "manual":
+            page._native_manual_intent()
+        else:
+            page._context_connected = False
+    finally:
+        release.set()
+    qtbot.waitUntil(lambda: not page.policy_runner.busy and not page.powerpoint_runner.busy)
+    qtbot.waitUntil(lambda: not page.session_runner.busy and page._session_pending_state is None)
+    assert not calls
+    assert not any(s.active_slide_id == "slide-2" for s in persisted)

@@ -2,29 +2,29 @@
 
 ## Current implementation and dependencies
 
-The desktop now has a deterministic policy connected to the real PDF player, owner-bound
-server eligibility checks and versioned session persistence. It defaults off on every
-presentation and application launch. This branch does **not** complete #21's two-format
-acceptance: #183 owns the missing saved PowerPoint speech/candidate/agent integration,
-and #153 owns eligible generated actions in Present. Both remain separate work. Local
-PowerPoint cannot enable this policy; its microphone/manual tools remain available.
-The policy rules accept a format-specific calibration identity, but rule tests with
-`source_format=pptx` are not evidence of a native Office integration.
+The desktop policy connects to the PDF player and saved Windows PowerPoint sessions,
+owner-bound eligibility checks and versioned session persistence. It defaults off.
+PowerPoint uses the exact saved source hash, native slide map and validated Office
+runtime; local unbound slideshows cannot enable automation. Native commands recheck
+source bytes and cancellation before dispatch. Manual input invalidates pending speech,
+and undo restores the previous native slide/view through the same adapter.
 
-No human recordings, real provider evaluation, native Office policy execution or
-measured production calibration are supplied. The PR must remain draft until the
-missing integration and independent acceptance evidence exist. #25 remains incomplete
-until it evaluates both formats and enforces real policy/player release evidence.
+Synthetic tests cover native admission, completion, persistence, undo and changed
+source/partial/manual/disconnect rejection with Office substituted at its boundary.
+They do not establish actual Office behavior, animation timing or real-world accuracy.
+No permissioned recordings, measured production calibration or independent holdout
+results are supplied. Those acceptance requirements remain open; use
+[evaluation recording preparation](evaluation-recordings.md) to collect the inputs.
 
 ## Presenter controls
 
-1. Open a saved PDF session and enable **Live suggestions** with its existing cloud
+1. Open a saved PDF or supported saved PowerPoint session and enable **Live suggestions** with its existing cloud
    processing disclosure. Start the microphone and wait for the session to sync.
 2. Explicitly enable **Automatic transitions**. Only unambiguous completed next/previous
    commands from the production deterministic navigation path work without calibration.
    Quoted, conditional and negated commands remain on the model path; they do not gain
    navigation permission from a keyword.
-3. For model-driven moves, first load a current consented PDF calibration with
+3. For model-driven moves, first load a current consented calibration for the presentation format with
    **Load calibration…**, then enable automation again. No profile is bundled or loaded
    implicitly. Without one the policy keeps the view and explains why.
 4. Manual controls take priority and clear pending evidence. Manual changes impose a
@@ -154,6 +154,5 @@ immediate commits report `animated=false`; repeated/no-op frames emit no complet
 No transcript, consent document, credential or free-form provider explanation is logged.
 Trace recording/export is explicit evaluation work and must follow recording permission.
 
-Native Office acceptance must separately verify the Windows interactive runtime, exact
-PPTX source/native slide identities, Office version and eligible typed actions once #183
-provides that path. Passing PDF or format-agnostic rule tests cannot stand in for it.
+Native Office acceptance must still separately verify the Windows interactive runtime, exact
+PPTX source/native slide identities, Office version and eligible typed actions on an interactive Office installation. Passing PDF or format-agnostic rule tests cannot stand in for it.
