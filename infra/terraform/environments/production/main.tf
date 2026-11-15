@@ -63,21 +63,27 @@ provider "aws" {
   }
 }
 module "environment" {
-  source                   = "../../modules/environment"
-  providers                = { aws = aws, aws.edge = aws.edge }
-  ingress_mode             = var.ingress_mode
-  environment              = "production"
-  account_id               = var.account_id
-  region                   = var.region
-  api_domain               = var.api_domain
-  zone_id                  = var.zone_id
-  api_image                = var.api_image
-  worker_image             = var.worker_image
-  worker_text_targeting    = var.worker_text_targeting
-  start_services           = var.start_services
-  enable_speech            = var.enable_speech
-  worker_start_services    = var.worker_start_services
-  github_oidc_provider_arn = var.github_oidc_provider_arn
-  vpc_cidr                 = "10.50.0.0/16"
+  source                     = "../../modules/environment"
+  providers                  = { aws = aws, aws.edge = aws.edge }
+  ingress_mode               = var.ingress_mode
+  environment                = "production"
+  account_id                 = var.account_id
+  region                     = var.region
+  api_domain                 = var.api_domain
+  zone_id                    = var.zone_id
+  api_image                  = var.api_image
+  worker_image               = var.worker_image
+  worker_text_targeting      = var.worker_text_targeting
+  start_services             = var.start_services
+  enable_speech              = var.enable_speech
+  enable_semantic_candidates = var.enable_semantic_candidates
+  worker_start_services      = var.worker_start_services
+  github_oidc_provider_arn   = var.github_oidc_provider_arn
+  vpc_cidr                   = "10.50.0.0/16"
 }
 output "deployment" { value = module.environment }
+
+variable "enable_semantic_candidates" {
+  type    = bool
+  default = false
+}

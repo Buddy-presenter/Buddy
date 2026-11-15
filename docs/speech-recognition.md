@@ -33,8 +33,9 @@ The native client now transmits 16 kHz mono PCM16, while hardware continues capt
 its native rate. Older supported 8–96 kHz protocol clients remain compatible. The API
 keeps receiving disconnects independently of upstream writes: a bounded eight-packet
 queue prevents a stalled provider from hiding client disconnects or accumulating an
-unbounded audio backlog. A full queue returns retryable `audio_backlog`; the old stream
-and queued audio are discarded. This removes the additional upstream-send wait before
+unbounded audio backlog. A full queue has a bounded 250 ms drain wait for brief socket/scheduler bursts; a
+packet waiting over 500 ms or a queue that cannot drain returns retryable
+`audio_backlog`. The old stream and queued audio are discarded. This removes the additional upstream-send wait before
 cleanup, while preserving bounded provider close and owner admission.
 
 A valid recognition result over five seconds behind capture is discarded and uses the

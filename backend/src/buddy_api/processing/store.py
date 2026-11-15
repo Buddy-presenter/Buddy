@@ -3,7 +3,7 @@
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
-from sqlalchemy import exists, func, select, text
+from sqlalchemy import delete, exists, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -13,6 +13,7 @@ from buddy_api.persistence.models import (
     Deck,
     DeckExtraction,
     JobOutbox,
+    PDFProcessingCheckpoint,
     ProcessingJob,
 )
 from buddy_api.persistence.repositories import Extractions
@@ -171,6 +172,7 @@ async def claim(
             "pdf_analysis.v1",
             "pdf_render",
             "provider",
+            "grounding",
             "validation",
             "pptx_metadata.v1",
             "pptx_analysis.v1",
@@ -231,6 +233,7 @@ async def defer_for_capacity(session: AsyncSession, message: Message) -> bool:
             "pdf_analysis.v1",
             "pdf_render",
             "provider",
+            "grounding",
             "validation",
             "pptx_metadata.v1",
             "pptx_analysis.v1",
@@ -278,7 +281,10 @@ async def advance_stage(
     progress: int,
 ) -> bool:
     """Persist a truthful, lease-fenced worker stage for library polling."""
-    if stage not in {"pdf_render", "provider", "validation"} or not 0 <= progress <= 95:
+    if (
+        stage not in {"pdf_render", "provider", "grounding", "validation"}
+        or not 0 <= progress <= 95
+    ):
         raise ValueError("Invalid processing stage")
     job = await session.scalar(
         select(ProcessingJob).where(ProcessingJob.id == identifier).with_for_update()
@@ -286,6 +292,7 @@ async def advance_stage(
     if job is None or not valid_lease(job, token):
         return False
     job.stage, job.stage_state = stage, "running"
+    job.error_code = None
     job.progress = max(job.progress, progress)
     return True
 
@@ -362,6 +369,11 @@ async def complete(session: AsyncSession, identifier: UUID, token: UUID, analysi
     )
     job.stage_state, job.progress, job.error_code = "succeeded", 100, None
     job.lease_id = job.lease_until = job.deadline_at = None
+    # Immutable analysis and validation history now own all completed work. Keep
+    # checkpoints only for unfinished/failed jobs, avoiding permanent raw duplicates.
+    await session.execute(
+        delete(PDFProcessingCheckpoint).where(PDFProcessingCheckpoint.job_id == job.id)
+    )
     return True
 
 

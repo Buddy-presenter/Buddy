@@ -285,7 +285,7 @@ async def relay(
     principal: Principal,
 ) -> None:
     timeline = AudioTimeline(start.sample_rate)
-    audio: asyncio.Queue[bytes] = asyncio.Queue(maxsize=8)
+    audio: asyncio.Queue[tuple[bytes, float]] = asyncio.Queue(maxsize=8)
 
     async def receive_audio() -> None:
         # Keep observing disconnects even if the provider stops reading. A
@@ -299,13 +299,18 @@ async def relay(
                 raise SpeechFailure("invalid_audio")
             pcm = timeline.accept(packet)
             try:
-                audio.put_nowait(pcm)
-            except asyncio.QueueFull:
+                # Absorb a short socket/scheduler burst, but never wait long
+                # enough to hide disconnects behind an upstream write again.
+                await asyncio.wait_for(audio.put((pcm, time.monotonic())), 0.25)
+            except TimeoutError:
                 raise SpeechFailure("audio_backlog", True) from None
 
     async def upload() -> None:
         while True:
-            await asyncio.wait_for(provider.send(await audio.get()), 5)
+            pcm, queued_at = await audio.get()
+            if time.monotonic() - queued_at > 0.5:
+                raise SpeechFailure("audio_backlog", True)
+            await asyncio.wait_for(provider.send(pcm), 5)
 
     async def download() -> None:
         sequence = 0

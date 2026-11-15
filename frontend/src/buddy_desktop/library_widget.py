@@ -681,6 +681,23 @@ class LibraryWidget(QWidget):
     def deck_status_text(deck: DeckSummary) -> tuple[str, str]:
         processing = deck.processing
         if processing is not None:
+            if deck.source_format == "pdf":
+                if processing.error_code == "grounding_timeout":
+                    return (
+                        "Region processing timed out",
+                        "Saved AI analysis and completed pages are kept. "
+                        "Processing could not finish locating regions on a page.",
+                    )
+                if processing.error_code == "grounding_failed":
+                    return (
+                        "Region processing failed",
+                        "Saved summaries are kept. A page could not be processed safely.",
+                    )
+                if processing.stage == "grounding" and processing.state in {"analyzing", "queued"}:
+                    return (
+                        "Locating regions",
+                        "AI analysis is saved. Locating highlights and zoom regions page by page.",
+                    )
             if deck.source_format == "pptx":
                 if processing.error_code == "powerpoint_busy":
                     return (

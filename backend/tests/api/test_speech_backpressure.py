@@ -90,3 +90,54 @@ def test_stalled_provider_cannot_accumulate_unbounded_audio():
         assert failure.value.retryable and provider.cancelled
 
     asyncio.run(run())
+
+
+def test_short_socket_burst_drains_without_restart():
+    async def run():
+        completed = asyncio.Event()
+
+        class Provider:
+            sent = 0
+
+            async def send(self, _data):
+                await asyncio.sleep(0.002)
+                self.sent += 1
+                if self.sent == 24:
+                    completed.set()
+
+            async def recv(self):
+                await asyncio.Event().wait()
+
+        class Socket:
+            sequence = 0
+            stamp = 0
+
+            async def receive(self):
+                if self.sequence < 24:
+                    self.sequence += 1
+                    self.stamp = max(time.monotonic_ns(), self.stamp + 1)
+                    # A short burst after scheduler/network jitter, below the
+                    # existing one-second ingress grace and PCM size limit.
+                    return {
+                        "type": "websocket.receive",
+                        "bytes": struct.pack(">Q", self.stamp) + b"\0" * 640,
+                    }
+                await completed.wait()
+                return {"type": "websocket.disconnect"}
+
+        provider = Provider()
+        await asyncio.wait_for(
+            speech.relay(
+                Socket(),
+                provider,
+                None,
+                uuid4(),
+                speech.StartSpeech(version=1, language="en-US", sample_rate=16000),
+                uuid4(),
+                Principal(uuid4(), "generated@example.test"),
+            ),
+            1,
+        )
+        assert provider.sent == 24
+
+    asyncio.run(run())

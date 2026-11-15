@@ -19,6 +19,7 @@ _STAGES = {
     "pdf_render",
     "validation",
     "provider",
+    "grounding",
 }
 _OUTCOMES = {"success", "rejected", "failed", "retry", "dead_letter"}
 _METRICS = {
