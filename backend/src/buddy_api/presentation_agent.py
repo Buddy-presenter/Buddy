@@ -76,6 +76,45 @@ class AgentRequest(Model):
         return self
 
 
+type AgentConflictCode = Literal[
+    "speech_context_expired",
+    "session_inactive",
+    "session_state_changed",
+    "analysis_changed",
+    "analysis_unavailable",
+]
+
+
+class AgentConflict(HTTPException):
+    """A safe, diagnosable conflict while preparing a live suggestion."""
+
+    def __init__(self, code: AgentConflictCode, message: str):
+        super().__init__(status_code=409, detail=message)
+        self.code = code
+        self.public_message = message
+
+
+def agent_conflict(
+    request: Request,
+    code: AgentConflictCode,
+    message: str,
+    **safe_context: str | int,
+) -> AgentConflict:
+    """Emit a content-free correlation event and return a typed conflict."""
+    event = {
+        "event": "presentation_agent_rejected",
+        "request_id": request.state.request_id,
+        "reason": code,
+        **safe_context,
+    }
+    try:
+        sys.stdout.write(json.dumps(event, separators=(",", ":")) + "\n")
+        sys.stdout.flush()
+    except OSError:
+        pass  # Diagnostics must never change the request outcome.
+    return AgentConflict(code, message)
+
+
 class Target(Model):
     tool: Literal[
         "no_action",
@@ -176,15 +215,49 @@ async def read_input(
     async with request.app.state.database.sessions() as db, db.begin():
         await db.connection(execution_options={"isolation_level": "REPEATABLE READ"})
         session = await owned_session(db, principal, identifier)
-        if session.status != "active" or session.state_version != values.expected_state_version:
-            raise HTTPException(409, "Session changed; wait for fresh speech.")
+        if session.status != "active":
+            raise agent_conflict(
+                request,
+                "session_inactive",
+                "Presentation session is no longer active.",
+            )
+        if session.state_version != values.expected_state_version:
+            raise agent_conflict(
+                request,
+                "session_state_changed",
+                "Presentation changed; wait for session sync, then speak again.",
+                expected_state_version=values.expected_state_version,
+                current_state_version=session.state_version,
+            )
         deck = await db.get(Deck, session.deck_id)
         if deck is None:
             raise HTTPException(404)
-        record, _ = await current_ready_analysis(db, deck, principal.id)
+        try:
+            record, _ = await current_ready_analysis(db, deck, principal.id)
+        except HTTPException as exc:
+            if exc.status_code == 409:
+                raise agent_conflict(
+                    request,
+                    "analysis_unavailable",
+                    "The saved analysis is unavailable for live suggestions.",
+                ) from None
+            raise
         if record.id != session.analysis_version_id:
-            raise HTTPException(409, "Analysis changed; reconnect.")
-        analysis = await request.app.state.candidate_analyses.read(db, record, principal.id)
+            raise agent_conflict(
+                request,
+                "analysis_changed",
+                "The saved analysis changed; reopen the presentation.",
+            )
+        try:
+            analysis = await request.app.state.candidate_analyses.read(db, record, principal.id)
+        except HTTPException as exc:
+            if exc.status_code == 409:
+                raise agent_conflict(
+                    request,
+                    "analysis_unavailable",
+                    "The saved analysis is unavailable for live suggestions.",
+                ) from None
+            raise
         # Include all validation eligibility/geometry, even if the analysis id is unchanged.
         identity = hashlib.sha256(
             (
@@ -542,8 +615,14 @@ def agent_router() -> APIRouter:
             values = AgentRequest.model_validate_json(bytes(body))
         except (ValidationError, ValueError):
             raise HTTPException(422, "Invalid completed speech context.") from None
-        if not -2 <= (datetime.now(UTC) - values.sent_at).total_seconds() <= 5:
-            raise HTTPException(409, "Speech context expired.")
+        speech_age_ms = round((datetime.now(UTC) - values.sent_at).total_seconds() * 1000)
+        if not -2000 <= speech_age_ms <= 5000:
+            raise agent_conflict(
+                request,
+                "speech_context_expired",
+                "Speech context expired; wait for fresh speech.",
+                speech_age_ms=speech_age_ms,
+            )
         started = time.monotonic()
         runtime: AgentRuntime | None = request.app.state.presentation_agent
         admitted = False

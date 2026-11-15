@@ -34,7 +34,7 @@ from buddy_api.handoff import HandoffLimitMiddleware, handoff_router
 from buddy_api.library import library_router
 from buddy_api.middleware import RequestContextMiddleware
 from buddy_api.persistence.database import Database, DatabaseProbe
-from buddy_api.presentation_agent import AgentRuntime, agent_router
+from buddy_api.presentation_agent import AgentConflict, AgentRuntime, agent_router
 from buddy_api.presentation_candidates import CandidateAnalyses, candidate_router
 from buddy_api.presentation_sessions import session_router
 from buddy_api.processing.api import processing_router
@@ -252,20 +252,30 @@ def create_app(
 
     @app.exception_handler(HTTPException)
     async def http_error(request: Request, exc: HTTPException) -> JSONResponse:
-        code = {
+        codes = {
             401: "unauthenticated",
             403: "forbidden",
             409: "conflict",
             404: "not_found",
             405: "method_not_allowed",
-        }.get(exc.status_code, "request_rejected")
-        message = {
+        }
+        messages = {
             401: "Authentication required.",
             403: "Access denied.",
             409: "Operation conflicts with stored data.",
             404: "Resource not found.",
             405: "Method not allowed.",
-        }.get(exc.status_code, "Request rejected.")
+        }
+        code = (
+            exc.code
+            if isinstance(exc, AgentConflict)
+            else codes.get(exc.status_code, "request_rejected")
+        )
+        message = (
+            exc.public_message
+            if isinstance(exc, AgentConflict)
+            else messages.get(exc.status_code, "Request rejected.")
+        )
         body = ErrorResponse(
             error=ErrorData(code=code, message=message), request_id=request_id(request)
         )
