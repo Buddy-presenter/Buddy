@@ -360,8 +360,8 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                 or result_semantic_verified != semantic_verified
             ):
                 raise ValueError
-            if powerpoint and (validation_kind != "execution" or result_semantic_verified):
-                raise ValueError
+            # A PowerPoint action can be execution validated today and may later
+            # receive independent visual proof. Keep those two claims distinct.
             usable = result["state"] == "validated" and (powerpoint or result_semantic_verified)
             legacy_execution = (
                 "semantic_verified" not in result

@@ -25,8 +25,12 @@ that application budget. Usage is still counted and provider quotas still apply.
 No key belongs in the desktop, Git, logs, command arguments or Terraform values.
 Backend opt-in defaults false. Existing embeddings setup/index preparation is reused.
 
-Run the matching API and desktop, sign in, open an analyzed PDF in Present, and enable
-**Live suggestions**. The disclosure explains that recognized speech and candidate
+Run the matching API and desktop, sign in, open an analyzed PDF in Present, or open a
+published saved PowerPoint from Library > Review, choose **Open saved PowerPoint**, then
+**Present with Buddy**. The PowerPoint path requires desktop Office on Windows, the
+exact saved source bytes, a matching analysis/version and native slide IDs. Wait for
+the synced presentation session before starting the microphone and enable **Live
+suggestions**. The disclosure explains that recognized speech and candidate
 summaries are sent to Cohere. The desktop prepares the index in a background worker;
 wait for Ready before starting the microphone. If preparation fails, toggle suggestions
 off/on to retry deliberately. This avoids an automatic paid retry loop.
@@ -37,12 +41,28 @@ controls stay manual. Starting a partial, changing the view/session/language, a 
 gap/reconnect, stopping/muting/pausing the microphone, or letting context go stale
 invalidates pending results through the existing rolling context. Leaving Present or
 switching sessions turns suggestions off; the opt-in is not saved across launches.
-Local PowerPoint without a saved API session is not eligible for this runtime.
+Local PowerPoint without a saved API session is not eligible for this runtime. A
+disconnected, changed or unverified Office slideshow stops transcription and discards
+the saved-session binding. The live slide is authoritative when resuming a PowerPoint
+session; Buddy syncs that slide to the server and does not move the audience's show to
+an old saved position. PowerPoint suggestions remain proposals, never commands.
+The native session currently syncs the live slide identity; Office does not provide
+Buddy with a trustworthy region state for arbitrary manual presenter annotations or
+zoom, so those are not represented as a saved focus region. PDF region state remains
+fully tracked. A PowerPoint regional suggestion is eligible only with independent
+semantic evidence; a successful Office drawing or zoom check is insufficient.
 
 Terraform `enable_presentation_agent` defaults false and requires
 `enable_semantic_candidates` for the existing API-only secret. It injects the enable flag
 only into the API, not workers or migrations. Staging requires a separately reviewed
 deployment and operator-populated secret.
+The existing staging worker runs on Linux. It cannot perform Office validation, so
+PowerPoint regions from that worker remain unavailable for action suggestions unless
+an isolated Windows/Office validation route completes its independent checks. A
+published PowerPoint analysis can still support slide-level retrieval and suggestions.
+Before calling staging end to end ready, confirm the deployed API image, database
+migration, feature flags, Cohere secret and Deepgram secret; merging code does not
+enable those services.
 This issue does not apply cloud infrastructure or distribute credentials. Because API
 and workers use strict schema readiness, use the existing compatibility-bridge and
 paused-worker rollout for the additive table. Never downgrade the live database as an
@@ -78,7 +98,10 @@ Tools are `no_action`, `next_slide`, `previous_slide`, `go_to_slide`, `reset_vie
 `zoom_region`, and `highlight_region`. Targets contain slide_id, optional action_id,
 and a region only for validated regional actions. Non-adjacent slide selection is
 explicitly typed. Reset is available only when the persisted current view is focused.
-Only currently usable, validated, semantically verified PDF regions qualify.
+Only currently usable, validated, independently semantically verified regions qualify
+for either format. Office execution proof alone does not qualify a PowerPoint action;
+when independent visual checks are unavailable, PowerPoint still offers slide-level
+retrieval and navigation suggestions without unsafe regional actions.
 
 After selection, a new transaction rechecks session/version/source/analysis and action
 eligibility/geometry. Changed state, analysis content or eligibility becomes no action. Ownership failures remain 401/403/404 and stale session

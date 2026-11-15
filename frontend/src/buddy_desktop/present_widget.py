@@ -52,6 +52,7 @@ from buddy_desktop.powerpoint_contract import (
     PowerPointFrame,
 )
 from buddy_desktop.powerpoint_controls import PowerPointControls
+from buddy_desktop.powerpoint_session_binding import PowerPointSessionBinding
 from buddy_desktop.presentation_session_service import (
     PresentationSession,
     PresentationSessionService,
@@ -251,6 +252,7 @@ class PresentWidget(Page):
         self._queued_powerpoint_operation: tuple[str, str | None] | None = None
         self._powerpoint_path: str | None = None
         self._powerpoint_info: PresentationInfo | None = None
+        self._powerpoint_binding: PowerPointSessionBinding | None = None
         self._powerpoint_verified = False
         self._powerpoint_poll = QTimer(self)
         self._powerpoint_poll.setInterval(500)
@@ -452,7 +454,7 @@ class PresentWidget(Page):
         self.speech_language.currentIndexChanged.connect(lambda _index: self.microphone.stop())
         microphone_layout.addWidget(self.speech_language)
         self.speech_status = QLabel(
-            "Saved PDF sessions: audio is sent to Deepgram (EU). "
+            "Saved PDF and PowerPoint sessions: audio is sent to Deepgram (EU). "
             "Transcript text is available for session sync for five minutes."
         )
         self.speech_status.setTextFormat(Qt.TextFormat.PlainText)
@@ -594,6 +596,8 @@ class PresentWidget(Page):
         self.session_service = PresentationSessionService(config)
 
     def set_account_identity(self, account_id: str | None, access: str | None) -> None:
+        if account_id != self._account_id:
+            self.invalidate_saved_powerpoint()
         if account_id != self._account_id or not access:
             self.microphone.stop()
         if account_id != self._account_id:
@@ -674,10 +678,12 @@ class PresentWidget(Page):
         if message != "Microphone on":
             self.speech.stop()
             self.speech_status.setText(
-                "Transcription off. During a saved PDF session, audio is sent to Deepgram (EU) "
+                "Transcription off. Saved presentation audio is sent to Deepgram (EU) "
                 "and transcript text is available for session sync for five minutes."
             )
-        if message == "Microphone on" and self._powerpoint_info is None:
+        if message == "Microphone on" and (
+            self._powerpoint_info is None or self._powerpoint_binding is not None
+        ):
             self._microphone_pdf_generation += 1
             self._microphone_pdf_poll.start()
             self._microphone_pdf_deadline.start()
@@ -695,10 +701,18 @@ class PresentWidget(Page):
         if (
             not self._closing
             and self.microphone.enabled
-            and self._powerpoint_info is None
+            and (self._powerpoint_info is None or self._powerpoint_binding is not None)
+            and (self._powerpoint_info is None or self._powerpoint_verified)
             and self._session is not None
             and self._session.status == "active"
             and self._session_access
+            and self._session_pending_state is None
+            and (
+                self._powerpoint_binding is None
+                or (
+                    self._powerpoint_verified and self._session.state == self._current_local_state()
+                )
+            )
         ):
             self.speech.start(
                 self.config,
@@ -709,8 +723,8 @@ class PresentWidget(Page):
             )
         elif self._powerpoint_info is not None:
             self.speech_status.setText(
-                "PowerPoint microphone capture is local; "
-                "transcription requires a saved PDF session."
+                "Open a saved PowerPoint from Review and start its synced session "
+                "before using transcription."
             )
 
     @Slot(int)
@@ -745,7 +759,12 @@ class PresentWidget(Page):
             and session is not None
             and session.status == "active"
             and self._session_access is not None
-            and self._powerpoint_info is None
+            and (
+                self._powerpoint_info is None
+                or (self._powerpoint_binding is not None and self._powerpoint_verified)
+            )
+            and self._session_pending_state is None
+            and (self._powerpoint_binding is None or session.state == self._current_local_state())
         )
         self.agent_enabled.setEnabled(available)
         if not available:
@@ -981,16 +1000,23 @@ class PresentWidget(Page):
             )
         else:
             manifest = self.executor.manifest
+            slide_ids = (
+                tuple(slide.slide_id for slide in self._powerpoint_binding.slides)
+                if self._powerpoint_binding is not None
+                else tuple(slide.slide_id for slide in manifest.slides)
+                if manifest is not None
+                else ()
+            )
             page = (
                 next(
                     (
                         index
-                        for index, slide in enumerate(manifest.slides, 1)
-                        if slide.slide_id == target["slide_id"]
+                        for index, slide_id in enumerate(slide_ids, 1)
+                        if slide_id == target["slide_id"]
                     ),
                     None,
                 )
-                if manifest is not None
+                if slide_ids
                 else None
             )
             if page is None:
@@ -1036,7 +1062,9 @@ class PresentWidget(Page):
 
     @Slot()
     def _verify_microphone_pdf_session(self) -> None:
-        if not self.microphone.enabled or self._powerpoint_info is not None:
+        if not self.microphone.enabled or (
+            self._powerpoint_info is not None and self._powerpoint_binding is None
+        ):
             return
         if self._session is None or not self._session_access:
             self._microphone_pdf_unverified()
@@ -1054,7 +1082,7 @@ class PresentWidget(Page):
 
     @Slot()
     def _microphone_pdf_unverified(self) -> None:
-        if self.microphone.enabled and self._powerpoint_info is None:
+        if self.microphone.enabled:
             self.microphone.stop()
             self.microphone_status.setText(
                 "Microphone stopped. Presentation session could not be verified."
@@ -1141,23 +1169,28 @@ class PresentWidget(Page):
 
     def _ensure_session(self, *, force: bool = False) -> None:
         manifest = self.executor.manifest
+        binding = self._powerpoint_binding
+        deck_id = (
+            binding.deck_id
+            if binding is not None
+            else (manifest.deck_id if manifest is not None and manifest.account_bound else None)
+        )
         if (
             self._closing
             or self._session_access is None
             or self._account_id is None
-            or manifest is None
-            or not manifest.account_bound
+            or deck_id is None
         ):
             return
-        key = (self._account_id, manifest.deck_id)
-        if self._session_deck_id != manifest.deck_id:
+        key = (self._account_id, deck_id)
+        if self._session_deck_id != deck_id:
             self._session_generation += 1
             self._session = None
             self._session_pending_state = None
             self._session_attempt = None
             self._session_error = False
             self._session_ended = False
-            self._session_deck_id = manifest.deck_id
+            self._session_deck_id = deck_id
         if (
             self._session is not None
             or (self._session_ended and not force)
@@ -1181,7 +1214,7 @@ class PresentWidget(Page):
             "start",
             generation,
             None,
-            lambda: service.start(access, manifest.deck_id),
+            lambda: service.start(access, deck_id),
         )
         if submitted:
             self._session_attempt = key
@@ -1217,6 +1250,22 @@ class PresentWidget(Page):
         return True
 
     def _current_local_state(self) -> SessionState | None:
+        if self._powerpoint_binding is not None:
+            info = self._powerpoint_info
+            if info is None or not self._powerpoint_verified:
+                return None
+            try:
+                slide_id = self._powerpoint_binding.slide_id(info)
+            except PowerPointError:
+                return None
+            return SessionState(
+                active_slide_id=slide_id,
+                autonomy_mode=(
+                    self._session.state.autonomy_mode
+                    if self._session is not None and self._session.state is not None
+                    else "manual"
+                ),
+            )
         manifest, slide = self.executor.manifest, self.surface.slide
         if manifest is None or slide is None:
             return None
@@ -1351,8 +1400,17 @@ class PresentWidget(Page):
                 outcome == "success"
                 and isinstance(session, PresentationSession)
                 and session.status == "active"
+                and self._session is not None
+                and session.id == self._session.id
+                and (
+                    self._powerpoint_binding is None
+                    or (
+                        session.analysis_version_id == self._powerpoint_binding.analysis_id
+                        and session.deck_id == self._powerpoint_binding.deck_id
+                    )
+                )
             ):
-                if self.microphone.enabled and self._powerpoint_info is None:
+                if self.microphone.enabled:
                     self._microphone_pdf_deadline.start()
                 if self._session_pending_state is not None:
                     self._session_followup = "flush"
@@ -1404,6 +1462,19 @@ class PresentWidget(Page):
             self._refresh()
             return
         self._session_error = False
+        if self._powerpoint_binding is not None and (
+            session.deck_id != self._powerpoint_binding.deck_id
+            or session.analysis_version_id != self._powerpoint_binding.analysis_id
+        ):
+            self.microphone.stop()
+            self._session = None
+            self._session_error = True
+            self._session_pending_state = None
+            self.session_status.setText(
+                "The saved PowerPoint analysis changed. Reopen it from Library."
+            )
+            self._refresh()
+            return
         self._session = session
         if kind == "start":
             if self._session_pending_state is None:
@@ -1562,6 +1633,19 @@ class PresentWidget(Page):
     def _restore_session_state(self, state: SessionState | None, *, conflict: bool = False) -> None:
         if state is not None:
             self._accepted_action_id = state.last_accepted_action_id
+        if self._powerpoint_binding is not None:
+            local = self._current_local_state()
+            if local is None:
+                self.microphone.stop()
+                self.session_status.setText("PowerPoint slideshow verification is required.")
+                return
+            if state != local:
+                self._session_pending_state = local
+                self._session_followup = "flush"
+                self.session_status.setText("Syncing the live PowerPoint slide…")
+            else:
+                self.session_status.setText("PowerPoint presentation session connected.")
+            return
         manifest = self.executor.manifest
         if state is None or manifest is None:
             self.session_status.setText(
@@ -1812,6 +1896,16 @@ class PresentWidget(Page):
         self._refresh()
 
     def _attach_powerpoint_info(self, info: PresentationInfo) -> None:
+        binding = self._powerpoint_binding
+        if binding is not None:
+            try:
+                binding.slide_id(info)
+            except PowerPointError:
+                self._powerpoint_lost(
+                    "The slideshow differs from the saved analysis. Reopen it from Review."
+                )
+                self._refresh()
+                return
         previous = self._powerpoint_info
         if previous is None or (previous.path, previous.window_id) != (info.path, info.window_id):
             self.microphone.stop()
@@ -1820,6 +1914,11 @@ class PresentWidget(Page):
         self._powerpoint_verification.start()
         self._powerpoint_path = info.path
         self.powerpoint_controls.set_info(info)
+        if binding is not None and self._session_access is not None:
+            if self._session is None:
+                self._ensure_session()
+            elif previous is None or previous.slide_key != info.slide_key:
+                self._queue_session_state()
         if (previous is None or previous.slide_key != info.slide_key) and min(
             info.slide_width, info.slide_height
         ) > 0:
@@ -1850,12 +1949,20 @@ class PresentWidget(Page):
             self._refresh()
 
     def _powerpoint_lost(self, reason: str | None = None) -> None:
+        if self._powerpoint_binding is not None:
+            self._session_generation += 1
+            self._session = None
+            self._session_pending_state = None
+            self._session_attempt = None
+            self._session_deck_id = None
+            self._session_followup = None
         self.microphone.stop()
         self._powerpoint_verification.stop()
         self._powerpoint_poll.stop()
         self._queued_powerpoint_action = None
         self._queued_powerpoint_preview = None
         self._powerpoint_info = None
+        self._powerpoint_binding = None
         self._powerpoint_verified = False
         self._powerpoint_path = None
         self.powerpoint_controls.set_info(None)
@@ -1866,6 +1973,13 @@ class PresentWidget(Page):
 
     @Slot()
     def _disconnect_powerpoint(self) -> None:
+        if self._powerpoint_binding is not None:
+            self._session_generation += 1
+            self._session = None
+            self._session_pending_state = None
+            self._session_attempt = None
+            self._session_deck_id = None
+            self._session_followup = None
         self.microphone.stop()
         self._powerpoint_verification.stop()
         with suppress(Exception):
@@ -1878,6 +1992,7 @@ class PresentWidget(Page):
         self._queued_powerpoint_preview = None
         self._queued_powerpoint_operation = None
         self._powerpoint_info = None
+        self._powerpoint_binding = None
         self._powerpoint_verified = False
         self._powerpoint_path = None
         self.powerpoint_controls.set_info(None)
@@ -1885,6 +2000,25 @@ class PresentWidget(Page):
             "Disconnected from Buddy. PowerPoint remains open and the slideshow is unchanged."
         )
         self._refresh()
+
+    def bind_saved_powerpoint(self, binding: PowerPointSessionBinding) -> None:
+        if self._closing or self._session_access is None or self._account_id is None:
+            return
+        self._disconnect_powerpoint()
+        self._powerpoint_binding = binding
+        self._session_generation += 1
+        self._session = None
+        self._session_attempt = None
+        self._session_pending_state = None
+        self._session_deck_id = None
+        self._session_ended = False
+        self.session_status.setText("Connecting the saved PowerPoint slideshow…")
+        self._submit_powerpoint("connect", binding.path)
+        self._refresh()
+
+    def invalidate_saved_powerpoint(self) -> None:
+        if self._powerpoint_binding is not None:
+            self._disconnect_powerpoint()
 
     @Slot()
     def _choose_manifest(self) -> None:
@@ -1900,6 +2034,7 @@ class PresentWidget(Page):
     def load_pdf(
         self, source: Path | bytes, *, deck_id: str | None = None, revision: str | None = None
     ) -> None:
+        self.invalidate_saved_powerpoint()
         self.microphone.stop()
         self._session_generation += 1
         self._session = None
@@ -2215,7 +2350,7 @@ class PresentWidget(Page):
         self.zoom_button.setEnabled(selected)
         self.highlight_button.setEnabled(selected)
         self.surface.selectable = ready
-        session_controls = loaded and account_bound
+        session_controls = (loaded and account_bound) or self._powerpoint_binding is not None
         mic_available = self._microphone_session_available()
         self.microphone_device.setEnabled(bool(mic_available) and not self.microphone.enabled)
         self.microphone_button.setEnabled(
@@ -2255,7 +2390,20 @@ class PresentWidget(Page):
             and self._session_access is not None
         )
         if self._powerpoint_info is not None:
-            return not self._closing and self._powerpoint_verified
+            return (
+                not self._closing
+                and self._powerpoint_verified
+                and (
+                    self._powerpoint_binding is None
+                    or (
+                        self._session is not None
+                        and self._session.status == "active"
+                        and self._session_access is not None
+                        and self._session_pending_state is None
+                        and self._session.state == self._current_local_state()
+                    )
+                )
+            )
         return not self._closing and pdf_active
 
     def hideEvent(self, event: QHideEvent) -> None:
@@ -2289,6 +2437,7 @@ class PresentWidget(Page):
         self._refresh()
 
     def clear_session_binding(self) -> None:
+        self.invalidate_saved_powerpoint()
         self.agent_enabled.setChecked(False)
         self.microphone.stop()
         self._session_generation += 1

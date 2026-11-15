@@ -13,6 +13,7 @@ import buddy_desktop.review_widget as widgets
 from buddy_desktop.auth import Tokens
 from buddy_desktop.powerpoint_contract import PresentationInfo
 from buddy_desktop.powerpoint_generated import generated_action
+from buddy_desktop.powerpoint_session_binding import PowerPointSessionBinding
 from buddy_desktop.review_service import DownloadedPowerPoint, ReviewService, parse_analysis
 from buddy_desktop.services import ServiceError
 
@@ -91,6 +92,29 @@ def powerpoint_payload(content=b"PK-synthetic-source", *, usable=True, kind="hig
     return deck, payload
 
 
+def test_saved_powerpoint_review_routes_verified_binding_to_present(desktop_window, monkeypatch):
+    content = b"PK-synthetic-source"
+    deck, payload = powerpoint_payload(content)
+    analysis = parse_analysis(payload, deck)
+    info = PresentationInfo("C:/saved/deck.pptx", "deck.pptx", 1, 1, 77, 256, 960, 540)
+    binding = PowerPointSessionBinding.create(analysis, content, info)
+    window = desktop_window()
+    window.account.account_id = str(uuid4())
+    window.account.session = SimpleNamespace(
+        tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
+    )
+    review = window.review
+    review.source_format = "pptx"
+    review.deck_id = deck
+    review.analysis = analysis
+    review._pptx_session = SimpleNamespace(binding=binding, cancelled=Event(), close=lambda: None)
+    routed = []
+    monkeypatch.setattr(window.present, "bind_saved_powerpoint", routed.append)
+    review.present_saved_powerpoint()
+    assert routed == [binding]
+    assert window.navigation.currentRow() == 3
+
+
 def test_legacy_zoom_proof_does_not_authorize_the_new_fitted_view():
     deck, payload = powerpoint_payload(kind="zoom_region")
     payload["data"]["slides"][0]["actions"][0]["validation"]["validator_version"] = (
@@ -99,6 +123,17 @@ def test_legacy_zoom_proof_does_not_authorize_the_new_fitted_view():
     action = parse_analysis(payload, deck).slides[0].actions[0]
     assert not action.usable
     assert "zoom_requires_fitted_view_revalidation" in action.reasons
+
+
+def test_powerpoint_review_preserves_independent_visual_verification():
+    deck, payload = powerpoint_payload(kind="highlight_region")
+    result = payload["data"]["slides"][0]["actions"][0]
+    result["validation"]["validation_kind"] = "visual"
+    result["validation"]["semantic_verified"] = True
+    result["semantic_verified"] = True
+    action = parse_analysis(payload, deck).slides[0].actions[0]
+    assert action.usable and action.semantic_verified
+    assert action.validation_kind == "visual"
 
 
 @pytest.mark.parametrize("kind", KINDS)

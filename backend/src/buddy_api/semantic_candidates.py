@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
-from buddy_api.analysis.contracts import AnalysisResult
+from buddy_api.analysis.contracts import AnalysisResult, PowerPointAnalysisResult
 from buddy_api.embeddings import SPACE, CohereEmbeddings, EmbeddingFailure, normalize
 from buddy_api.persistence.database import Database
 from buddy_api.persistence.models import CandidateIndex, EmbeddingQuota
@@ -30,15 +30,17 @@ class Document:
     text: str = field(repr=False)
 
 
-def documents(analysis: AnalysisResult) -> tuple[Document, ...]:
+def documents(analysis: AnalysisResult | PowerPointAnalysisResult) -> tuple[Document, ...]:
+    from buddy_api.presentation_candidates import candidate_action_eligible, candidate_slides
+
     result = []
-    for position, slide in enumerate(analysis.slides, 1):
+    for position, slide in enumerate(candidate_slides(analysis), 1):
         if slide.summary.status == "available" and slide.summary.text:
             result.append(
                 Document(slide.slide_id, None, "slide", f"Slide {position}. " + slide.summary.text)
             )
         for action in slide.actions:
-            if action.usable and action.state == "validated" and action.semantic_verified:
+            if candidate_action_eligible(action):
                 result.append(
                     Document(
                         slide.slide_id,
@@ -137,7 +139,9 @@ class SemanticCandidates:
                 raise EmbeddingFailure("embedding_budget_exhausted")
         return await self.provider.embed(texts, "document" if kind == "document" else "query")
 
-    async def prepare(self, analysis: AnalysisResult, owner: UUID) -> bool:
+    async def prepare(
+        self, analysis: AnalysisResult | PowerPointAnalysisResult, owner: UUID
+    ) -> bool:
         items = documents(analysis)
         identity = fingerprint(items)
         async with self.database.sessions() as db:
@@ -178,7 +182,12 @@ class SemanticCandidates:
             self._preparing.discard(owner)
 
     async def retrieve(
-        self, analysis: AnalysisResult, owner: UUID, current: str, latest: str, recent: str
+        self,
+        analysis: AnalysisResult | PowerPointAnalysisResult,
+        owner: UUID,
+        current: str,
+        latest: str,
+        recent: str,
     ) -> tuple["Candidate", ...]:
         from buddy_api.presentation_candidates import Candidate, navigation_step, resolve
 
