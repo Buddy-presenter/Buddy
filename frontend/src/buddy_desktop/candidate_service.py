@@ -15,6 +15,47 @@ from buddy_desktop.services import NoRedirects, ServiceError
 from buddy_desktop.transcript_context import ContextSnapshot
 
 
+def completed_payload(
+    session: PresentationSession,
+    context: ContextSnapshot,
+    current_context: Callable[[], ContextSnapshot] | None = None,
+) -> dict[str, object]:
+    """Build only from fresh completed speech; caller publishes snapshots off the GUI thread."""
+    now = time.monotonic_ns()
+    segments = context.candidate_segments
+    if (
+        not context.fresh
+        or not context.segments
+        or not context.stream_id
+        or session.status != "active"
+        or session.id != context.session_id
+        or session.state_version != context.state_version
+        or not 0 <= now - context.observed_ns <= 1_000_000_000
+        or not 0 <= now - context.segments[-1].capture_end_ns <= 5_000_000_000
+        or any(
+            now - (s.capture_end_ns - round((s.end_seconds - s.start_seconds) * 1e9))
+            > 30_000_000_000
+            for s in context.segments
+        )
+    ):
+        raise ServiceError("Speech context changed or expired; wait for fresh speech.")
+    if not segments:
+        raise ServiceError("Wait for a completed speech segment before searching.")
+    if current_context is not None and not context.matches(current_context()):
+        raise ServiceError("Speech context changed or expired; wait for fresh speech.")
+    payload = {
+        "protocol": "presentation-candidates.v1",
+        "expected_state_version": context.state_version,
+        "context_epoch": context.epoch,
+        "stream_id": context.stream_id,
+        "sequence": max(segment.sequence for segment in segments),
+        "sent_at": datetime.now(UTC).isoformat(),
+        "text": " ".join(segment.text for segment in segments),
+        "latest_utterance": segments[-1].text,
+    }
+    return payload
+
+
 class CandidateService:
     def __init__(self, config: AppConfig):
         self.config = config
@@ -50,38 +91,7 @@ class CandidateService:
         current_context must read caller-published immutable snapshots safely;
         it must not access widgets or mutate the live Qt-owned context.
         """
-        now = time.monotonic_ns()
-        segments = context.candidate_segments
-        if (
-            not context.fresh
-            or not context.segments
-            or not context.stream_id
-            or session.status != "active"
-            or session.id != context.session_id
-            or session.state_version != context.state_version
-            or not 0 <= now - context.observed_ns <= 1_000_000_000
-            or not 0 <= now - context.segments[-1].capture_end_ns <= 5_000_000_000
-            or any(
-                now - (s.capture_end_ns - round((s.end_seconds - s.start_seconds) * 1e9))
-                > 30_000_000_000
-                for s in context.segments
-            )
-        ):
-            raise ServiceError("Speech context changed or expired; wait for fresh speech.")
-        if not segments:
-            raise ServiceError("Wait for a completed speech segment before searching.")
-        if current_context is not None and not context.matches(current_context()):
-            raise ServiceError("Speech context changed or expired; wait for fresh speech.")
-        payload = {
-            "protocol": "presentation-candidates.v1",
-            "expected_state_version": context.state_version,
-            "context_epoch": context.epoch,
-            "stream_id": context.stream_id,
-            "sequence": max(segment.sequence for segment in segments),
-            "sent_at": datetime.now(UTC).isoformat(),
-            "text": " ".join(segment.text for segment in segments),
-            "latest_utterance": segments[-1].text,
-        }
+        payload = completed_payload(session, context, current_context)
         request = Request(
             self.config.api_url + f"/api/v1/sessions/{UUID(session.id)}/candidates",
             data=json.dumps(payload, ensure_ascii=False).encode(),

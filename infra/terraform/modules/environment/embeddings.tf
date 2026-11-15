@@ -21,3 +21,13 @@ resource "aws_iam_role_policy" "cohere_secret" {
     Condition = { StringEquals = { "kms:ViaService" = "secretsmanager.${var.region}.amazonaws.com" } } }
   ] })
 }
+
+variable "enable_presentation_agent" {
+  type        = bool
+  default     = false
+  description = "Enable bounded API-only presentation suggestions using the existing Cohere secret."
+  validation {
+    condition     = !var.enable_presentation_agent || var.enable_semantic_candidates
+    error_message = "Presentation agent requires enable_semantic_candidates for the API-only key."
+  }
+}

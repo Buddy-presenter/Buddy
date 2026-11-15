@@ -118,3 +118,6 @@ documented in [rolling speech context](transcript-context.md).
 
 The versioned, owner-scoped candidate resolver is documented in
 [presentation candidates](presentation-candidates.md).
+
+The opt-in decision loop, constrained tools, provider setup and manual suggestion check
+are documented in [presentation agent](presentation-agent.md).

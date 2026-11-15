@@ -13,6 +13,7 @@ from buddy_api.persistence.migration_config import migration_heads
 from buddy_api.persistence.models import (
     ActionCheck,
     ActionValidation,
+    AgentQuota,
     AnalysisSlide,
     AnalysisVersion,
     CandidateIndex,
@@ -83,6 +84,8 @@ class Database:
                     SessionEvent.id,
                     CandidateIndex.analysis_id,
                     EmbeddingQuota.key_hash,
+                    AgentQuota.request_times,
+                    AgentQuota.blocked_until,
                     PDFProcessingCheckpoint.job_id,
                 ):
                     await connection.execute(select(identifier).limit(0))

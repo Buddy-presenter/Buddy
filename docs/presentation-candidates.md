@@ -58,18 +58,18 @@ validated no-model fast path, including a no-change result at deck boundaries.
 
 - Prepare: at most 1500 documents and two million characters, batches of 64, two
   simultaneous preparations per process, one per owner, 120-second deadline.
-- Queries: one concurrent request per owner, at most one new call every two seconds
-  per process, 16 concurrent owners total. A bounded 128-entry memory cache may
+- Queries: one concurrent request per owner, 16 concurrent owners total. No fixed
+  interval is imposed between completed queries. A bounded 128-entry memory cache may
   reuse identical query vectors for five seconds. Speech vectors are never persisted.
 - Provider: fixed HTTPS endpoint, no redirects, persistent connection pool, bounded
   responses, strict finite/nonzero 512-dimensional vectors, two-second query and
   20-second document-call deadlines. There are no automatic rate-limit retries.
-- PostgreSQL atomically reserves at most 750 attempted calls per API-key hash per
-  UTC calendar month, shared across API replicas and restarts. Preparation batches
-  and query calls both count; failed attempts count conservatively. This leaves a
-  buffer below the documented 1000-call trial limit but cannot account for key use
-  outside this database. Disposable test schemas have separate counters. Account or
-  key rotation is not a quota-control mechanism.
+- PostgreSQL counts attempted calls per API-key hash per UTC calendar month, shared
+  across API replicas and restarts. There is no default 750-call Buddy cap. An explicit
+  adapter call budget remains available to operators. Preparation batches and query
+  calls both count; failed attempts count conservatively. Provider monthly/input/rate
+  limits still apply, including usage outside this database. Agent admission separately
+  enforces its configured rolling Chat allowance before starting retrieval.
 
 ### Setup, deployment and privacy
 
@@ -129,7 +129,9 @@ Responses are no-store. Request bodies and speech are never added to ordinary lo
 or persisted by this route. Existing speech journal retention is unchanged.
 
 To avoid reconstructing hundreds of unavailable regions on every live request, the API
-may keep up to eight region-free typed analysis reads in memory for 30 seconds. Each
+may keep up to eight region-free typed analysis reads in memory for 30 seconds since
+their last verified use. Active reads refresh this idle TTL after authorization and
+validation-revision checks, avoiding a periodic heavy rebuild during speech. Each
 request still rechecks identity/ownership, active session/state, current source/job and
 pinned analysis in PostgreSQL. The cache also binds the immutable content hash and the
 append-only validation-history count in the same repeatable-read snapshot; a new check

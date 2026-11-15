@@ -49,11 +49,19 @@ def test_region_free_cache_keeps_authorization_and_validation_revisions_fresh(
         return await original(self, *args, **kwargs)
 
     monkeypatch.setattr(Analyses, "read", measured)
+    clock = [0.0]
+    monkeypatch.setattr(
+        "buddy_api.presentation_candidates.time", SimpleNamespace(monotonic=lambda: clock[0])
+    )
     path = f"/api/v1/sessions/{ids['sessions']}/candidates"
     headers = {"Authorization": "Bearer owner"}
     for _ in range(2):
         assert client.post(path, headers=headers, json=payload()).status_code == 200
     assert len(reads) == 1
+    for instant in (29, 31):
+        clock[0] = instant
+        assert client.post(path, headers=headers, json=payload()).status_code == 200
+    assert len(reads) == 1  # Active, re-authorized reads refresh the idle TTL.
     assert (
         client.post(path, headers={"Authorization": "Bearer other"}, json=payload()).status_code
         == 403
@@ -63,6 +71,9 @@ def test_region_free_cache_keeps_authorization_and_validation_revisions_fresh(
         == 409
     )
     assert len(reads) == 1
+    clock[0] = 65
+    assert client.post(path, headers=headers, json=payload()).status_code == 200
+    assert len(reads) == 2  # Idle presentations still expire after 30 seconds.
 
     async def verify_region():
         async with database.sessions() as db, db.begin():
@@ -270,6 +281,31 @@ def test_latest_utterance_keeps_negation_and_embedded_command_guards(utterance):
         latest_utterance=utterance,
     )
     assert not any(c.reason == "explicit_navigation" for c in result)
+
+
+@pytest.mark.parametrize(
+    "utterance,step",
+    [
+        ("Let's go to the next slide.", 1),
+        ("Let’s move to the previous page, please.", -1),
+        ("Please switch to the next page.", 1),
+        ("Let us move forward by one page.", 1),
+        ("Go back one slide.", -1),
+        ("Do not go to the next slide.", None),
+        ("Should we go to the next slide?", None),
+        ('He said "next slide".', None),
+        ("“Next slide”", None),
+        ("'next slide'", None),
+        ("Next slide?", None),
+        ("If we go to the next slide, we lose context.", None),
+        ("Let's go to the next slide. Actually, stay here.", None),
+        ("The next slide describes refunds.", None),
+    ],
+)
+def test_relative_navigation_requires_a_complete_unambiguous_instruction(utterance, step):
+    from buddy_api.presentation_candidates import navigation_step
+
+    assert navigation_step(utterance) == step
 
 
 @pytest.mark.parametrize("latest", ["", "   ", "x" * 4097, "different utterance"])

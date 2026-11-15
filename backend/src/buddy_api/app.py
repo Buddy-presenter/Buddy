@@ -11,6 +11,7 @@ from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 
 from buddy_api import __version__
+from buddy_api.agent_provider import CohereDecisionProvider
 from buddy_api.analysis.api import analysis_router
 from buddy_api.auth import Authentication, auth_router
 from buddy_api.authorization import private_router
@@ -33,6 +34,7 @@ from buddy_api.handoff import HandoffLimitMiddleware, handoff_router
 from buddy_api.library import library_router
 from buddy_api.middleware import RequestContextMiddleware
 from buddy_api.persistence.database import Database, DatabaseProbe
+from buddy_api.presentation_agent import AgentRuntime, agent_router
 from buddy_api.presentation_candidates import CandidateAnalyses, candidate_router
 from buddy_api.presentation_sessions import session_router
 from buddy_api.processing.api import processing_router
@@ -149,6 +151,8 @@ def create_app(
             semantic = getattr(_app.state, "semantic_candidates", None)
             if semantic is not None:
                 await semantic.provider.aclose()
+            if _app.state.presentation_agent is not None:
+                await _app.state.presentation_agent.provider.aclose()
             if database is not None:
                 await database.close()
 
@@ -179,6 +183,19 @@ def create_app(
         else None
     )
     app.state.uploads = uploads
+    app.state.presentation_agent = (
+        AgentRuntime(
+            config.agent,
+            CohereDecisionProvider(
+                config.agent,
+                client=app.state.semantic_candidates.provider.client
+                if app.state.semantic_candidates is not None
+                else None,
+            ),
+        )
+        if config.agent
+        else None
+    )
     app.state.validator = validator
     app.state.worker_settings = config.worker
     app.include_router(auth_router(config.identity))
@@ -190,6 +207,7 @@ def create_app(
     app.include_router(analysis_router())
     app.include_router(session_router())
     app.include_router(candidate_router())
+    app.include_router(agent_router())
     app.include_router(speech_router(config.allowed_hosts))
     app.include_router(upload_router())
     app.include_router(validation_router())
