@@ -416,7 +416,7 @@ def agent_router() -> APIRouter:
                 if deck is None:
                     raise HTTPException(404)
                 record, _ = await current_ready_analysis(db, deck, principal.id)
-                if record.id != values.analysis_id or record.source_format != "pdf":
+                if record.id != values.analysis_id or record.source_format not in {"pdf", "pptx"}:
                     raise HTTPException(409, "This source has no compatible live agent runtime.")
                 analysis = await request.app.state.candidate_analyses.read(db, record, principal.id)
                 source = AgentInput(

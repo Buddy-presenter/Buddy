@@ -145,4 +145,5 @@ def run_application(
         window.present.powerpoint_runner.wait_for_shutdown()
         window.present.agent.wait_for_shutdown()
         window.present.policy_runner.wait_for_shutdown()
+        window.present.generated_runner.wait_for_shutdown()
         activation.close()

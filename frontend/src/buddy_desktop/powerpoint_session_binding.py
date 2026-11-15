@@ -16,6 +16,7 @@ class PowerPointSessionBinding:
     path: str
     window_id: int
     slides: tuple[ReviewSlide, ...]
+    render_id: str = ""
 
     @classmethod
     def create(
@@ -43,6 +44,7 @@ class PowerPointSessionBinding:
             info.identity,
             info.window_id,
             analysis.slides,
+            analysis.render_id,
         )
         binding.slide_id(info)
         return binding
