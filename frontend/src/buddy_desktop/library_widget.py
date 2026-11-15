@@ -1,5 +1,6 @@
 """Keyboard-accessible library with serialized requests and invalidated late results."""
 
+import sys
 import time
 from collections.abc import Callable
 from math import ceil
@@ -80,6 +81,7 @@ class LibraryWidget(QWidget):
     activity_changed = Signal(bool)
     present_requested = Signal(object)
     review_requested = Signal(object, str, str, str)
+    powerpoint_present_requested = Signal(object, str, str)
     private_invalidated = Signal()
     deck_deleted = Signal(object)
     upload_progress = Signal(object, str, int, int)
@@ -159,7 +161,7 @@ class LibraryWidget(QWidget):
         self.upload_button.clicked.connect(self.choose_upload)
         controls.addWidget(self.upload_button)
         self.open_button = QPushButton("Present")
-        self.open_button.setAccessibleName("Present PDF")
+        self.open_button.setAccessibleName("Present selected presentation")
         command(self.open_button, "presentation", primary=True)
         self.open_button.setToolTip("Present the selected deck")
         self.open_button.setEnabled(False)
@@ -614,14 +616,18 @@ class LibraryWidget(QWidget):
             self.retry_job_button.setEnabled(not self.runner.busy)
             if deck.source_format == "pptx":
                 guidance = (
-                    "Open Review for PowerPoint summaries and actions. Once processing finishes, "
-                    "use Open saved PowerPoint there to display the slideshow. " + guidance
+                    "Use Present to open the saved slideshow, or Review to inspect its analysis. "
+                    + guidance
                 )
             elif deck.can_present:
                 guidance = "PDF is available to present. " + guidance
-            self.open_button.setEnabled(deck.can_present and not self.runner.busy)
+            self.open_button.setEnabled(
+                bool(self.token())
+                and not self.runner.busy
+                and (deck.can_present or self._can_present_powerpoint(deck))
+            )
             self.open_button.setToolTip(
-                "For PowerPoint, use Review then Open saved PowerPoint."
+                "Open this saved slideshow in desktop PowerPoint on Windows."
                 if deck.source_format == "pptx"
                 else "Present this PDF in Buddy."
             )
@@ -858,12 +864,26 @@ class LibraryWidget(QWidget):
         self.upload_bar.setRange(0, total if total else 0)
         self.upload_bar.setValue(sent)
 
+    @staticmethod
+    def _can_present_powerpoint(deck: DeckSummary) -> bool:
+        return (
+            sys.platform == "win32"
+            and deck.source_format == "pptx"
+            and (
+                deck.processing.state in {"review_ready", "partial"}
+                if deck.processing is not None
+                else deck.status == "ready"
+            )
+        )
+
     def open_selected(self) -> None:
         row = self.table.currentRow()
         if self.last_page and 0 <= row < len(self.last_page.items):
             deck = self.last_page.items[row]
             if deck.can_present:
                 self.run_presentation(lambda service: service.download(str(deck.id)))
+            elif self.token() and not self.runner.busy and self._can_present_powerpoint(deck):
+                self.powerpoint_present_requested.emit(deck.id, deck.title, deck.status)
 
     def run_presentation(self, operation: Callable[[PresentationService], object]) -> None:
         access = self.token()
