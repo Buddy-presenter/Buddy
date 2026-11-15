@@ -182,6 +182,22 @@ def test_numbered_navigation_can_select_a_nonadjacent_slide_without_a_provider()
     )
 
 
+def test_negative_numbered_navigation_abstains_through_selection():
+    from backend.tests.api.test_presentation_candidates import analysis
+
+    from buddy_api.presentation_candidates import resolve
+
+    deck = analysis(*(f"Summary {i}" for i in range(10)))
+    candidates = resolve(deck, "slide-0", "Go to slide -8.")
+    assert not any(c.reason == "explicit_navigation" for c in candidates)
+    targets, _ = options(AgentInput(deck, "slide-0", "slide", "hash"), candidates)
+    selection = navigation_selection(targets, candidates, segment_count=1)
+    assert checked_selection(selection, targets, segment_count=1) == Target(
+        tool="no_action", slide_id="slide-0"
+    )
+    assert "slide-7" not in {target.slide_id for target in targets}
+
+
 def test_neighbor_reservation_preserves_every_retrieved_alternative_within_ten_options():
     from backend.tests.api.test_presentation_candidates import analysis
 
