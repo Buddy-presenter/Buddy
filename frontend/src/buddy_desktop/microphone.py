@@ -25,7 +25,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtMultimedia import QAudio, QAudioDevice, QAudioSource, QMediaDevices
 
-from buddy_desktop.speech_audio import PCM16Encoder
+from buddy_desktop.speech_audio import SPEECH_SAMPLE_RATE, PCM16Encoder, PCM16Resampler
 
 if TYPE_CHECKING:
     from buddy_desktop.windows_microphone import WindowsInput
@@ -57,6 +57,7 @@ class _CaptureWorker(QObject):
         self.generation = 0
         self.last_capture_ns = 0
         self.encoder: PCM16Encoder | None = None
+        self.resampler: PCM16Resampler | None = None
         self.compatibility: WindowsInput | None = None
 
     @Slot(object, int, bool)
@@ -91,12 +92,13 @@ class _CaptureWorker(QObject):
                     lambda pcm: self._queue_pcm(pcm, generation),
                     lambda: self.gap.emit(generation),
                 )
+                self.resampler = PCM16Resampler(self.compatibility.sample_rate)
                 self.compatibility.start()
                 self.monitor = QTimer(self)
                 self.monitor.setInterval(250)
                 self.monitor.timeout.connect(self._check_error)
                 self.monitor.start()
-                self.formatted.emit(generation, self.compatibility.sample_rate)
+                self.formatted.emit(generation, SPEECH_SAMPLE_RATE)
                 self.changed.emit(generation, "Microphone on")
                 return
             audio_format = device.preferredFormat()
@@ -105,6 +107,7 @@ class _CaptureWorker(QObject):
             )
             if not 8000 <= audio_format.sampleRate() <= 96000:
                 raise ValueError("Unsupported microphone sample rate.")
+            self.resampler = PCM16Resampler(audio_format.sampleRate())
             source = QAudioSource(device, audio_format, self)
             source.setBufferSize(16384)
             self.source = source
@@ -129,7 +132,7 @@ class _CaptureWorker(QObject):
         self.monitor.setInterval(250)
         self.monitor.timeout.connect(self._check_error)
         self.monitor.start()
-        self.formatted.emit(generation, audio_format.sampleRate())
+        self.formatted.emit(generation, SPEECH_SAMPLE_RATE)
         self.changed.emit(generation, "Microphone on")
 
     @Slot()
@@ -152,21 +155,28 @@ class _CaptureWorker(QObject):
         with self.frame_lock:
             if not self.accepting.is_set() or generation != self.generation:
                 return
-            # Timestamp in the same critical section as FIFO insertion. Capture
-            # callbacks may overlap during device transitions; a correction of
-            # one nanosecond handles equal-resolution clock readings without
-            # weakening the server's strict increasing-timestamp validation.
-            stamp = max(time.monotonic_ns(), self.last_capture_ns + 1)
-            packet = struct.pack(">Q", stamp) + pcm
-            try:
-                self.frames.put_nowait(packet)
-            except Full:
-                dropped = True
-                with suppress(Empty):
-                    self.frames.get_nowait()
-                with suppress(Full):
+            capture_end = time.monotonic_ns()
+            if self.resampler is not None:
+                pcm = self.resampler.encode(pcm)
+                capture_end -= self.resampler.delay_ns
+            # Sinc filter delay belongs to capture time, not recognition latency.
+            # Split any output burst into <=50 ms packets with their own end time.
+            for start in range(0, len(pcm), 1600):
+                chunk = pcm[start : start + 1600]
+                trailing_ns = round(
+                    (len(pcm) - start - len(chunk)) * 1e9 / (2 * SPEECH_SAMPLE_RATE)
+                )
+                stamp = max(capture_end - trailing_ns, self.last_capture_ns + 1)
+                packet = struct.pack(">Q", stamp) + chunk
+                try:
                     self.frames.put_nowait(packet)
-            self.last_capture_ns = stamp
+                except Full:
+                    dropped = True
+                    with suppress(Empty):
+                        self.frames.get_nowait()
+                    with suppress(Full):
+                        self.frames.put_nowait(packet)
+                self.last_capture_ns = stamp
         if dropped:
             self.gap.emit(generation)
         self.received.emit(len(pcm))
@@ -200,6 +210,7 @@ class _CaptureWorker(QObject):
             source.stop()
             source.deleteLater()
         with self.frame_lock:
+            self.resampler = None
             _clear_frames(self.frames)
 
     @Slot()

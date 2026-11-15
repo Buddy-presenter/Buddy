@@ -72,6 +72,44 @@ def test_valid_result_emits_measured_latency_and_stop_clears(controller):
     assert cleared and not controller._active and not controller._access
 
 
+def test_valid_but_delayed_transcript_discards_context_and_reconnects(controller):
+    updates, cleared = [], []
+    controller.transcript_received.connect(updates.append)
+    controller.cleared.connect(lambda: cleared.append(True))
+    controller._message(
+        json.dumps(event(controller, capture_end_ns=time.monotonic_ns() - 6_000_000_000))
+    )
+    assert not updates and cleared
+    assert controller._active and not controller._ready and controller._retry.isActive()
+    assert controller._attempts == 1
+
+
+def test_filter_delayed_packets_from_connection_gap_are_not_replayed(controller):
+    sent = []
+
+    class Socket:
+        def bytesToWrite(self):
+            return 0
+
+        def sendBinaryMessage(self, packet):
+            sent.append(bytes(packet))
+
+        def abort(self):
+            pass
+
+        def deleteLater(self):
+            pass
+
+    controller.socket = Socket()
+    controller._sample_rate = 16000
+    boundary = controller._audio_boundary_ns
+    # 50 ms of audio: before ready, straddling ready, then wholly after ready.
+    for end in (boundary - 1, boundary + 25_000_000, boundary + 100_000_000):
+        controller.send(struct.pack(">Q", end) + b"\0" * 1600)
+    assert len(sent) == 1
+    assert struct.unpack(">Q", sent[0][:8])[0] == boundary + 100_000_000
+
+
 @pytest.mark.parametrize(
     "change",
     [

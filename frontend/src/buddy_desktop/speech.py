@@ -2,6 +2,7 @@
 
 import json
 import math
+import struct
 import time
 from collections.abc import Callable
 from uuid import UUID
@@ -13,6 +14,7 @@ from PySide6.QtWebSockets import QWebSocket
 from buddy_desktop.config import AppConfig
 
 ERRORS = {
+    "audio_backlog": "The speech connection fell behind; queued audio was discarded.",
     "speech_unconfigured": "Speech recognition is not configured on this server.",
     "provider_configuration": "The server's speech provider credentials need attention.",
     "provider_unavailable": "The speech provider is temporarily unavailable.",
@@ -50,6 +52,7 @@ class SpeechController(QObject):
         self._url = ""
         self._session = ""
         self._sample_rate = 0
+        self._audio_boundary_ns = 0
         self._language = "en-US"
         self._stream = ""
         self._sequence = 0
@@ -146,6 +149,7 @@ class SpeechController(QObject):
                 self._sequence, self._final_end = 0, 0.0
                 self._final_start = -1.0
                 self._ready = True
+                self._audio_boundary_ns = time.monotonic_ns()
                 self._deadline.stop()
                 self.status_changed.emit(
                     "Transcribing • audio sent to Deepgram (EU); "
@@ -183,6 +187,9 @@ class SpeechController(QObject):
             now = time.monotonic_ns()
             if type(stamp) is not int or not 0 < stamp <= now or now - stamp > 30_000_000_000:
                 raise ValueError
+            if now - stamp > 5_000_000_000:
+                self._fail("Speech recognition fell behind; old audio was discarded.", True)
+                return
             self._sequence = sequence
             if data["final"]:
                 self._final_end = end
@@ -195,6 +202,13 @@ class SpeechController(QObject):
     def send(self, packet: bytes) -> None:
         if not self._active or not self._ready or self.socket is None:
             return  # Never replay audio captured during connection/reconnection gaps.
+        if not 10 <= len(packet) <= 8200 or len(packet) % 2 or self._sample_rate <= 0:
+            self._fail("Microphone returned invalid audio. Restart capture.", False)
+            return
+        capture_end = struct.unpack(">Q", packet[:8])[0]
+        capture_start = capture_end - round((len(packet) - 8) * 1e9 / (2 * self._sample_rate))
+        if capture_start <= self._audio_boundary_ns:
+            return  # Includes filter-delayed audio captured before this connection.
         if self.socket.bytesToWrite() > 32768:
             self._fail("Speech connection is too slow; audio was discarded.", True)
             return
