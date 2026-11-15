@@ -107,6 +107,22 @@ class AgentProposal(Model):
     elapsed_ms: int = Field(ge=0)
     retry_after_ms: int | None = Field(default=None, ge=1, le=5000)
 
+    @model_validator(mode="after")
+    def consistent_outcome(self) -> "AgentProposal":
+        if self.decision_source == "fallback" and (
+            self.target.tool != "no_action" or self.confidence is not None or self.evidence
+        ):
+            raise ValueError("Fallback cannot propose an action or provider evidence")
+        if (self.reason == "paced") != (self.retry_after_ms is not None):
+            raise ValueError("Only unspent paced admission carries a retry wait")
+        if self.decision_source == "navigation" and self.target.tool not in {
+            "no_action",
+            "next_slide",
+            "previous_slide",
+        }:
+            raise ValueError("Deterministic navigation cannot select another tool")
+        return self
+
 
 @dataclass(frozen=True)
 class AgentInput:

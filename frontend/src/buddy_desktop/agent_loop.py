@@ -49,6 +49,7 @@ class AgentLoop(QObject):
             self._deferred_revision = None
             self._deferrals = 0
             self._current = None
+            self._submitted = None
             self._prepare_failed_for = None
             self.proposed.emit(None)
             self.status.emit("Waiting for completed speech…" if enabled else "Suggestions off")
@@ -84,7 +85,9 @@ class AgentLoop(QObject):
             context.epoch,
             context.stream_id,
             context.language,
-            context.segments,
+            # Revisions are immutable under the speech contract. Dedupe needs ids,
+            # not another long-lived copy of private transcript text.
+            tuple((s.segment_id, s.sequence) for s in context.segments),
         )
         if (
             self.runner.busy
@@ -111,13 +114,14 @@ class AgentLoop(QObject):
                 self.status.emit("Ready • waiting for completed speech…")
             self._preparing_for = None
             return
+        submitted, self._submitted = self._submitted, None
         current = self.current_context() if self.current_context is not None else self._current
         if (
             self.enabled
             and self._request_generation == self._generation
-            and self._submitted is not None
+            and submitted is not None
             and current is not None
-            and self._submitted.matches(current)
+            and submitted.matches(current)
         ):
             if isinstance(result, dict) and result.get("reason") == "paced":
                 # No provider attempt was spent. Retain only the live latest input.
@@ -129,12 +133,13 @@ class AgentLoop(QObject):
                     self._last_revision = None
                     self._not_before = time.monotonic() + delay / 1000
                     self.proposed.emit(None)
-                    self.status.emit("Waiting for the shared suggestion allowance…")
+                    self.status.emit("Waiting for the next suggestion…")
                     return
             self.proposed.emit(result)
             self.status.emit("Suggestion ready • slide controls remain manual")
 
     def _failed(self, _identifier: int, message: str) -> None:
+        self._submitted = None
         if self._preparing_for is not None:
             self._prepare_failed_for, self._preparing_for = self._preparing_for, None
         if self.enabled and self._request_generation == self._generation:
@@ -143,7 +148,10 @@ class AgentLoop(QObject):
 
     def stop(self) -> None:
         self.set_enabled(False)
+        self._current = self._submitted = None
+        self._last_revision = self._deferred_revision = None
         self.runner.stop()
 
     def wait_for_shutdown(self) -> None:
+        self.stop()
         self.runner.wait_for_shutdown()

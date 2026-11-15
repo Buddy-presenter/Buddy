@@ -84,7 +84,7 @@ configuration, invalid provider output, provider failure, stale eligibility or a
 `DecisionProvider` separates the selection contract from its replaceable adapter.
 The implementation uses `command-a-03-2025` at the fixed HTTPS Cohere Chat v2
 endpoint, temperature zero, no reasoning mode, 160 output tokens and structured JSON.
-There are no arbitrary tool calls, redirects, retries, provider-selected URLs or shell
+There are no arbitrary tool calls, redirects, provider retries, provider-selected URLs or shell
 capabilities. The Chat adapter borrows the existing embeddings HTTP pool (120-second idle
 keepalive) when both are configured, avoiding a second cold connection to the same host.
 The embeddings adapter owns shutdown of that pool; each operation keeps its own deadline.
@@ -100,7 +100,8 @@ otherwise valid result. Embeddings retain their own bounded adapter and allowanc
 
 The Qt scheduler runs off the GUI thread, with one in-flight operation, newest-only
 coalescing, no queue of old transcripts, no fixed post-final wait, and at least 3.2
-seconds between requests. New completed revisions can trigger requests; the same
+seconds between admitted attempts. Unspent admission deferrals follow the server wait.
+New completed revisions can trigger requests; the same
 revision is not automatically retried after a provider failure. A `paced` response
 includes bounded `retry_after_ms`: since no provider attempt was spent, the latest
 still-fresh revision can be deferred at most twice without entering a FIFO. Expired or
@@ -124,7 +125,9 @@ this database. This is a development allowance, not unlimited presentation time.
 The standard Cohere API receives completed speech and selected slide summaries/purposes;
 audio still goes only to the configured speech provider. The requester's acceptance of
 standard API retention and training-enabled development applies here. This is not EU-only
-or zero-retention processing. Agent requests/results are not persisted as speech history.
+or zero-retention processing. Agent requests/results are not persisted as speech history. Scheduler dedupe keys contain
+segment ids/revision numbers, not transcript text; completed/failed in-flight snapshots
+are released, and disabling/shutdown clears pending snapshots.
 The existing five-minute speech journal is unchanged, as are its backup limitations.
 
 The `presentation_agent_decision` operational log contains only decision_id, request_id, finite tool,

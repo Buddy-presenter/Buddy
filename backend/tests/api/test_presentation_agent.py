@@ -367,7 +367,9 @@ def test_owner_gates_no_store_read_only_and_disabled(ready_session_api, caplog):
 
 
 @pytest.mark.postgres
-@pytest.mark.parametrize("mode", ["stay", "malformed", "failure", "busy", "deadline", "stale"])
+@pytest.mark.parametrize(
+    "mode", ["stay", "malformed", "failure", "busy", "deadline", "stale", "source_changed"]
+)
 def test_proposal_fallback_and_inflight_state_changes(agent_api, mode):
     client, ids, provider = agent_api
     runtime = client.app.state.presentation_agent
@@ -396,12 +398,21 @@ def test_proposal_fallback_and_inflight_state_changes(agent_api, mode):
                 (await db.get(PresentationSession, ids["sessions"])).state_version += 1
 
         provider.callback = changed
+    if mode == "source_changed":
+        from buddy_api.persistence.models import Deck
+
+        async def replaced_source():
+            async with client.app.state.database.sessions() as db, db.begin():
+                (await db.get(Deck, ids["decks"])).source_sha256 = "b" * 64
+
+        provider.callback = replaced_source
     reply = client.post(path, headers={"Authorization": "Bearer owner"}, json=payload())
     assert reply.status_code == 200, reply.text
     assert reply.json()["target"]["tool"] == "no_action"
     assert reply.json()["reason"] == {
         "malformed": "invalid_output",
         "failure": "provider_unavailable",
+        "source_changed": "stale",
     }.get(mode, mode)
     if mode != "busy":
         assert not runtime.active

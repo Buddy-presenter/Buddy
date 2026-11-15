@@ -49,11 +49,19 @@ def test_region_free_cache_keeps_authorization_and_validation_revisions_fresh(
         return await original(self, *args, **kwargs)
 
     monkeypatch.setattr(Analyses, "read", measured)
+    clock = [0.0]
+    monkeypatch.setattr(
+        "buddy_api.presentation_candidates.time", SimpleNamespace(monotonic=lambda: clock[0])
+    )
     path = f"/api/v1/sessions/{ids['sessions']}/candidates"
     headers = {"Authorization": "Bearer owner"}
     for _ in range(2):
         assert client.post(path, headers=headers, json=payload()).status_code == 200
     assert len(reads) == 1
+    for instant in (29, 31):
+        clock[0] = instant
+        assert client.post(path, headers=headers, json=payload()).status_code == 200
+    assert len(reads) == 1  # Active, re-authorized reads refresh the idle TTL.
     assert (
         client.post(path, headers={"Authorization": "Bearer other"}, json=payload()).status_code
         == 403
@@ -63,6 +71,9 @@ def test_region_free_cache_keeps_authorization_and_validation_revisions_fresh(
         == 409
     )
     assert len(reads) == 1
+    clock[0] = 65
+    assert client.post(path, headers=headers, json=payload()).status_code == 200
+    assert len(reads) == 2  # Idle presentations still expire after 30 seconds.
 
     async def verify_region():
         async with database.sessions() as db, db.begin():

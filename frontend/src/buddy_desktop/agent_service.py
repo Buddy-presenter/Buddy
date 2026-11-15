@@ -170,6 +170,18 @@ class AgentService:
                 raise ValueError
             if target["tool"] != "no_action" and (not evidence or confidence is None):
                 raise ValueError
+            if result["decision_source"] == "fallback" and (
+                target["tool"] != "no_action" or confidence is not None or evidence
+            ):
+                raise ValueError
+            if result["decision_source"] == "navigation" and target["tool"] not in {
+                "no_action",
+                "next_slide",
+                "previous_slide",
+            }:
+                raise ValueError
+            if result["reason"] == "paced" and result["decision_source"] != "fallback":
+                raise ValueError
             if target["tool"] in {"no_action", "reset_view"} and (
                 session.state is None or target["slide_id"] != session.state.active_slide_id
             ):

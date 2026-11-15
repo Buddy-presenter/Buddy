@@ -59,6 +59,7 @@ def inputs():
         "partial",
         "retry",
         "capture_expired",
+        "fallback_action",
     ],
 )
 def test_real_http_validates_proposals_and_context(corrupt, monkeypatch):
@@ -113,6 +114,8 @@ def test_real_http_validates_proposals_and_context(corrupt, monkeypatch):
                 answer["confidence"] = float("nan")
             if corrupt == "extra":
                 answer["code"] = "bad"
+            if corrupt == "fallback_action":
+                answer["decision_source"] = "fallback"
             if corrupt == "retry":
                 answer["reason"] = "paced"
                 answer["retry_after_ms"] = True
@@ -202,6 +205,8 @@ def test_loop_coalesces_and_invalidates_corrections_manual_changes_and_disable(q
         qtbot.waitUntil(lambda: not loop.runner.busy)
         assert service.calls[-1].segments[-1].sequence == 9
         assert received[-1] == {"sequence": 9}
+        assert loop._submitted is None
+        assert "Our sales are growing" not in repr(loop._last_revision)
         loop.update("token", session, current[0])
         assert len(service.calls) == 2  # Same final is not charged twice.
         current[0] = replace(current[0], epoch=2)
@@ -212,6 +217,7 @@ def test_loop_coalesces_and_invalidates_corrections_manual_changes_and_disable(q
         loop.update("token", session, current[0])
         assert len(service.calls) == 2
         loop.set_enabled(False)
+        assert loop._current is None and loop._submitted is None
         loop.update("token", session, context)
         assert len(service.calls) == 2
     finally:

@@ -144,6 +144,10 @@ class CandidateAnalyses:
         )
         cached = self._entries.get(key)
         if cached is not None:
+            # Active presentations need not reconstruct hundreds of unusable
+            # actions every 30 seconds. The key and authorization were rechecked;
+            # expire inactive entries 30 seconds after their last verified use.
+            self._entries[key] = (now, cached[1])
             self._entries.move_to_end(key)
             return cached[1]
         analysis = await Analyses(db).read(record.id, owner_id=owner)

@@ -129,7 +129,9 @@ Responses are no-store. Request bodies and speech are never added to ordinary lo
 or persisted by this route. Existing speech journal retention is unchanged.
 
 To avoid reconstructing hundreds of unavailable regions on every live request, the API
-may keep up to eight region-free typed analysis reads in memory for 30 seconds. Each
+may keep up to eight region-free typed analysis reads in memory for 30 seconds since
+their last verified use. Active reads refresh this idle TTL after authorization and
+validation-revision checks, avoiding a periodic heavy rebuild during speech. Each
 request still rechecks identity/ownership, active session/state, current source/job and
 pinned analysis in PostgreSQL. The cache also binds the immutable content hash and the
 append-only validation-history count in the same repeatable-read snapshot; a new check
