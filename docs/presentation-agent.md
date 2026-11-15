@@ -41,6 +41,13 @@ controls stay manual. Starting a partial, changing the view/session/language, a 
 gap/reconnect, stopping/muting/pausing the microphone, or letting context go stale
 invalidates pending results through the existing rolling context. Leaving Present or
 switching sessions turns suggestions off; the opt-in is not saved across launches.
+
+In Present, pause or resume automatic moves with the dedicated button or
+**Ctrl+Shift+P**. Use **Undo automatic move** (**Ctrl+Shift+Z**) to return to the
+previous view after an automatic transition. Undo pauses automatic moves.
+These controls apply to saved PDFs and verified PowerPoint shows. The PowerPoint
+shortcuts work while Buddy has keyboard focus. After a manual move, Buddy syncs
+the new slide before requesting another suggestion.
 Local PowerPoint without a saved API session is not eligible for this runtime. A
 disconnected, changed or unverified Office slideshow stops transcription and discards
 the saved-session binding. The live slide is authoritative when resuming a PowerPoint
