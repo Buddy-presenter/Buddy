@@ -282,6 +282,61 @@ def checked_selection(
     return targets[index]
 
 
+def decision_passage(
+    source: AgentInput, values: AgentRequest, descriptions: list[dict[str, object]]
+) -> dict[str, object]:
+    """The production provider input, also used by permissioned offline replay."""
+    current_slide = next(s for s in source.analysis.slides if s.slide_id == source.current)
+    return {
+        "segments": [s.text for s in values.segments],
+        "latest_segment": len(values.segments) - 1,
+        "current_view": {
+            "slide": source.current,
+            "slide_number": next(
+                i + 1 for i, s in enumerate(source.analysis.slides) if s.slide_id == source.current
+            ),
+            "slide_count": len(source.analysis.slides),
+            "focus": source.focus,
+            "summary": (current_slide.summary.text or "")[:1200],
+            "focused_purpose": next(
+                (
+                    a.action.purpose
+                    for a in current_slide.actions
+                    if a.usable
+                    and a.state == "validated"
+                    and a.semantic_verified
+                    and a.action.type == source.focus
+                    and a.action.params.region == source.focus_region
+                ),
+                None,
+            ),
+        },
+        "options": descriptions,
+    }
+
+
+def navigation_selection(
+    targets: tuple[Target, ...], candidates: tuple[Candidate, ...], segment_count: int
+) -> Selection:
+    neighbor = next((c.slide_id for c in candidates if c.reason == "explicit_navigation"), None)
+    choice = next(
+        (
+            i
+            for i, target in enumerate(targets)
+            if target.slide_id == neighbor and target.tool in {"next_slide", "previous_slide"}
+        ),
+        0,
+    )
+    return Selection.model_validate(
+        {
+            "choice": f"c{choice}",
+            "reason": "explicit" if choice else "stay",
+            "confidence": 1.0,
+            "evidence": [segment_count - 1],
+        }
+    )
+
+
 class AgentRuntime:
     def __init__(self, settings: AgentSettings, provider: DecisionProvider):
         self.settings, self.provider = settings, provider
@@ -400,27 +455,7 @@ def agent_router() -> APIRouter:
                             source.analysis, source.current, values.text, values.latest_utterance
                         )
                         targets, _ = options(source, candidates)
-                        neighbor = next(
-                            (c.slide_id for c in candidates if c.reason == "explicit_navigation"),
-                            None,
-                        )
-                        choice = next(
-                            (
-                                i
-                                for i, t in enumerate(targets)
-                                if t.slide_id == neighbor
-                                and t.tool in {"next_slide", "previous_slide"}
-                            ),
-                            0,
-                        )
-                        selection = Selection.model_validate(
-                            {
-                                "choice": f"c{choice}",
-                                "reason": "explicit" if choice else "stay",
-                                "confidence": 1.0,
-                                "evidence": [len(values.segments) - 1],
-                            }
-                        )
+                        selection = navigation_selection(targets, candidates, len(values.segments))
                     else:
                         # Reserve first: exhausted/fast clients cannot spend query quota.
                         await runtime.reserve(request.app.state.database)
@@ -443,39 +478,9 @@ def agent_router() -> APIRouter:
                             )
                         )
                         targets, descriptions = options(source, candidates)
-                        current_slide = next(
-                            s for s in source.analysis.slides if s.slide_id == source.current
-                        )
                         phase = "selection"
                         selection = await runtime.provider.select(
-                            {
-                                "segments": [s.text for s in values.segments],
-                                "latest_segment": len(values.segments) - 1,
-                                "current_view": {
-                                    "slide": source.current,
-                                    "slide_number": next(
-                                        i + 1
-                                        for i, s in enumerate(source.analysis.slides)
-                                        if s.slide_id == source.current
-                                    ),
-                                    "slide_count": len(source.analysis.slides),
-                                    "focus": source.focus,
-                                    "summary": (current_slide.summary.text or "")[:1200],
-                                    "focused_purpose": next(
-                                        (
-                                            a.action.purpose
-                                            for a in current_slide.actions
-                                            if a.usable
-                                            and a.state == "validated"
-                                            and a.semantic_verified
-                                            and a.action.type == source.focus
-                                            and a.action.params.region == source.focus_region
-                                        ),
-                                        None,
-                                    ),
-                                },
-                                "options": descriptions,
-                            }
+                            decision_passage(source, values, descriptions)
                         )
                         decision_source = "model"
                     target = checked_selection(selection, targets, len(values.segments))

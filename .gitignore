@@ -9,6 +9,8 @@ build/
 *.egg-info/
 .env
 .env.*
+replay-artifacts/
+tests/fixtures/replay/private/
 !.env.example
 .DS_Store
 Thumbs.db
