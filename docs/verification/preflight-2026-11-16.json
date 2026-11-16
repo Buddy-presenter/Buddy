@@ -26,8 +26,8 @@
     "follow_up": "Restore a licensed dedicated Office runtime, rerun smoke_preflight.py with the actual physical viewport, and inspect all native captures."
   },
   "macos": {
-    "state": "pending-ci",
-    "note": "Native capture requires an interactive Mac and screen-recording permission. An unavailable capture must remain unsupported."
+    "state": "unsupported-on-managed-ci",
+    "note": "Both managed macOS CI versions exercised the native child but could not verify an unobstructed audience viewport. A clean interactive Mac with native capture permission is still required for acceptance; these captures are not counted as passed."
   },
   "semantic_verified": false
 }

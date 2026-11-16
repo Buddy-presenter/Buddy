@@ -100,7 +100,8 @@ and real native captures under a private output directory. It fails if a request
 is unsupported; skipping Office never counts as Office acceptance. Normal Windows/macOS
 frontend CI exercises real PDF child execution, baseline/reset pixels, native capture,
 authorization, cancellation/retry, invalid tools, safe fallback and cleanup. Managed macOS
-hosts without native capture permissions explicitly skip the capture acceptance case;
+hosts without native capture permissions or a verifiable unobstructed audience explicitly
+skip the capture acceptance case after asserting the fail-closed result;
 run that case on an authorized native Mac before claiming its capture profile is supported.
 
 This adds a desktop library/worker, not a server feature switch. Rebuild/install the desktop
