@@ -21,7 +21,19 @@ def test_tutorial_navigation_scroll_and_actions(desktop_window, qapp, size):
     assert "Open PDF" in text and "Execution validation" in text
     assert "Automatic visual verification and correction are not available yet" in text
     assert "Deepgram in the EU" in text
-    assert "does not automatically navigate slides" in text
+    assert "does not automatically navigate slides" not in text
+    assert "PowerPoint slideshow stays local and is not transcribed" not in text
+    assert "saved PDF and saved PowerPoint sessions" in text
+    for button in (
+        window.review.open_powerpoint,
+        window.review.present_powerpoint,
+        window.review.open_evidence,
+        window.present.policy_undo_button,
+    ):
+        assert button.text() in text
+    assert window.present.agent_enabled.text() in text
+    assert window.present.policy_enabled.text() in text
+    assert "Ctrl+Shift+P" in text and "Ctrl+Shift+Z" in text
     assert "Reset zoom" in text and "PPTX" in text
     assert not window.runner.busy and not window.library.runner.busy
     for title, destination in (("Open Present", 3), ("Open Library", 1), ("Open Settings", 4)):

@@ -2,7 +2,10 @@
 
 The sidebar's **How to use** page (Alt+7) provides an offline guide to local PDF
 presentation, account and Library uploads, saved analysis review, keyboard shortcuts,
-Windows PowerPoint controls and troubleshooting. It is available without signing in.
+Windows PowerPoint controls, saved-session speech and opt-in automatic moves, and
+troubleshooting. The guide distinguishes cloud transcription for saved PDF/PPTX sessions
+from local-only PowerPoint capture and explains how to pause movement versus listening.
+It is available without signing in.
 Its buttons open Present, Library and Settings. Profile retains Alt+6.
 
 The application has one `QApplication` and one event loop. `app.py` validates environment
