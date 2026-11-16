@@ -3,13 +3,15 @@
 import math
 from importlib.resources import files
 
-from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QCloseEvent,
     QColor,
     QCursor,
+    QEnterEvent,
     QKeyEvent,
     QPainter,
+    QPaintEvent,
     QPen,
     QPixmap,
 )
@@ -130,11 +132,11 @@ class BuddyMini(QWidget):
             y = round(97 + 68 * math.sin(angle))
             button.move(x, self.height() - y - button.height() if top else y)
 
-    def enterEvent(self, event) -> None:
+    def enterEvent(self, event: QEnterEvent) -> None:
         self._hover_close.stop()
         super().enterEvent(event)
 
-    def leaveEvent(self, event) -> None:
+    def leaveEvent(self, event: QEvent) -> None:
         self._hover_close.start()
         super().leaveEvent(event)
 
@@ -221,7 +223,7 @@ class BuddyMini(QWidget):
                 self.mascot.setAccessibleDescription("")
             self.update()
 
-    def paintEvent(self, event) -> None:
+    def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
