@@ -19,10 +19,12 @@ def completed_payload(
     session: PresentationSession,
     context: ContextSnapshot,
     current_context: Callable[[], ContextSnapshot] | None = None,
+    *,
+    allow_provisional: bool = False,
 ) -> dict[str, object]:
-    """Build only from fresh completed speech; caller publishes snapshots off the GUI thread."""
+    """Build bounded fresh decision input; the candidate-only route stays final-only."""
     now = time.monotonic_ns()
-    segments = context.candidate_segments
+    segments = context.decision_segments if allow_provisional else context.candidate_segments
     if (
         not context.fresh
         or not context.segments
@@ -41,7 +43,8 @@ def completed_payload(
         raise ServiceError("Speech context changed or expired; wait for fresh speech.")
     if not segments:
         raise ServiceError("Wait for a completed speech segment before searching.")
-    if current_context is not None and not context.matches(current_context()):
+    matches = context.matches_decision if allow_provisional else context.matches
+    if current_context is not None and not matches(current_context()):
         raise ServiceError("Speech context changed or expired; wait for fresh speech.")
     payload = {
         "protocol": "presentation-candidates.v1",
@@ -53,6 +56,8 @@ def completed_payload(
         "text": " ".join(segment.text for segment in segments),
         "latest_utterance": segments[-1].text,
     }
+    if allow_provisional:
+        payload["provisional"] = not segments[-1].final
     return payload
 
 

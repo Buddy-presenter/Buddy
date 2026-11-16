@@ -154,6 +154,111 @@ def test_candidate_passage_drops_whole_old_segments_at_character_bound(monkeypat
     assert all(len(s.text) == 1500 for s in selected)
 
 
+def test_interim_stable_prefix_is_bounded_and_revisions_revoke_it(monkeypatch):
+    context, clock = setup(monkeypatch)
+    phrase = "Let's now have a look at the table of contents"
+    context.accept(event(clock, text=phrase))
+    first = context.snapshot()
+    assert not first.decision_segments
+    clock[0] += 100_000_000
+    context.accept(event(clock, sequence=2, text=phrase + " where we explain"))
+    stable = context.snapshot()
+    assert stable.decision_segments[-1].text == phrase
+    assert not stable.decision_segments[-1].final
+    assert not stable.matches(first)
+    clock[0] += 100_000_000
+    context.accept(event(clock, sequence=3, text=phrase + " where we explain the sections"))
+    extended = context.snapshot()
+    assert extended.decision_segments[-1].text.startswith(phrase)
+    assert stable.matches_decision(extended)
+    clock[0] += 100_000_000
+    context.accept(
+        event(
+            clock,
+            sequence=4,
+            text=phrase + " where we explain the sections, actually the sales chart",
+        )
+    )
+    clock[0] += 100_000_000
+    context.accept(
+        event(
+            clock,
+            sequence=5,
+            text=phrase + " where we explain the sections, actually the sales chart",
+        )
+    )
+    assert not stable.matches_decision(context.snapshot())
+    clock[0] += 100_000_000
+    context.accept(event(clock, sequence=6, text="Let's now have a look at the sales chart"))
+    corrected = context.snapshot()
+    assert not stable.matches_decision(corrected)
+    assert corrected.decision_segments[-1].text != stable.decision_segments[-1].text
+
+
+def test_finalizing_interim_decision_preserves_it_but_new_final_supersedes(monkeypatch):
+    context, clock = setup(monkeypatch)
+    phrase = "Let's look at the table of contents"
+    context.accept(event(clock, text=phrase))
+    clock[0] += 100_000_000
+    context.accept(event(clock, sequence=2, text=phrase + " and the different sections"))
+    submitted = context.snapshot()
+    clock[0] += 100_000_000
+    context.accept(
+        event(clock, sequence=3, text=phrase + " and the different sections", final=True)
+    )
+    finalized = context.snapshot()
+    assert submitted.matches_decision(finalized)
+    clock[0] += 100_000_000
+    context.accept(
+        event(
+            clock,
+            sequence=4,
+            segment_id="next",
+            start_seconds=1,
+            end_seconds=1.2,
+            final=True,
+            text="And now we will review the different sections.",
+        )
+    )
+    continuing = context.snapshot()
+    assert submitted.matches_decision(continuing)
+    clock[0] += 100_000_000
+    context.accept(
+        event(
+            clock,
+            sequence=5,
+            segment_id="correction",
+            start_seconds=1.3,
+            end_seconds=1.5,
+            final=True,
+            text="Actually, go to the summary instead.",
+        )
+    )
+    assert not submitted.matches_decision(context.snapshot())
+
+
+def test_decision_match_allows_unchanged_history_omitted_by_bounded_window():
+    from buddy_desktop.transcript_context import ContextSegment, ContextSnapshot
+
+    now = 10_000_000_000
+    snapshot = ContextSnapshot(
+        "session",
+        1,
+        1,
+        "stream",
+        "en-US",
+        (
+            ContextSegment("older", 1, "x" * 4096, True, 0.0, 1.0, now),
+            ContextSegment("latest", 2, "Go to slide 8", True, 1.1, 1.2, now),
+        ),
+        now,
+        True,
+    )
+
+    assert [segment.segment_id for segment in snapshot.decision_segments] == ["latest"]
+    assert snapshot.matches_decision(snapshot)
+
+
 def test_reconnect_clear_and_privacy(monkeypatch):
     context, clock = setup(monkeypatch)
     context.accept(event(clock))

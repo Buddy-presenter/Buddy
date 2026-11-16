@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from threading import Event
+from time import monotonic_ns, sleep
 
 import pytest
 from PySide6.QtCore import QPoint, Qt
@@ -48,6 +49,59 @@ def test_presenter_can_pause_and_resume_from_the_current_manual_slide(present, q
     page.policy_pause_button.click()
     assert page.policy.enabled
     assert page.executor.current_index == 1
+
+
+def test_continued_speech_does_not_cancel_an_already_dispatched_office_action(present):
+    _window, page = present
+    page._native_guard.set()
+    page._speech_transcript(
+        {
+            "final": False,
+            "start_seconds": 0.0,
+            "end_seconds": 0.1,
+            "latency_ms": 10,
+            "text": "and the next part",
+        }
+    )
+    assert page._native_guard.is_set()
+
+
+def test_corrected_speech_revokes_dispatched_native_action(present):
+    _window, page = present
+    page.transcript_context.bind("session", 1, str(page.speech_language.currentData()))
+    sleep(0.11)  # Let the test utterance begin after the context capture boundary.
+
+    def emit(sequence, segment_id, text, *, final=False):
+        page.transcript_context.accept(
+            {
+                "session_id": "session",
+                "stream_id": "stream",
+                "sequence": sequence,
+                "segment_id": segment_id,
+                "text": text,
+                "final": final,
+                "start_seconds": 0.0,
+                "end_seconds": 0.1,
+                "capture_end_ns": monotonic_ns(),
+            }
+        )
+
+    phrase = "Let's look at the table"
+    emit(1, "active", phrase)
+    emit(2, "active", phrase + " of contents")
+    page._native_policy_context = page.transcript_context.snapshot()
+    page._native_guard.set()
+    delayed_office_guard = page._native_guard.is_set
+
+    emit(3, "active", phrase + " of contents while I keep explaining")
+    page._revoke_native_guard_if_speech_changed()
+    assert page._native_guard.is_set()  # Normal continuation keeps the dispatched task live.
+
+    emit(4, "correction", "Actually, do not go to the next slide.", final=True)
+    page._revoke_native_guard_if_speech_changed()
+    assert not page._native_guard.is_set()
+    assert not delayed_office_guard()  # A held Office task cannot commit after the correction.
+    assert page._native_policy_context is None
 
 
 def test_open_dialog_and_all_six_buttons(desktop_window, qtbot, monkeypatch):

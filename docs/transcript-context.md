@@ -8,8 +8,8 @@ publication timestamps, which cannot prove which slide was visible at capture.
 
 A frozen snapshot includes session ID, authoritative state version, a local
 invalidation epoch, stream ID, language, ordered segments and local monotonic
-observation time. Segments include audio offsets, capture-end timestamps and
-revision sequence.
+observation time. Segments include audio offsets, capture-end timestamps, revision
+sequence, and a stable whole-token prefix for the active interim segment.
 `text` joins segments once; partial corrections replace the
 same segment and a final segment cannot be overwritten. Duplicate and older
 updates are ignored. SpeechController enforces wire validation and current-stream
@@ -31,21 +31,29 @@ preceding context still inside the 30-second capture window. A six- or twenty-se
 pause therefore preserves references, while an older context still expires under the
 existing memory-retention policy. Pauses are not a topic classifier.
 
-`candidate_segments` selects consecutive final segments, capped at 4096 characters with
-no fixed segment count. It stops at a partial or size boundary instead of bridging a
-hole or splitting a segment. A completed segment is eligible immediately; there is no
-additional settling timer. Provider segmentation is not treated as sentence structure.
-`ContextSnapshot.matches(current)` rejects an old result after any speech revision,
-including a new partial, or after freshness/session/state/epoch/stream/language changes.
-An unchanged newer observation alone does not invalidate a result.
+`candidate_segments` remains final-only for candidate retrieval. `decision_segments`
+allows the agent to use consecutive final evidence plus only whole tokens shared by two
+consecutive hypotheses of the active interim segment. It never sends the changing tail.
+The desktop requests a provisional decision after 12 stable characters, then allows at
+most two follow-ups per segment with at least 20 additional stable characters each. A
+completed segment remains eligible immediately; there is no extra settling timer. Provider
+segmentation is not treated as sentence structure.
+`ContextSnapshot.matches(current)` remains an exact snapshot check. The agent-specific
+`matches_decision(current)` also accepts ordinary continuation if the submitted stable
+prefix stays intact, while rejecting a revision that changes that prefix, an explicit
+correction/negation, or freshness/session/state/epoch/stream/language changes. Ordinary
+completed segments can continue the thought without canceling the pending action. The accepted result is
+still bounded by the five-second capture freshness and authoritative slide/session checks.
 
 `CandidateService.resolve(..., current_context=...)` can check a caller-supplied current
 snapshot before and after the network request. Callers must supply a thread-safe source
 of newly published immutable snapshots and recheck `matches` again at result consumption.
 Without this callback, that input-revision check remains the caller's responsibility.
 #20 owns worker scheduling, keeping only the newest pending input while a request is
-running, honoring provider pacing, and final decision/execution policy. This change does
-not add an automatic worker or decision loop to Present.
+running, honoring provider pacing, and final decision/execution policy. The presentation
+agent may send the bounded stable interim prefix only when Live suggestions are enabled;
+the changing partial tail is never sent. This does not change speech retention, audio
+handling, or the manual-control opt-in.
 
 Manual navigation/focus changes invalidate immediately before the server write.
 Remote state/version changes, identity/session/deck/language changes, speech

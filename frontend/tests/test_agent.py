@@ -182,7 +182,9 @@ def test_real_http_validates_proposals_and_context(corrupt, monkeypatch):
                 service.propose(
                     "private-token", session, context, current_context=lambda: current[0]
                 )
-        assert seen[0]["segments"] == [{"sequence": 1, "text": "Our sales are growing."}]
+        assert seen[0]["segments"] == [
+            {"sequence": 1, "text": "Our sales are growing.", "final": True}
+        ]
     finally:
         server.shutdown()
         server.server_close()
@@ -287,7 +289,8 @@ def test_loop_coalesces_and_invalidates_corrections_manual_changes_and_disable(q
         loop.update("token", session, current[0])
         qtbot.waitUntil(lambda: not loop.runner.busy)
         assert service.calls[-1].segments[-1].sequence == 9
-        assert received[-1] == {"sequence": 9}
+        assert received[-1]["sequence"] == 9
+        assert received[-1]["_client_context"] is current[0]
         assert loop._submitted is None
         assert "Our sales are growing" not in repr(loop._last_revision)
         loop.update("token", session, current[0])
@@ -308,6 +311,173 @@ def test_loop_coalesces_and_invalidates_corrections_manual_changes_and_disable(q
     finally:
         service.release.set()
         loop.wait_for_shutdown()
+
+
+def test_loop_submits_stable_interim_and_keeps_result_through_continuation(qtbot):
+    session, final = inputs()
+    segment = replace(
+        final.segments[0],
+        final=False,
+        text="Let's look at the table",
+        stable_text="Let's look at the table",
+    )
+    partial = replace(final, segments=(segment,))
+    current = [partial]
+    service = Service()
+    loop = AgentLoop(service, current_context=lambda: current[0])
+    loop._prepared_for = session.id
+    loop.set_enabled(True)
+    received = []
+    loop.proposed.connect(received.append)
+    try:
+        loop.update("token", session, partial)
+        qtbot.waitUntil(lambda: len(service.calls) == 1)
+        assert service.calls[0].decision_segments[-1].text == "Let's look at the table"
+        assert not service.calls[0].decision_segments[-1].final
+        current[0] = replace(
+            partial,
+            segments=(
+                replace(
+                    segment,
+                    sequence=2,
+                    text="Let's look at the table of contents",
+                    stable_text="Let's look at the table of contents",
+                ),
+            ),
+        )
+        loop.update("token", session, current[0])
+        service.release.set()
+        qtbot.waitUntil(lambda: not loop.runner.busy)
+        assert isinstance(received[-1], dict)
+        assert received[-1]["_client_context"] is partial
+    finally:
+        service.release.set()
+        loop.wait_for_shutdown()
+
+
+def test_loop_discards_interim_result_after_prefix_correction(qtbot):
+    session, final = inputs()
+    segment = replace(
+        final.segments[0],
+        final=False,
+        text="Let's look at the table",
+        stable_text="Let's look at the table",
+    )
+    partial = replace(final, segments=(segment,))
+    current = [partial]
+    service = Service()
+    loop = AgentLoop(service, current_context=lambda: current[0])
+    loop._prepared_for = session.id
+    loop.set_enabled(True)
+    received = []
+    loop.proposed.connect(received.append)
+    try:
+        loop.update("token", session, partial)
+        qtbot.waitUntil(lambda: len(service.calls) == 1)
+        current[0] = replace(
+            partial,
+            segments=(
+                replace(
+                    segment,
+                    sequence=2,
+                    text="Let's look at the chart",
+                    stable_text="Let's look at the chart",
+                ),
+            ),
+        )
+        loop.update("token", session, current[0])
+        service.release.set()
+        qtbot.waitUntil(lambda: not loop.runner.busy)
+        assert not any(isinstance(value, dict) for value in received)
+    finally:
+        service.release.set()
+        loop.wait_for_shutdown()
+
+
+def test_explicit_interim_correction_bypasses_followup_pacing(qtbot):
+    session, final = inputs()
+    text = "Let's look at the table"
+    segment = replace(final.segments[0], final=False, text=text, stable_text=text)
+    current = [replace(final, segments=(segment,))]
+    service = Service()
+    service.release.set()
+    loop = AgentLoop(service, current_context=lambda: current[0])
+    loop._prepared_for = session.id
+    loop.set_enabled(True)
+    try:
+        loop.update("token", session, current[0])
+        qtbot.waitUntil(lambda: not loop.runner.busy)
+        assert len(service.calls) == 1
+
+        correction = text + " actually chart"
+        current[0] = replace(
+            current[0],
+            segments=(replace(segment, sequence=2, text=correction, stable_text=correction),),
+        )
+        assert len(correction) - len(text) < 20
+        loop.update("token", session, current[0])
+        qtbot.waitUntil(lambda: not loop.runner.busy)
+        assert len(service.calls) == 2
+        assert service.calls[-1].decision_segments[-1].text == correction
+    finally:
+        loop.wait_for_shutdown()
+
+
+def test_interim_decision_requests_are_coalesced_and_bounded(qtbot):
+    session, final = inputs()
+    base = "Let's review this market overview"
+    segment = replace(final.segments[0], final=False, text=base, stable_text=base)
+    current = [replace(final, segments=(segment,))]
+    service = Service()
+    service.release.set()
+    loop = AgentLoop(service, current_context=lambda: current[0])
+    loop._prepared_for = session.id
+    loop.set_enabled(True)
+    try:
+        loop.update("token", session, current[0])
+        qtbot.waitUntil(lambda: not loop.runner.busy)
+        assert len(service.calls) == 1
+        for seq, suffix, expected_calls in (
+            (2, " with recent growth", 1),
+            (3, " with recent growth and customer numbers", 2),
+            (
+                4,
+                " with recent growth and customer numbers we should explain "
+                "the whole section fully",
+                3,
+            ),
+            (
+                5,
+                " with recent growth and customer numbers we should explain "
+                "the whole section fully now",
+                3,
+            ),
+        ):
+            text = base + suffix
+            current[0] = replace(
+                current[0],
+                segments=(replace(segment, sequence=seq, text=text, stable_text=text),),
+            )
+            loop.update("token", session, current[0])
+            qtbot.waitUntil(lambda: not loop.runner.busy)
+            assert len(service.calls) == expected_calls
+    finally:
+        loop.wait_for_shutdown()
+
+
+def test_agent_payload_marks_stable_interim_without_changing_candidate_contract():
+    from buddy_desktop.candidate_service import completed_payload
+
+    session, final = inputs()
+    text = "Let's look at the table of contents"
+    segment = replace(final.segments[0], final=False, text=text, stable_text=text)
+    partial = replace(final, segments=(segment,))
+    payload = completed_payload(session, partial, lambda: partial, allow_provisional=True)
+    assert payload["provisional"] is True
+    assert payload["latest_utterance"] == text
+    assert payload["sequence"] == segment.sequence
+    with pytest.raises(ServiceError, match="completed speech"):
+        completed_payload(session, partial, lambda: partial)
 
 
 def test_consumption_rechecks_live_context_before_timer_and_off_on_by_default(

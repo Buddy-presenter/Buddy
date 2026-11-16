@@ -90,6 +90,16 @@ from buddy_desktop.views import Page, StatusLabel
 from buddy_desktop.visuals import BuddyMark, command
 
 
+def proposal_context(value: dict[str, Any], live: ContextSnapshot) -> ContextSnapshot | None:
+    """Bind a result to the snapshot it analyzed while allowing normal continuation."""
+    submitted = value.get("_client_context")
+    if submitted is None:
+        return live
+    if not isinstance(submitted, ContextSnapshot) or not submitted.matches_decision(live):
+        return None
+    return submitted
+
+
 class SelectionSurface(SlideSurface):
     selection_changed = Signal(object)
 
@@ -261,6 +271,7 @@ class PresentWidget(Page):
         self._powerpoint_binding: PowerPointSessionBinding | None = None
         self._native_present: PowerPointPresent | None = None
         self._native_guard = Event()
+        self._native_policy_context: ContextSnapshot | None = None
         self._generated_analysis: ReviewAnalysis | None = None
         self._generated_request: tuple[str, int, str, str | None] | None = None
         self.generated_runner = TaskRunner(self)
@@ -849,6 +860,7 @@ class PresentWidget(Page):
         self.policy_pause_button.setAccessibleName(label)
         self.policy_pause_button.setToolTip(f"{label} (Ctrl+Shift+P)")
         self._native_guard.clear()
+        self._native_policy_context = None
         self.policy.set_enabled(enabled)
         self._policy_check = None
         self._invalidate_transcript_context()
@@ -900,6 +912,7 @@ class PresentWidget(Page):
     def _invalidate_transcript_context(self) -> None:
         if hasattr(self, "_native_guard"):
             self._native_guard.clear()
+            self._native_policy_context = None
         self.transcript_context.invalidate()
 
     def _native_focus_view(self) -> str:
@@ -923,6 +936,7 @@ class PresentWidget(Page):
         if not hasattr(self, "policy"):
             return
         self._native_guard.clear()
+        self._native_policy_context = None
         prediction = (
             self._policy_check[0]
             if self._policy_check is not None
@@ -943,7 +957,10 @@ class PresentWidget(Page):
         native, session, info = self._native_present, self._session, self._powerpoint_info
         if not self.policy.enabled or native is None or session is None or info is None:
             return
-        context = self.transcript_context.snapshot()
+        context = proposal_context(value, self.transcript_context.snapshot())
+        if context is None:
+            self.policy_status.setText("Speech changed before the action could run; repeat it.")
+            return
         state = self._current_local_state()
         if state is None:
             self.policy.clear_pending()
@@ -1018,7 +1035,7 @@ class PresentWidget(Page):
             or self.powerpoint_runner.busy
             or self.session_runner.busy
             or self._session_pending_state is not None
-            or not context.matches(self.transcript_context.snapshot())
+            or not context.matches_decision(self.transcript_context.snapshot())
         ):
             self.policy.completed(prediction.decision_id, success=False, now_ns=time.monotonic_ns())
             self.policy_status.setText(
@@ -1037,8 +1054,9 @@ class PresentWidget(Page):
             self._current_local_state(),
             prediction.target.action_id,
         )
+        self._native_policy_context = context
         self._native_guard.set()
-        deadline = context.candidate_segments[-1].capture_end_ns + 5_000_000_000
+        deadline = context.decision_segments[-1].capture_end_ns + 5_000_000_000
 
         def guard() -> bool:
             return (
@@ -1059,6 +1077,7 @@ class PresentWidget(Page):
         )
 
     def _native_completed(self, kind: str, result: PowerPointActionResult) -> None:
+        self._native_policy_context = None
         metadata, self._native_completion = self._native_completion, None
         if metadata is None or self._powerpoint_binding is None or self._session is None:
             return
@@ -1296,7 +1315,11 @@ class PresentWidget(Page):
         session, manifest = self._session, self.executor.manifest
         if not self.policy.enabled or session is None or manifest is None:
             return
-        context, state = self.transcript_context.snapshot(), self._current_local_state()
+        context = proposal_context(value, self.transcript_context.snapshot())
+        state = self._current_local_state()
+        if context is None:
+            self.policy_status.setText("Speech changed before the action could run; repeat it.")
+            return
         if state is None or self._powerpoint_info is not None:
             return
         try:
@@ -1405,7 +1428,7 @@ class PresentWidget(Page):
             or self.executor.busy
             or self.session_runner.busy
             or self._session_pending_state is not None
-            or not context.matches(self.transcript_context.snapshot())
+            or not context.matches_decision(self.transcript_context.snapshot())
         ):
             self.policy.completed(prediction.decision_id, success=False, now_ns=time.monotonic_ns())
             self.policy_status.setText(
@@ -1429,7 +1452,7 @@ class PresentWidget(Page):
                 and self._session.state_version == prediction.state_version
                 and self._session_pending_state is None
                 and self._stream_snapshot is None
-                and context.matches(self.transcript_context.snapshot())
+                and context.matches_decision(self.transcript_context.snapshot())
             )
 
         self.executor.dispatch(command_value, commit_guard=still_current)
@@ -1491,13 +1514,8 @@ class PresentWidget(Page):
         if not isinstance(result, dict):
             self.agent_proposal.clear()
             context = self.transcript_context.snapshot()
-            candidates = context.candidate_segments
-            if (
-                not context.fresh
-                or not candidates
-                or not context.segments
-                or context.segments[-1].sequence != candidates[-1].sequence
-            ):
+            candidates = context.decision_segments
+            if not context.fresh or not candidates or not context.segments:
                 self.policy.clear_pending()
             return
         target = result["target"]
@@ -1552,11 +1570,6 @@ class PresentWidget(Page):
 
     @Slot(object)
     def _speech_transcript(self, event: dict[str, object]) -> None:
-        self._native_guard.clear()
-        if not event["final"]:
-            # Break sustained evidence at capture delivery, even if a final arrives
-            # before the scheduler observes this unfinished thought.
-            self.policy.clear_pending()
         if (
             self._session is not None
             and self._context_connected
@@ -1569,12 +1582,21 @@ class PresentWidget(Page):
                 str(self.speech_language.currentData()),
             )
             self.transcript_context.accept(event)
+            self._revoke_native_guard_if_speech_changed()
         kind = "Final" if event["final"] else "Partial"
         start = float(cast(float, event["start_seconds"]))
         end = float(cast(float, event["end_seconds"]))
         self.speech_text.setPlainText(
             f"{kind} • {start:.2f}–{end:.2f} s • {event['latency_ms']} ms\n{event['text']}"
         )
+
+    def _revoke_native_guard_if_speech_changed(self) -> None:
+        submitted = self._native_policy_context
+        if submitted is not None and not submitted.matches_decision(
+            self.transcript_context.snapshot()
+        ):
+            self._native_guard.clear()
+            self._native_policy_context = None
 
     @Slot()
     def _verify_microphone_pdf_session(self) -> None:
@@ -2405,6 +2427,7 @@ class PresentWidget(Page):
             completion = self._native_completion
             self._native_completion = None
             self._native_guard.clear()
+            self._native_policy_context = None
             if completion is not None and completion[0] is not None:
                 self.policy.completed(
                     completion[0].decision_id,
@@ -2984,6 +3007,7 @@ class PresentWidget(Page):
         self.policy_runner.stop()
         self.generated_runner.stop()
         self._native_guard.clear()
+        self._native_policy_context = None
         self._agent_tick.stop()
         self.agent.stop()
         self.session_events.stop()
@@ -3007,6 +3031,7 @@ class PresentWidget(Page):
         self._generated_analysis = None
         self._generated_request = None
         self._native_guard.clear()
+        self._native_policy_context = None
         self.invalidate_saved_powerpoint()
         self.agent_enabled.setChecked(False)
         self.microphone.stop()

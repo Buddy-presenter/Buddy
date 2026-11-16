@@ -22,8 +22,8 @@ Independent calibration/holdout claims remain out of scope for this delivery; us
 1. Open a saved PDF or supported saved PowerPoint session, enable **Live suggestions**
    with its existing cloud-processing disclosure, and start the microphone.
 2. Explicitly enable **Automatic transitions**. Clear next/previous/numbered-slide
-   commands use the deterministic navigation path. Other completed speech can execute
-   the single eligible action selected by the live agent, including a current-slide
+   commands use the deterministic navigation path. A stable interim phrase or completed
+   speech can execute the single eligible action selected by the live agent, including a current-slide
    highlight, zoom, or reset. Ambiguous speech and a `no_action` decision leave the view
    unchanged.
 3. The option is a presenter opt-in, not a calibration workflow. No local calibration
@@ -49,13 +49,16 @@ It retains bounded completed-evidence identities, not speech text/history. `Sett
 controls post-action cooldown and manual hold without modifying the decision provider.
 
 - Check the current session, analysis, immutable source, state version, stream, context
-  epoch, language, completed revision and five-second capture freshness.
-- Reject partials, silence, missing/latest-evidence mismatches, unknown targets, current
-  focus and busy/disconnected players. Each completed speech evidence sequence can trigger
+  epoch, language, submitted evidence and five-second capture freshness.
+- Interim speech is eligible only through its stable whole-token prefix, corroborated by
+  consecutive recognition hypotheses. A result remains current while that prefix remains
+  intact and the presenter continues speaking; an explicit correction/negation, manual
+  change or session change supersedes it. Unknown targets, current focus and
+  busy/disconnected players are rejected. Each submitted speech watermark can trigger
   at most once, even if duplicate HTTP decisions arrive. There is no accumulating
   confirmation queue and no locally loaded user profile.
-- Model-selected actions require a finite provider score, a completed latest evidence
-  segment and an exact match in the currently eligible target set. That score is only a
+- Model-selected actions require a finite provider score, evidence in the submitted
+  fresh decision window and an exact match in the currently eligible target set. That score is only a
   provider ranking value; it is not represented as measured real-world accuracy. A model
   can still select the wrong eligible action, so use the explicit opt-in and evaluate
   closed-loop target accuracy and false transitions separately.

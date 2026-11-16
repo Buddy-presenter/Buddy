@@ -35,11 +35,12 @@ summaries are sent to Cohere. The desktop prepares the index in a background wor
 wait for Ready before starting the microphone. If preparation fails, toggle suggestions
 off/on to retry deliberately. This avoids an automatic paid retry loop.
 
-Speak about a specific slide subject, correct yourself to another subject, then try
-“Do not go to the next slide.” Watch the suggestion beneath the transcript. Slide
-controls stay manual. Starting a partial, changing the view/session/language, a capture
-gap/reconnect, stopping/muting/pausing the microphone, or letting context go stale
-invalidates pending results through the existing rolling context. Leaving Present or
+Speak about a specific slide subject, continue speaking, then correct yourself to another
+subject; also try “Do not go to the next slide.” Watch the suggestion beneath the transcript.
+Slide controls stay manual. A corrected interim prefix or an explicit correction/negation, changing
+the view/session/language, a capture gap/reconnect, stopping/muting/pausing the microphone,
+or letting context go stale invalidates pending results through the rolling context. Ordinary
+continuation does not by itself cancel a decision based on an unchanged stable prefix. Leaving Present or
 switching sessions turns suggestions off; the opt-in is not saved across launches.
 
 In Present, pause or resume automatic moves with the dedicated button or
@@ -81,11 +82,14 @@ automatic rollback step. The table contains credential hashes/counts/timestamps 
 and persisted ownership checks. Responses are `Cache-Control: no-store`.
 `presentation-agent.v1` input binds expected state version, context epoch, stream id,
 sequence watermark, aware sent_at, coherent passage, latest utterance, and up to 64
-completed speech segments with sequence/text. The passage must exactly join the
-segments, end with the latest segment, and fit 4096 characters. Only the desktop's
-validated fresh capture context is eligible; server timestamps bound transit, not
-proof that a remote client actually captured microphone audio. No partial input is
-sent by the desktop. Bodies are bounded to 64 KiB and five seconds.
+speech segments with sequence/text/final status. The passage must exactly join the
+segments, end with the latest segment, and fit 4096 characters. The latest segment may
+be a stable prefix corroborated by consecutive Deepgram interim hypotheses; only whole
+common tokens are sent. The desktop bounds provisional requests to three per segment,
+with at least 20 new stable characters between follow-up requests. Ordinary changing
+tail text is not sent. Only the desktop's validated fresh capture context is eligible;
+server timestamps bound transit, not proof that a remote client actually captured
+microphone audio. Bodies are bounded to 64 KiB and five seconds.
 
 The server reads active session, current source/job/analysis and canonical region
 eligibility in a short repeatable-read transaction. It closes the transaction before
@@ -147,12 +151,14 @@ model work immediately while its rolling 60-second provider window has capacity,
 rather than spacing requests 3.2 seconds apart. Unspent admission deferrals
 follow the server wait for that revision only. New completed speech can be checked
 immediately, so a navigation command does not inherit an earlier model admission wait.
-New completed revisions can trigger requests; the same
+New stable interim checkpoints and completed revisions can trigger requests; only one
+operation is in flight and newer evidence is coalesced rather than queued. The same
 revision is not automatically retried after a provider failure. A `paced` response
 includes bounded `retry_after_ms`: since no provider attempt was spent, the latest
 still-fresh revision can be deferred at most twice without entering a FIFO. Expired or
-changed input is discarded rather than retried. New partials invalidate prior results but are
-not themselves submitted. Preparation has its existing 125-second client bound and
+changed input is discarded rather than retried. A pending result survives ordinary
+continuation only while the submitted stable prefix remains unchanged; a corrected prefix,
+explicit correction/negation, or session/view change supersedes it. Preparation has its existing 125-second client bound and
 stays off the GUI thread; shutdown waits for bounded work after the event loop exits.
 
 An atomic PostgreSQL row per API-key hash shares the rolling provider window and any

@@ -138,10 +138,11 @@ class AgentService:
         *,
         current_context: Callable[[], ContextSnapshot],
     ) -> dict[str, object]:
-        payload = completed_payload(session, context, current_context)
+        payload = completed_payload(session, context, current_context, allow_provisional=True)
         payload["protocol"] = "presentation-agent.v1"
         payload["segments"] = [
-            {"sequence": s.sequence, "text": s.text} for s in context.candidate_segments
+            {"sequence": s.sequence, "text": s.text, "final": s.final}
+            for s in context.decision_segments
         ]
         request = Request(
             self.config.api_url + f"/api/v1/sessions/{UUID(session.id)}/agent",
@@ -216,7 +217,7 @@ class AgentService:
                 not isinstance(evidence, list)
                 or len(evidence) > 8
                 or any(
-                    type(i) is not int or not 0 <= i < len(context.candidate_segments)
+                    type(i) is not int or not 0 <= i < len(context.decision_segments)
                     for i in evidence
                 )
                 or len(set(evidence)) != len(evidence)
@@ -268,7 +269,7 @@ class AgentService:
             ):
                 raise ValueError
             if (
-                not context.matches(current_context())
+                not context.matches_decision(current_context())
                 or time.monotonic_ns() - context.segments[-1].capture_end_ns > 5_000_000_000
             ):
                 raise ServiceError("Suggestion expired; waiting for fresh speech.")

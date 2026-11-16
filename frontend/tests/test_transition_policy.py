@@ -154,7 +154,8 @@ def test_invalid_or_stale_decisions_are_rejected(change):
     now = NOW
     if change == "partial":
         context = replace(
-            context, segments=(*context.segments, replace(context.segments[-1], final=False))
+            context,
+            segments=(replace(context.segments[-1], final=False, stable_text=""),),
         )
     elif change == "old":
         now += 6_000_000_000
