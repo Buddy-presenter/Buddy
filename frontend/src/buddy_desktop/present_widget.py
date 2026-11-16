@@ -186,6 +186,7 @@ class PresentWidget(Page):
     session_access_expired = Signal(str)
     session_event_received = Signal(object)
     transition_observed = Signal(object)
+    mini_requested = Signal()
 
     def __init__(self, config: AppConfig, settings: QSettings) -> None:
         super().__init__("Present", "")
@@ -203,6 +204,7 @@ class PresentWidget(Page):
         self._session_attempt: tuple[str, str] | None = None
         self._session_error = False
         self._session_ended = False
+        self.mini_active = False
         self._session_generation = 0
         self._session_request: tuple[str, int, SessionState | None] | None = None
         self._session_pending_state: SessionState | None = None
@@ -546,6 +548,25 @@ class PresentWidget(Page):
         self.policy_undo_button.setEnabled(False)
         self.policy_undo_button.clicked.connect(self._undo_policy_move)
         policy_row.addWidget(self.policy_undo_button)
+        self.mini_button = QPushButton("Enter Buddy Mini")
+        command(self.mini_button, "external-link")
+        self.mini_button.setToolTip(
+            "Hide the workspace and show the floating presenter controls. "
+            "Mini may be visible when sharing the entire screen."
+        )
+        self.mini_button.clicked.connect(self.mini_requested)
+        microphone_layout.addWidget(self.mini_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.mini_chime = QCheckBox("Buddy Mini completion sound")
+        self.mini_chime.setToolTip(
+            "Play a short sound after a completed move. Capture pauses briefly."
+        )
+        self.mini_chime.setChecked(
+            bool(settings.value("presentation/mini_chime", False, type=bool))
+        )
+        self.mini_chime.toggled.connect(
+            lambda enabled: settings.setValue("presentation/mini_chime", enabled)
+        )
+        microphone_layout.addWidget(self.mini_chime)
         policy_row.addStretch()
         microphone_layout.addLayout(policy_row)
         self.policy_status = StatusLabel("Automatic transitions off")
@@ -2668,6 +2689,8 @@ class PresentWidget(Page):
 
     def _fullscreen_exited(self) -> None:
         self.fullscreen = None
+        if self.mini_active:
+            self.mini_requested.emit()
         if not self._closing:
             self.fullscreen_button.setFocus()
 
@@ -2935,8 +2958,10 @@ class PresentWidget(Page):
         mic_available = self._microphone_session_available()
         self.microphone_device.setEnabled(bool(mic_available) and not self.microphone.enabled)
         self.microphone_button.setEnabled(
-            bool(mic_available) and self.microphone_device.count() > 0
+            not self._closing
+            and (self.microphone.enabled or (mic_available and self.microphone_device.count() > 0))
         )
+        self.mini_button.setEnabled(bool(self.mini_session_id()))
         self.microphone_button.setToolTip(
             "No microphone was detected."
             if self.microphone_device.count() == 0
@@ -2994,9 +3019,29 @@ class PresentWidget(Page):
             )
         return not self._closing and pdf_active
 
+    def mini_session_id(self) -> str | None:
+        session = self._session
+        if (
+            not self._closing
+            and isinstance(session, PresentationSession)
+            and session.status == "active"
+            and self._session_access
+            and (
+                self._powerpoint_binding is not None and self._powerpoint_verified
+                if self._powerpoint_info is not None
+                else bool(self.executor.manifest and self.executor.manifest.account_bound)
+            )
+        ):
+            return session.id
+        return None
+
     def hideEvent(self, event: QHideEvent) -> None:
         # A hidden presentation must not keep a microphone running out of view.
-        if hasattr(self, "microphone") and not getattr(self, "_closing", False):
+        if (
+            hasattr(self, "microphone")
+            and not getattr(self, "_closing", False)
+            and not self.mini_active
+        ):
             self.microphone.stop()
             self.agent_enabled.setChecked(False)
         super().hideEvent(event)

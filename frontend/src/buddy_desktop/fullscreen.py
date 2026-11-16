@@ -23,7 +23,7 @@ class FullscreenPresentation(QMainWindow):
         owner: QWidget,
         screen: QScreen | None = None,
     ) -> None:
-        super().__init__(owner.window())
+        super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowTitle("Buddy presentation — Esc to exit")
         self.surface, self.original_layout = surface, layout

@@ -76,6 +76,25 @@ and workers use strict schema readiness, use the existing compatibility-bridge a
 paused-worker rollout for the additive table. Never downgrade the live database as an
 automatic rollback step. The table contains credential hashes/counts/timestamps only.
 
+## Buddy Mini
+
+On a synced saved PDF or PowerPoint session, click **Enter Buddy Mini** in Present.
+PDF opens its slideshow if needed. Buddy floats in its own window while the main
+workspace is hidden. With two displays, Mini stays off the slideshow display.
+With one display, the overlay can be visible in whole-screen shares. Drag the mascot
+to move it on the presenter display.
+
+Hover or click the mascot to reveal icon buttons for microphone, pause/resume, undo,
+Settings, and Open Buddy. Click the mascot or focus it and press Space, then Tab
+through the controls. Open Buddy or Escape restores the workspace. Closing Mini,
+opening Settings, ending the show, or losing the saved session stops capture.
+Listening ripples become static when Reduce motion is enabled.
+
+Enable **Buddy Mini completion sound** in Present before entering Mini to hear a
+short chime after completed automatic moves. Capture pauses during playback and
+the audio tail, and the prior speech context is discarded. A muted or stopped
+microphone is not started by the chime.
+
 ## HTTP and tool contract
 
 `POST /api/v1/sessions/{id}/agent` uses the existing bearer authentication/revocation
