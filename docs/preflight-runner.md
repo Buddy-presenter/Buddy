@@ -115,6 +115,12 @@ hosts without native capture permissions or a verifiable unobstructed audience e
 skip the capture acceptance case after asserting the fail-closed result;
 run that case on an authorized native Mac before claiming its capture profile is supported.
 
+For issue #48, the requester explicitly waived native Mac acceptance on 2026-11-16
+because their development machine runs Windows. Windows PDF and native Office evidence
+therefore satisfy the agreed platform acceptance for this issue. Mac capture remains
+unvalidated; the waiver does not turn an unsupported capture into a pass or disable
+automated macOS compatibility checks. See the [recorded evidence](verification/preflight-2026-11-16.json).
+
 This adds a desktop library/worker, not a server feature switch. Rebuild/install the desktop
 wheel on the dedicated runner host for changes to take effect. Committing or deploying the
 API alone does not install this worker; no staging infrastructure/migration is required.
