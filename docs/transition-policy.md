@@ -54,9 +54,12 @@ controls post-action cooldown and manual hold without modifying the decision pro
   consecutive recognition hypotheses. A result remains current while that prefix remains
   intact and the presenter continues speaking; an explicit correction/negation, manual
   change or session change supersedes it. Unknown targets, current focus and
-  busy/disconnected players are rejected. Each submitted speech watermark can trigger
-  at most once, even if duplicate HTTP decisions arrive. There is no accumulating
-  confirmation queue and no locally loaded user profile.
+  disconnected or changed presentations are rejected. A suggestion that encounters a
+  transient local slide/session sync is retained as one bounded pending item, then its
+  freshness and server admission are checked again after sync; changed or expired input
+  is discarded. Each submitted speech watermark can trigger at most once, even if
+  duplicate HTTP decisions arrive. There is no multi-utterance confirmation queue and no
+  locally loaded user profile.
 - Model-selected actions require a finite provider score, evidence in the submitted
   fresh decision window and an exact match in the currently eligible target set. That score is only a
   provider ranking value; it is not represented as measured real-world accuracy. A model

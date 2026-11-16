@@ -142,41 +142,48 @@ class ContextSnapshot:
 
     def matches_decision(self, current: "ContextSnapshot") -> bool:
         """Accept ordinary continuation while rejecting corrected decision evidence."""
+        return self.decision_mismatch_reason(current) is None
+
+    def decision_mismatch_reason(self, current: "ContextSnapshot") -> str | None:
+        """Return a bounded reason code; never include transcript content."""
         submitted = self.decision_segments
-        if not (
-            self.fresh
-            and current.fresh
-            and submitted
-            and self.session_id == current.session_id
-            and self.state_version == current.state_version
-            and self.epoch == current.epoch
-            and self.stream_id == current.stream_id
-            and self.language == current.language
-        ):
-            return False
+        if not self.fresh or not current.fresh:
+            return "stale_capture"
+        if not submitted:
+            return "no_decision_evidence"
+        if self.session_id != current.session_id:
+            return "session_changed"
+        if self.state_version != current.state_version:
+            return "state_version_changed"
+        if self.epoch != current.epoch:
+            return "context_epoch_changed"
+        if self.stream_id != current.stream_id:
+            return "speech_stream_changed"
+        if self.language != current.language:
+            return "language_changed"
         now_by_id = {segment.segment_id: segment for segment in current.segments}
         original_by_id = {segment.segment_id: segment for segment in self.segments}
         submitted_ids = {segment.segment_id for segment in submitted}
         for segment in submitted:
             latest = now_by_id.get(segment.segment_id)
             if latest is None:
-                return False
+                return "submitted_segment_missing"
             if segment.final:
                 if (
                     not latest.final
                     or latest.sequence != segment.sequence
                     or latest.text != segment.text
                 ):
-                    return False
+                    return "completed_speech_changed"
             elif latest.final:
                 if not latest.text.startswith(segment.text) or _correction_follows(
                     segment.text, latest.text
                 ):
-                    return False
+                    return "interim_prefix_corrected"
             elif not latest.stable_text.startswith(segment.text) or _correction_follows(
                 segment.text, latest.stable_text
             ):
-                return False
+                return "interim_prefix_corrected"
         newest_submitted = max(segment.sequence for segment in submitted)
         if any(
             segment.sequence > newest_submitted
@@ -188,7 +195,7 @@ class ContextSnapshot:
             )
             for segment in current.segments
         ):
-            return False
+            return "new_speech_corrected_prior_intent"
         if any(
             segment.final
             and segment.sequence <= newest_submitted
@@ -201,14 +208,16 @@ class ContextSnapshot:
             )
             for segment in current.segments
         ):
-            return False
-        return not any(
+            return "completed_speech_changed"
+        if any(
             not segment.final
             and segment.sequence > newest_submitted
             and segment.stable_text
             and _starts_correction(segment.stable_text)
             for segment in current.segments
-        )
+        ):
+            return "new_speech_corrected_prior_intent"
+        return None
 
     def has_correction_since(self, previous: "ContextSnapshot") -> bool:
         """Whether newly stabilized speech explicitly reverses a prior target cue."""

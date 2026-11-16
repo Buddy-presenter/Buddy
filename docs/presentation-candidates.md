@@ -50,10 +50,13 @@ Positive-cosine matches form a ranked shortlist of at
 most seven slide destinations including current (five when region slots are reserved),
 plus eligible region options and no change,
 with eight candidates maximum. Similarity is a ranking signal, not a calibrated
-confidence probability. Exact whole-utterance next/previous and numbered slide/page
-navigation keep a validated no-model fast path. Numbered destinations support digits and
-English cardinal words across the 500-slide deck limit. Invalid or already-current
-destinations return no change rather than falling through to semantic matching.
+confidence probability. Clear leading next/previous and numbered slide/page commands keep
+a validated no-model fast path while allowing the presenter to continue with an
+explanation (for example, “Go to slide 7, and then we can review the results”). Negated,
+conditional, quoted, corrected, or merely discussed commands remain outside that fast
+path. Numbered destinations support digits and English cardinal words across the 500-slide
+deck limit. Invalid or already-current destinations return no change rather than falling
+through to semantic matching.
 #20 owns decisions, abstention and execution policy.
 
 ### Limits and usage accounting

@@ -234,6 +234,57 @@ def test_model_proposal_executes_without_a_calibration_file(player, qtbot):
     assert page.policy.enabled and page.policy_enabled.isChecked()
 
 
+def test_action_proposal_waits_for_transient_session_sync_then_executes(player, qtbot):
+    page, proposal, current, persisted, checks = player
+    segment = replace(current[0].segments[-1], capture_end_ns=time.monotonic_ns())
+    current[0] = replace(current[0], segments=(segment,), observed_ns=segment.capture_end_ns)
+    proposal["_client_context"] = current[0]
+    page._session_pending_state = page._current_local_state()
+
+    page._agent_proposed(proposal)
+
+    assert page._deferred_agent_proposal is not None
+    assert not checks
+    assert page.executor.current_index == 0
+    page._session_pending_state = None
+    page._retry_deferred_policy()
+    qtbot.waitUntil(lambda: page.executor.current_index == 1 and not page.executor.busy)
+    qtbot.waitUntil(lambda: not page.session_runner.busy and bool(persisted))
+    assert len(checks) == 1
+    assert page.policy.enabled and page.policy_enabled.isChecked()
+
+
+def test_preflight_result_is_rechecked_after_transient_sync(player, qtbot, monkeypatch):
+    page, proposal, current, persisted, _ = player
+    segment = replace(current[0].segments[-1], capture_end_ns=time.monotonic_ns())
+    current[0] = replace(current[0], segments=(segment,), observed_ns=segment.capture_end_ns)
+    proposal["_client_context"] = current[0]
+    entered, release = Event(), Event()
+    checks = []
+
+    def delayed_first_check(*args):
+        checks.append(args)
+        if len(checks) == 1:
+            entered.set()
+            assert release.wait(5)
+        return {}
+
+    monkeypatch.setattr(page.agent.service, "check_transition", delayed_first_check)
+    page._agent_proposed(proposal)
+    qtbot.waitUntil(entered.is_set)
+    page._session_pending_state = page._current_local_state()
+    release.set()
+    qtbot.waitUntil(lambda: page._deferred_transition_check is not None)
+    assert page.executor.current_index == 0
+
+    page._session_pending_state = None
+    page._retry_deferred_policy()
+    qtbot.waitUntil(lambda: page.executor.current_index == 1 and not page.executor.busy)
+    qtbot.waitUntil(lambda: not page.session_runner.busy and bool(persisted))
+    assert len(checks) == 2
+    assert page.policy.enabled and page.policy_enabled.isChecked()
+
+
 def test_numbered_navigation_flows_through_policy_and_executes(player, qtbot):
     page, proposal, _, persisted, checks = player
     target = page.executor.manifest.slides[2].slide_id

@@ -365,7 +365,10 @@ def test_latest_utterance_keeps_negation_and_embedded_command_guards(utterance):
         ("Next slide?", None),
         ("If we go to the next slide, we lose context.", None),
         ("Let's go to the next slide. Actually, stay here.", None),
+        ("Let's go to the next slide, and then review the data.", 1),
+        ("Go to the next slide where we can compare results.", 1),
         ("The next slide describes refunds.", None),
+        ("Next slide behavior is different.", None),
     ],
 )
 def test_relative_navigation_requires_a_complete_unambiguous_instruction(utterance, step):
@@ -392,6 +395,11 @@ def test_relative_navigation_requires_a_complete_unambiguous_instruction(utteran
         ("Do not go to slide 8.", None),
         ("If we go to slide 8, we lose context.", None),
         ("Go to slide eight after the chart.", None),
+        ("Go to slide eight, and then we can review the chart.", ("absolute", 8)),
+        ("Go to slide 7 where we explain the results.", ("absolute", 7)),
+        ("Let's go back to slide one, where the agenda is.", ("absolute", 1)),
+        ("Go to slide 8 if there is time.", None),
+        ("Go to slide 8, actually stay on this slide.", None),
         ("Slide 8 explains the results.", None),
     ],
 )
