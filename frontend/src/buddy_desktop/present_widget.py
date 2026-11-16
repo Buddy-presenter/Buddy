@@ -79,7 +79,6 @@ from buddy_desktop.transition_policy import (
 from buddy_desktop.transition_policy import (
     Prediction,
     TransitionPolicy,
-    load_calibration,
 )
 from buddy_desktop.transition_policy import (
     Target as PolicyTarget,
@@ -518,14 +517,11 @@ class PresentWidget(Page):
         self.policy_enabled = QCheckBox("Automatic transitions")
         self.policy_enabled.setAccessibleName("Allow automatic presentation transitions")
         self.policy_enabled.setToolTip(
-            "Requires live suggestions and a synced session. Manual controls always take priority."
+            "Uses clear speech to run one eligible action from the current presentation. "
+            "Manual controls always take priority."
         )
         self.policy_enabled.toggled.connect(self._policy_toggled)
         microphone_layout.addWidget(self.policy_enabled)
-        self.policy_profile_button = QPushButton("Load calibration…")
-        command(self.policy_profile_button, "folder-open")
-        self.policy_profile_button.clicked.connect(self._load_policy_profile)
-        policy_row.addWidget(self.policy_profile_button)
         self.policy_pause_button = QPushButton("Resume automatic moves")
         self.policy_pause_button.setAccessibleName("Resume automatic moves")
         self.policy_pause_button.setToolTip("Resume automatic moves (Ctrl+Shift+P)")
@@ -818,13 +814,21 @@ class PresentWidget(Page):
             and (self._powerpoint_binding is None or session.state == self._current_local_state())
         )
         self.agent_enabled.setEnabled(connected)
-        if not connected:
-            self.agent_enabled.setChecked(False)
+        # A temporary connection/verification gap pauses proposals, but it must not
+        # silently revoke the presenter's opt-in. Session identity changes below reset
+        # consent for a genuinely new presentation.
+        if self._powerpoint_info is not None and self._powerpoint_binding is None:
+            # A locally opened Office show has no saved, owner-checked session contract.
+            self.policy_enabled.setChecked(False)
         self.policy_enabled.setEnabled(
             (synced or self.policy.enabled) and self.agent_enabled.isChecked()
         )
-        if not connected or not self.agent_enabled.isChecked():
+        if not self.agent_enabled.isChecked():
             self.policy_enabled.setChecked(False)
+        elif self.policy.enabled and not synced:
+            self.policy_status.setText(
+                "Automatic actions on; waiting for the presentation to sync."
+            )
         self.policy_pause_button.setEnabled(self.policy.enabled or self.policy_enabled.isEnabled())
         context = self.transcript_context.snapshot()
         self.agent.update(
@@ -851,8 +855,8 @@ class PresentWidget(Page):
         if not enabled and self._policy_execution is not None:
             self.executor.cancel()
         self.policy_status.setText(
-            "Automatic transitions on. Exact next/previous commands are available; "
-            "model-driven moves require a current calibration."
+            "Automatic actions on. Clear navigation and eligible speech-matched actions can run; "
+            "ambiguous speech is skipped."
             if enabled
             else "Automatic transitions paused. Manual controls are available."
         )
@@ -864,28 +868,6 @@ class PresentWidget(Page):
             self.policy_enabled.setChecked(False)
         elif self.policy_enabled.isEnabled():
             self.policy_enabled.setChecked(True)
-
-    @Slot()
-    def _load_policy_profile(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Load transition calibration", "", "JSON (*.json)"
-        )
-        if not path:
-            return
-        self.policy_enabled.setChecked(False)
-        try:
-            calibration = load_calibration(Path(path))
-            if not calibration.usable("pptx" if self._powerpoint_binding else "pdf", date.today()):
-                raise ValueError
-        except (ValueError, TypeError, KeyError, OSError):
-            self.policy.calibration = None
-            self.policy_status.setText(
-                "Calibration unavailable: use a current consented evaluation for this format with "
-                "at least 100 admitted samples and a 95% lower precision bound."
-            )
-            return
-        self.policy.calibration = calibration
-        self.policy_status.setText("Calibration loaded. Enable automatic transitions when ready.")
 
     def _policy_command(self, target: PolicyTarget) -> dict[str, object]:
         manifest, slide = self.executor.manifest, self.surface.slide
@@ -941,8 +923,15 @@ class PresentWidget(Page):
         if not hasattr(self, "policy"):
             return
         self._native_guard.clear()
-        if self._policy_check is not None or self._native_completion is not None:
-            self.policy_enabled.setChecked(False)
+        prediction = (
+            self._policy_check[0]
+            if self._policy_check is not None
+            else self._native_completion[0]
+            if self._native_completion is not None
+            else None
+        )
+        if prediction is not None:
+            self.policy.completed(prediction.decision_id, success=False, now_ns=time.monotonic_ns())
         self.policy.reset(manual=True, now_ns=time.monotonic_ns())
         self._policy_check = None
         self._policy_undo = None
@@ -1000,9 +989,9 @@ class PresentWidget(Page):
             self.policy_status.setText("Suggestion is unavailable for the current Office source.")
             return
         self.policy_status.setText(
-            "Waiting for a sustained, consistent reference."
-            if reason == "awaiting_evidence"
-            else "Keeping the current PowerPoint view."
+            "Keeping the current PowerPoint view."
+            if reason != "accepted"
+            else "Checking the current PowerPoint action…"
         )
         if reason == "accepted" and self._session_access:
             access = self._session_access
@@ -1032,12 +1021,13 @@ class PresentWidget(Page):
             or not context.matches(self.transcript_context.snapshot())
         ):
             self.policy.completed(prediction.decision_id, success=False, now_ns=time.monotonic_ns())
-            self.policy_enabled.setChecked(False)
+            self.policy_status.setText("Speech decision expired; waiting for fresh speech.")
             return
         try:
             command_value = native.command(prediction.target, info)
         except PowerPointError:
-            self.policy_enabled.setChecked(False)
+            self.policy.completed(prediction.decision_id, success=False, now_ns=time.monotonic_ns())
+            self.policy_status.setText("That action is unavailable in the current PowerPoint view.")
             return
         self._native_completion = (
             prediction,
@@ -1347,12 +1337,17 @@ class PresentWidget(Page):
             self.policy_status.setText("Suggestion cannot execute in the current view.")
             return
         labels = {
-            "uncalibrated": "Model-driven movement needs a current measured calibration.",
-            "awaiting_evidence": "Waiting for a sustained, consistent reference.",
             "current_focus": "Keeping the current focus.",
             "cooldown": "Keeping the view steady after the latest move.",
+            "stale": "Speech decision expired; waiting for fresh speech.",
+            "weak_evidence": "Speech was unclear; waiting for a clearer reference.",
+            "ineligible": "That action is not available for the current slide.",
         }
-        self.policy_status.setText(labels.get(reason, "Keeping the current view."))
+        self.policy_status.setText(
+            "Checking the selected action…"
+            if reason == "accepted"
+            else labels.get(reason, "Keeping the current view; automatic actions remain on.")
+        )
         if reason != "accepted":
             return
         access = self._session_access
@@ -1390,7 +1385,7 @@ class PresentWidget(Page):
             or not context.matches(self.transcript_context.snapshot())
         ):
             self.policy.completed(prediction.decision_id, success=False, now_ns=time.monotonic_ns())
-            self.policy_enabled.setChecked(False)
+            self.policy_status.setText("Speech decision expired; waiting for fresh speech.")
             return
         self._policy_before = self._current_local_state()
         self._policy_execution = prediction
@@ -1415,8 +1410,10 @@ class PresentWidget(Page):
 
     @Slot(int, str)
     def _policy_failed(self, _identifier: int, message: str) -> None:
-        self._policy_check = None
-        self.policy_enabled.setChecked(False)
+        pending, self._policy_check = self._policy_check, None
+        if pending is not None:
+            prediction = pending[0]
+            self.policy.completed(prediction.decision_id, success=False, now_ns=time.monotonic_ns())
         self.policy_status.setText(message)
 
     @Slot()
@@ -2373,9 +2370,15 @@ class PresentWidget(Page):
             return
         action, _ = pending
         if action in {"policy", "saved_action", "undo_policy"}:
+            completion = self._native_completion
             self._native_completion = None
             self._native_guard.clear()
-            self.policy_enabled.setChecked(False)
+            if completion is not None and completion[0] is not None:
+                self.policy.completed(
+                    completion[0].decision_id,
+                    success=False,
+                    now_ns=time.monotonic_ns(),
+                )
             self.policy_status.setText(message)
             self.generated_status.setText(message)
             return
@@ -2642,8 +2645,13 @@ class PresentWidget(Page):
             if self._policy_execution is not None:
                 self.executor.cancel()
             if self._policy_check is not None:
-                self.policy.set_enabled(False)
-                self.policy_enabled.setChecked(False)
+                prediction = self._policy_check[0]
+                self.policy.completed(
+                    prediction.decision_id,
+                    success=False,
+                    now_ns=time.monotonic_ns(),
+                )
+                self._policy_check = None
             self.policy.reset(manual=True, now_ns=time.monotonic_ns())
             self._invalidate_transcript_context()
             self._policy_check = None
@@ -2736,9 +2744,9 @@ class PresentWidget(Page):
                 )
                 self.policy_status.setText("Automatic move completed. Undo is available.")
             else:
-                self.policy_enabled.setChecked(False)
                 self.policy_status.setText(
-                    "Automatic movement failed. Manual controls remain available."
+                    "Automatic action failed; manual controls remain available. "
+                    "Automatic actions are still on."
                 )
             self._policy_before = None
         manifest, slide = self.executor.manifest, self.surface.slide

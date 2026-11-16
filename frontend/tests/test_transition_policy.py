@@ -1,4 +1,4 @@
-"""Real policy rules with captured clocks, frozen calibration and no provider calls."""
+"""Fresh, eligible speech proposals can run without a local calibration profile."""
 
 import json
 from dataclasses import replace
@@ -12,7 +12,6 @@ from buddy_desktop.transition_calibration import build
 from buddy_desktop.transition_policy import (
     MODEL,
     VERSION,
-    Calibration,
     Prediction,
     Settings,
     Target,
@@ -24,6 +23,8 @@ from buddy_desktop.transition_policy import (
 TODAY = date(2026, 11, 15)
 NOW = 10_000_000_000
 NEXT = Target("next_slide", "two")
+PREVIOUS = Target("previous_slide", "two")
+NUMBERED = Target("go_to_slide", "three")
 ZOOM = Target("zoom_region", "one", "a", (10, 10, 100, 100))
 
 
@@ -63,14 +64,19 @@ def inputs(sequence=1, now=NOW, *, source_format="pdf", target=NEXT, source="mod
         sequence,
     )
     view = View(
-        "session", "analysis", "sourcehash", source_format, 3, Target("slide", "one"), (NEXT, ZOOM)
+        "session",
+        "analysis",
+        "sourcehash",
+        source_format,
+        3,
+        Target("slide", "one"),
+        (NEXT, PREVIOUS, NUMBERED, ZOOM),
     )
     return prediction, context, view
 
 
-def calibrated(source_format="pdf"):
+def enabled():
     policy = TransitionPolicy()
-    policy.calibration = Calibration(source_format, 0.9, 200, 200, "a" * 64, TODAY, True)
     policy.set_enabled(True)
     return policy
 
@@ -80,77 +86,46 @@ def consider(policy, bundle, now=NOW):
 
 
 @pytest.mark.parametrize("source_format", ["pdf", "pptx"])
-def test_two_distinct_completed_references_persist_then_complete(source_format):
-    policy = calibrated(source_format)
-    first = inputs(source_format=source_format)
-    assert consider(policy, first) == "awaiting_evidence"
-    # Another HTTP decision about the same evidence is not a confirmation.
-    assert (
-        consider(policy, (replace(first[0], decision_id=str(uuid4())), *first[1:]))
-        == "awaiting_evidence"
-    )
-    second = inputs(2, NOW + 900_000_000, source_format=source_format)
-    assert consider(policy, second, NOW + 900_000_000) == "accepted"
-    assert consider(policy, inputs(3, NOW + 1_000_000_000), NOW + 1_000_000_000) == "busy"
-    policy.completed(second[0].decision_id, success=True, now_ns=NOW + 1_000_000_000)
-    assert consider(policy, inputs(3, NOW + 1_100_000_000), NOW + 1_100_000_000) == "cooldown"
+def test_one_fresh_model_proposal_is_accepted_without_calibration(source_format):
+    policy = enabled()
+    proposal = inputs(source_format=source_format)
+    assert policy.calibration_sha256 is None
+    assert consider(policy, proposal) == "accepted"
+    assert policy.enabled
 
 
-def test_uncalibrated_and_low_quality_calibration_never_move_model_targets():
-    policy = TransitionPolicy()
-    policy.set_enabled(True)
-    assert consider(policy, inputs()) == "uncalibrated"
-    good = calibrated().calibration
-    for profile in (
-        replace(good, samples=99, successes=99),
-        replace(good, successes=160),
-        replace(good, consented=False),
-        replace(good, expires=date(2026, 11, 14)),
-        replace(good, source_format="pptx"),
-    ):
-        policy.calibration = profile
-        assert consider(policy, inputs()) == "uncalibrated"
+@pytest.mark.parametrize(
+    "target",
+    [
+        Target("next_slide", "two"),
+        Target("previous_slide", "two"),
+        Target("go_to_slide", "three"),
+    ],
+)
+def test_explicit_navigation_including_numbered_slide_bypasses_model(target):
+    policy = enabled()
+    proposal = inputs(source="navigation", target=target)
+    assert consider(policy, proposal) == "accepted"
 
 
-@pytest.mark.parametrize("source_format", ["pdf", "pptx"])
-def test_request_watermark_can_differ_from_latest_utterance_without_false_confirmation(
-    source_format,
-):
-    policy = calibrated(source_format)
-    prediction, context, view = inputs(source_format=source_format)
-    latest = context.segments[-1]
-    earlier = replace(
-        latest,
-        segment_id="earlier",
-        sequence=2,
-        start_seconds=0,
-        end_seconds=1,
-        capture_end_ns=NOW - 1_000_000_000,
-    )
-    context = replace(context, segments=(earlier, latest))
-    prediction = replace(prediction, sequence=2)
-    assert consider(policy, (prediction, context, view)) == "awaiting_evidence"
-
-    # A newer revision/watermark elsewhere in the window is not new latest evidence.
-    revised = replace(context, segments=(replace(earlier, sequence=3), latest))
-    repeated = replace(prediction, decision_id=str(uuid4()), sequence=3)
-    assert consider(policy, (repeated, revised, view), NOW + 900_000_000) == "awaiting_evidence"
-
-    new = inputs(4, NOW + 1_800_000_000, source_format=source_format)
-    assert consider(policy, new, NOW + 1_800_000_000) == "accepted"
+def test_failed_execution_keeps_opt_in_and_requires_fresh_speech():
+    policy = enabled()
+    proposal = inputs(source="navigation")
+    assert consider(policy, proposal) == "accepted"
+    policy.completed(proposal[0].decision_id, success=False, now_ns=NOW)
+    assert policy.enabled
+    assert consider(policy, proposal) == "duplicate"
+    assert consider(policy, inputs(2, NOW + 500_000_000), NOW + 500_000_000) == "cooldown"
+    assert consider(policy, inputs(3, NOW + 900_000_000), NOW + 900_000_000) == "accepted"
 
 
-def test_wrong_request_watermark_still_rejects_and_clears_pending_evidence():
-    policy = calibrated()
-    assert consider(policy, inputs()) == "awaiting_evidence"
-    prediction, context, view = inputs(2, NOW + 900_000_000)
-    assert (
-        consider(policy, (replace(prediction, sequence=3), context, view), NOW + 900_000_000)
-        == "stale"
-    )
-    assert (
-        consider(policy, inputs(3, NOW + 1_800_000_000), NOW + 1_800_000_000) == "awaiting_evidence"
-    )
+def test_duplicate_http_decisions_for_same_completed_speech_cannot_repeat():
+    policy = enabled()
+    proposal = inputs()
+    assert consider(policy, proposal) == "accepted"
+    policy.completed(proposal[0].decision_id, success=True, now_ns=NOW)
+    repeated = replace(proposal[0], decision_id=str(uuid4()))
+    assert consider(policy, (repeated, *proposal[1:]), NOW + 800_000_000) == "duplicate"
 
 
 @pytest.mark.parametrize(
@@ -167,15 +142,20 @@ def test_wrong_request_watermark_still_rejects_and_clears_pending_evidence():
         "connection",
         "busy",
         "ineligible",
+        "missing_evidence",
+        "bad_confidence",
+        "unknown_source",
+        "nonexplicit_navigation",
     ],
 )
-def test_stale_and_boundary_changes_clear_sustained_evidence(change):
-    policy = calibrated()
-    assert consider(policy, inputs()) == "awaiting_evidence"
-    p, c, v = inputs(2, NOW + 1_000_000_000)
-    now = NOW + 1_000_000_000
+def test_invalid_or_stale_decisions_are_rejected(change):
+    policy = enabled()
+    prediction, context, view = inputs()
+    now = NOW
     if change == "partial":
-        c = replace(c, segments=(*c.segments, replace(c.segments[-1], final=False)))
+        context = replace(
+            context, segments=(*context.segments, replace(context.segments[-1], final=False))
+        )
     elif change == "old":
         now += 6_000_000_000
     elif change == "future":
@@ -184,98 +164,45 @@ def test_stale_and_boundary_changes_clear_sustained_evidence(change):
         field = {"session": "session_id", "analysis": "analysis_id", "version": "state_version"}[
             change
         ]
-        v = replace(v, **{field: 99 if change == "version" else "other"})
+        view = replace(view, **{field: 99 if change == "version" else "other"})
     elif change in {"epoch", "stream"}:
-        c = replace(
-            c, **{change if change == "epoch" else "stream_id": 5 if change == "epoch" else "other"}
+        context = replace(
+            context,
+            **{change if change == "epoch" else "stream_id": 5 if change == "epoch" else "other"},
         )
     elif change == "connection":
-        v = replace(v, connected=False)
+        view = replace(view, connected=False)
     elif change == "busy":
-        v = replace(v, busy=True)
+        view = replace(view, busy=True)
     elif change == "ineligible":
-        v = replace(v, eligible=())
-    assert consider(policy, (p, c, v), now) != "accepted"
-    assert (
-        consider(policy, inputs(3, NOW + 2_000_000_000), NOW + 2_000_000_000) == "awaiting_evidence"
+        view = replace(view, eligible=())
+    elif change == "missing_evidence":
+        prediction = replace(prediction, evidence_sequences=())
+    elif change == "bad_confidence":
+        prediction = replace(prediction, confidence=float("nan"))
+    elif change == "unknown_source":
+        prediction = replace(prediction, source="fallback")
+    elif change == "nonexplicit_navigation":
+        prediction = replace(prediction, source="navigation", reason="topic")
+    result = consider(policy, (prediction, context, view), now)
+    assert result in {"stale", "busy", "ineligible", "weak_evidence"}
+    assert policy.enabled
+
+
+def test_current_focus_no_action_and_manual_hold_abstain():
+    policy = enabled()
+    proposal = inputs(target=ZOOM)
+    assert consider(policy, (proposal[0], proposal[1], replace(proposal[2], current=ZOOM))) == (
+        "current_focus"
     )
+    no_action = inputs(target=Target("no_action", "one"))
+    assert consider(policy, no_action) == "no_action"
+    policy.reset(manual=True, now_ns=NOW)
+    assert consider(policy, inputs(2, NOW + 1_000_000_000), NOW + 1_000_000_000) == "cooldown"
+    assert consider(policy, inputs(3, NOW + 6_000_000_000), NOW + 6_000_000_000) == "accepted"
 
 
-def test_conflicts_no_action_silence_and_manual_changes_restart_persistence():
-    policy = calibrated()
-    assert consider(policy, inputs()) == "awaiting_evidence"
-    assert (
-        consider(policy, inputs(2, NOW + 1_000_000_000, target=ZOOM), NOW + 1_000_000_000)
-        == "awaiting_evidence"
-    )
-    assert (
-        consider(policy, inputs(3, NOW + 2_000_000_000), NOW + 2_000_000_000) == "awaiting_evidence"
-    )
-    assert (
-        consider(
-            policy,
-            inputs(4, NOW + 3_000_000_000, target=Target("no_action", "one")),
-            NOW + 3_000_000_000,
-        )
-        == "no_action"
-    )
-    assert (
-        consider(policy, inputs(5, NOW + 4_000_000_000), NOW + 4_000_000_000) == "awaiting_evidence"
-    )
-    policy.reset(manual=True, now_ns=NOW + 4_000_000_000)
-    assert consider(policy, inputs(6, NOW + 5_000_000_000), NOW + 5_000_000_000) == "cooldown"
-    assert (
-        consider(policy, inputs(7, NOW + 10_000_000_000), NOW + 10_000_000_000)
-        == "awaiting_evidence"
-    )
-
-
-def test_current_focus_never_retriggers_and_switch_needs_stronger_longer_evidence():
-    policy = calibrated()
-    p, c, v = inputs(target=ZOOM)
-    assert consider(policy, (p, c, replace(v, current=ZOOM))) == "current_focus"
-    view = replace(v, current=ZOOM)
-    for sequence in range(1, 4):
-        now = NOW + sequence * 1_000_000_000
-        p, c, _ = inputs(sequence, now)
-        assert consider(policy, (replace(p, confidence=0.94), c, view), now) == "weak_evidence"
-    for sequence in range(4, 7):
-        now = NOW + sequence * 1_000_000_000
-        p, c, _ = inputs(sequence, now)
-        expected = "accepted" if sequence == 6 else "awaiting_evidence"
-        assert consider(policy, (p, c, view), now) == expected
-
-
-def test_navigation_uses_production_fast_path_without_model_calibration_and_failure_disables():
-    policy = TransitionPolicy()
-    policy.set_enabled(True)
-    values = inputs(source="navigation")
-    assert consider(policy, values) == "accepted"
-    policy.completed(values[0].decision_id, success=False, now_ns=NOW)
-    assert not policy.enabled
-    assert consider(policy, inputs()) == "disabled"
-    policy.set_enabled(True)
-    assert consider(policy, values, NOW + 6_000_000_000) == "stale"
-
-
-@pytest.mark.parametrize("change", ["confidence", "short", "duration", "evidence", "fallback"])
-def test_weak_or_unfinished_evidence_never_accumulates(change):
-    policy = calibrated()
-    p, c, v = inputs()
-    if change == "confidence":
-        p = replace(p, confidence=float("nan"))
-    elif change == "evidence":
-        p = replace(p, evidence_sequences=())
-    elif change == "fallback":
-        p = replace(p, source="fallback")
-    elif change == "short":
-        c = replace(c, segments=(replace(c.segments[0], text="Sales"),))
-    else:
-        c = replace(c, segments=(replace(c.segments[0], end_seconds=1.1),))
-    assert consider(policy, (p, c, v)) == "weak_evidence"
-
-
-def test_calibration_builder_freezes_development_only_and_never_overwrites(tmp_path):
+def test_calibration_builder_remains_available_for_offline_evaluation(tmp_path):
     path, output = tmp_path / "development.json", tmp_path / "profile.json"
     raw = {
         "protocol": "transition-calibration-input.v1",
@@ -299,8 +226,7 @@ def test_calibration_builder_freezes_development_only_and_never_overwrites(tmp_p
         build(path, 0.9, tmp_path / "other.json")
 
 
-def test_invalid_policy_settings_are_rejected():
+@pytest.mark.parametrize("values", [(-1, 0), (0, -1), (60_001, 0)])
+def test_invalid_policy_settings_are_rejected(values):
     with pytest.raises(ValueError):
-        Settings(confirmations=1)
-    with pytest.raises(ValueError):
-        Settings(persistence_ms=0)
+        Settings(*values)

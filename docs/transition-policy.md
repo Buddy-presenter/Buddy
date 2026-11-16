@@ -19,49 +19,49 @@ Independent calibration/holdout claims remain out of scope for this delivery; us
 
 ## Presenter controls
 
-1. Open a saved PDF or supported saved PowerPoint session and enable **Live suggestions** with its existing cloud
-   processing disclosure. Start the microphone and wait for the session to sync.
-2. Explicitly enable **Automatic transitions**. Only unambiguous completed next/previous
-   commands from the production deterministic navigation path work without calibration.
-   Quoted, conditional and negated commands remain on the model path; they do not gain
-   navigation permission from a keyword.
-3. For model-driven moves, first load a current consented calibration for the presentation format with
-   **Load calibration…**, then enable automation again. No profile is bundled or loaded
-   implicitly. Without one the policy keeps the view and explains why.
-4. Manual controls take priority and clear pending evidence. Manual changes impose a
+1. Open a saved PDF or supported saved PowerPoint session, enable **Live suggestions**
+   with its existing cloud-processing disclosure, and start the microphone.
+2. Explicitly enable **Automatic transitions**. Clear next/previous/numbered-slide
+   commands use the deterministic navigation path. Other completed speech can execute
+   the single eligible action selected by the live agent, including a current-slide
+   highlight, zoom, or reset. Ambiguous speech and a `no_action` decision leave the view
+   unchanged.
+3. The option is a presenter opt-in, not a calibration workflow. No local calibration
+   file, profile or repeated confirmation utterance is required. Calibration artifacts
+   remain available for offline evaluation only and cannot grant runtime permissions.
+4. Manual controls take priority and invalidate pending speech. Manual changes impose a
    five-second hold. **Undo automatic move** disables automation and restores the previous
    slide/focus through the existing player, then saves that observed state. Manual changes,
    new sessions and source changes invalidate undo; an old undo cannot move another deck.
 
-Failures stop automatic movement. Re-enable only after the session is synchronized.
-Leaving Present, sign-out, disabling suggestions or changing the session turns automation
-off. A saved `autonomy_mode` never opts a new desktop instance in. Regular keyboard,
+Recoverable proposal, preflight and execution failures leave the presenter's opt-in on;
+they report the failure and wait for fresh speech. Actions still cannot run while the
+session is stale, disconnected, busy, changed or ineligible. Leaving Present, sign-out,
+disabling Live suggestions or changing to a genuinely new session turns automation off.
+A saved `autonomy_mode` never opts a new desktop instance in. Regular keyboard,
 fullscreen, reset and recovery controls remain available. No new animation is added;
 PDF changes use the existing immediate player commits and respect reduced-motion settings.
 
 ## Deterministic admission and execution
 
 `buddy_desktop.transition_policy` is independent of Qt, provider calls and execution.
-It retains target identity, bounded decision identifiers and evidence sequence watermarks,
-not speech text/history. `Settings` controls persistence, confirmations, cooldown,
-manual hold and hysteresis without modifying the decision provider.
+It retains bounded completed-evidence identities, not speech text/history. `Settings`
+controls post-action cooldown and manual hold without modifying the decision provider.
 
 - Check the current session, analysis, immutable source, state version, stream, context
   epoch, language, completed revision and five-second capture freshness.
-- Reject partials, silence, no-action, missing/latest-evidence mismatches, unknown targets,
-  current focus and busy/disconnected players. No-action or contradictory predictions
-  clear pending persistence; replaying the same completed evidence cannot confirm itself.
-  The request sequence is the maximum revision watermark across the completed window,
-  which can differ from the chronologically latest utterance's sequence. Advancing an
-  earlier utterance's revision never counts as a new latest-utterance confirmation.
-- Model proposals need a format-matched, unexpired calibration, finite confidence over
-  its measured threshold, at least 700 ms of completed speech and more than a brief keyword.
-  Two distinct completed evidence revisions must agree for at least 800 ms, with no gap
-  longer than four seconds. Switching an existing regional focus needs three confirmations
-  and a confidence threshold 0.05 higher. These are conservative configurable heuristics,
-  not a language-independent proof that a sentence is semantically complete.
-- A completed production navigation command can take one adjacent step without a model
-  probability threshold. Every branch still checks freshness, bounds, cooldown and opt-in.
+- Reject partials, silence, missing/latest-evidence mismatches, unknown targets, current
+  focus and busy/disconnected players. Each completed speech evidence sequence can trigger
+  at most once, even if duplicate HTTP decisions arrive. There is no accumulating
+  confirmation queue and no locally loaded user profile.
+- Model-selected actions require a finite provider score, a completed latest evidence
+  segment and an exact match in the currently eligible target set. That score is only a
+  provider ranking value; it is not represented as measured real-world accuracy. A model
+  can still select the wrong eligible action, so use the explicit opt-in and evaluate
+  closed-loop target accuracy and false transitions separately.
+- Deterministic next/previous and absolute slide-number commands bypass semantic retrieval
+  and model selection. Every branch still checks freshness, target bounds, cooldown,
+  session/source identity and opt-in.
 - Recheck the target through authenticated
   `POST /api/v1/sessions/{id}/transition-check`. The server uses current ownership, active
   autonomous session state, exact analysis/source lineage and canonical eligibility/geometry.
@@ -117,9 +117,9 @@ python -m buddy_desktop.transition_calibration policy-artifacts/development.json
 
 The command refuses holdout input, malformed/duplicate observations and overwrites. It
 binds exact input bytes, format, model and recording permission and writes aggregate counts
-only. Live admission requires at least 100 observations above the threshold and a 95%
-Wilson lower precision bound of at least 0.95. The default threshold is not an accuracy
-claim. Synthetic profiles are permitted for tests but rejected for live model admission.
+only. Offline reports may compute a threshold and Wilson precision bound, but those
+artifacts do not gate or enable live automatic actions. Synthetic profiles remain test
+fixtures only and are never evidence of production accuracy.
 The model's score is only a ranking variable; the lower bound comes from reference labels.
 Wilson bounds assume independent representative observations. Do not inflate counts with
 overlapping windows or repeated evidence; use session-separated development and holdout
@@ -127,7 +127,8 @@ recordings, review per-session error clustering and evaluate closed-loop false t
 unnecessary animations, target accuracy and latency separately through #25. Do not select
 thresholds on holdout failures. Changed models, prompts, retrieval, eligibility or policy
 settings require a new development calibration and independent holdout run; this version
-does not attest or automatically detect every upstream prompt change.
+does not attest or automatically detect every upstream prompt change. Those evaluation
+requirements do not impose a per-user setup step in the desktop app.
 
 Keep input recordings, profiles and output outside Git; `policy-artifacts/` is ignored.
 Follow #25's consent, cloud
@@ -149,8 +150,8 @@ completed-state persistence, partial-during-load, sign-out, disconnect and manua
 They are synthetic correctness tests, not permissioned real-world release acceptance.
 
 `PresentWidget.transition_observed` emits policy version, decision/target identity,
-monotonic player completion, observed animation flag and calibration digest only after
-successful execution. #25 can align this with its captured proposal/frame clock. PDF
+monotonic player completion, observed animation flag and a null calibration digest only
+after successful execution. #25 can align this with its captured proposal/frame clock. PDF
 immediate commits report `animated=false`; repeated/no-op frames emit no completion.
 No transcript, consent document, credential or free-form provider explanation is logged.
 Trace recording/export is explicit evaluation work and must follow recording permission.
@@ -164,7 +165,7 @@ PPTX source/native slide identities, Office version and eligible typed actions o
 `frontend/scripts/smoke_transition_policy.py` generates its own PDF/PPTX and uses the
 actual app policy, PDF rendering and Office execution/undo. It records measured completion
 latency and player events, with speech, eligibility HTTP and versioned session transport
-explicitly substituted locally. It never enables uncalibrated model movement. A live run
+explicitly substituted locally. A live run
 also guards the native preview/undo race: undo retains its saved state and queues until
 Office work becomes idle. Manual intent invalidates a queued undo.
 

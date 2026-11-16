@@ -7,6 +7,7 @@ The caller supplies current authoritative eligibility and observes actual comple
 import hashlib
 import json
 import math
+from collections import OrderedDict
 from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
@@ -138,29 +139,15 @@ def load_calibration(path: Path) -> Calibration:
 
 @dataclass(frozen=True)
 class Settings:
-    confirmations: int = 2
-    persistence_ms: int = 800
-    max_gap_ms: int = 4000
-    cooldown_ms: int = 2500
+    cooldown_ms: int = 750
     manual_hold_ms: int = 5000
-    switch_margin: float = 0.05
 
     def __post_init__(self) -> None:
         if (
-            type(self.confirmations) is not int
-            or not 2 <= self.confirmations <= 10
-            or any(
-                type(v) is not int or not 0 <= v <= 60000
-                for v in (
-                    self.persistence_ms,
-                    self.max_gap_ms,
-                    self.cooldown_ms,
-                    self.manual_hold_ms,
-                )
-            )
-            or not 100 <= self.persistence_ms <= self.max_gap_ms
-            or not math.isfinite(self.switch_margin)
-            or not 0 <= self.switch_margin <= 0.2
+            type(self.cooldown_ms) is not int
+            or not 0 <= self.cooldown_ms <= 60000
+            or type(self.manual_hold_ms) is not int
+            or not 0 <= self.manual_hold_ms <= 60000
         ):
             raise ValueError("Invalid transition policy settings.")
 
@@ -217,22 +204,17 @@ class TransitionPolicy:
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or Settings()
         self.enabled = False
-        self.calibration: Calibration | None = None
         self._binding: tuple[object, ...] | None = None
-        self._pending: Target | None = None
-        self._first_ns = self._last_ns = 0
-        self._sequence = 0
-        self._count = 0
         self._hold_until = 0
         self._inflight: str | None = None
-        self._seen: set[str] = set()
+        self._seen: OrderedDict[tuple[object, ...], None] = OrderedDict()
 
     def clear_pending(self) -> None:
-        self._pending = None
-        self._count = self._sequence = 0
+        # Retained for callers that invalidate speech context. A policy decision is
+        # admitted atomically now; there is no multi-utterance confirmation buffer.
+        return
 
     def reset(self, *, manual: bool = False, now_ns: int = 0) -> None:
-        self.clear_pending()
         self._binding = None
         if manual:
             self._hold_until = max(
@@ -249,12 +231,7 @@ class TransitionPolicy:
             return
         self._inflight = None
         self.reset()
-        self._hold_until = (
-            now_ns
-            + (self.settings.cooldown_ms if success else self.settings.manual_hold_ms) * 1_000_000
-        )
-        if not success:
-            self.enabled = False
+        self._hold_until = now_ns + self.settings.cooldown_ms * 1_000_000
 
     def consider(
         self,
@@ -316,7 +293,13 @@ class TransitionPolicy:
             and view.current.tool == "slide"
         ):
             return reject("current_focus")
-        if prediction.decision_id in self._seen:
+        evidence_key = (
+            prediction.session_id,
+            prediction.epoch,
+            prediction.stream_id,
+            segments[-1].sequence,
+        )
+        if evidence_key in self._seen:
             return reject("duplicate")
         if now_ns < self._hold_until:
             return reject("cooldown")
@@ -330,59 +313,26 @@ class TransitionPolicy:
             if prediction.reason != "explicit" or target.tool not in {
                 "next_slide",
                 "previous_slide",
+                "go_to_slide",
             }:
                 return reject("weak_evidence")
         else:
-            calibration = self.calibration
-            if calibration is None or not calibration.usable(view.source_format, today):
-                return reject("uncalibrated")
             confidence = prediction.confidence
-            switching = view.current.tool != "slide"
-            threshold = min(
-                1.0, calibration.threshold + (self.settings.switch_margin if switching else 0)
-            )
-            if (
-                confidence is None
-                or not math.isfinite(confidence)
-                or not threshold <= confidence <= 1
-                or segments[-1].end_seconds - segments[-1].start_seconds < 0.7
-                or len(segments[-1].text.strip()) < 12
-            ):
+            if confidence is None or not math.isfinite(confidence) or not 0 <= confidence <= 1:
                 return reject("weak_evidence")
-            if (
-                target != self._pending
-                or now_ns - self._last_ns > self.settings.max_gap_ms * 1_000_000
-            ):
-                self.clear_pending()
-                self._pending, self._first_ns = target, now_ns
-            # The request watermark may advance when an earlier utterance completes.
-            # Only a new latest completed utterance can confirm the current target.
-            evidence_sequence = segments[-1].sequence
-            if evidence_sequence <= self._sequence:
-                return "awaiting_evidence"
-            self._sequence, self._last_ns = evidence_sequence, now_ns
-            self._count += 1
-            if (
-                self._count < self.settings.confirmations + int(switching)
-                or now_ns - self._first_ns < self.settings.persistence_ms * 1_000_000
-            ):
-                return "awaiting_evidence"
-        self._seen.add(prediction.decision_id)
-        # Bounded to this presenter lifetime; no transcript, provider answer or coordinates.
+        self._seen[evidence_key] = None
+        # Bound deduplication to this presenter lifetime without turning automation off.
         if len(self._seen) > 2048:
-            self.enabled = False
-            return reject("decision_limit")
+            self._seen.popitem(last=False)
         self._inflight = prediction.decision_id
         self.clear_pending()
         return "accepted"
 
     @property
     def calibration_sha256(self) -> str | None:
-        return (
-            hashlib.sha256(repr(self.calibration).encode()).hexdigest()
-            if self.calibration
-            else None
-        )
+        # Calibration artifacts remain a development/evaluation tool, not an end-user
+        # prerequisite. Keep this nullable telemetry field for trace compatibility.
+        return None
 
     @property
     def settings_sha256(self) -> str:
