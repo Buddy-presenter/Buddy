@@ -4,11 +4,12 @@ import hashlib
 import json
 import sys
 import time
+import traceback
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, qVersion
+from PySide6.QtCore import QSettings, Qt, qVersion
 from PySide6.QtGui import QGuiApplication, QImage
 from PySide6.QtWidgets import QApplication
 
@@ -165,6 +166,13 @@ def run(folder: Path) -> dict[str, Any]:
     app = QApplication(["buddy-isolated-preflight"])
     app.setApplicationName("BuddyPreflight")
     app.setOrganizationName("BuddyTestOnly")
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    QSettings.setPath(
+        QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(folder / "qt-settings")
+    )
+    result["qt_settings_private"] = Path(QSettings().fileName()).resolve().is_relative_to(folder)
+    if not result["qt_settings_private"]:
+        raise ContractError("Preflight Qt settings are not isolated.")
     player: Any = None
     try:
         if request["source_format"] == "pdf":
@@ -226,7 +234,20 @@ def run(folder: Path) -> dict[str, Any]:
         for _ in range(4):
             if cause is None:
                 break
-            errors.append(dict(kind=type(cause).__name__, code=getattr(cause, "hresult", None)))
+            errors.append(
+                dict(
+                    kind=type(cause).__name__,
+                    code=getattr(cause, "hresult", getattr(cause, "winerror", None)),
+                    attribute=getattr(cause, "name", None),
+                    operation=getattr(cause, "funcname", None),
+                    frames=[
+                        dict(
+                            module=Path(frame.filename).stem, function=frame.name, line=frame.lineno
+                        )
+                        for frame in traceback.extract_tb(cause.__traceback__)[-3:]
+                    ],
+                )
+            )
             cause = cause.__cause__
         result["failure_codes"] = errors
     finally:

@@ -17,6 +17,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--office-viewport", nargs=2, type=int, metavar=("WIDTH", "HEIGHT"))
+    parser.add_argument(
+        "--office-action", choices=("highlight_region", "zoom_region"), default="highlight_region"
+    )
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     _private(args.output)
@@ -55,12 +58,12 @@ def main() -> int:
         action = dict(
             source_format="pptx",
             version="powerpoint-2",
-            instance_id="test-highlight",
+            instance_id="test-" + args.office_action,
             purpose="Inspect synthetic object",
             deck_id="preflight-test",
             render_id="pptx-" + extracted.source_sha256,
             slide_id=slide.id,
-            type="highlight_region",
+            type=args.office_action,
             params=dict(region=region, source_shape_id=obj.source_id),
         )
         snapshots.append(

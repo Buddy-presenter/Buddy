@@ -12,9 +12,18 @@ its independent per-action pixel/geometry verdict or implement #50's visual QA a
 Create the runner inside an authenticated deck-owner boundary, with the verified owner
 principal. Fetch that owner's exact source revision and saved action catalog there.
 The host supplies source bytes (never a source URL), deck ID, revision, slide map, catalog,
-display profile and explicit viewport. No API account client, production session, credentials
+display profile and explicit viewport. No Buddy API account client, production session,
 or network tool is installed in the child. The child environment drops AWS, database,
-Buddy API, auth and provider variables and isolates HOME, config, cache and temporary paths.
+Buddy API, auth and provider variables and isolates HOME, Qt settings/cache and temporary paths.
+PDF also redirects the OS profile/application-data paths. Native Office preserves
+`USERPROFILE`, `APPDATA` and `LOCALAPPDATA` for its actual interactive Windows identity:
+redirecting those paths to empty directories does not create a Windows user or isolate
+its registry identity, and can break Office activation/cache lookup. The operator must
+provide a dedicated licensed Windows test account for deployed Office runners. Buddy never
+copies activation tokens, switches accounts or changes licensing settings. Qt explicitly
+uses private INI settings and private shader/QML caches even for an Office run.
+Generated pywin32/comtypes wrappers also use per-job private directories, so a run
+neither reuses stale generated interfaces nor writes wrappers into installed/user caches.
 This is a local callable, not a new public backend route. The host must not expose source,
 profile or catalog configuration as model tools. Work is synchronous; use a worker thread.
 
@@ -59,7 +68,8 @@ Windows runtime and actual viewport are recorded. macOS PowerPoint is unsupporte
 Native window hit tests and a source-render comparison reject obstructing dialogs/apps;
 the source export is an occlusion guard only and never replaces desktop evidence. Office
 activation/licensing prompts therefore make the case unsupported until the operator
-restores a licensed runtime and repeats the smoke. Do not dismiss account/security
+checks the runner's Windows profile/runtime and repeats the smoke. Such a dialog alone
+does not establish that the user's normal Office installation is unlicensed. Do not dismiss account/security
 prompts automatically or count an obstructed capture as acceptance.
 This is process/resource isolation, not a sandbox for hostile native documents; run the
 Office host in a dedicated test account, not alongside personal documents/apps.
@@ -93,6 +103,7 @@ python -m pytest frontend/tests/test_preflight.py -q
 python tests/integration/smoke_preflight.py --output replay-artifacts/preflight-pdf
 # Dedicated Windows/Office display, with its actual physical width/height:
 python tests/integration/smoke_preflight.py --output replay-artifacts/preflight-office --office-viewport 1920 1080
+python tests/integration/smoke_preflight.py --output replay-artifacts/preflight-office-zoom --office-viewport 1920 1080 --office-action zoom_region
 ```
 
 The opt-in smoke uses synthetic repository fixtures and writes separate PDF/PPTX reports

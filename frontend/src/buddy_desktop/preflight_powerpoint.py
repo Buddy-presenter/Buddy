@@ -8,7 +8,7 @@ import time
 import zipfile
 from contextlib import suppress
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any
 from xml.etree import ElementTree
 
@@ -50,6 +50,24 @@ def safe_source(content: bytes) -> None:
                     raise ContractError("unsafe_office_content")
 
 
+def private_com_caches(folder: Path) -> None:
+    """Generate COM wrappers per job instead of sharing installed/user caches."""
+    win32_cache = folder / "com-cache" / "win32com"
+    comtypes_cache = folder / "com-cache" / "comtypes"
+    for path in (win32_cache, comtypes_cache):
+        path.mkdir(parents=True)
+    win32com: Any = importlib.import_module("win32com")
+    win32com.__gen_path__ = str(win32_cache)
+    win32com.gen_py.__path__ = [str(win32_cache)]
+    comtypes: Any = importlib.import_module("comtypes")
+    generated: Any = ModuleType("comtypes.gen")
+    generated.__path__ = [str(comtypes_cache)]
+    sys.modules["comtypes.gen"] = generated
+    comtypes.gen = generated
+    client: Any = importlib.import_module("comtypes.client")
+    client.gen_dir = str(comtypes_cache)
+
+
 class OfficePlayer:
     office: Any
     presentation: Any
@@ -88,6 +106,7 @@ class OfficePlayer:
         self.pythoncom.CoInitialize()
         stage = "startup"
         try:
+            private_com_caches(folder)
             started = time.time()
             self.office = importlib.import_module("win32com.client").DispatchEx(
                 "PowerPoint.Application"
@@ -128,6 +147,8 @@ class OfficePlayer:
                 renderer_version="desktop-powerpoint-2",
                 runtime_os="Windows",
                 office_version=f"{self.office.Version}.{self.office.Build}",
+                office_identity="interactive_windows_user",
+                com_cache_private=True,
                 requested_viewport=[width, height],
                 display_scale=dpr,
             )

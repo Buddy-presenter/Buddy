@@ -6,7 +6,10 @@
   "pdf": {
     "state": "passed",
     "runtime": "Windows; Qt 6.12.0; pdfium-5.14.0-144dpi",
-    "viewport": [1280, 720],
+    "viewport": [
+      1280,
+      720
+    ],
     "display_scale": 1,
     "source_sha256": "7f2706d21d400854f2e233f02005a19624f0d79aedc21322bbdd5377423601f9",
     "baseline_capture_sha256": "422bc303e14267f02c6e5143533a04170e1426386a98311256df9d0ba71cc707",
@@ -15,15 +18,44 @@
     "baseline_repeated": true,
     "result_repeated": true,
     "visible_change": true,
-    "reset_restored": true
+    "reset_restored": true,
+    "qt_settings_private": true,
+    "source_unchanged": true
   },
   "powerpoint": {
-    "state": "unsupported",
+    "state": "passed",
     "runtime": "Windows; desktop Office 16.0.20527",
-    "viewport": [1920, 1080],
+    "viewport": [
+      1920,
+      1080
+    ],
     "source_sha256": "6e2bc547cf4a9b3056df249dde24bdfe7af077cd1e4f900961df1d836892aafc",
-    "reason": "Office reported an inactive license and intermittently obstructed the audience with an account dialog. Native runs fail closed as needs-review; no clean PowerPoint acceptance is claimed.",
-    "follow_up": "Restore a licensed dedicated Office runtime, rerun smoke_preflight.py with the actual physical viewport, and inspect all native captures."
+    "office_identity": "interactive_windows_user",
+    "baseline_capture_sha256": "8db1fc9d0d77ff011598873550920134cf5ec9e316411536057d6548aa2f7a4e",
+    "highlight_capture_sha256": "e60e1d3a8a7ccae45734db7a7a10a55721e4c9db360cab88a2b85403cca529d4",
+    "reset_capture_sha256": "bc9c09b84adce988bdfbdf3780922994fb63914b7bbacd87552b85b02a843249",
+    "baseline_repeated": true,
+    "result_repeated": true,
+    "visible_change": true,
+    "reset_restored": true,
+    "source_unchanged": true,
+    "note": "Clean native captures were inspected. Redirecting Office's activation-profile directories caused the earlier stale-account/runtime failures; the user's normal Office subscription was already active. Preserving the actual Windows Office profile while isolating Qt settings, caches and test data passed without changing accounts or licensing settings. Deploy Office workers under a dedicated licensed Windows test account.",
+    "qt_settings_private": true,
+    "com_cache_private": true,
+    "verified_actions": [
+      "highlight_region",
+      "zoom_region"
+    ],
+    "zoom": {
+      "baseline_repeated": true,
+      "result_repeated": true,
+      "visible_change": true,
+      "reset_restored": true,
+      "source_unchanged": true,
+      "qt_settings_private": true,
+      "com_cache_private": true,
+      "capture_sha256": "23f3e4a84fa1700e645b7fa129ceab329a82e153a5267dc56058fc826077a22d"
+    }
   },
   "macos": {
     "state": "unsupported-on-managed-ci",

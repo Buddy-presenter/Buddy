@@ -199,7 +199,7 @@ class PreflightRunner:
             artifacts=[],
         )
         try:
-            reason = self._launch(folder, profile, cancelled)
+            reason = self._launch(folder, profile, cancelled, source_format)
             if reason:
                 report["reason"] = reason
             else:
@@ -245,7 +245,9 @@ class PreflightRunner:
         return report
 
     @staticmethod
-    def _launch(folder: Path, profile: str, cancelled: Event | None) -> str | None:
+    def _launch(
+        folder: Path, profile: str, cancelled: Event | None, source_format: str = "pdf"
+    ) -> str | None:
         if cancelled is not None and cancelled.is_set():
             return "cancelled"
         for name in ("profile", "roaming", "local", "temp"):
@@ -275,7 +277,17 @@ class PreflightRunner:
             QT_SCALE_FACTOR="1",
             QT_SCREEN_SCALE_FACTORS=str(PROFILES[profile][2]),
             PYTHONDONTWRITEBYTECODE="1",
+            QML_DISK_CACHE_PATH=str(folder / "local" / "qml"),
+            QT_SHADER_CACHE_DIR=str(folder / "local" / "shaders"),
         )
+        if source_format == "pptx" and sys.platform == "win32":
+            # Office's COM server uses the actual interactive Windows identity.
+            # Fake profile paths cannot isolate that identity and can break its
+            # activation/cache lookup. The operator supplies a dedicated Office
+            # test account; Qt settings and all job data remain private below.
+            for name in ("USERPROFILE", "APPDATA", "LOCALAPPDATA"):
+                if name in os.environ:
+                    environment[name] = os.environ[name]
         process = subprocess.Popen(
             [sys.executable, "-m", "buddy_desktop.preflight_worker", str(folder)],
             cwd=folder,
