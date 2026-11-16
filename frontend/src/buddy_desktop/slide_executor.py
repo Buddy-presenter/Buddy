@@ -1,6 +1,9 @@
 """Allowlisted slide execution; file IO/decoding in one worker, commits on Qt's thread."""
 
 import hashlib
+import logging
+import time
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +22,9 @@ from buddy_desktop.slide_contract import (
     read_json,
 )
 from buddy_desktop.slide_surface import SlideSurface
+
+logger = logging.getLogger(__name__)
+_IMAGE_CACHE_LIMIT_BYTES = 64 * 1024 * 1024
 
 
 def _guard_allows(guard: Callable[[], bool] | None) -> bool:
@@ -112,7 +118,13 @@ class SlideExecutor(QObject):
         self.current_index = 0
         self.pool = QThreadPool(self)
         self.pool.setMaxThreadCount(1)
+        self.prefetch_pool = QThreadPool(self)
+        self.prefetch_pool.setMaxThreadCount(1)
         self._worker: _Work | None = None
+        self._prefetch_worker: _Work | None = None
+        self._prefetch_key: tuple[str, str, str] | None = None
+        self._image_cache: OrderedDict[tuple[str, str, str], QImage] = OrderedDict()
+        self._image_cache_bytes = 0
         self._pending: tuple[int, str | None, Action | None] | None = None
         self._commit_guard: Callable[[], bool] | None = None
         self._sequence = 0
@@ -144,6 +156,84 @@ class SlideExecutor(QObject):
         self._worker = _Work(request, operation)
         self._worker.signals.done.connect(self._loaded)
         self.pool.start(self._worker)
+
+    @staticmethod
+    def _cache_key(manifest: Manifest, slide: Slide) -> tuple[str, str, str]:
+        return manifest.deck_id, manifest.render_id, slide.slide_id
+
+    def _cached_image(self, key: tuple[str, str, str]) -> QImage | None:
+        image = self._image_cache.pop(key, None)
+        if image is not None:
+            self._image_cache[key] = image
+        return image
+
+    def _remember_image(self, key: tuple[str, str, str], image: QImage) -> None:
+        size = int(image.sizeInBytes())
+        if size <= 0 or size > _IMAGE_CACHE_LIMIT_BYTES:
+            return
+        previous = self._image_cache.pop(key, None)
+        if previous is not None:
+            self._image_cache_bytes -= int(previous.sizeInBytes())
+        while self._image_cache and self._image_cache_bytes + size > _IMAGE_CACHE_LIMIT_BYTES:
+            _old_key, old_image = self._image_cache.popitem(last=False)
+            self._image_cache_bytes -= int(old_image.sizeInBytes())
+        self._image_cache[key] = image
+        self._image_cache_bytes += size
+
+    def prefetch_slide(self, slide_id: str) -> None:
+        """Render one selected PDF destination while its server preflight is running."""
+        manifest = self.manifest
+        if (
+            self._closed
+            or manifest is None
+            or manifest.pdf_content is None
+            or self._prefetch_worker is not None
+        ):
+            return
+        slide = next((item for item in manifest.slides if item.slide_id == slide_id), None)
+        if slide is None:
+            return
+        key = self._cache_key(manifest, slide)
+        if key in self._image_cache or self._prefetch_key == key:
+            return
+        self._prefetch_key = key
+        started = time.monotonic_ns()
+        worker = _Work(0, lambda: (key, load_image(manifest, slide)))
+        worker.signals.done.connect(
+            lambda _request, result, error: self._prefetched(key, started, result, error)
+        )
+        self._prefetch_worker = worker
+        self.prefetch_pool.start(worker, priority=-1)
+
+    def _prefetched(
+        self,
+        key: tuple[str, str, str],
+        started_ns: int,
+        result: Any,
+        error: str,
+    ) -> None:
+        self.surface.check_thread()
+        self._prefetch_worker = None
+        if self._prefetch_key == key:
+            self._prefetch_key = None
+        manifest = self.manifest
+        valid_manifest = (
+            not self._closed
+            and manifest is not None
+            and (manifest.deck_id, manifest.render_id) == key[:2]
+        )
+        image = result[1] if isinstance(result, tuple) and len(result) == 2 else None
+        if valid_manifest and not error and isinstance(image, QImage) and not image.isNull():
+            self._remember_image(key, image)
+            outcome = "ready"
+        else:
+            outcome = "discarded" if not valid_manifest else "unavailable"
+        logger.info(
+            "presentation_latency event=pdf_prefetch outcome=%s elapsed_ms=%d cache_bytes=%d",
+            outcome,
+            max(0, (time.monotonic_ns() - started_ns) // 1_000_000),
+            self._image_cache_bytes,
+        )
 
     def load_manifest(self, path: Path) -> int:
         request = self._request()
@@ -199,11 +289,23 @@ class SlideExecutor(QObject):
             self._finish(request, instance, "completed")
         else:
             manifest = self.manifest
+            slide = manifest.slides[action.target_index]
+            key = self._cache_key(manifest, slide)
+            cached = self._cached_image(key)
+            if cached is not None:
+                self.current_index = action.target_index
+                self.surface.commit(slide, cached, action.region)
+                self._finish(request, instance, "completed")
+                logger.info(
+                    "presentation_latency event=pdf_prefetch outcome=hit cache_bytes=%d",
+                    self._image_cache_bytes,
+                )
+                return request
             self._start(
                 request,
                 instance,
                 action,
-                lambda: load_image(manifest, manifest.slides[action.target_index]),
+                lambda: load_image(manifest, slide),
             )
             self._commit_guard = commit_guard
         return request
@@ -226,14 +328,16 @@ class SlideExecutor(QObject):
                 manifest, image = result
                 self.manifest, self.current_index = manifest, 0
                 slide = manifest.slides[0]
+                self._remember_image(self._cache_key(manifest, slide), image)
                 self.surface.commit(slide, image, slide.full)
                 self._finish(request, instance, "completed")
             else:
                 assert self.manifest is not None
+                slide = self.manifest.slides[action.target_index]
                 self.current_index = action.target_index
-                self.surface.commit(
-                    self.manifest.slides[action.target_index], result, action.region
-                )
+                if isinstance(result, QImage):
+                    self._remember_image(self._cache_key(self.manifest, slide), result)
+                self.surface.commit(slide, result, action.region)
                 self._finish(request, instance, "completed")
         if not self.busy:
             self.idle.emit()
@@ -250,13 +354,18 @@ class SlideExecutor(QObject):
         """Call before destroying the surface; wait_for_shutdown after the event loop exits."""
         self.surface.check_thread()
         self._closed = True
+        self._image_cache.clear()
+        self._image_cache_bytes = 0
         self.cancel()
 
     def clear(self) -> None:
         self.cancel()
         self.manifest = None
         self.current_index = 0
+        self._image_cache.clear()
+        self._image_cache_bytes = 0
         self.surface.clear()
 
     def wait_for_shutdown(self) -> None:
         self.pool.waitForDone()
+        self.prefetch_pool.waitForDone()

@@ -181,3 +181,11 @@ def _configure_logging() -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
         handlers=handlers,
     )
+    # Keep performance events available in packaged desktop logs without turning on
+    # INFO output from unrelated application components.
+    for name in (
+        "buddy_desktop.agent_loop",
+        "buddy_desktop.present_widget",
+        "buddy_desktop.slide_executor",
+    ):
+        logging.getLogger(name).setLevel(logging.INFO)

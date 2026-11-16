@@ -640,32 +640,51 @@ def agent_router() -> APIRouter:
         admitted = False
         retry_after_ms = None
         phase = "session"
+        phase_started = started
+        phase_timings_ms: dict[str, int] = {}
         failure_detail = None
+
+        def finish_phase() -> None:
+            nonlocal phase_started
+            phase_timings_ms[phase] = max(0, round((time.monotonic() - phase_started) * 1000))
+            phase_started = time.monotonic()
+
+        def begin_phase(name: str) -> None:
+            nonlocal phase, phase_started
+            phase = name
+            phase_started = time.monotonic()
+
         try:
             async with asyncio.timeout(4.5):
                 source = await read_input(request, principal, identifier, values)
+                finish_phase()
                 target = Target(tool="no_action", slide_id=source.current)
                 reason: AgentReason = "disabled"
                 decision_source: Literal["model", "navigation", "fallback"] = "fallback"
                 selection = None
                 if runtime is not None:
-                    phase = "admission"
+                    begin_phase("admission")
                     if principal.id in runtime.active or len(runtime.active) >= 16:
                         raise AgentFailure("busy")
                     runtime.active.add(principal.id)
                     admitted = True
+                    finish_phase()
                     intent = navigation_intent(values.latest_utterance)
                     if intent is not None:
                         decision_source = "navigation"
+                        begin_phase("navigation")
                         candidates = resolve(
                             source.analysis, source.current, values.text, values.latest_utterance
                         )
                         targets, _ = options(source, candidates)
                         selection = navigation_selection(targets, candidates, len(values.segments))
+                        finish_phase()
                     else:
+                        begin_phase("quota_reservation")
                         # Reserve first: exhausted/fast clients cannot spend query quota.
                         await runtime.reserve(request.app.state.database)
-                        phase = "retrieval"
+                        finish_phase()
+                        begin_phase("retrieval")
                         semantic = request.app.state.semantic_candidates
                         candidates = (
                             await semantic.retrieve(
@@ -684,10 +703,12 @@ def agent_router() -> APIRouter:
                             )
                         )
                         targets, descriptions = options(source, candidates)
-                        phase = "selection"
+                        finish_phase()
+                        begin_phase("selection")
                         selection = await runtime.provider.select(
                             decision_passage(source, values, descriptions)
                         )
+                        finish_phase()
                         decision_source = "model"
                     target = checked_selection(selection, targets, len(values.segments))
                     reason = (
@@ -697,7 +718,7 @@ def agent_router() -> APIRouter:
                     )
                     if (datetime.now(UTC) - values.sent_at).total_seconds() > 5:
                         raise AgentFailure("stale")
-                    phase = "validation"
+                    begin_phase("validation")
                     try:
                         fresh = await read_input(request, principal, identifier, values)
                     except HTTPException as exc:
@@ -706,6 +727,7 @@ def agent_router() -> APIRouter:
                         raise
                     if fresh.identity != source.identity:
                         raise AgentFailure("stale")
+                    finish_phase()
         except HTTPException:
             # Ownership/auth failures must remain denied; stale session failures never propose.
             raise
@@ -747,6 +769,8 @@ def agent_router() -> APIRouter:
         except (PersistenceError, SQLAlchemyError, OSError):
             raise HTTPException(503, "Agent temporarily unavailable.") from None
         finally:
+            if phase not in phase_timings_ms:
+                finish_phase()
             if admitted and runtime is not None:
                 runtime.active.discard(principal.id)
         proposal = AgentProposal(
@@ -778,6 +802,7 @@ def agent_router() -> APIRouter:
             "model": MODEL if runtime else "disabled",
             "decision_source": proposal.decision_source,
             "phase": phase,
+            "phase_timings_ms": phase_timings_ms,
             "failure_detail": failure_detail,
         }
         try:
