@@ -1365,12 +1365,15 @@ class PresentWidget(Page):
             ),
             "busy": "Suggestion found; a slide action or sync is still running. It was not run.",
             "stale": (
-                "Suggestion found, but speech or slide state changed before it could run. Repeat it."
+                "Suggestion found, but speech or slide state changed before it could run. "
+                "Repeat it."
             ),
             "no_action": "No action was selected; continue presenting manually.",
             "current_focus": "Suggestion found, but that view is already active.",
             "duplicate": "Suggestion found, but this speech segment was already handled.",
-            "cooldown": "Suggestion found just after the previous move; wait briefly and repeat it.",
+            "cooldown": (
+                "Suggestion found just after the previous move; wait briefly and repeat it."
+            ),
             "weak_evidence": (
                 "Suggestion found, but the latest speech did not support running it confidently."
             ),
@@ -1406,7 +1409,8 @@ class PresentWidget(Page):
         ):
             self.policy.completed(prediction.decision_id, success=False, now_ns=time.monotonic_ns())
             self.policy_status.setText(
-                "Suggestion found, but speech or slide state changed while it was checked. Repeat it."
+                "Suggestion found, but speech or slide state changed while it was checked. "
+                "Repeat it."
             )
             return
         self._policy_before = self._current_local_state()
