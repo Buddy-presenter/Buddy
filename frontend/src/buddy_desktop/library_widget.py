@@ -482,7 +482,8 @@ class LibraryWidget(QWidget):
         if isinstance(result, LibraryAccessExpired) and self.upload_request and self.retry_path:
             # Navigation must not hide an expired upload session. Identity changes
             # clear retry_path, so a late old-account response cannot expire a new one.
-            self.account.expire_session(str(result))
+            self.account.verify_resource_access(str(result))
+            self.failed(_identifier, "Upload access could not be verified. Try again.")
             return
         if isinstance(result, UploadRejected):
             if self.upload_request:
@@ -516,7 +517,8 @@ class LibraryWidget(QWidget):
         if not self.current():
             return
         if isinstance(result, LibraryAccessExpired):
-            self.account.expire_session(str(result))
+            self.account.verify_resource_access(str(result))
+            self.failed(_identifier, "Library access could not be verified. Refresh to retry.")
             return
         if isinstance(result, SavedPresentation):
             self.pending = True

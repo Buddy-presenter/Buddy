@@ -249,7 +249,7 @@ class MainWindow(QMainWindow):
         menu.addWidget(self.account)
         popover_layout.addLayout(menu)
         self.account.session_changed.connect(self._account_identity)
-        self.present.session_access_expired.connect(self.account.expire_session)
+        self.present.session_access_expired.connect(self.account.verify_resource_access)
         self.account.profile_loaded.connect(self._profile_identity)
         self._account_identity()
         self.library.signin_requested.connect(self._show_account_controls)
@@ -706,11 +706,11 @@ class MainWindow(QMainWindow):
                 screen = next(candidate for candidate in screens if candidate != audience)
         mini = BuddyMini(
             self.present.microphone_button,
-            self.present.policy_pause_button,
             self.present.policy_undo_button,
         )
         mini.restore_requested.connect(self._leave_mini)
         mini.settings_requested.connect(self._mini_settings)
+        mini.automation_requested.connect(self._toggle_mini_automation)
         mini.closed.connect(lambda: self._leave_mini(stop=True))
         mini.chime_finished.connect(self._mini_chime_finished)
         mini.reduced_motion = self.preferences.reduce_motion.isChecked()
@@ -777,7 +777,25 @@ class MainWindow(QMainWindow):
             if page.microphone_status.text() == "Microphone on"
             else "Mic off"
         )
-        mini.sync(state, page.microphone_button, page.policy_pause_button, page.policy_undo_button)
+        mini.sync(state, page.microphone_button, page.policy_undo_button)
+        mini.sync_automation(
+            page.agent_enabled.isEnabled(),
+            page.agent_enabled.isChecked() and page.policy_enabled.isChecked(),
+        )
+
+    def _toggle_mini_automation(self) -> None:
+        page = self.present
+        if page.agent_enabled.isChecked() and page.policy_enabled.isChecked():
+            page.agent_enabled.setChecked(False)
+        elif page.agent_enabled.isEnabled():
+            suggestions_were_on = page.agent_enabled.isChecked()
+            page.agent_enabled.setChecked(True)
+            page._update_agent()
+            if page.policy_enabled.isEnabled():
+                page.policy_enabled.setChecked(True)
+            else:
+                page.agent_enabled.setChecked(suggestions_were_on)
+        self._sync_mini()
 
     def _mini_completed(self, result: object) -> None:
         if self._mini is None or not self._mini.isVisible():

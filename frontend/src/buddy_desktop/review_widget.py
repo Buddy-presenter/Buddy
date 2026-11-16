@@ -674,7 +674,11 @@ class ReviewWidget(Page):
             return
         operation, self.pending_operation = self.pending_operation, ""
         if isinstance(result, LibraryAccessExpired):
-            self.account.expire_session(str(result))
+            self.account.verify_resource_access(str(result))
+            self.state.show_state(
+                "Review unavailable", "Could not verify access to this presentation.", retry=True
+            )
+            self.content.hide()
         elif isinstance(result, UpdatedChecks):
             current = self.analysis
             if current is None or (

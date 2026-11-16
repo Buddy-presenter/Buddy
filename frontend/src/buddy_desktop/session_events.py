@@ -253,7 +253,7 @@ class SessionEventStream(QObject):
                 if status in {401, 403, 404}:
                     if not stopped.is_set():
                         self.failed.emit(
-                            generation, "Session access ended. Sign in and sync again.", True
+                            generation, "Presentation session access ended. Reopen the deck.", True
                         )
                     return
                 if status == 409:

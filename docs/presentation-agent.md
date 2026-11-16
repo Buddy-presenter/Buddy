@@ -85,7 +85,8 @@ With one display, the overlay can be visible in whole-screen shares. In Settings
 Buddy Mini, choose the fixed screen corner or enable automatic entry when opening
 a saved deck from the library. Mini starts once the saved session is connected.
 
-Hover or click the mascot to reveal icon buttons for microphone, pause/resume, undo,
+Hover or click the mascot to reveal icon buttons for microphone, live suggestions
+and automatic moves together, undo,
 Settings, and Open Buddy. Click the mascot or focus it and press Space, then Tab
 through the controls. Open Buddy or Escape restores the workspace. Closing Mini,
 opening Settings, ending the show, or losing the saved session stops capture.

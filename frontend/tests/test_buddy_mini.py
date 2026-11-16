@@ -103,3 +103,37 @@ def test_completion_chime_pauses_capture_until_the_sound_finishes(desktop_window
     mini.chime_finished.emit()
     assert events == [True, "play", False]
     window._leave_mini()
+
+
+def test_mini_automation_icon_toggles_suggestions_and_moves(desktop_window, monkeypatch):
+    window = desktop_window()
+    page = window.present
+    page._agent_tick.stop()
+    monkeypatch.setattr(page, "mini_session_id", lambda: "saved-session")
+    monkeypatch.setattr(page, "_queue_session_state", lambda: None)
+    monkeypatch.setattr(page, "_update_agent", lambda: page.policy_enabled.setEnabled(True))
+    page.agent_enabled.setEnabled(True)
+    window._toggle_mini()
+    mini = window._mini
+    assert mini is not None
+    mini.buttons[1].click()
+    assert page.agent_enabled.isChecked() and page.policy_enabled.isChecked()
+    mini.buttons[1].click()
+    assert not page.agent_enabled.isChecked() and not page.policy_enabled.isChecked()
+    window._leave_mini()
+
+
+def test_presentation_access_failure_rechecks_account_without_signing_out(
+    desktop_window, monkeypatch
+):
+    window = desktop_window()
+    account = window.account
+    account.account_id = "signed-in-account"
+    account.session = SimpleNamespace(tokens=object())
+    checks = []
+    monkeypatch.setattr(account, "start", lambda operation: checks.append(operation) or 1)
+    window.present.session_access_expired.emit("Presentation session access ended.")
+    window.present.session_access_expired.emit("Presentation session access ended.")
+    assert checks == ["check"]
+    assert account.account_id == "signed-in-account"
+    account.session = None

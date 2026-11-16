@@ -25,8 +25,9 @@ class BuddyMini(QWidget):
     settings_requested = Signal()
     closed = Signal()
     chime_finished = Signal()
+    automation_requested = Signal()
 
-    def __init__(self, mic: QPushButton, pause: QPushButton, undo: QPushButton) -> None:
+    def __init__(self, mic: QPushButton, undo: QPushButton) -> None:
         super().__init__(
             None,
             Qt.WindowType.Tool
@@ -76,7 +77,7 @@ class BuddyMini(QWidget):
                     mic.click() if not self.chiming or mic.text() == "Stop microphone" else None
                 ),
             ),
-            ("pause", "Pause or resume automatic moves", pause.click),
+            ("play", "Live suggestions and automatic moves", self.automation_requested.emit),
             ("rotate-ccw", "Undo automatic move", undo.click),
             ("settings-2", "Settings", self.settings_requested.emit),
             ("external-link", "Open Buddy", self.restore_requested.emit),
@@ -110,6 +111,16 @@ class BuddyMini(QWidget):
         for button in self.buttons:
             button.setVisible(visible)
         self.update()
+
+    def sync_automation(self, available: bool, enabled: bool) -> None:
+        button = self.buttons[1]
+        label = f"{'Turn off' if enabled else 'Turn on'} live suggestions and automatic moves"
+        button.setEnabled(available or enabled)
+        if button.property("automationOn") != enabled:
+            button.setProperty("automationOn", enabled)
+            button.setIcon(icon("pause" if enabled else "play"))
+        button.setAccessibleName(label)
+        button.setToolTip(label)
 
     def set_top_corner(self, top: bool) -> None:
         self._center.setY(47 if top else 111)
@@ -148,12 +159,12 @@ class BuddyMini(QWidget):
         self.closed.emit()
         super().hideEvent(event)
 
-    def sync(self, state: str, mic: QPushButton, pause: QPushButton, undo: QPushButton) -> None:
+    def sync(self, state: str, mic: QPushButton, undo: QPushButton) -> None:
         self._listening = state == "Listening"
         self._state = state
         self.mascot.setAccessibleName(f"Buddy Mini — {state}")
         self.mascot.setToolTip(f"{state}. Click for controls.")
-        for mini, full in zip(self.buttons, (mic, pause, undo), strict=False):
+        for mini, full in ((self.buttons[0], mic), (self.buttons[2], undo)):
             mini.setEnabled(full.isEnabled())
             mini.setAccessibleName(full.text())
             mini.setToolTip(full.text())
@@ -218,10 +229,6 @@ class BuddyMini(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        if self._open:
-            # Windows sends pointer events through fully transparent pixels.
-            # A nearly transparent bridge keeps the orbit reachable across the gaps.
-            painter.fillRect(self.rect(), QColor(0, 0, 0, 2))
         y = self._center.y()
         if self._listening:
             for offset in (0, 12):
