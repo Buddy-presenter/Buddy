@@ -13,7 +13,7 @@ from PySide6.QtGui import QGuiApplication, QImage
 from PySide6.QtWidgets import QApplication
 
 from buddy_desktop.preflight import check_tools
-from buddy_desktop.slide_contract import ContractError, read_json
+from buddy_desktop.slide_contract import ContractError
 from buddy_desktop.slide_executor import SlideExecutor
 from buddy_desktop.slide_surface import SlideSurface
 from buddy_desktop.validation_worker import PROFILES
@@ -134,8 +134,16 @@ class PDFPlayer:
 
 
 def run(folder: Path) -> dict[str, Any]:
-    request = read_json(folder / "request.json", 1024 * 1024)
-    assert isinstance(request, dict)
+    # The slide-action reader deliberately caps every object at 16 fields. A
+    # processed snapshot instead contains up to 500 slides/1,000 catalog entries.
+    # This fixed private file was serialized/validated by the trusted host.
+    with (folder / "request.json").open("rb") as stream:
+        raw = stream.read(1024 * 1024 + 1)
+    if len(raw) > 1024 * 1024:
+        raise ContractError("Preflight snapshot exceeds bounds.")
+    request = json.loads(raw)
+    if not isinstance(request, dict):
+        raise ContractError("Invalid preflight snapshot.")
     check_tools(request["tools"], request["catalog"], request["slides"])
     result: dict[str, Any] = dict(
         source_sha256=request["source_sha256"],

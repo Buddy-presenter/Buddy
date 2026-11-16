@@ -130,6 +130,18 @@ def test_cancelled_run_can_retry_without_reusing_partial_state(snapshot):
         )
 
 
+def test_processed_catalog_larger_than_action_object_limit_loads_in_real_child(snapshot):
+    action = snapshot["catalog"]["zoom"]
+    snapshot["catalog"] = {str(i): {**action, "instance_id": f"action-{i}"} for i in range(20)}
+    with PreflightRunner("owner") as runner:
+        report = runner.run("owner", **snapshot, tools=[{"op": "read_state"}])
+        assert report["state"] == (
+            "completed" if sys.platform in {"win32", "darwin"} else "needs-review"
+        ), report
+        if sys.platform not in {"win32", "darwin"}:
+            assert report["reason"] == "unsupported_desktop_runtime"
+
+
 def test_authorization_and_bad_catalog_fail_before_launch(snapshot, monkeypatch):
     with PreflightRunner("owner") as runner:
         monkeypatch.setattr(runner, "_launch", lambda *args: pytest.fail("must not launch"))
