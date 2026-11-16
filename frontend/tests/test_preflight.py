@@ -1,0 +1,152 @@
+"""Real child-process PDF sessions plus access, bounds and fail-closed contracts."""
+
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+from threading import Event
+
+import pytest
+
+from buddy_desktop.pdf_document import open_pdf
+from buddy_desktop.preflight import PreflightRunner, check_tools
+from buddy_desktop.preflight_powerpoint import safe_source
+from buddy_desktop.slide_contract import ContractError
+
+FIXTURE = Path(__file__).resolve().parents[2] / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf"
+
+
+@pytest.fixture
+def snapshot():
+    source = FIXTURE.read_bytes()
+    manifest, _ = open_pdf(source, deck_id="test-deck", revision="test-revision")
+    action = dict(
+        version="1.1",
+        instance_id="zoom",
+        purpose="Preflight test",
+        deck_id="test-deck",
+        render_id=manifest.render_id,
+        slide_id=manifest.slides[0].slide_id,
+        type="zoom_region",
+        params={"region": {"x": 96, "y": 410, "width": 480, "height": 240}},
+    )
+    return dict(
+        source=source,
+        source_format="pdf",
+        deck_id="test-deck",
+        revision="test-revision",
+        slides={s.slide_id: {} for s in manifest.slides},
+        catalog={"zoom": action},
+    )
+
+
+@pytest.mark.parametrize(
+    "tools",
+    [
+        [{"op": "shell", "command": "whoami"}],
+        [{"op": "capture", "path": "../other.png"}],
+        [{"op": "apply_action", "action_id": "unknown"}],
+        [{"op": "load_slide", "slide_id": "unknown"}],
+        [{"op": "capture"}] * 5,
+        [{"op": "read_state"}] * 17,
+    ],
+)
+def test_tool_allowlist_rejects_arbitrary_operations(tools):
+    with pytest.raises(ContractError):
+        check_tools(tools, {}, {})
+
+
+def test_real_pdf_process_capture_and_deterministic_action_baselines(snapshot):
+    with PreflightRunner("owner") as runner:
+        root = runner._root
+        report = runner.run(
+            "owner",
+            **snapshot,
+            tools=[
+                {"op": "capture"},
+                {"op": "apply_action", "action_id": "zoom"},
+                {"op": "read_state"},
+                {"op": "capture"},
+                {"op": "apply_action", "action_id": "zoom"},
+                {"op": "reset"},
+                {"op": "capture"},
+            ],
+        )
+        if sys.platform not in {"win32", "darwin"}:
+            assert report["reason"] == "unsupported_desktop_runtime"
+            return
+        # macOS screen recording may be denied on managed CI hosts; never pass a fake capture.
+        if sys.platform == "darwin" and report["reason"] == "desktop_capture_unavailable":
+            pytest.skip("Native capture unsupported by this host's screen-recording permission")
+        assert report["state"] == "completed", (
+            report.get("reason"),
+            report.get("actual_display_scale"),
+        )
+        assert report["semantic_verified"] is False
+        assert report["viewport"] == [1280, 720]
+        trace = report["trace"]
+        assert trace[1]["baseline"] == trace[4]["baseline"]
+        assert trace[1]["after"] == trace[4]["after"]
+        assert trace[1]["after"] != trace[1]["baseline"]
+        images = [runner.artifact("owner", report["run_id"], f"{i}.png") for i in range(3)]
+        assert images[0] == images[2] and images[0] != images[1]
+        assert all(i.startswith(b"\x89PNG") for i in images)
+        assert not (root / report["run_id"] / "source.pdf").exists()
+        stored = json.loads(runner.artifact("owner", report["run_id"], "report.json"))
+        assert stored["source_sha256"] == hashlib.sha256(snapshot["source"]).hexdigest()
+        with pytest.raises(PermissionError):
+            runner.artifact("other", report["run_id"], "0.png")
+        with pytest.raises(FileNotFoundError):
+            runner.artifact("owner", report["run_id"], "../request.json")
+        if os.name != "nt":
+            assert root.stat().st_mode & 0o077 == 0
+    assert not root.exists()
+    with pytest.raises(PermissionError):
+        runner.run("owner", **snapshot, tools=[{"op": "read_state"}])
+
+
+def test_cancelled_run_can_retry_without_reusing_partial_state(snapshot):
+    cancelled = Event()
+    cancelled.set()
+    with PreflightRunner("owner") as runner:
+        report = runner.run("owner", **snapshot, tools=[{"op": "read_state"}], cancelled=cancelled)
+        assert report["state"] == "needs-review" and report["reason"] == "cancelled"
+        retry = runner.run("owner", **snapshot, tools=[{"op": "read_state"}])
+        assert retry["run_id"] != report["run_id"]
+        assert retry["state"] == (
+            "completed" if sys.platform in {"win32", "darwin"} else "needs-review"
+        )
+
+
+def test_authorization_and_bad_catalog_fail_before_launch(snapshot, monkeypatch):
+    with PreflightRunner("owner") as runner:
+        monkeypatch.setattr(runner, "_launch", lambda *args: pytest.fail("must not launch"))
+        with pytest.raises(PermissionError):
+            runner.run("foreign", **snapshot, tools=[{"op": "read_state"}])
+        snapshot["catalog"]["zoom"]["deck_id"] = "foreign"
+        with pytest.raises(ContractError):
+            runner.run("owner", **snapshot, tools=[{"op": "read_state"}])
+
+
+def test_worker_failure_is_not_visual_approval_and_source_is_cleaned(snapshot, monkeypatch):
+    with PreflightRunner("owner") as runner:
+        monkeypatch.setattr(runner, "_launch", lambda *args: "worker_failed")
+        report = runner.run("owner", **snapshot, tools=[{"op": "read_state"}])
+        assert report["state"] == "needs-review" and report["semantic_verified"] is False
+        assert set(p.name for p in (runner._root / report["run_id"]).iterdir()) == {"report.json"}
+
+
+def test_passive_powerpoint_package_and_external_content_rejection():
+    import io
+    import zipfile
+
+    safe_source((Path(__file__).parent / "fixtures/slide_actions/wide.pptx").read_bytes())
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w") as archive:
+        archive.writestr(
+            "ppt/_rels/presentation.xml.rels",
+            '<Relationships><Relationship TargetMode="External" Target="https://example.com"/></Relationships>',
+        )
+    with pytest.raises(ContractError, match="unsafe_office_content"):
+        safe_source(stream.getvalue())
