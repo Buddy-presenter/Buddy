@@ -171,6 +171,7 @@ def test_interim_stable_prefix_is_bounded_and_revisions_revoke_it(monkeypatch):
     extended = context.snapshot()
     assert extended.decision_segments[-1].text.startswith(phrase)
     assert stable.matches_decision(extended)
+    assert stable.decision_mismatch_reason(extended) is None
     clock[0] += 100_000_000
     context.accept(
         event(
@@ -188,10 +189,12 @@ def test_interim_stable_prefix_is_bounded_and_revisions_revoke_it(monkeypatch):
         )
     )
     assert not stable.matches_decision(context.snapshot())
+    assert stable.decision_mismatch_reason(context.snapshot()) == "interim_prefix_corrected"
     clock[0] += 100_000_000
     context.accept(event(clock, sequence=6, text="Let's now have a look at the sales chart"))
     corrected = context.snapshot()
     assert not stable.matches_decision(corrected)
+    assert stable.decision_mismatch_reason(corrected) == "interim_prefix_corrected"
     assert corrected.decision_segments[-1].text != stable.decision_segments[-1].text
 
 
