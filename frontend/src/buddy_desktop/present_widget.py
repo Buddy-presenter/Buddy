@@ -90,6 +90,16 @@ from buddy_desktop.views import Page, StatusLabel
 from buddy_desktop.visuals import BuddyMark, command
 
 
+def proposal_context(value: dict[str, Any], live: ContextSnapshot) -> ContextSnapshot | None:
+    """Bind a result to the snapshot it analyzed while allowing normal continuation."""
+    submitted = value.get("_client_context")
+    if submitted is None:
+        return live
+    if not isinstance(submitted, ContextSnapshot) or not submitted.matches_decision(live):
+        return None
+    return submitted
+
+
 class SelectionSurface(SlideSurface):
     selection_changed = Signal(object)
 
@@ -943,7 +953,10 @@ class PresentWidget(Page):
         native, session, info = self._native_present, self._session, self._powerpoint_info
         if not self.policy.enabled or native is None or session is None or info is None:
             return
-        context = self.transcript_context.snapshot()
+        context = proposal_context(value, self.transcript_context.snapshot())
+        if context is None:
+            self.policy_status.setText("Speech changed before the action could run; repeat it.")
+            return
         state = self._current_local_state()
         if state is None:
             self.policy.clear_pending()
@@ -1018,7 +1031,7 @@ class PresentWidget(Page):
             or self.powerpoint_runner.busy
             or self.session_runner.busy
             or self._session_pending_state is not None
-            or not context.matches(self.transcript_context.snapshot())
+            or not context.matches_decision(self.transcript_context.snapshot())
         ):
             self.policy.completed(prediction.decision_id, success=False, now_ns=time.monotonic_ns())
             self.policy_status.setText(
@@ -1038,7 +1051,7 @@ class PresentWidget(Page):
             prediction.target.action_id,
         )
         self._native_guard.set()
-        deadline = context.candidate_segments[-1].capture_end_ns + 5_000_000_000
+        deadline = context.decision_segments[-1].capture_end_ns + 5_000_000_000
 
         def guard() -> bool:
             return (
@@ -1296,7 +1309,11 @@ class PresentWidget(Page):
         session, manifest = self._session, self.executor.manifest
         if not self.policy.enabled or session is None or manifest is None:
             return
-        context, state = self.transcript_context.snapshot(), self._current_local_state()
+        context = proposal_context(value, self.transcript_context.snapshot())
+        state = self._current_local_state()
+        if context is None:
+            self.policy_status.setText("Speech changed before the action could run; repeat it.")
+            return
         if state is None or self._powerpoint_info is not None:
             return
         try:
@@ -1405,7 +1422,7 @@ class PresentWidget(Page):
             or self.executor.busy
             or self.session_runner.busy
             or self._session_pending_state is not None
-            or not context.matches(self.transcript_context.snapshot())
+            or not context.matches_decision(self.transcript_context.snapshot())
         ):
             self.policy.completed(prediction.decision_id, success=False, now_ns=time.monotonic_ns())
             self.policy_status.setText(
@@ -1429,7 +1446,7 @@ class PresentWidget(Page):
                 and self._session.state_version == prediction.state_version
                 and self._session_pending_state is None
                 and self._stream_snapshot is None
-                and context.matches(self.transcript_context.snapshot())
+                and context.matches_decision(self.transcript_context.snapshot())
             )
 
         self.executor.dispatch(command_value, commit_guard=still_current)
@@ -1491,12 +1508,11 @@ class PresentWidget(Page):
         if not isinstance(result, dict):
             self.agent_proposal.clear()
             context = self.transcript_context.snapshot()
-            candidates = context.candidate_segments
+            candidates = context.decision_segments
             if (
                 not context.fresh
                 or not candidates
                 or not context.segments
-                or context.segments[-1].sequence != candidates[-1].sequence
             ):
                 self.policy.clear_pending()
             return
@@ -1552,11 +1568,6 @@ class PresentWidget(Page):
 
     @Slot(object)
     def _speech_transcript(self, event: dict[str, object]) -> None:
-        self._native_guard.clear()
-        if not event["final"]:
-            # Break sustained evidence at capture delivery, even if a final arrives
-            # before the scheduler observes this unfinished thought.
-            self.policy.clear_pending()
         if (
             self._session is not None
             and self._context_connected

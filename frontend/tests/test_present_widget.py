@@ -50,6 +50,21 @@ def test_presenter_can_pause_and_resume_from_the_current_manual_slide(present, q
     assert page.executor.current_index == 1
 
 
+def test_continued_speech_does_not_cancel_an_already_dispatched_office_action(present):
+    _window, page = present
+    page._native_guard.set()
+    page._speech_transcript(
+        {
+            "final": False,
+            "start_seconds": 0.0,
+            "end_seconds": 0.1,
+            "latency_ms": 10,
+            "text": "and the next part",
+        }
+    )
+    assert page._native_guard.is_set()
+
+
 def test_open_dialog_and_all_six_buttons(desktop_window, qtbot, monkeypatch):
     window = desktop_window()
     window.navigation.setCurrentRow(3)

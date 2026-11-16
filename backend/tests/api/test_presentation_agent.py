@@ -95,6 +95,43 @@ def test_context_is_coherent_and_bounded():
     )
 
 
+def test_provisional_context_requires_one_explicit_unfinished_tail():
+    phrase = "Let's look at the table of contents"
+    AgentRequest.model_validate(
+        payload(
+            text=phrase,
+            latest_utterance=phrase,
+            sequence=2,
+            provisional=True,
+            segments=[{"sequence": 2, "text": phrase, "final": False}],
+        )
+    )
+    with pytest.raises(ValueError):
+        AgentRequest.model_validate(
+            payload(
+                text=phrase,
+                latest_utterance=phrase,
+                sequence=2,
+                provisional=False,
+                segments=[{"sequence": 2, "text": phrase, "final": False}],
+            )
+        )
+    with pytest.raises(ValueError):
+        AgentRequest.model_validate(
+            payload(
+                text="Earlier complete. " + phrase,
+                latest_utterance=phrase,
+                provisional=True,
+                segments=[
+                    {"sequence": 1, "text": "Earlier complete."},
+                    {"sequence": 2, "text": phrase, "final": False},
+                    {"sequence": 3, "text": "Another interim", "final": False},
+                ],
+                sequence=3,
+            )
+        )
+
+
 def test_options_derive_navigation_and_only_usable_authoritative_regions():
     from buddy_api.analysis.contracts import Region
 

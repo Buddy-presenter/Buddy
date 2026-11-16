@@ -1,5 +1,6 @@
 """Latest-only, bounded native scheduling. All mutable scheduling state belongs to Qt."""
 
+import hashlib
 import time
 from collections.abc import Callable
 from dataclasses import replace
@@ -41,6 +42,7 @@ class AgentLoop(QObject):
         self._prepared_for: str | None = None
         self._preparing_for: str | None = None
         self._prepare_failed_for: str | None = None
+        self._partial_attempts: dict[tuple[int, str | None, str], tuple[int, int]] = {}
 
     def set_enabled(self, enabled: bool) -> None:
         if self.enabled != enabled:
@@ -53,14 +55,14 @@ class AgentLoop(QObject):
             self._submitted = None
             self._prepare_failed_for = None
             self.proposed.emit(None)
-            self.status.emit("Waiting for completed speech…" if enabled else "Suggestions off")
+            self.status.emit("Listening for a clear phrase…" if enabled else "Suggestions off")
 
     def update(
         self, access: str | None, session: PresentationSession | None, context: ContextSnapshot
     ) -> None:
         # Publish immutable snapshots on the GUI thread. Worker reads only this reference.
         previous, self._current = self._current, context
-        if previous is not None and not previous.matches(context):
+        if previous is not None and not previous.matches_decision(context):
             self.proposed.emit(None)
         if not self.enabled:
             return
@@ -76,20 +78,16 @@ class AgentLoop(QObject):
                 self.status.emit("Preparing presentation suggestions…")
                 self.runner.submit(lambda: self.service.prepare(access, session))
             return
-        segments = context.candidate_segments
+        segments = context.decision_segments
         if (
             not access
             or session is None
             or not context.fresh
             or not segments
             or not context.segments
-            # Do not display a suggestion based on completed words while a newer,
-            # unfinished segment is already in the context. The execution gate
-            # cannot safely admit that proposal, so wait for the final update.
-            or context.segments[-1].sequence != segments[-1].sequence
         ):
             self.proposed.emit(None)
-            self.status.emit("Waiting for completed speech…")
+            self.status.emit("Listening for a clear phrase…")
             return
         revision = (
             context.session_id,
@@ -97,14 +95,52 @@ class AgentLoop(QObject):
             context.epoch,
             context.stream_id,
             context.language,
-            # Revisions are immutable under the speech contract. Dedupe needs ids,
-            # not another long-lived copy of private transcript text.
-            tuple((s.segment_id, s.sequence) for s in context.segments),
+            tuple(
+                (s.segment_id, s.sequence, s.final, hashlib.sha256(s.text.encode()).hexdigest())
+                for s in segments
+            ),
         )
         if revision != self._deferred_revision:
             # A server wait applies to that input, not a new command. The API
             # enforces the shared model budget; free navigation must not wait.
             self._not_before = float("-inf")
+        partial_key: tuple[int, str | None, str] | None = None
+        partial_length = 0
+        correction_since_previous = (
+            previous is not None and context.has_correction_since(previous)
+        )
+        if not segments[-1].final:
+            partial_key = (context.epoch, context.stream_id, segments[-1].segment_id)
+            partial_length = len(segments[-1].text)
+            if previous is not None:
+                previous_partial = next(
+                    (
+                        item
+                        for item in previous.decision_segments
+                        if item.segment_id == segments[-1].segment_id and not item.final
+                    ),
+                    None,
+                )
+                if (
+                    previous_partial is not None
+                    and not segments[-1].text.startswith(previous_partial.text)
+                ):
+                    prior_length, attempts = self._partial_attempts.get(partial_key, (0, 0))
+                    self._partial_attempts[partial_key] = (
+                        min(prior_length, partial_length - 20), attempts
+                    )
+            prior_length, attempts = self._partial_attempts.get(partial_key, (0, 0))
+            if (
+                partial_length < 12
+                or attempts >= 3
+                or (
+                    attempts
+                    and partial_length - prior_length < 20
+                    and not correction_since_previous
+                )
+            ):
+                self.status.emit("Listening for a clear phrase…")
+                return
         if (
             self.runner.busy
             or revision == self._last_revision
@@ -112,6 +148,13 @@ class AgentLoop(QObject):
         ):
             return
         self._last_revision, self._submitted = revision, context
+        if partial_key is not None:
+            _, attempts = self._partial_attempts.get(partial_key, (0, 0))
+            self._partial_attempts[partial_key] = (partial_length, attempts + 1)
+            if len(self._partial_attempts) > 128:
+                oldest = next(iter(self._partial_attempts))
+                if oldest != partial_key:
+                    del self._partial_attempts[oldest]
         self._request_generation = self._generation
         self.status.emit("Considering your latest speech…")
 
@@ -127,7 +170,7 @@ class AgentLoop(QObject):
         if self._preparing_for is not None:
             if self.enabled and self._request_generation == self._generation:
                 self._prepared_for = self._preparing_for
-                self.status.emit("Ready • waiting for completed speech…")
+                self.status.emit("Ready • listening for a clear phrase…")
             self._preparing_for = None
             return
         submitted, self._submitted = self._submitted, None
@@ -137,7 +180,7 @@ class AgentLoop(QObject):
             and self._request_generation == self._generation
             and submitted is not None
             and current is not None
-            and submitted.matches(current)
+            and submitted.matches_decision(current)
         ):
             if isinstance(result, dict) and result.get("reason") == "paced":
                 # No provider attempt was spent. Retain only the live latest input.
@@ -151,6 +194,14 @@ class AgentLoop(QObject):
                     self.proposed.emit(None)
                     self.status.emit("Waiting for the next suggestion…")
                     return
+            if isinstance(result, dict):
+                result = {
+                    **result,
+                    "_client_context": submitted,
+                    "_client_segment_ids": [
+                        segment.segment_id for segment in submitted.decision_segments
+                    ],
+                }
             self.proposed.emit(result)
             self.status.emit("Suggestion ready • slide controls remain manual")
 

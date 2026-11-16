@@ -46,6 +46,7 @@ from buddy_api.presentation_sessions import current_ready_analysis, owned_sessio
 class SpeechSegment(Model):
     sequence: int = Field(ge=1, strict=True)
     text: str = Field(min_length=1, max_length=4096, repr=False)
+    final: bool = True
 
 
 class AgentRequest(Model):
@@ -58,11 +59,15 @@ class AgentRequest(Model):
     text: str = Field(min_length=1, max_length=4096, repr=False)
     latest_utterance: str = Field(min_length=1, max_length=4096, repr=False)
     segments: tuple[SpeechSegment, ...] = Field(min_length=1, max_length=64, repr=False)
+    provisional: bool = False
 
     @model_validator(mode="after")
     def coherent(self) -> "AgentRequest":
         CandidateRequest.model_validate(
-            {**self.model_dump(exclude={"segments"}), "protocol": "presentation-candidates.v1"}
+            {
+                **self.model_dump(exclude={"segments", "provisional"}),
+                "protocol": "presentation-candidates.v1",
+            }
         )
         if (
             len(self.text) > 4096
@@ -71,8 +76,10 @@ class AgentRequest(Model):
             or self.sequence != max(s.sequence for s in self.segments)
             or any(not s.text.strip() for s in self.segments)
             or len({s.sequence for s in self.segments}) != len(self.segments)
+            or any(not s.final for s in self.segments[:-1])
+            or self.provisional == self.segments[-1].final
         ):
-            raise ValueError("Inconsistent completed speech")
+            raise ValueError("Inconsistent speech evidence")
         return self
 
 
@@ -397,7 +404,7 @@ def decision_passage(
     current_slide = next(
         s for s in candidate_slides(source.analysis) if s.slide_id == source.current
     )
-    return {
+    passage: dict[str, object] = {
         "segments": [s.text for s in values.segments],
         "latest_segment": len(values.segments) - 1,
         "current_view": {
@@ -423,6 +430,9 @@ def decision_passage(
         },
         "options": descriptions,
     }
+    if values.provisional:
+        passage["latest_segment_status"] = "provisional stable prefix; speech is ongoing"
+    return passage
 
 
 def navigation_selection(

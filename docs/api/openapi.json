@@ -6709,10 +6709,20 @@
                     "title": "Protocol",
                     "type": "string"
                   },
+                  "provisional": {
+                    "default": false,
+                    "title": "Provisional",
+                    "type": "boolean"
+                  },
                   "segments": {
                     "items": {
                       "additionalProperties": false,
                       "properties": {
+                        "final": {
+                          "default": true,
+                          "title": "Final",
+                          "type": "boolean"
+                        },
                         "sequence": {
                           "minimum": 1,
                           "title": "Sequence",

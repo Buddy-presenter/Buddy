@@ -169,7 +169,7 @@ class Prediction:
 
     @classmethod
     def from_validated(cls, value: dict[str, Any], context: ContextSnapshot) -> "Prediction":
-        segments = context.candidate_segments
+        segments = context.decision_segments
         return cls(
             value["decision_id"],
             Target.parse(value["target"]),
@@ -254,16 +254,12 @@ class TransitionPolicy:
             return reject("unsupported_format")
         if view.busy or self._inflight is not None:
             return reject("busy")
-        segments = context.candidate_segments
+        segments = context.decision_segments
+        evidence_sequences = set(prediction.evidence_sequences)
         if (
             not view.connected
             or not context.fresh
             or not segments
-            or not context.segments
-            # candidate_segments is a bounded request window. Older finalized
-            # segments may be omitted once the transcript exceeds its size budget;
-            # only a newer unfinished segment should make this decision stale.
-            or context.segments[-1].sequence != segments[-1].sequence
             or not 0 <= now_ns - segments[-1].capture_end_ns <= 5_000_000_000
             or (prediction.session_id, prediction.analysis_id, prediction.state_version)
             != (view.session_id, view.analysis_id, view.state_version)
@@ -310,7 +306,7 @@ class TransitionPolicy:
         if (
             prediction.source not in {"model", "navigation"}
             or prediction.reason not in {"explicit", "topic", "correction"}
-            or segments[-1].sequence not in prediction.evidence_sequences
+            or not evidence_sequences.intersection(segment.sequence for segment in segments)
         ):
             return reject("weak_evidence")
         if prediction.source == "navigation":
