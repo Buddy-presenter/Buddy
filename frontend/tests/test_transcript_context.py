@@ -237,6 +237,28 @@ def test_finalizing_interim_decision_preserves_it_but_new_final_supersedes(monke
     assert not submitted.matches_decision(context.snapshot())
 
 
+def test_decision_match_allows_unchanged_history_omitted_by_bounded_window():
+    from buddy_desktop.transcript_context import ContextSegment, ContextSnapshot
+
+    now = 10_000_000_000
+    snapshot = ContextSnapshot(
+        "session",
+        1,
+        1,
+        "stream",
+        "en-US",
+        (
+            ContextSegment("older", 1, "x" * 4096, True, 0.0, 1.0, now),
+            ContextSegment("latest", 2, "Go to slide 8", True, 1.1, 1.2, now),
+        ),
+        now,
+        True,
+    )
+
+    assert [segment.segment_id for segment in snapshot.decision_segments] == ["latest"]
+    assert snapshot.matches_decision(snapshot)
+
+
 def test_reconnect_clear_and_privacy(monkeypatch):
     context, clock = setup(monkeypatch)
     context.accept(event(clock))

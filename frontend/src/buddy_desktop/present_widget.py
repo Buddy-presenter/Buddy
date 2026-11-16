@@ -271,6 +271,7 @@ class PresentWidget(Page):
         self._powerpoint_binding: PowerPointSessionBinding | None = None
         self._native_present: PowerPointPresent | None = None
         self._native_guard = Event()
+        self._native_policy_context: ContextSnapshot | None = None
         self._generated_analysis: ReviewAnalysis | None = None
         self._generated_request: tuple[str, int, str, str | None] | None = None
         self.generated_runner = TaskRunner(self)
@@ -859,6 +860,7 @@ class PresentWidget(Page):
         self.policy_pause_button.setAccessibleName(label)
         self.policy_pause_button.setToolTip(f"{label} (Ctrl+Shift+P)")
         self._native_guard.clear()
+        self._native_policy_context = None
         self.policy.set_enabled(enabled)
         self._policy_check = None
         self._invalidate_transcript_context()
@@ -910,6 +912,7 @@ class PresentWidget(Page):
     def _invalidate_transcript_context(self) -> None:
         if hasattr(self, "_native_guard"):
             self._native_guard.clear()
+            self._native_policy_context = None
         self.transcript_context.invalidate()
 
     def _native_focus_view(self) -> str:
@@ -933,6 +936,7 @@ class PresentWidget(Page):
         if not hasattr(self, "policy"):
             return
         self._native_guard.clear()
+        self._native_policy_context = None
         prediction = (
             self._policy_check[0]
             if self._policy_check is not None
@@ -1050,6 +1054,7 @@ class PresentWidget(Page):
             self._current_local_state(),
             prediction.target.action_id,
         )
+        self._native_policy_context = context
         self._native_guard.set()
         deadline = context.decision_segments[-1].capture_end_ns + 5_000_000_000
 
@@ -1072,6 +1077,7 @@ class PresentWidget(Page):
         )
 
     def _native_completed(self, kind: str, result: PowerPointActionResult) -> None:
+        self._native_policy_context = None
         metadata, self._native_completion = self._native_completion, None
         if metadata is None or self._powerpoint_binding is None or self._session is None:
             return
@@ -1576,12 +1582,21 @@ class PresentWidget(Page):
                 str(self.speech_language.currentData()),
             )
             self.transcript_context.accept(event)
+            self._revoke_native_guard_if_speech_changed()
         kind = "Final" if event["final"] else "Partial"
         start = float(cast(float, event["start_seconds"]))
         end = float(cast(float, event["end_seconds"]))
         self.speech_text.setPlainText(
             f"{kind} • {start:.2f}–{end:.2f} s • {event['latency_ms']} ms\n{event['text']}"
         )
+
+    def _revoke_native_guard_if_speech_changed(self) -> None:
+        submitted = self._native_policy_context
+        if submitted is not None and not submitted.matches_decision(
+            self.transcript_context.snapshot()
+        ):
+            self._native_guard.clear()
+            self._native_policy_context = None
 
     @Slot()
     def _verify_microphone_pdf_session(self) -> None:
@@ -2412,6 +2427,7 @@ class PresentWidget(Page):
             completion = self._native_completion
             self._native_completion = None
             self._native_guard.clear()
+            self._native_policy_context = None
             if completion is not None and completion[0] is not None:
                 self.policy.completed(
                     completion[0].decision_id,
@@ -2991,6 +3007,7 @@ class PresentWidget(Page):
         self.policy_runner.stop()
         self.generated_runner.stop()
         self._native_guard.clear()
+        self._native_policy_context = None
         self._agent_tick.stop()
         self.agent.stop()
         self.session_events.stop()
@@ -3014,6 +3031,7 @@ class PresentWidget(Page):
         self._generated_analysis = None
         self._generated_request = None
         self._native_guard.clear()
+        self._native_policy_context = None
         self.invalidate_saved_powerpoint()
         self.agent_enabled.setChecked(False)
         self.microphone.stop()

@@ -155,6 +155,7 @@ class ContextSnapshot:
         ):
             return False
         now_by_id = {segment.segment_id: segment for segment in current.segments}
+        original_by_id = {segment.segment_id: segment for segment in self.segments}
         submitted_ids = {segment.segment_id for segment in submitted}
         for segment in submitted:
             latest = now_by_id.get(segment.segment_id)
@@ -192,6 +193,12 @@ class ContextSnapshot:
             segment.final
             and segment.sequence <= newest_submitted
             and segment.segment_id not in submitted_ids
+            and (
+                (original := original_by_id.get(segment.segment_id)) is None
+                or not original.final
+                or original.sequence != segment.sequence
+                or original.text != segment.text
+            )
             for segment in current.segments
         ):
             return False
