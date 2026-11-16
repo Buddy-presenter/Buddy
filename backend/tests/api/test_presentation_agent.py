@@ -307,6 +307,10 @@ def test_exact_navigation_boundary_does_not_spend_provider_allowance(agent_api, 
     ]
     assert len(traces) == 1
     assert traces[0]["decision_id"] == reply.json()["decision_id"]
+    assert traces[0]["phase"] == "validation"
+    timings = traces[0]["phase_timings_ms"]
+    assert {"session", "admission", "navigation", "validation"} <= timings.keys()
+    assert all(type(value) is int and value >= 0 for value in timings.values())
     assert phrase not in json.dumps(traces)
 
 

@@ -234,6 +234,7 @@ class PresentWidget(Page):
         self.policy_runner.succeeded.connect(self._policy_checked)
         self.policy_runner.failed.connect(self._policy_failed)
         self._policy_check: tuple[Prediction, ContextSnapshot, str] | None = None
+        self._policy_latency: dict[str, dict[str, int]] = {}
         self._deferred_agent_proposal: tuple[dict[str, Any], int] | None = None
         self._deferred_transition_check: tuple[Prediction, ContextSnapshot, str] | None = None
         self._policy_execution: Prediction | None = None
@@ -953,6 +954,7 @@ class PresentWidget(Page):
             else None
         )
         if prediction is not None:
+            self._policy_latency.pop(prediction.decision_id, None)
             self.policy.completed(prediction.decision_id, success=False, now_ns=time.monotonic_ns())
         self.policy.reset(manual=True, now_ns=time.monotonic_ns())
         self._policy_check = None
@@ -961,7 +963,77 @@ class PresentWidget(Page):
         self.policy_undo_button.setEnabled(False)
         self._invalidate_transcript_context()
 
+    def _start_policy_latency(
+        self, prediction: Prediction, context: ContextSnapshot, proposal_received_ns: int
+    ) -> None:
+        segments = context.decision_segments
+        if not segments:
+            return
+        self._policy_latency[prediction.decision_id] = {
+            "capture_end_ns": segments[-1].capture_end_ns,
+            "proposal_received_ns": proposal_received_ns,
+            "preflight_started_ns": time.monotonic_ns(),
+        }
+        while len(self._policy_latency) > 32:
+            self._policy_latency.pop(next(iter(self._policy_latency)))
+
+    def _policy_stage(self, prediction: Prediction, name: str, stamp_ns: int) -> None:
+        timing = self._policy_latency.get(prediction.decision_id)
+        if timing is not None:
+            timing[name] = stamp_ns
+
+    def _log_policy_preflight(self, prediction: Prediction, source_format: str) -> None:
+        timing = self._policy_latency.get(prediction.decision_id)
+        if timing is None:
+            return
+        execution_ns = timing.get("execution_started_ns", time.monotonic_ns())
+        logger.info(
+            "presentation_latency event=preflight_completed decision_id=%s "
+            "source_format=%s proposal_to_preflight_ms=%d preflight_ms=%d",
+            prediction.decision_id,
+            source_format,
+            max(0, (timing["preflight_started_ns"] - timing["proposal_received_ns"]) // 1_000_000),
+            max(0, (execution_ns - timing["preflight_started_ns"]) // 1_000_000),
+        )
+
+    def _log_policy_completion(
+        self,
+        prediction: Prediction,
+        context: ContextSnapshot | None,
+        source_format: str,
+        completed_ns: int,
+        outcome: str,
+    ) -> None:
+        timing = self._policy_latency.pop(prediction.decision_id, None)
+        segments = context.decision_segments if context is not None else ()
+        capture_end_ns = (timing.get("capture_end_ns") if timing is not None else None) or (
+            segments[-1].capture_end_ns if segments else None
+        )
+        if timing is None or capture_end_ns is None:
+            return
+        logger.info(
+            "presentation_latency event=action_finished decision_id=%s "
+            "source_format=%s tool=%s outcome=%s capture_to_action_ms=%d proposal_to_action_ms=%d "
+            "preflight_ms=%d executor_ms=%d",
+            prediction.decision_id,
+            source_format,
+            prediction.target.tool,
+            outcome,
+            max(0, (completed_ns - capture_end_ns) // 1_000_000),
+            max(0, (completed_ns - timing["proposal_received_ns"]) // 1_000_000),
+            max(
+                0,
+                (timing.get("execution_started_ns", completed_ns) - timing["preflight_started_ns"])
+                // 1_000_000,
+            ),
+            max(
+                0,
+                (completed_ns - timing.get("execution_started_ns", completed_ns)) // 1_000_000,
+            ),
+        )
+
     def _consider_native_policy(self, value: dict[str, Any]) -> None:
+        proposal_received_ns = time.monotonic_ns()
         native, session, info = self._native_present, self._session, self._powerpoint_info
         if not self.policy.enabled or native is None or session is None or info is None:
             return
@@ -1048,6 +1120,7 @@ class PresentWidget(Page):
         if reason == "accepted" and self._session_access:
             access = self._session_access
             self._policy_check = (prediction, context, native.binding.source_sha256)
+            self._start_policy_latency(prediction, context, proposal_received_ns)
             self.policy_runner.submit(
                 lambda: self.agent.service.check_transition(access, session, value["target"])
             )
@@ -1092,6 +1165,7 @@ class PresentWidget(Page):
                     "Suggestion found; waiting for PowerPoint/session sync to finish."
                 )
                 return
+            self._policy_latency.pop(prediction.decision_id, None)
             self.policy.completed(prediction.decision_id, success=False, now_ns=time.monotonic_ns())
             self.policy_status.setText(self._policy_rejection_status(reason))
             return
@@ -1099,6 +1173,7 @@ class PresentWidget(Page):
         try:
             command_value = native.command(prediction.target, info)
         except PowerPointError:
+            self._policy_latency.pop(prediction.decision_id, None)
             self.policy.completed(prediction.decision_id, success=False, now_ns=time.monotonic_ns())
             self.policy_status.setText("That action is unavailable in the current PowerPoint view.")
             return
@@ -1108,6 +1183,8 @@ class PresentWidget(Page):
             prediction.target.action_id,
         )
         self._native_policy_context = context
+        self._policy_stage(prediction, "execution_started_ns", time.monotonic_ns())
+        self._log_policy_preflight(prediction, "pptx")
         self._native_guard.set()
         deadline = context.decision_segments[-1].capture_end_ns + 5_000_000_000
 
@@ -1130,6 +1207,7 @@ class PresentWidget(Page):
         )
 
     def _native_completed(self, kind: str, result: PowerPointActionResult) -> None:
+        context = self._native_policy_context
         self._native_policy_context = None
         metadata, self._native_completion = self._native_completion, None
         if metadata is None or self._powerpoint_binding is None or self._session is None:
@@ -1142,7 +1220,9 @@ class PresentWidget(Page):
         self._native_completion = None
         self._accepted_action_id = identifier
         if prediction is not None:
-            self.policy.completed(prediction.decision_id, success=True, now_ns=time.monotonic_ns())
+            completed_ns = time.monotonic_ns()
+            self._log_policy_completion(prediction, context, "pptx", completed_ns, "completed")
+            self.policy.completed(prediction.decision_id, success=True, now_ns=completed_ns)
             if before is not None:
                 self._policy_undo = (
                     self._session.id,
@@ -1362,6 +1442,7 @@ class PresentWidget(Page):
         )
 
     def _consider_policy(self, value: dict[str, Any]) -> None:
+        proposal_received_ns = time.monotonic_ns()
         self._deferred_agent_proposal = None
         if self._powerpoint_binding is not None:
             self._consider_native_policy(value)
@@ -1454,9 +1535,13 @@ class PresentWidget(Page):
             return
         access = self._session_access
         if not access:
+            self._policy_latency.pop(prediction.decision_id, None)
             self._policy_failed(0, "Sign in again before enabling automatic transitions.")
             return
         self._policy_check = (prediction, context, manifest.render_id)
+        self._start_policy_latency(prediction, context, proposal_received_ns)
+        if prediction.target.tool in {"next_slide", "previous_slide", "go_to_slide"}:
+            self.executor.prefetch_slide(prediction.target.slide_id)
         self.policy_runner.submit(
             lambda: self.agent.service.check_transition(access, session, value["target"])
         )
@@ -1538,11 +1623,14 @@ class PresentWidget(Page):
                     "Suggestion found; waiting for the slide/session sync to finish."
                 )
                 return
+            self._policy_latency.pop(prediction.decision_id, None)
             self.policy.completed(prediction.decision_id, success=False, now_ns=time.monotonic_ns())
             self.policy_status.setText(self._policy_rejection_status(reason))
             return
         self._policy_before = self._current_local_state()
         self._policy_execution = prediction
+        self._policy_stage(prediction, "execution_started_ns", time.monotonic_ns())
+        self._log_policy_preflight(prediction, "pdf")
         command_value = self._policy_command(prediction.target)
         command_value["instance_id"] = "policy:" + prediction.decision_id
 
@@ -1833,6 +1921,7 @@ class PresentWidget(Page):
         pending, self._policy_check = self._policy_check, None
         if pending is not None:
             prediction = pending[0]
+            self._policy_latency.pop(prediction.decision_id, None)
             self.policy.completed(prediction.decision_id, success=False, now_ns=time.monotonic_ns())
         self.policy_status.setText(message)
 
@@ -1971,6 +2060,10 @@ class PresentWidget(Page):
             )
             self.transcript_context.accept(event)
             self._revoke_native_guard_if_speech_changed()
+            # Process each recognized update as soon as Qt receives it. The 100 ms
+            # timer remains a recovery path for session/state changes, not a speech
+            # dispatch delay.
+            self._update_agent()
         kind = "Final" if event["final"] else "Partial"
         start = float(cast(float, event["start_seconds"]))
         end = float(cast(float, event["end_seconds"]))
@@ -2815,10 +2908,14 @@ class PresentWidget(Page):
             completion = self._native_completion
             self._native_completion = None
             self._native_guard.clear()
-            self._native_policy_context = None
+            context, self._native_policy_context = self._native_policy_context, None
             if completion is not None and completion[0] is not None:
+                prediction = completion[0]
+                self._log_policy_completion(
+                    prediction, context, "pptx", time.monotonic_ns(), "failed"
+                )
                 self.policy.completed(
-                    completion[0].decision_id,
+                    prediction.decision_id,
                     success=False,
                     now_ns=time.monotonic_ns(),
                 )
@@ -3089,6 +3186,7 @@ class PresentWidget(Page):
                 self.executor.cancel()
             if self._policy_check is not None:
                 prediction = self._policy_check[0]
+                self._policy_latency.pop(prediction.decision_id, None)
                 self.policy.completed(
                     prediction.decision_id,
                     success=False,
@@ -3161,9 +3259,9 @@ class PresentWidget(Page):
         if prediction is not None and result.instance_id == "policy:" + prediction.decision_id:
             self._policy_execution = None
             success = result.status == "completed"
-            self.policy.completed(
-                prediction.decision_id, success=success, now_ns=time.monotonic_ns()
-            )
+            completed_ns = time.monotonic_ns()
+            self._log_policy_completion(prediction, None, "pdf", completed_ns, result.status)
+            self.policy.completed(prediction.decision_id, success=success, now_ns=completed_ns)
             if success:
                 self._accepted_action_id = prediction.target.action_id
                 manifest = self.executor.manifest
