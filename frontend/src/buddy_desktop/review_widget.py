@@ -28,6 +28,7 @@ from buddy_desktop.config import AppConfig
 from buddy_desktop.library_service import LibraryAccessExpired
 from buddy_desktop.pdf_document import render
 from buddy_desktop.powerpoint_review import PowerPointReviewSession
+from buddy_desktop.powerpoint_session_binding import PowerPointSessionBinding
 from buddy_desktop.review_service import (
     ReviewAction,
     ReviewAnalysis,
@@ -189,6 +190,8 @@ class ReviewWidget(Page):
     activity_changed = Signal(bool)
     signin_requested = Signal()
     back_requested = Signal()
+    powerpoint_present_requested = Signal(object)
+    powerpoint_invalidated = Signal()
 
     def __init__(self, config: AppConfig, account: AccountWidget) -> None:
         super().__init__(
@@ -207,6 +210,7 @@ class ReviewWidget(Page):
         )
         self._cleanup_queue: list[PowerPointReviewSession] = []
         self._pptx_session: PowerPointReviewSession | None = None
+        self._present_on_load = False
         self._evidence_dialog: QDialog | None = None
         self.source_format = "pdf"
         self.generation = 0
@@ -293,6 +297,10 @@ class ReviewWidget(Page):
         self.open_powerpoint = QPushButton("Open saved PowerPoint")
         command(self.open_powerpoint, "external-link")
         self.open_powerpoint.clicked.connect(self.open_saved_powerpoint)
+        self.present_powerpoint = QPushButton("Present with Buddy")
+        command(self.present_powerpoint, "presentation")
+        self.present_powerpoint.clicked.connect(self.present_saved_powerpoint)
+        self.present_powerpoint.setEnabled(False)
         self.reset_powerpoint_zoom = QPushButton("Reset zoom")
         command(self.reset_powerpoint_zoom, "refresh-cw")
         self.reset_powerpoint_zoom.clicked.connect(self.reset_saved_powerpoint_zoom)
@@ -302,9 +310,10 @@ class ReviewWidget(Page):
         self.run_powerpoint.setAccessibleName("Run selected action in PowerPoint")
         command(self.run_powerpoint, "arrow-right", primary=True)
         self.run_powerpoint.clicked.connect(self.run_selected_powerpoint_action)
-        for button in (self.open_powerpoint, self.run_powerpoint):
+        for button in (self.open_powerpoint, self.present_powerpoint, self.run_powerpoint):
             button.hide()
         powerpoint_row.addWidget(self.open_powerpoint)
+        powerpoint_row.addWidget(self.present_powerpoint)
         powerpoint_row.addWidget(self.reset_powerpoint_zoom)
         powerpoint_row.addStretch(1)
         content_layout.addLayout(powerpoint_row)
@@ -444,19 +453,28 @@ class ReviewWidget(Page):
         self.account_changed()
 
     def set_deck(
-        self, deck_id: UUID, title: str, status: str = "uploaded", source_format: str = "pdf"
+        self,
+        deck_id: UUID,
+        title: str,
+        status: str = "uploaded",
+        source_format: str = "pdf",
+        *,
+        present: bool = False,
     ) -> None:
         if source_format not in {"pdf", "pptx"}:
             raise ServiceError("Unsupported presentation source format.")
         self.source_format = source_format
         self.deck_id, self.deck_title, self.deck_status = deck_id, title, status
         self.clear_private(keep_deck=True)
+        self._present_on_load = present
         self.pending_load = True
         if self.active:
             self.load()
 
     def activate(self, active: bool) -> None:
         self.active = active
+        if not active:
+            self._present_on_load = False
         if active and self.deck_id is not None and self.token() and self.pdf_content is None:
             if self.runner.busy:
                 if self.request_generation != self.generation:
@@ -511,6 +529,8 @@ class ReviewWidget(Page):
                 self.load()
 
     def clear_private(self, *, keep_deck: bool = False) -> None:
+        self._present_on_load = False
+        self.powerpoint_invalidated.emit()
         self._close_evidence()
         self.details_toggle.setChecked(False)
         if self._pptx_session is not None:
@@ -539,6 +559,7 @@ class ReviewWidget(Page):
         self.run_powerpoint.setEnabled(False)
         self.reset_powerpoint_zoom.setEnabled(False)
         self.open_powerpoint.setEnabled(False)
+        self.present_powerpoint.setEnabled(False)
         self.refresh_checks_button.setEnabled(False)
         self.pending_load = False
         if not keep_deck:
@@ -706,6 +727,7 @@ class ReviewWidget(Page):
             self._expand_summary(False)
             powerpoint = self.source_format == "pptx"
             self.open_powerpoint.setVisible(powerpoint)
+            self.present_powerpoint.setVisible(powerpoint)
             self.reset_powerpoint_zoom.setVisible(powerpoint)
             self.run_powerpoint.setVisible(powerpoint)
             self.open_powerpoint.setEnabled(
@@ -728,6 +750,13 @@ class ReviewWidget(Page):
         elif isinstance(result, RenderedPage):
             self.page_index, self.image = result.index, result.image
             self._display_page()
+            self.present_powerpoint.setEnabled(
+                self.source_format == "pptx"
+                and self._pptx_session is not None
+                and getattr(self._pptx_session, "binding", None) is not None
+                and self.analysis is not None
+                and self.analysis.publication == "published"
+            )
             if operation == "powerpoint_action":
                 self.notice.setText(
                     "PowerPoint action completed on the saved source. Execution validation "
@@ -761,6 +790,7 @@ class ReviewWidget(Page):
         if self.closing or identifier < 1 or self.request_generation != self.generation:
             return
         operation, self.pending_operation = self.pending_operation, ""
+        self._present_on_load = False
         if operation == "evidence":
             self.notice.setText("Validation evidence unavailable: " + message)
             self.open_evidence.setEnabled(self.evidence_choice.count() > 0)
@@ -799,6 +829,26 @@ class ReviewWidget(Page):
             return
         if self.source_format == "pptx" and self.action_rows:
             self.action_selected()
+        if self._present_on_load and self.active and not self.runner.busy:
+            if self.present_powerpoint.isEnabled():
+                self._present_on_load = False
+                self.present_saved_powerpoint()
+            elif (
+                self.open_powerpoint.isEnabled()
+                and self._pptx_session is None
+                and self.analysis is not None
+                and self.analysis.publication == "published"
+                and self.pdf_content
+                and self.token()
+            ):
+                self.open_saved_powerpoint()
+                return
+            else:
+                self._present_on_load = False
+                self.notice.setText(
+                    "Present requires a published analysis and a saved source "
+                    "that PowerPoint can open."
+                )
         self.activity_changed.emit(self.cleanup_runner.busy)
 
     def _cleanup_idle(self) -> None:
@@ -833,6 +883,24 @@ class ReviewWidget(Page):
                 index, powerpoint_image(session.open(content, analysis, index).png)
             )
         )
+
+    def present_saved_powerpoint(self) -> None:
+        session = self._pptx_session
+        binding = getattr(session, "binding", None)
+        if (
+            self.runner.busy
+            or self.closing
+            or not self.token()
+            or not isinstance(binding, PowerPointSessionBinding)
+            or self.analysis is None
+            or self.analysis.publication != "published"
+            or binding.analysis_id != str(self.analysis.id)
+            or binding.deck_id != str(self.deck_id)
+            or binding.source_revision != self.analysis.source_revision
+            or binding.source_sha256 != self.analysis.source_sha256
+        ):
+            return
+        self.powerpoint_present_requested.emit(binding)
 
     def run_selected_powerpoint_action(self) -> None:
         row = self.action_table.currentRow()

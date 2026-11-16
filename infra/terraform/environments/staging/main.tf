@@ -92,6 +92,8 @@ module "environment" {
   worker_text_targeting       = var.worker_text_targeting
   start_services              = var.start_services
   enable_speech               = var.enable_speech
+  enable_semantic_candidates  = var.enable_semantic_candidates
+  enable_presentation_agent   = var.enable_presentation_agent
   worker_start_services       = var.worker_start_services
   enable_terraform_monitoring = false
   alert_email_recipients      = var.alert_email_recipients
@@ -100,3 +102,13 @@ module "environment" {
   vpc_cidr                    = "10.40.0.0/16"
 }
 output "deployment" { value = module.environment }
+
+variable "enable_semantic_candidates" {
+  type    = bool
+  default = false
+}
+
+variable "enable_presentation_agent" {
+  type    = bool
+  default = false
+}

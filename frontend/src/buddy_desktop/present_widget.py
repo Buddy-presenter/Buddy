@@ -1,12 +1,18 @@
 """Local rendered-slide controls using the production six-command executor."""
 
+import hashlib
+import logging
 import sys
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 from queue import Empty
-from typing import cast
+from threading import Event
+from typing import Any, cast
+from uuid import UUID
 
 from PySide6.QtCore import QPointF, QRectF, QSettings, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import (
@@ -19,6 +25,7 @@ from PySide6.QtGui import (
     QPaintEvent,
     QPen,
     QScreen,
+    QStandardItemModel,
 )
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -36,6 +43,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from buddy_desktop.agent_loop import AgentLoop
+from buddy_desktop.agent_service import AgentService
 from buddy_desktop.config import AppConfig
 from buddy_desktop.fullscreen import FullscreenPresentation
 from buddy_desktop.library_service import LibraryAccessExpired
@@ -48,22 +57,50 @@ from buddy_desktop.powerpoint_contract import (
     PowerPointFrame,
 )
 from buddy_desktop.powerpoint_controls import PowerPointControls
+from buddy_desktop.powerpoint_present import PowerPointPresent
+from buddy_desktop.powerpoint_session_binding import PowerPointSessionBinding
 from buddy_desktop.presentation_session_service import (
     PresentationSession,
     PresentationSessionService,
     SessionConflict,
     SessionState,
 )
+from buddy_desktop.review_service import ReviewAnalysis, ReviewService
 from buddy_desktop.services import ServiceError
 from buddy_desktop.session_events import SessionEvent, SessionEventStream
-from buddy_desktop.slide_contract import Region
+from buddy_desktop.slide_contract import ContractError, Region, parse_action
 from buddy_desktop.slide_executor import Completion, SlideExecutor
 from buddy_desktop.slide_surface import SlideSurface
 from buddy_desktop.speech import SpeechController
 from buddy_desktop.tasks import TaskRunner
-from buddy_desktop.transcript_context import TranscriptContext
+from buddy_desktop.transcript_context import ContextSnapshot, TranscriptContext
+from buddy_desktop.transition_policy import (
+    VERSION as POLICY_VERSION,
+)
+from buddy_desktop.transition_policy import (
+    Prediction,
+    TransitionPolicy,
+)
+from buddy_desktop.transition_policy import (
+    Target as PolicyTarget,
+)
+from buddy_desktop.transition_policy import (
+    View as PolicyView,
+)
 from buddy_desktop.views import Page, StatusLabel
 from buddy_desktop.visuals import BuddyMark, command
+
+logger = logging.getLogger(__name__)
+
+
+def proposal_context(value: dict[str, Any], live: ContextSnapshot) -> ContextSnapshot | None:
+    """Bind a result to the snapshot it analyzed while allowing normal continuation."""
+    submitted = value.get("_client_context")
+    if submitted is None:
+        return live
+    if not isinstance(submitted, ContextSnapshot) or not submitted.matches_decision(live):
+        return None
+    return submitted
 
 
 class SelectionSurface(SlideSurface):
@@ -151,6 +188,7 @@ class PresentWidget(Page):
 
     session_access_expired = Signal(str)
     session_event_received = Signal(object)
+    transition_observed = Signal(object)
 
     def __init__(self, config: AppConfig, settings: QSettings) -> None:
         super().__init__("Present", "")
@@ -189,6 +227,22 @@ class PresentWidget(Page):
         self.microphone = MicrophoneController(self)
         self.speech = SpeechController(self)
         self.transcript_context = TranscriptContext()
+        self.agent = AgentLoop(AgentService(config), self, self.transcript_context.snapshot)
+        self.policy = TransitionPolicy()
+        self.agent.unavailable.connect(self.policy.clear_pending)
+        self.policy_runner = TaskRunner(self)
+        self.policy_runner.succeeded.connect(self._policy_checked)
+        self.policy_runner.failed.connect(self._policy_failed)
+        self._policy_check: tuple[Prediction, ContextSnapshot, str] | None = None
+        self._deferred_agent_proposal: tuple[dict[str, Any], int] | None = None
+        self._deferred_transition_check: tuple[Prediction, ContextSnapshot, str] | None = None
+        self._policy_execution: Prediction | None = None
+        self._policy_before: SessionState | None = None
+        self._policy_undo: tuple[str, str, SessionState] | None = None
+        self._policy_undo_restoring = False
+        self._pending_native_undo = False
+        self._accepted_action_id: str | None = None
+        self._agent_session_id: str | None = None
         self._context_connected = False
         self._context_expiry = QTimer(self)
         self._context_expiry.setInterval(1000)
@@ -219,6 +273,18 @@ class PresentWidget(Page):
         self._queued_powerpoint_operation: tuple[str, str | None] | None = None
         self._powerpoint_path: str | None = None
         self._powerpoint_info: PresentationInfo | None = None
+        self._powerpoint_binding: PowerPointSessionBinding | None = None
+        self._native_present: PowerPointPresent | None = None
+        self._native_guard = Event()
+        self._native_policy_context: ContextSnapshot | None = None
+        self._generated_analysis: ReviewAnalysis | None = None
+        self._generated_request: tuple[str, int, str, str | None] | None = None
+        self.generated_runner = TaskRunner(self)
+        self.generated_runner.succeeded.connect(self._generated_loaded)
+        self.generated_runner.failed.connect(self._generated_failed)
+        self._native_completion: (
+            tuple[Prediction | None, SessionState | None, str | None] | None
+        ) = None
         self._powerpoint_verified = False
         self._powerpoint_poll = QTimer(self)
         self._powerpoint_poll.setInterval(500)
@@ -420,7 +486,7 @@ class PresentWidget(Page):
         self.speech_language.currentIndexChanged.connect(lambda _index: self.microphone.stop())
         microphone_layout.addWidget(self.speech_language)
         self.speech_status = QLabel(
-            "Saved PDF sessions: audio is sent to Deepgram (EU). "
+            "Saved PDF and PowerPoint sessions: audio is sent to Deepgram (EU). "
             "Transcript text is available for session sync for five minutes."
         )
         self.speech_status.setTextFormat(Qt.TextFormat.PlainText)
@@ -439,6 +505,85 @@ class PresentWidget(Page):
         self.microphone.status_changed.connect(self._microphone_status_changed)
         self.microphone.devices_changed.connect(self._microphone_devices_changed)
         self.body.addWidget(self.microphone_panel)
+        self.agent_enabled = QCheckBox("Live suggestions")
+        self.agent_enabled.setAccessibleName("Enable live presentation suggestions")
+        self.agent_enabled.toggled.connect(self.agent.set_enabled)
+        self.agent_enabled.toggled.connect(self._suggestions_toggled)
+        microphone_layout.addWidget(self.agent_enabled)
+        agent_privacy = QLabel(
+            "When enabled, recognized speech and slide summaries are sent to Cohere. "
+            "Suggestions leave slide changes manual unless you enable automatic transitions."
+        )
+        agent_privacy.setWordWrap(True)
+        agent_privacy.setObjectName("muted")
+        microphone_layout.addWidget(agent_privacy)
+        self.agent_status = QLabel("Suggestions off")
+        self.agent_status.setWordWrap(True)
+        self.agent_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.agent_status.setAccessibleName("Live suggestion status")
+        microphone_layout.addWidget(self.agent_status)
+        self.agent_proposal = QLabel("")
+        self.agent_proposal.setWordWrap(True)
+        self.agent_proposal.setTextFormat(Qt.TextFormat.PlainText)
+        self.agent_proposal.setAccessibleName("Latest presentation suggestion")
+        microphone_layout.addWidget(self.agent_proposal)
+        self.agent.status.connect(self.agent_status.setText)
+        self.agent.proposed.connect(self._agent_proposed)
+        policy_row = QHBoxLayout()
+        self.policy_enabled = QCheckBox("Automatic transitions")
+        self.policy_enabled.setAccessibleName("Allow automatic presentation transitions")
+        self.policy_enabled.setToolTip(
+            "Uses clear speech to run one eligible action from the current presentation. "
+            "Manual controls always take priority."
+        )
+        self.policy_enabled.toggled.connect(self._policy_toggled)
+        microphone_layout.addWidget(self.policy_enabled)
+        self.policy_pause_button = QPushButton("Resume automatic moves")
+        self.policy_pause_button.setAccessibleName("Resume automatic moves")
+        self.policy_pause_button.setToolTip("Resume automatic moves (Ctrl+Shift+P)")
+        self.policy_pause_button.setShortcut("Ctrl+Shift+P")
+        self.policy_pause_button.setEnabled(False)
+        self.policy_pause_button.clicked.connect(self._toggle_policy_pause)
+        microphone_layout.addWidget(self.policy_pause_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.policy_undo_button = QPushButton("Undo automatic move")
+        command(self.policy_undo_button, "rotate-ccw")
+        self.policy_undo_button.setShortcut("Ctrl+Shift+Z")
+        self.policy_undo_button.setEnabled(False)
+        self.policy_undo_button.clicked.connect(self._undo_policy_move)
+        policy_row.addWidget(self.policy_undo_button)
+        policy_row.addStretch()
+        microphone_layout.addLayout(policy_row)
+        self.policy_status = StatusLabel("Automatic transitions off")
+        self.policy_status.setWordWrap(True)
+        self.policy_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.policy_status.setAccessibleName("Automatic transition status")
+        microphone_layout.addWidget(self.policy_status)
+        self.generated_actions = QComboBox()
+        self.generated_actions.setAccessibleName("Saved analysis actions for the current slide")
+        microphone_layout.addWidget(self.generated_actions)
+        generated_row = QHBoxLayout()
+        self.generated_reload = QPushButton("Load saved actions")
+        self.generated_reload.setAccessibleName("Load saved analysis actions")
+        self.generated_reload.setToolTip("Load eligible saved actions for the current slide")
+        self.generated_reload.clicked.connect(lambda: self._load_generated(None))
+        self.generated_apply = QPushButton("Apply saved action")
+        self.generated_apply.setAccessibleName("Apply selected saved action")
+        self.generated_apply.setToolTip(
+            "Apply the selected validated action to the current presentation"
+        )
+        self.generated_apply.clicked.connect(self._apply_generated)
+        self.generated_actions.currentIndexChanged.connect(lambda _: self._refresh_generated())
+        generated_row.addWidget(self.generated_reload)
+        generated_row.addWidget(self.generated_apply)
+        microphone_layout.addLayout(generated_row)
+        self.generated_status = StatusLabel("Load current analysis to choose an action.")
+        self.generated_status.setWordWrap(True)
+        self.generated_status.setTextFormat(Qt.TextFormat.PlainText)
+        microphone_layout.addWidget(self.generated_status)
+        self._agent_tick = QTimer(self)
+        self._agent_tick.setInterval(100)
+        self._agent_tick.timeout.connect(self._update_agent)
+        self._agent_tick.start()
         self.powerpoint_open_button = QPushButton("Open PowerPoint…")
         command(self.powerpoint_open_button, "presentation")
         self.powerpoint_open_button.setAccessibleName("Open a PowerPoint presentation")
@@ -510,6 +655,8 @@ class PresentWidget(Page):
         self.session_service = PresentationSessionService(config)
 
     def set_account_identity(self, account_id: str | None, access: str | None) -> None:
+        if account_id != self._account_id:
+            self.invalidate_saved_powerpoint()
         if account_id != self._account_id or not access:
             self.microphone.stop()
         if account_id != self._account_id:
@@ -590,10 +737,12 @@ class PresentWidget(Page):
         if message != "Microphone on":
             self.speech.stop()
             self.speech_status.setText(
-                "Transcription off. During a saved PDF session, audio is sent to Deepgram (EU) "
+                "Transcription off. Saved presentation audio is sent to Deepgram (EU) "
                 "and transcript text is available for session sync for five minutes."
             )
-        if message == "Microphone on" and self._powerpoint_info is None:
+        if message == "Microphone on" and (
+            self._powerpoint_info is None or self._powerpoint_binding is not None
+        ):
             self._microphone_pdf_generation += 1
             self._microphone_pdf_poll.start()
             self._microphone_pdf_deadline.start()
@@ -611,10 +760,18 @@ class PresentWidget(Page):
         if (
             not self._closing
             and self.microphone.enabled
-            and self._powerpoint_info is None
+            and (self._powerpoint_info is None or self._powerpoint_binding is not None)
+            and (self._powerpoint_info is None or self._powerpoint_verified)
             and self._session is not None
             and self._session.status == "active"
             and self._session_access
+            and self._session_pending_state is None
+            and (
+                self._powerpoint_binding is None
+                or (
+                    self._powerpoint_verified and self._session.state == self._current_local_state()
+                )
+            )
         ):
             self.speech.start(
                 self.config,
@@ -625,8 +782,8 @@ class PresentWidget(Page):
             )
         elif self._powerpoint_info is not None:
             self.speech_status.setText(
-                "PowerPoint microphone capture is local; "
-                "transcription requires a saved PDF session."
+                "Open a saved PowerPoint from Review and start its synced session "
+                "before using transcription."
             )
 
     @Slot(int)
@@ -644,7 +801,1160 @@ class PresentWidget(Page):
     def _context_connection_changed(self, generation: int, state: str) -> None:
         if generation == self.session_events.generation:
             self._context_connected = state == "connected"
-            self.transcript_context.invalidate()
+            self._invalidate_transcript_context()
+
+    @Slot()
+    def _update_agent(self) -> None:
+        session = self._session if isinstance(self._session, PresentationSession) else None
+        identifier = session.id if session is not None else None
+        if identifier != self._agent_session_id:
+            self._agent_session_id = identifier
+            self.agent_enabled.setChecked(False)
+            self._policy_undo = None
+            self._accepted_action_id = None
+            self.policy_undo_button.setEnabled(False)
+        connected = (
+            not self._closing
+            and session is not None
+            and session.status == "active"
+            and self._session_access is not None
+            and (
+                self._powerpoint_info is None
+                or (self._powerpoint_binding is not None and self._powerpoint_verified)
+            )
+        )
+        synced = (
+            connected
+            and session is not None
+            and self._session_pending_state is None
+            and (self._powerpoint_binding is None or session.state == self._current_local_state())
+        )
+        self.agent_enabled.setEnabled(connected)
+        # A temporary connection/verification gap pauses proposals, but it must not
+        # silently revoke the presenter's opt-in. Session identity changes below reset
+        # consent for a genuinely new presentation.
+        if self._powerpoint_info is not None and self._powerpoint_binding is None:
+            # A locally opened Office show has no saved, owner-checked session contract.
+            self.policy_enabled.setChecked(False)
+        self.policy_enabled.setEnabled(
+            (synced or self.policy.enabled) and self.agent_enabled.isChecked()
+        )
+        if not self.agent_enabled.isChecked():
+            self.policy_enabled.setChecked(False)
+        elif self.policy.enabled and not synced:
+            self.policy_status.setText(
+                "Automatic actions on; waiting for the presentation to sync."
+            )
+        self.policy_pause_button.setEnabled(self.policy.enabled or self.policy_enabled.isEnabled())
+        self._retry_deferred_policy()
+        context = self.transcript_context.snapshot()
+        self.agent.update(
+            self._session_access if synced else None,
+            session,
+            context if synced else replace(context, fresh=False),
+        )
+
+    @Slot(bool)
+    def _suggestions_toggled(self, enabled: bool) -> None:
+        if not enabled and hasattr(self, "policy_enabled"):
+            self.policy_enabled.setChecked(False)
+
+    @Slot(bool)
+    def _policy_toggled(self, enabled: bool) -> None:
+        label = "Pause automatic moves" if enabled else "Resume automatic moves"
+        self.policy_pause_button.setText(label)
+        self.policy_pause_button.setAccessibleName(label)
+        self.policy_pause_button.setToolTip(f"{label} (Ctrl+Shift+P)")
+        self._native_guard.clear()
+        self._native_policy_context = None
+        self.policy.set_enabled(enabled)
+        self._policy_check = None
+        self._deferred_agent_proposal = None
+        self._deferred_transition_check = None
+        self._invalidate_transcript_context()
+        if not enabled and self._policy_execution is not None:
+            self.executor.cancel()
+        self.policy_status.setText(
+            "Automatic actions on. Clear navigation and eligible speech-matched actions can run; "
+            "ambiguous speech is skipped."
+            if enabled
+            else "Automatic transitions paused. Manual controls are available."
+        )
+        self._queue_session_state()
+
+    @Slot()
+    def _toggle_policy_pause(self) -> None:
+        if self.policy.enabled:
+            self.policy_enabled.setChecked(False)
+        elif self.policy_enabled.isEnabled():
+            self.policy_enabled.setChecked(True)
+
+    def _policy_command(self, target: PolicyTarget) -> dict[str, object]:
+        manifest, slide = self.executor.manifest, self.surface.slide
+        if manifest is None or slide is None:
+            raise ValueError
+        index = manifest.index(target.slide_id)
+        if target.tool in {"next_slide", "previous_slide"}:
+            if index - self.executor.current_index != (1 if target.tool == "next_slide" else -1):
+                raise ValueError
+        elif target.tool != "go_to_slide" and target.slide_id != slide.slide_id:
+            raise ValueError
+        params: dict[str, object] = {}
+        if target.tool == "go_to_slide":
+            params["target_slide_id"] = target.slide_id
+        elif target.region is not None:
+            params["region"] = dict(zip(("x", "y", "width", "height"), target.region, strict=True))
+        command_value: dict[str, object] = {
+            "version": "1.1",
+            "instance_id": "policy:check",
+            "purpose": "Accepted live transition.",
+            "deck_id": manifest.deck_id,
+            "render_id": manifest.render_id,
+            "slide_id": slide.slide_id,
+            "type": target.tool,
+            "params": params,
+        }
+        parse_action(command_value, manifest, self.executor.current_index)
+        return command_value
+
+    def _invalidate_transcript_context(self) -> None:
+        if hasattr(self, "_native_guard"):
+            self._native_guard.clear()
+            self._native_policy_context = None
+        self.transcript_context.invalidate()
+
+    def _native_focus_view(self) -> str:
+        focus = self._native_present.focus if self._native_present else None
+        return (
+            focus.tool
+            if focus is not None and focus.tool in {"zoom_region", "highlight_region"}
+            else "slide"
+        )
+
+    def _native_focus_region(self) -> dict[str, float] | None:
+        focus = self._native_present.focus if self._native_present else None
+        return (
+            dict(zip(("x", "y", "width", "height"), focus.region, strict=True))
+            if focus is not None and focus.region is not None
+            else None
+        )
+
+    def _native_manual_intent(self) -> None:
+        self._pending_native_undo = False
+        if not hasattr(self, "policy"):
+            return
+        self._native_guard.clear()
+        self._native_policy_context = None
+        prediction = (
+            self._policy_check[0]
+            if self._policy_check is not None
+            else self._native_completion[0]
+            if self._native_completion is not None
+            else None
+        )
+        if prediction is not None:
+            self.policy.completed(prediction.decision_id, success=False, now_ns=time.monotonic_ns())
+        self.policy.reset(manual=True, now_ns=time.monotonic_ns())
+        self._policy_check = None
+        self._policy_undo = None
+        self._accepted_action_id = None
+        self.policy_undo_button.setEnabled(False)
+        self._invalidate_transcript_context()
+
+    def _consider_native_policy(self, value: dict[str, Any]) -> None:
+        native, session, info = self._native_present, self._session, self._powerpoint_info
+        if not self.policy.enabled or native is None or session is None or info is None:
+            return
+        context = proposal_context(value, self.transcript_context.snapshot())
+        if context is None:
+            self.policy_status.setText("Speech changed before the action could run; repeat it.")
+            return
+        busy_reasons = []
+        if self.powerpoint_runner.busy:
+            busy_reasons.append("powerpoint_operation")
+        if self.session_runner.busy:
+            busy_reasons.append("session_sync")
+        if self._stream_snapshot is not None:
+            busy_reasons.append("session_event")
+        if self._session_pending_state is not None:
+            busy_reasons.append("pending_session_state")
+        if (
+            busy_reasons
+            and not self.policy_runner.busy
+            and self._policy_check is None
+            and self._native_completion is None
+        ):
+            self._deferred_agent_proposal = (value, time.monotonic_ns())
+            logger.warning(
+                "presentation_policy event=proposal_deferred reason=%s",
+                ",".join(busy_reasons),
+            )
+            self.policy_status.setText(
+                "Suggestion found; waiting for PowerPoint/session sync to finish."
+            )
+            return
+        state = self._current_local_state()
+        if state is None:
+            self.policy.clear_pending()
+            return
+        try:
+            prediction = Prediction.from_validated(value, context)
+            eligible: tuple[PolicyTarget, ...] = ()
+            if prediction.target.tool != "no_action":
+                native.command(prediction.target, info)
+                eligible = (prediction.target,)
+            reason = self.policy.consider(
+                prediction,
+                context,
+                PolicyView(
+                    session.id,
+                    session.analysis_version_id,
+                    native.binding.source_sha256,
+                    "pptx",
+                    session.state_version,
+                    PolicyTarget.parse(
+                        {
+                            "tool": state.focus_view,
+                            "slide_id": state.active_slide_id,
+                            "region": state.focus_region,
+                        }
+                    ),
+                    eligible,
+                    busy=self.powerpoint_runner.busy
+                    or self.session_runner.busy
+                    or self.policy_runner.busy
+                    or self._stream_snapshot is not None
+                    or self._session_pending_state is not None,
+                    connected=self._context_connected
+                    and self._powerpoint_verified
+                    and self.microphone.enabled
+                    and session.state is not None
+                    and session.state.autonomy_mode == "autonomous",
+                ),
+                now_ns=time.monotonic_ns(),
+                today=date.today(),
+            )
+        except (ValueError, KeyError, TypeError, IndexError, PowerPointError):
+            self.policy.clear_pending()
+            self.policy_status.setText("Suggestion is unavailable for the current Office source.")
+            return
+        if reason != "accepted":
+            self._log_policy_rejection(prediction, context, reason)
+        self.policy_status.setText(
+            "Checking the current PowerPoint action…"
+            if reason == "accepted"
+            else self._policy_rejection_message(reason)
+        )
+        if reason == "accepted" and self._session_access:
+            access = self._session_access
+            self._policy_check = (prediction, context, native.binding.source_sha256)
+            self.policy_runner.submit(
+                lambda: self.agent.service.check_transition(access, session, value["target"])
+            )
+
+    def _native_policy_checked(
+        self, prediction: Prediction, context: ContextSnapshot, source: str
+    ) -> None:
+        native, session, info = self._native_present, self._session, self._powerpoint_info
+        reason = None
+        if native is None or session is None or info is None:
+            reason = "powerpoint_or_session_missing"
+        elif not self.policy.enabled or self._closing:
+            reason = "automatic_actions_paused_or_closing"
+        elif not self._context_connected or not self._powerpoint_verified:
+            reason = "powerpoint_session_disconnected"
+        elif not self.microphone.enabled:
+            reason = "microphone_stopped"
+        elif session.state_version != prediction.state_version:
+            reason = "session_state_version_changed"
+        elif native.binding.source_sha256 != source:
+            reason = "powerpoint_source_changed"
+        else:
+            reason = context.decision_mismatch_reason(self.transcript_context.snapshot())
+            if reason is None and (
+                self.powerpoint_runner.busy
+                or self.session_runner.busy
+                or self._session_pending_state is not None
+            ):
+                reason = "powerpoint_or_session_sync_in_progress"
+        if reason is not None:
+            logger.warning(
+                "presentation_policy event=execution_check_rejected decision_id=%s "
+                "reason=%s state_version_expected=%d state_version_current=%s",
+                prediction.decision_id,
+                reason,
+                prediction.state_version,
+                session.state_version if session is not None else "missing",
+            )
+            if reason == "powerpoint_or_session_sync_in_progress":
+                self._deferred_transition_check = (prediction, context, source)
+                self.policy_status.setText(
+                    "Suggestion found; waiting for PowerPoint/session sync to finish."
+                )
+                return
+            self.policy.completed(prediction.decision_id, success=False, now_ns=time.monotonic_ns())
+            self.policy_status.setText(self._policy_rejection_status(reason))
+            return
+        assert native is not None and session is not None and info is not None
+        try:
+            command_value = native.command(prediction.target, info)
+        except PowerPointError:
+            self.policy.completed(prediction.decision_id, success=False, now_ns=time.monotonic_ns())
+            self.policy_status.setText("That action is unavailable in the current PowerPoint view.")
+            return
+        self._native_completion = (
+            prediction,
+            self._current_local_state(),
+            prediction.target.action_id,
+        )
+        self._native_policy_context = context
+        self._native_guard.set()
+        deadline = context.decision_segments[-1].capture_end_ns + 5_000_000_000
+
+        def guard() -> bool:
+            return (
+                self._native_guard.is_set()
+                and self.policy.enabled
+                and time.monotonic_ns() <= deadline
+                and self._session is not None
+                and self._session.id == session.id
+                and self._session.state_version == session.state_version
+            )
+
+        self._submit_powerpoint_task(
+            "policy",
+            info.path,
+            lambda: native.execute(
+                self.powerpoint, command_value, identifier=prediction.target.action_id, guard=guard
+            ),
+        )
+
+    def _native_completed(self, kind: str, result: PowerPointActionResult) -> None:
+        self._native_policy_context = None
+        metadata, self._native_completion = self._native_completion, None
+        if metadata is None or self._powerpoint_binding is None or self._session is None:
+            return
+        prediction, before, identifier = metadata
+        # Keep completion metadata until attach finishes, so observed policy movement
+        # is not mistaken for a new manual Office navigation event.
+        self._native_completion = metadata
+        self._attach_powerpoint_info(result.info)
+        self._native_completion = None
+        self._accepted_action_id = identifier
+        if prediction is not None:
+            self.policy.completed(prediction.decision_id, success=True, now_ns=time.monotonic_ns())
+            if before is not None:
+                self._policy_undo = (
+                    self._session.id,
+                    self._powerpoint_binding.source_sha256,
+                    before,
+                )
+                self.policy_undo_button.setEnabled(True)
+            self.transition_observed.emit(
+                {
+                    "policy_version": POLICY_VERSION,
+                    "source_format": "pptx",
+                    "decision_id": prediction.decision_id,
+                    "target": {
+                        "tool": prediction.target.tool,
+                        "slide_id": prediction.target.slide_id,
+                        "action_id": prediction.target.action_id,
+                        "region": self._native_focus_region(),
+                    },
+                    "completed_ns": time.monotonic_ns(),
+                    "animated": None,
+                    "calibration_sha256": self.policy.calibration_sha256,
+                    "settings_sha256": self.policy.settings_sha256,
+                }
+            )
+        self._queue_session_state()
+        self.generated_status.setText(
+            "Native action completed."
+            if kind != "undo_policy"
+            else "Previous native view restored."
+        )
+        self._refresh()
+
+    def _load_generated(self, identifier: str | None) -> None:
+        session, access, state = self._session, self._session_access, self._current_local_state()
+        if (
+            self._closing
+            or session is None
+            or access is None
+            or state is None
+            or self.generated_runner.busy
+        ):
+            return
+        self._generated_request = (
+            session.id,
+            session.state_version,
+            state.active_slide_id,
+            identifier,
+        )
+        source_format = "pptx" if self._powerpoint_binding else "pdf"
+        service = ReviewService(self.config, access)
+        self.generated_status.setText("Checking the current saved analysis…")
+        self.generated_runner.submit(lambda: service.analysis(UUID(session.deck_id), source_format))
+        self._refresh_generated()
+
+    def _generated_failed(self, _request: int, message: str) -> None:
+        self._generated_request = None
+        self._generated_analysis = None
+        self.generated_status.setText(message)
+        self._refresh_generated()
+
+    def _generated_loaded(self, _request: int, analysis: object) -> None:
+        pending, self._generated_request = self._generated_request, None
+        session, state = self._session, self._current_local_state()
+        if (
+            pending is None
+            or session is None
+            or state is None
+            or self._closing
+            or not isinstance(analysis, ReviewAnalysis)
+        ):
+            return
+        session_id, version, slide_id, identifier = pending
+        if (
+            session.id != session_id
+            or session.state_version != version
+            or state.active_slide_id != slide_id
+            or str(analysis.id) != session.analysis_version_id
+            or str(analysis.deck_id) != session.deck_id
+        ):
+            self._generated_failed(0, "Presentation changed. Reload its saved actions.")
+            return
+        if self._powerpoint_binding is not None:
+            binding = self._powerpoint_binding
+            if (
+                analysis.source_format != "pptx"
+                or analysis.source_sha256 != binding.source_sha256
+                or analysis.source_revision != binding.source_revision
+                or analysis.render_id != binding.render_id
+                or not analysis.office_safe
+            ):
+                self._generated_failed(0, "The PowerPoint source changed. Reopen it from Library.")
+                return
+            self._powerpoint_binding = replace(binding, slides=analysis.slides)
+            if self._native_present is not None:
+                self._native_present.binding = self._powerpoint_binding
+        else:
+            manifest = self.executor.manifest
+            if (
+                manifest is None
+                or manifest.pdf_content is None
+                or analysis.source_format != "pdf"
+                or hashlib.sha256(manifest.pdf_content).hexdigest() != analysis.source_sha256
+            ):
+                self._generated_failed(0, "The PDF source changed. Reopen it from Library.")
+                return
+        self._generated_analysis = analysis
+        self.generated_status.setText(
+            "Choose a saved action. Unavailable actions cannot be applied."
+        )
+        self._refresh_generated()
+        if identifier is None:
+            return
+        slide = next((s for s in analysis.slides if s.slide_id == slide_id), None)
+        action = (
+            next((a for a in slide.actions if a.instance_id == identifier), None) if slide else None
+        )
+        if (
+            action is None
+            or not action.usable
+            or action.state != "validated"
+            or (analysis.source_format == "pdf" and not action.semantic_verified)
+        ):
+            self.generated_status.setText("This action is no longer eligible.")
+            return
+        if self._native_present is not None and self._powerpoint_info is not None:
+            if self.powerpoint_runner.busy:
+                self.generated_status.setText(
+                    "PowerPoint is busy. Apply the action again when ready."
+                )
+                return
+            self._native_manual_intent()
+            native, info = self._native_present, self._powerpoint_info
+            try:
+                command_value = native.saved_command(identifier, info)
+            except PowerPointError as exc:
+                self.generated_status.setText(str(exc))
+                return
+            self._native_completion = (None, state, identifier)
+            self._native_guard.set()
+            self._submit_powerpoint_task(
+                "saved_action",
+                info.path,
+                lambda: native.execute(
+                    self.powerpoint,
+                    command_value,
+                    identifier=identifier,
+                    guard=self._native_guard.is_set,
+                ),
+            )
+        else:
+            self._accepted_action_id = identifier
+            self.send(
+                action.action_type,
+                {"region": dict(zip(("x", "y", "width", "height"), action.region, strict=True))},
+            )
+            # send() clears manual accepted state; retain this exact saved identity.
+            self._accepted_action_id = identifier
+            self._queue_session_state()
+
+    def _apply_generated(self) -> None:
+        identifier = self.generated_actions.currentData()
+        if isinstance(identifier, str):
+            self._load_generated(identifier)
+
+    def _refresh_generated(self) -> None:
+        if not hasattr(self, "generated_actions"):
+            return
+        session = self._session
+        state = self._current_local_state()
+        analysis = self._generated_analysis
+        key = (
+            (session.id, session.analysis_version_id, state.active_slide_id, analysis)
+            if session
+            and state
+            and analysis
+            and str(analysis.id) == session.analysis_version_id
+            and str(analysis.deck_id) == session.deck_id
+            else None
+        )
+        if getattr(self, "_generated_key", None) != key:
+            self._generated_key = key
+            self.generated_actions.clear()
+            if key and analysis is not None and state is not None:
+                slide = next(
+                    (s for s in analysis.slides if s.slide_id == state.active_slide_id), None
+                )
+                for action in slide.actions if slide else ():
+                    eligible = (
+                        action.usable
+                        and action.state == "validated"
+                        and (analysis.source_format == "pptx" or action.semantic_verified)
+                    )
+                    label = f"{action.purpose} · {action.action_type}" + (
+                        ""
+                        if eligible
+                        else " · unavailable: " + ", ".join(action.reasons or (action.state,))
+                    )
+                    self.generated_actions.addItem(label, action.instance_id if eligible else None)
+                    if not eligible:
+                        item = cast(QStandardItemModel, self.generated_actions.model()).item(
+                            self.generated_actions.count() - 1
+                        )
+                        if item is not None:
+                            item.setEnabled(False)
+        available = (
+            session is not None
+            and session.status == "active"
+            and self._session_access is not None
+            and state is not None
+            and not self._closing
+        )
+        self.generated_reload.setEnabled(available and not self.generated_runner.busy)
+        self.generated_apply.setEnabled(
+            available
+            and not self.generated_runner.busy
+            and isinstance(self.generated_actions.currentData(), str)
+        )
+
+    def _consider_policy(self, value: dict[str, Any]) -> None:
+        self._deferred_agent_proposal = None
+        if self._powerpoint_binding is not None:
+            self._consider_native_policy(value)
+            return
+        session, manifest = self._session, self.executor.manifest
+        if not self.policy.enabled or session is None or manifest is None:
+            return
+        context = proposal_context(value, self.transcript_context.snapshot())
+        state = self._current_local_state()
+        if context is None:
+            self.policy_status.setText("Speech changed before the action could run; repeat it.")
+            return
+        if state is None or self._powerpoint_info is not None:
+            return
+        busy_reasons = []
+        if self.executor.busy:
+            busy_reasons.append("slide_executor")
+        if self.session_runner.busy:
+            busy_reasons.append("session_sync")
+        if self._session_pending_state is not None:
+            busy_reasons.append("pending_session_state")
+        if self._session_restore_state is not None:
+            busy_reasons.append("session_restore")
+        if self._stream_snapshot is not None:
+            busy_reasons.append("session_event")
+        if (
+            busy_reasons
+            and not self.policy_runner.busy
+            and self._policy_check is None
+            and self._policy_execution is None
+        ):
+            self._deferred_agent_proposal = (value, time.monotonic_ns())
+            logger.warning(
+                "presentation_policy event=proposal_deferred reason=%s",
+                ",".join(busy_reasons),
+            )
+            self.policy_status.setText(
+                "Suggestion found; waiting for the slide/session sync to finish."
+            )
+            return
+        try:
+            prediction = Prediction.from_validated(value, context)
+            eligible: tuple[PolicyTarget, ...] = ()
+            if prediction.target.tool != "no_action":
+                self._policy_command(prediction.target)
+                eligible = (prediction.target,)
+            reason = self.policy.consider(
+                prediction,
+                context,
+                PolicyView(
+                    session.id,
+                    session.analysis_version_id,
+                    manifest.deck_id + ":" + manifest.render_id,
+                    "pdf",
+                    session.state_version,
+                    PolicyTarget.parse(
+                        {
+                            "tool": state.focus_view,
+                            "slide_id": state.active_slide_id,
+                            "region": state.focus_region,
+                        }
+                    ),
+                    eligible,
+                    busy=self.executor.busy
+                    or self.session_runner.busy
+                    or self.policy_runner.busy
+                    or self._session_pending_state is not None
+                    or self._session_restore_state is not None
+                    or self._stream_snapshot is not None,
+                    connected=self._context_connected
+                    and self.microphone.enabled
+                    and session.state is not None
+                    and session.state.autonomy_mode == "autonomous",
+                ),
+                now_ns=time.monotonic_ns(),
+                today=date.today(),
+            )
+        except (ValueError, TypeError, KeyError, IndexError, ContractError):
+            self.policy.clear_pending()
+            self.policy_status.setText("Suggestion cannot execute in the current view.")
+            return
+        if reason != "accepted":
+            self._log_policy_rejection(prediction, context, reason)
+        self.policy_status.setText(
+            "Checking the selected action…"
+            if reason == "accepted"
+            else self._policy_rejection_message(reason)
+        )
+        if reason != "accepted":
+            return
+        access = self._session_access
+        if not access:
+            self._policy_failed(0, "Sign in again before enabling automatic transitions.")
+            return
+        self._policy_check = (prediction, context, manifest.render_id)
+        self.policy_runner.submit(
+            lambda: self.agent.service.check_transition(access, session, value["target"])
+        )
+        self.policy_status.setText("Checking the current action before moving…")
+
+    @staticmethod
+    def _policy_rejection_message(reason: str) -> str:
+        labels = {
+            "disabled": "Suggestion found; automatic transitions are off, so it was not run.",
+            "unsupported_format": (
+                "Suggestion found; automatic transitions do not support this file."
+            ),
+            "busy": "Suggestion found; a slide action or sync is still running. It was not run.",
+            "stale": (
+                "Suggestion found, but speech or slide state changed before it could run. "
+                "Repeat it."
+            ),
+            "no_action": "No action was selected; continue presenting manually.",
+            "current_focus": "Suggestion found, but that view is already active.",
+            "duplicate": "Suggestion found, but this speech segment was already handled.",
+            "cooldown": (
+                "Suggestion found just after the previous move; wait briefly and repeat it."
+            ),
+            "weak_evidence": (
+                "Suggestion found, but the latest speech did not support running it confidently."
+            ),
+            "ineligible": (
+                "Suggestion found, but that action is unavailable for the current slide."
+            ),
+        }
+        return labels.get(reason, "Suggestion found, but it was not run; continue manually.")
+
+    @staticmethod
+    def _log_policy_rejection(
+        prediction: Prediction, context: ContextSnapshot, reason: str
+    ) -> None:
+        segments = context.decision_segments
+        request_age_ms = (
+            max(0, (time.monotonic_ns() - segments[-1].capture_end_ns) // 1_000_000)
+            if segments
+            else -1
+        )
+        logger.warning(
+            "presentation_policy event=proposal_rejected decision_id=%s reason=%s "
+            "request_age_ms=%d state_version=%d",
+            prediction.decision_id,
+            reason,
+            request_age_ms,
+            prediction.state_version,
+        )
+
+    @Slot(int, object)
+    def _policy_checked(self, _identifier: int, _result: object) -> None:
+        pending, self._policy_check = self._policy_check, None
+        if pending is None:
+            return
+        prediction, context, render = pending
+        if self._powerpoint_binding is not None:
+            self._native_policy_checked(prediction, context, render)
+            return
+        session, manifest = self._session, self.executor.manifest
+        reason = self._policy_check_rejection(prediction, context, render, session, manifest)
+        if reason is not None:
+            transient = reason in {
+                "slide_executor_busy",
+                "session_sync_in_progress",
+            }
+            logger.warning(
+                "presentation_policy event=execution_check_rejected decision_id=%s "
+                "reason=%s state_version_expected=%d state_version_current=%s",
+                prediction.decision_id,
+                reason,
+                prediction.state_version,
+                session.state_version if session is not None else "missing",
+            )
+            if transient:
+                self._deferred_transition_check = (prediction, context, render)
+                self.policy_status.setText(
+                    "Suggestion found; waiting for the slide/session sync to finish."
+                )
+                return
+            self.policy.completed(prediction.decision_id, success=False, now_ns=time.monotonic_ns())
+            self.policy_status.setText(self._policy_rejection_status(reason))
+            return
+        self._policy_before = self._current_local_state()
+        self._policy_execution = prediction
+        command_value = self._policy_command(prediction.target)
+        command_value["instance_id"] = "policy:" + prediction.decision_id
+
+        def still_current() -> bool:
+            return (
+                self.policy.enabled
+                and not self._closing
+                and self._context_connected
+                and self.microphone.enabled
+                and self._session is not None
+                and self._session.id == prediction.session_id
+                and self._session.state_version == prediction.state_version
+                and self._session_pending_state is None
+                and self._stream_snapshot is None
+                and context.matches_decision(self.transcript_context.snapshot())
+            )
+
+        self.executor.dispatch(command_value, commit_guard=still_current)
+
+    def _policy_check_rejection(
+        self,
+        prediction: Prediction,
+        context: ContextSnapshot,
+        render: str,
+        session: PresentationSession | None,
+        manifest: Any,
+    ) -> str | None:
+        if not self.policy.enabled:
+            return "automatic_actions_paused"
+        if self._closing:
+            return "presentation_closing"
+        if session is None:
+            return "session_missing"
+        if manifest is None:
+            return "slide_manifest_missing"
+        if session.state_version != prediction.state_version:
+            return "session_state_version_changed"
+        if manifest.render_id != render:
+            return "slide_render_changed"
+        if not self._context_connected:
+            return "session_disconnected"
+        if not self.microphone.enabled:
+            return "microphone_stopped"
+        mismatch = context.decision_mismatch_reason(self.transcript_context.snapshot())
+        if mismatch is not None:
+            return mismatch
+        if self.executor.busy:
+            return "slide_executor_busy"
+        if (
+            self.session_runner.busy
+            or self._session_pending_state is not None
+            or self._session_restore_state is not None
+            or self._stream_snapshot is not None
+        ):
+            return "session_sync_in_progress"
+        return None
+
+    @staticmethod
+    def _policy_rejection_status(reason: str) -> str:
+        if reason in {"slide_executor_busy", "session_sync_in_progress"}:
+            return "Suggestion found; waiting for the slide/session sync to finish."
+        if reason in {
+            "stale_capture",
+            "interim_prefix_corrected",
+            "new_speech_corrected_prior_intent",
+            "completed_speech_changed",
+        }:
+            return "Speech changed before the action could run; repeat the instruction."
+        if reason in {
+            "session_state_version_changed",
+            "slide_render_changed",
+            "session_disconnected",
+        }:
+            return "Presentation state changed before the action could run; repeat the instruction."
+        if reason == "microphone_stopped":
+            return "Microphone stopped before the action could run."
+        return "Suggestion could not run in the current presentation state."
+
+    def _retry_deferred_policy(self) -> None:
+        deferred_check = self._deferred_transition_check
+        deferred_proposal = self._deferred_agent_proposal
+        if deferred_check is None and deferred_proposal is None:
+            return
+        now = time.monotonic_ns()
+        if deferred_check is not None:
+            prediction, context, render = deferred_check
+            if self._powerpoint_binding is not None:
+                self._retry_deferred_native_transition(prediction, context, render, now)
+                return
+            session, manifest = self._session, self.executor.manifest
+            if now - context.decision_segments[-1].capture_end_ns > 5_000_000_000:
+                self._deferred_transition_check = None
+                self.policy.completed(prediction.decision_id, success=False, now_ns=now)
+                logger.warning(
+                    "presentation_policy event=deferred_action_dropped reason=stale_capture "
+                    "decision_id=%s",
+                    prediction.decision_id,
+                )
+                self.policy_status.setText(
+                    "Suggestion expired while the slide was syncing; repeat it."
+                )
+                return
+            if not self.policy.enabled or self._closing or not self.microphone.enabled:
+                self._deferred_transition_check = None
+                self.policy.completed(prediction.decision_id, success=False, now_ns=now)
+                return
+            mismatch = context.decision_mismatch_reason(self.transcript_context.snapshot())
+            if mismatch is not None:
+                self._deferred_transition_check = None
+                self.policy.completed(prediction.decision_id, success=False, now_ns=now)
+                logger.warning(
+                    "presentation_policy event=deferred_action_dropped reason=%s decision_id=%s",
+                    mismatch,
+                    prediction.decision_id,
+                )
+                self.policy_status.setText(self._policy_rejection_status(mismatch))
+                return
+            reason = self._policy_check_rejection(prediction, context, render, session, manifest)
+            if (
+                reason in {"slide_executor_busy", "session_sync_in_progress"}
+                or self.policy_runner.busy
+            ):
+                return
+            if reason is not None:
+                self._deferred_transition_check = None
+                self.policy.completed(prediction.decision_id, success=False, now_ns=now)
+                logger.warning(
+                    "presentation_policy event=deferred_action_dropped reason=%s decision_id=%s",
+                    reason,
+                    prediction.decision_id,
+                )
+                self.policy_status.setText(self._policy_rejection_status(reason))
+                return
+            if session is None or not self._session_access:
+                return
+            self._deferred_transition_check = None
+            self._policy_check = (prediction, context, render)
+            access = self._session_access
+            target = self._prediction_target_payload(prediction)
+            self.policy_runner.submit(
+                lambda: self.agent.service.check_transition(access, session, target)
+            )
+            logger.warning(
+                "presentation_policy event=deferred_action_rechecked decision_id=%s",
+                prediction.decision_id,
+            )
+            self.policy_status.setText("Rechecking the suggestion after slide/session sync…")
+            return
+
+        assert deferred_proposal is not None
+        value, created_ns = deferred_proposal
+        proposal_snapshot = value.get("_client_context")
+        if (
+            not isinstance(proposal_snapshot, ContextSnapshot)
+            or not proposal_snapshot.decision_segments
+            or now - proposal_snapshot.decision_segments[-1].capture_end_ns > 5_000_000_000
+        ):
+            self._deferred_agent_proposal = None
+            logger.warning(
+                "presentation_policy event=deferred_proposal_dropped reason=stale_capture"
+            )
+            self.policy_status.setText("Suggestion expired while the slide was syncing; repeat it.")
+            return
+        if not proposal_snapshot.matches_decision(self.transcript_context.snapshot()):
+            self._deferred_agent_proposal = None
+            logger.warning(
+                "presentation_policy event=deferred_proposal_dropped reason=%s",
+                proposal_snapshot.decision_mismatch_reason(self.transcript_context.snapshot()),
+            )
+            self.policy_status.setText("Speech changed before the action could run; repeat it.")
+            return
+        if (
+            self.executor.busy
+            or self.session_runner.busy
+            or self.powerpoint_runner.busy
+            or self._session_pending_state is not None
+            or self._session_restore_state is not None
+            or self._stream_snapshot is not None
+            or self.policy_runner.busy
+        ):
+            return
+        self._deferred_agent_proposal = None
+        logger.warning(
+            "presentation_policy event=deferred_proposal_rechecked wait_ms=%d",
+            max(0, (now - created_ns) // 1_000_000),
+        )
+        self._consider_policy(value)
+
+    def _retry_deferred_native_transition(
+        self,
+        prediction: Prediction,
+        context: ContextSnapshot,
+        source: str,
+        now_ns: int,
+    ) -> None:
+        native, session = self._native_present, self._session
+        if now_ns - context.decision_segments[-1].capture_end_ns > 5_000_000_000:
+            self._deferred_transition_check = None
+            self.policy.completed(prediction.decision_id, success=False, now_ns=now_ns)
+            logger.warning(
+                "presentation_policy event=deferred_action_dropped reason=stale_capture "
+                "decision_id=%s",
+                prediction.decision_id,
+            )
+            self.policy_status.setText(
+                "Suggestion expired while PowerPoint was syncing; repeat it."
+            )
+            return
+        if not self.policy.enabled or self._closing or not self.microphone.enabled:
+            self._deferred_transition_check = None
+            self.policy.completed(prediction.decision_id, success=False, now_ns=now_ns)
+            return
+        mismatch = context.decision_mismatch_reason(self.transcript_context.snapshot())
+        if mismatch is not None:
+            self._deferred_transition_check = None
+            self.policy.completed(prediction.decision_id, success=False, now_ns=now_ns)
+            logger.warning(
+                "presentation_policy event=deferred_action_dropped reason=%s decision_id=%s",
+                mismatch,
+                prediction.decision_id,
+            )
+            self.policy_status.setText(self._policy_rejection_status(mismatch))
+            return
+        if (
+            native is None
+            or session is None
+            or not self._context_connected
+            or not self._powerpoint_verified
+            or native.binding.source_sha256 != source
+            or session.state_version != prediction.state_version
+        ):
+            if (
+                self.powerpoint_runner.busy
+                or self.session_runner.busy
+                or self._session_pending_state is not None
+            ):
+                return
+            self._deferred_transition_check = None
+            self.policy.completed(prediction.decision_id, success=False, now_ns=now_ns)
+            logger.warning(
+                "presentation_policy event=deferred_action_dropped "
+                "reason=powerpoint_or_session_state_changed decision_id=%s",
+                prediction.decision_id,
+            )
+            self.policy_status.setText(
+                "PowerPoint/session state changed before the action could run; "
+                "repeat the instruction."
+            )
+            return
+        if (
+            self.powerpoint_runner.busy
+            or self.session_runner.busy
+            or self.policy_runner.busy
+            or self._policy_check is not None
+        ):
+            return
+        if not self._session_access:
+            return
+        self._deferred_transition_check = None
+        self._policy_check = (prediction, context, source)
+        access = self._session_access
+        target = self._prediction_target_payload(prediction)
+        self.policy_runner.submit(
+            lambda: self.agent.service.check_transition(access, session, target)
+        )
+        logger.warning(
+            "presentation_policy event=deferred_action_rechecked decision_id=%s",
+            prediction.decision_id,
+        )
+        self.policy_status.setText("Rechecking the suggestion after PowerPoint/session sync…")
+
+    @staticmethod
+    def _prediction_target_payload(prediction: Prediction) -> dict[str, Any]:
+        region = prediction.target.region
+        return {
+            "tool": prediction.target.tool,
+            "slide_id": prediction.target.slide_id,
+            "action_id": prediction.target.action_id,
+            "region": (
+                {"x": region[0], "y": region[1], "width": region[2], "height": region[3]}
+                if region is not None
+                else None
+            ),
+        }
+
+    @Slot(int, str)
+    def _policy_failed(self, _identifier: int, message: str) -> None:
+        pending, self._policy_check = self._policy_check, None
+        if pending is not None:
+            prediction = pending[0]
+            self.policy.completed(prediction.decision_id, success=False, now_ns=time.monotonic_ns())
+        self.policy_status.setText(message)
+
+    @Slot()
+    def _undo_policy_move(self) -> None:
+        if (
+            self._powerpoint_binding is not None
+            and self._native_present is not None
+            and self.powerpoint_runner.busy
+            and self._policy_undo is not None
+        ):
+            # Preview/status work may still be finishing after a successful move.
+            # Keep the saved state until the native worker can actually restore it.
+            self._pending_native_undo = True
+            self.policy_enabled.setChecked(False)
+            return
+        self._pending_native_undo = False
+        undo, self._policy_undo = self._policy_undo, None
+        self.policy_undo_button.setEnabled(False)
+        self.policy_enabled.setChecked(False)
+        if self._powerpoint_binding is not None and self._native_present is not None:
+            if undo is not None and self._session is not None and self._powerpoint_info is not None:
+                session_id, source, state = undo
+                if (
+                    session_id == self._session.id
+                    and source == self._powerpoint_binding.source_sha256
+                    and not self.powerpoint_runner.busy
+                ):
+                    native, info = self._native_present, self._powerpoint_info
+                    self._native_completion = (None, state, state.last_accepted_action_id)
+                    self._submit_powerpoint_task(
+                        "undo_policy",
+                        info.path,
+                        lambda: native.restore(self.powerpoint, info, state),
+                    )
+            return
+        manifest = self.executor.manifest
+        if undo is None or manifest is None or self._session is None:
+            return
+        session_id, render, state = undo
+        if session_id != self._session.id or render != manifest.render_id:
+            return
+        self._accepted_action_id = state.last_accepted_action_id
+        # Use the existing versioned restore path, including zoom/highlight and failures.
+        self._policy_undo_restoring = True
+        self._restore_session_state(state)
+
+    @Slot(object)
+    def _agent_proposed(self, result: object) -> None:
+        if not isinstance(result, dict):
+            # AgentLoop emits None while `_update_agent` deliberately marks its
+            # context stale during session synchronization. Keep the proposal
+            # evidence until the sync retry can revalidate it, or reject it as
+            # stale/corrected. Clearing it here loses valid actions on the next
+            # 100 ms timer tick.
+            syncing = any(
+                (
+                    self.executor.busy,
+                    self.session_runner.busy,
+                    self.powerpoint_runner.busy,
+                    self._session_pending_state is not None,
+                    self._session_restore_state is not None,
+                    self._stream_snapshot is not None,
+                )
+            )
+            if not syncing:
+                self._deferred_agent_proposal = None
+            self.agent_proposal.clear()
+            context = self.transcript_context.snapshot()
+            candidates = context.decision_segments
+            if not context.fresh or not candidates or not context.segments:
+                self.policy.clear_pending()
+            return
+        target = result["target"]
+        tool = target["tool"]
+        if tool == "no_action":
+            messages = {
+                "budget": "Suggestion allowance reached; continue presenting manually.",
+                "disabled": "Suggestions are not enabled on this server.",
+                "paced": "Waiting for the next suggestion opportunity.",
+                "stay": "Keep the current view.",
+                "uncertain": "Keep the current view.",
+            }
+            message = messages.get(
+                result["reason"], "No suggestion available; continue presenting manually."
+            )
+        else:
+            manifest = self.executor.manifest
+            slide_ids = (
+                tuple(slide.slide_id for slide in self._powerpoint_binding.slides)
+                if self._powerpoint_binding is not None
+                else tuple(slide.slide_id for slide in manifest.slides)
+                if manifest is not None
+                else ()
+            )
+            page = (
+                next(
+                    (
+                        index
+                        for index, slide_id in enumerate(slide_ids, 1)
+                        if slide_id == target["slide_id"]
+                    ),
+                    None,
+                )
+                if slide_ids
+                else None
+            )
+            if page is None:
+                self.policy.clear_pending()
+                self.agent_proposal.setText("Suggestion unavailable; reopen the presentation.")
+                return
+            labels = {
+                "next_slide": f"Next slide (slide {page})",
+                "previous_slide": f"Previous slide (slide {page})",
+                "go_to_slide": f"Go to slide {page}",
+                "zoom_region": f"Focus region on slide {page}",
+                "highlight_region": f"Highlight region on slide {page}",
+                "reset_view": f"Show slide {page} in full",
+            }
+            message = f"Suggested: {labels[tool]}"
+        self.agent_proposal.setText(message)
+        self._consider_policy(result)
 
     @Slot(object)
     def _speech_transcript(self, event: dict[str, object]) -> None:
@@ -660,6 +1970,7 @@ class PresentWidget(Page):
                 str(self.speech_language.currentData()),
             )
             self.transcript_context.accept(event)
+            self._revoke_native_guard_if_speech_changed()
         kind = "Final" if event["final"] else "Partial"
         start = float(cast(float, event["start_seconds"]))
         end = float(cast(float, event["end_seconds"]))
@@ -667,9 +1978,19 @@ class PresentWidget(Page):
             f"{kind} • {start:.2f}–{end:.2f} s • {event['latency_ms']} ms\n{event['text']}"
         )
 
+    def _revoke_native_guard_if_speech_changed(self) -> None:
+        submitted = self._native_policy_context
+        if submitted is not None and not submitted.matches_decision(
+            self.transcript_context.snapshot()
+        ):
+            self._native_guard.clear()
+            self._native_policy_context = None
+
     @Slot()
     def _verify_microphone_pdf_session(self) -> None:
-        if not self.microphone.enabled or self._powerpoint_info is not None:
+        if not self.microphone.enabled or (
+            self._powerpoint_info is not None and self._powerpoint_binding is None
+        ):
             return
         if self._session is None or not self._session_access:
             self._microphone_pdf_unverified()
@@ -687,7 +2008,7 @@ class PresentWidget(Page):
 
     @Slot()
     def _microphone_pdf_unverified(self) -> None:
-        if self.microphone.enabled and self._powerpoint_info is None:
+        if self.microphone.enabled:
             self.microphone.stop()
             self.microphone_status.setText(
                 "Microphone stopped. Presentation session could not be verified."
@@ -774,23 +2095,28 @@ class PresentWidget(Page):
 
     def _ensure_session(self, *, force: bool = False) -> None:
         manifest = self.executor.manifest
+        binding = self._powerpoint_binding
+        deck_id = (
+            binding.deck_id
+            if binding is not None
+            else (manifest.deck_id if manifest is not None and manifest.account_bound else None)
+        )
         if (
             self._closing
             or self._session_access is None
             or self._account_id is None
-            or manifest is None
-            or not manifest.account_bound
+            or deck_id is None
         ):
             return
-        key = (self._account_id, manifest.deck_id)
-        if self._session_deck_id != manifest.deck_id:
+        key = (self._account_id, deck_id)
+        if self._session_deck_id != deck_id:
             self._session_generation += 1
             self._session = None
             self._session_pending_state = None
             self._session_attempt = None
             self._session_error = False
             self._session_ended = False
-            self._session_deck_id = manifest.deck_id
+            self._session_deck_id = deck_id
         if (
             self._session is not None
             or (self._session_ended and not force)
@@ -814,7 +2140,7 @@ class PresentWidget(Page):
             "start",
             generation,
             None,
-            lambda: service.start(access, manifest.deck_id),
+            lambda: service.start(access, deck_id),
         )
         if submitted:
             self._session_attempt = key
@@ -850,6 +2176,21 @@ class PresentWidget(Page):
         return True
 
     def _current_local_state(self) -> SessionState | None:
+        if self._powerpoint_binding is not None:
+            info = self._powerpoint_info
+            if info is None or not self._powerpoint_verified:
+                return None
+            try:
+                slide_id = self._powerpoint_binding.slide_id(info)
+            except PowerPointError:
+                return None
+            return SessionState(
+                active_slide_id=slide_id,
+                focus_view=self._native_focus_view(),
+                focus_region=self._native_focus_region(),
+                autonomy_mode="autonomous" if self.policy.enabled else "manual",
+                last_accepted_action_id=self._accepted_action_id,
+            )
         manifest, slide = self.executor.manifest, self.surface.slide
         if manifest is None or slide is None:
             return None
@@ -867,16 +2208,8 @@ class PresentWidget(Page):
                 if region is not None
                 else None
             ),
-            autonomy_mode=(
-                self._session.state.autonomy_mode
-                if self._session is not None and self._session.state is not None
-                else "manual"
-            ),
-            last_accepted_action_id=(
-                self._session.state.last_accepted_action_id
-                if self._session is not None and self._session.state is not None
-                else None
-            ),
+            autonomy_mode="autonomous" if self.policy.enabled else "manual",
+            last_accepted_action_id=self._accepted_action_id,
         )
 
     def _queue_session_state(self) -> None:
@@ -898,14 +2231,19 @@ class PresentWidget(Page):
         if state == self._session.state and in_flight_state is None:
             self._session_pending_state = None
             return
-        self.transcript_context.invalidate()
+        self._invalidate_transcript_context()
         self._session_pending_state = state
         if not self.session_runner.busy:
             QTimer.singleShot(0, self._flush_session_state)
 
     @Slot()
     def _flush_session_state(self) -> None:
-        if self._closing or self.session_runner.busy or self._session_pending_state is None:
+        if (
+            self._closing
+            or self.session_runner.busy
+            or self._session_pending_state is None
+            or self._session_restore_state is not None
+        ):
             return
         if self._session is None or self._session.status != "active" or not self._session_access:
             return
@@ -987,8 +2325,17 @@ class PresentWidget(Page):
                 outcome == "success"
                 and isinstance(session, PresentationSession)
                 and session.status == "active"
+                and self._session is not None
+                and session.id == self._session.id
+                and (
+                    self._powerpoint_binding is None
+                    or (
+                        session.analysis_version_id == self._powerpoint_binding.analysis_id
+                        and session.deck_id == self._powerpoint_binding.deck_id
+                    )
+                )
             ):
-                if self.microphone.enabled and self._powerpoint_info is None:
+                if self.microphone.enabled:
                     self._microphone_pdf_deadline.start()
                 if self._session_pending_state is not None:
                     self._session_followup = "flush"
@@ -1040,6 +2387,19 @@ class PresentWidget(Page):
             self._refresh()
             return
         self._session_error = False
+        if self._powerpoint_binding is not None and (
+            session.deck_id != self._powerpoint_binding.deck_id
+            or session.analysis_version_id != self._powerpoint_binding.analysis_id
+        ):
+            self.microphone.stop()
+            self._session = None
+            self._session_error = True
+            self._session_pending_state = None
+            self.session_status.setText(
+                "The saved PowerPoint analysis changed. Reopen it from Library."
+            )
+            self._refresh()
+            return
         self._session = session
         if kind == "start":
             if self._session_pending_state is None:
@@ -1135,6 +2495,8 @@ class PresentWidget(Page):
                 ):
                     return
                 if incoming.state_version > session.state_version or incoming.status == "ended":
+                    self._invalidate_transcript_context()
+                    self.policy.clear_pending()
                     if incoming.status == "ended":
                         self.microphone.stop()
                     self._stream_snapshot = incoming
@@ -1162,7 +2524,7 @@ class PresentWidget(Page):
             or incoming.state_version <= self._session.state_version
         ):
             return
-        self.transcript_context.invalidate()
+        self._invalidate_transcript_context()
         self._session = incoming
         if incoming.status == "ended":
             self.microphone.stop()
@@ -1182,7 +2544,7 @@ class PresentWidget(Page):
         if generation != self.session_events.generation or self._closing:
             return
         self._context_connected = False
-        self.transcript_context.invalidate()
+        self._invalidate_transcript_context()
         self.microphone.stop()
         self._session_error = True
         if access_ended:
@@ -1194,6 +2556,21 @@ class PresentWidget(Page):
         self._refresh()
 
     def _restore_session_state(self, state: SessionState | None, *, conflict: bool = False) -> None:
+        if state is not None:
+            self._accepted_action_id = state.last_accepted_action_id
+        if self._powerpoint_binding is not None:
+            local = self._current_local_state()
+            if local is None:
+                self.microphone.stop()
+                self.session_status.setText("PowerPoint slideshow verification is required.")
+                return
+            if state != local:
+                self._session_pending_state = local
+                self._session_followup = "flush"
+                self.session_status.setText("Syncing the live PowerPoint slide…")
+            else:
+                self.session_status.setText("PowerPoint presentation session connected.")
+            return
         manifest = self.executor.manifest
         if state is None or manifest is None:
             self.session_status.setText(
@@ -1245,6 +2622,9 @@ class PresentWidget(Page):
         self._session_restore_state = None
         self._session_restore_action = None
         self._restore_focus_applied = False
+        if self._policy_undo_restoring:
+            self._policy_undo_restoring = False
+            self._queue_session_state()
         self.session_status.setText(
             "Synced the latest position from another controller."
             if conflict
@@ -1302,6 +2682,7 @@ class PresentWidget(Page):
 
     @Slot(object)
     def _queue_powerpoint_action(self, action: PowerPointAction) -> None:
+        self._native_manual_intent()
         if self._closing or self._powerpoint_info is None or self._queued_powerpoint_action:
             return
         try:
@@ -1324,6 +2705,9 @@ class PresentWidget(Page):
     @Slot()
     def _powerpoint_idle(self) -> None:
         if self._closing or self.powerpoint_runner.busy:
+            return
+        if self._pending_native_undo:
+            self._undo_policy_move()
             return
         if self._queued_powerpoint_operation is not None:
             operation, path = self._queued_powerpoint_operation
@@ -1352,6 +2736,11 @@ class PresentWidget(Page):
         if pending is None or self._closing:
             return
         action, path = pending
+        if action in {"policy", "saved_action", "undo_policy"} and isinstance(
+            result, PowerPointActionResult
+        ):
+            self._native_completed(action, result)
+            return
         if action in {"launch", "connect"} and isinstance(result, PresentationInfo):
             self._attach_powerpoint_info(result)
         elif action == "list" and isinstance(result, tuple):
@@ -1422,6 +2811,20 @@ class PresentWidget(Page):
         if pending is None or self._closing:
             return
         action, _ = pending
+        if action in {"policy", "saved_action", "undo_policy"}:
+            completion = self._native_completion
+            self._native_completion = None
+            self._native_guard.clear()
+            self._native_policy_context = None
+            if completion is not None and completion[0] is not None:
+                self.policy.completed(
+                    completion[0].decision_id,
+                    success=False,
+                    now_ns=time.monotonic_ns(),
+                )
+            self.policy_status.setText(message)
+            self.generated_status.setText(message)
+            return
         if action == "status":
             # If the show cannot be verified, stop listening until an explicit restart.
             self._powerpoint_verified = False
@@ -1441,7 +2844,25 @@ class PresentWidget(Page):
         self._refresh()
 
     def _attach_powerpoint_info(self, info: PresentationInfo) -> None:
+        binding = self._powerpoint_binding
+        if binding is not None:
+            try:
+                binding.slide_id(info)
+            except PowerPointError:
+                self._powerpoint_lost(
+                    "The slideshow differs from the saved analysis. Reopen it from Review."
+                )
+                self._refresh()
+                return
         previous = self._powerpoint_info
+        if (
+            previous is not None
+            and previous.slide_key != info.slide_key
+            and self._native_completion is None
+        ):
+            self._native_manual_intent()
+            if self._native_present is not None:
+                self._native_present.focus = None
         if previous is None or (previous.path, previous.window_id) != (info.path, info.window_id):
             self.microphone.stop()
         self._powerpoint_info = info
@@ -1449,6 +2870,11 @@ class PresentWidget(Page):
         self._powerpoint_verification.start()
         self._powerpoint_path = info.path
         self.powerpoint_controls.set_info(info)
+        if binding is not None and self._session_access is not None:
+            if self._session is None:
+                self._ensure_session()
+            elif previous is None or previous.slide_key != info.slide_key:
+                self._queue_session_state()
         if (previous is None or previous.slide_key != info.slide_key) and min(
             info.slide_width, info.slide_height
         ) > 0:
@@ -1479,12 +2905,23 @@ class PresentWidget(Page):
             self._refresh()
 
     def _powerpoint_lost(self, reason: str | None = None) -> None:
+        self._native_present = None
+        self.policy_enabled.setChecked(False)
+        self._native_manual_intent()
+        if self._powerpoint_binding is not None:
+            self._session_generation += 1
+            self._session = None
+            self._session_pending_state = None
+            self._session_attempt = None
+            self._session_deck_id = None
+            self._session_followup = None
         self.microphone.stop()
         self._powerpoint_verification.stop()
         self._powerpoint_poll.stop()
         self._queued_powerpoint_action = None
         self._queued_powerpoint_preview = None
         self._powerpoint_info = None
+        self._powerpoint_binding = None
         self._powerpoint_verified = False
         self._powerpoint_path = None
         self.powerpoint_controls.set_info(None)
@@ -1495,6 +2932,15 @@ class PresentWidget(Page):
 
     @Slot()
     def _disconnect_powerpoint(self) -> None:
+        self._native_manual_intent()
+        self._native_present = None
+        if self._powerpoint_binding is not None:
+            self._session_generation += 1
+            self._session = None
+            self._session_pending_state = None
+            self._session_attempt = None
+            self._session_deck_id = None
+            self._session_followup = None
         self.microphone.stop()
         self._powerpoint_verification.stop()
         with suppress(Exception):
@@ -1507,6 +2953,7 @@ class PresentWidget(Page):
         self._queued_powerpoint_preview = None
         self._queued_powerpoint_operation = None
         self._powerpoint_info = None
+        self._powerpoint_binding = None
         self._powerpoint_verified = False
         self._powerpoint_path = None
         self.powerpoint_controls.set_info(None)
@@ -1514,6 +2961,26 @@ class PresentWidget(Page):
             "Disconnected from Buddy. PowerPoint remains open and the slideshow is unchanged."
         )
         self._refresh()
+
+    def bind_saved_powerpoint(self, binding: PowerPointSessionBinding) -> None:
+        if self._closing or self._session_access is None or self._account_id is None:
+            return
+        self._disconnect_powerpoint()
+        self._powerpoint_binding = binding
+        self._native_present = PowerPointPresent(binding)
+        self._session_generation += 1
+        self._session = None
+        self._session_attempt = None
+        self._session_pending_state = None
+        self._session_deck_id = None
+        self._session_ended = False
+        self.session_status.setText("Connecting the saved PowerPoint slideshow…")
+        self._submit_powerpoint("connect", binding.path)
+        self._refresh()
+
+    def invalidate_saved_powerpoint(self) -> None:
+        if self._powerpoint_binding is not None:
+            self._disconnect_powerpoint()
 
     @Slot()
     def _choose_manifest(self) -> None:
@@ -1529,6 +2996,7 @@ class PresentWidget(Page):
     def load_pdf(
         self, source: Path | bytes, *, deck_id: str | None = None, revision: str | None = None
     ) -> None:
+        self.invalidate_saved_powerpoint()
         self.microphone.stop()
         self._session_generation += 1
         self._session = None
@@ -1616,6 +3084,23 @@ class PresentWidget(Page):
         manifest, slide = self.executor.manifest, self.surface.slide
         if manifest is None or slide is None or self._closing:
             return
+        if not restoring:
+            if self._policy_execution is not None:
+                self.executor.cancel()
+            if self._policy_check is not None:
+                prediction = self._policy_check[0]
+                self.policy.completed(
+                    prediction.decision_id,
+                    success=False,
+                    now_ns=time.monotonic_ns(),
+                )
+                self._policy_check = None
+            self.policy.reset(manual=True, now_ns=time.monotonic_ns())
+            self._invalidate_transcript_context()
+            self._policy_check = None
+            self._policy_undo = None
+            self.policy_undo_button.setEnabled(False)
+            self._accepted_action_id = None
         self._instance += 1
         instance_id = f"manual:{self._instance}"
         if restoring and self._session_restore_state is not None:
@@ -1672,6 +3157,42 @@ class PresentWidget(Page):
 
     @Slot(object)
     def _completed(self, result: Completion) -> None:
+        prediction = self._policy_execution
+        if prediction is not None and result.instance_id == "policy:" + prediction.decision_id:
+            self._policy_execution = None
+            success = result.status == "completed"
+            self.policy.completed(
+                prediction.decision_id, success=success, now_ns=time.monotonic_ns()
+            )
+            if success:
+                self._accepted_action_id = prediction.target.action_id
+                manifest = self.executor.manifest
+                if self._policy_before is not None and manifest is not None:
+                    self._policy_undo = (
+                        prediction.session_id,
+                        manifest.render_id,
+                        self._policy_before,
+                    )
+                    self.policy_undo_button.setEnabled(True)
+                self.transition_observed.emit(
+                    {
+                        "policy_version": POLICY_VERSION,
+                        "decision_id": prediction.decision_id,
+                        "target": prediction.target,
+                        "completed_ns": time.monotonic_ns(),
+                        "animated": False,  # PDF commits immediately, without an animation.
+                        "calibration_sha256": self.policy.calibration_sha256,
+                        "settings_sha256": self.policy.settings_sha256,
+                    }
+                )
+                self.policy_status.setText("Automatic move completed. Undo is available.")
+            else:
+                self.policy_status.setText(
+                    "Buddy found the action but did not complete it. "
+                    "Manual controls remain available; "
+                    "repeat the request. Automatic actions are still on."
+                )
+            self._policy_before = None
         manifest, slide = self.executor.manifest, self.surface.slide
         key = (manifest.deck_id, manifest.render_id, slide.slide_id) if manifest and slide else None
         if result.status in {"failed", "cancelled"} or key != self._committed_key:
@@ -1737,6 +3258,7 @@ class PresentWidget(Page):
 
     @Slot()
     def _refresh(self) -> None:
+        self._refresh_generated()
         self.transcript_context.bind(
             self._session.id if isinstance(self._session, PresentationSession) else "",
             self._session.state_version if isinstance(self._session, PresentationSession) else 0,
@@ -1752,7 +3274,7 @@ class PresentWidget(Page):
         generation = self.session_events.generation
         self.session_events.bind(self.config, self._session_access, active_session)
         if generation != self.session_events.generation:
-            self.transcript_context.invalidate()
+            self._invalidate_transcript_context()
             self._stream_snapshot = None
         elif self._stream_snapshot is not None:
             QTimer.singleShot(0, self._apply_stream_snapshot)
@@ -1797,11 +3319,18 @@ class PresentWidget(Page):
         self.zoom_button.setEnabled(selected)
         self.highlight_button.setEnabled(selected)
         self.surface.selectable = ready
-        session_controls = loaded and account_bound
+        session_controls = (loaded and account_bound) or self._powerpoint_binding is not None
         mic_available = self._microphone_session_available()
         self.microphone_device.setEnabled(bool(mic_available) and not self.microphone.enabled)
         self.microphone_button.setEnabled(
             bool(mic_available) and self.microphone_device.count() > 0
+        )
+        self.microphone_button.setToolTip(
+            "No microphone was detected."
+            if self.microphone_device.count() == 0
+            else "Wait for the saved presentation session to connect and sync the current slide."
+            if self._powerpoint_binding is not None and not mic_available
+            else "Start or stop microphone capture"
         )
         self.microphone_button.setText(
             "Stop microphone" if self.microphone.enabled else "Start microphone"
@@ -1837,17 +3366,38 @@ class PresentWidget(Page):
             and self._session_access is not None
         )
         if self._powerpoint_info is not None:
-            return not self._closing and self._powerpoint_verified
+            return (
+                not self._closing
+                and self._powerpoint_verified
+                and (
+                    self._powerpoint_binding is None
+                    or (
+                        self._session is not None
+                        and self._session.status == "active"
+                        and self._session_access is not None
+                        and self._session_pending_state is None
+                        and self._session.state == self._current_local_state()
+                    )
+                )
+            )
         return not self._closing and pdf_active
 
     def hideEvent(self, event: QHideEvent) -> None:
         # A hidden presentation must not keep a microphone running out of view.
         if hasattr(self, "microphone") and not getattr(self, "_closing", False):
             self.microphone.stop()
+            self.agent_enabled.setChecked(False)
         super().hideEvent(event)
 
     def shutdown(self) -> None:
         self._closing = True
+        self.policy_enabled.setChecked(False)
+        self.policy_runner.stop()
+        self.generated_runner.stop()
+        self._native_guard.clear()
+        self._native_policy_context = None
+        self._agent_tick.stop()
+        self.agent.stop()
         self.session_events.stop()
         self._powerpoint_verification.stop()
         self.speech.stop()
@@ -1866,6 +3416,12 @@ class PresentWidget(Page):
         self._refresh()
 
     def clear_session_binding(self) -> None:
+        self._generated_analysis = None
+        self._generated_request = None
+        self._native_guard.clear()
+        self._native_policy_context = None
+        self.invalidate_saved_powerpoint()
+        self.agent_enabled.setChecked(False)
         self.microphone.stop()
         self._session_generation += 1
         self._account_id = None

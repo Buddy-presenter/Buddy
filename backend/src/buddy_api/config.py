@@ -8,6 +8,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from buddy_api.agent_provider import AgentSettings
+from buddy_api.embeddings import EmbeddingSettings
 from buddy_api.persistence.settings import DatabaseConfigurationError, DatabaseSettings
 from buddy_api.processing.config import WorkerSettings
 from buddy_api.speech import SpeechSettings
@@ -55,6 +57,8 @@ class Settings:
     validator: ValidatorSettings | None = None
     worker: WorkerSettings | None = None
     speech: SpeechSettings | None = field(default=None, repr=False)
+    embeddings: EmbeddingSettings | None = field(default=None, repr=False)
+    agent: AgentSettings | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.environment, Environment):
@@ -131,6 +135,23 @@ class Settings:
             speech = SpeechSettings.from_environment(values)
         except ValueError as exc:
             raise ConfigurationError(str(exc)) from None
+        if values.get("BUDDY_AGENT_ENABLED", "false") not in {"true", "false"}:
+            raise ConfigurationError("BUDDY_AGENT_ENABLED must be true or false.")
+        agent = None
+        if values.get("BUDDY_AGENT_ENABLED") == "true":
+            try:
+                agent = AgentSettings(
+                    values.get("BUDDY_COHERE_API_KEY", ""),
+                    int(values["BUDDY_AGENT_MONTHLY_LIMIT"])
+                    if values.get("BUDDY_AGENT_MONTHLY_LIMIT")
+                    else None,
+                    int(values.get("BUDDY_AGENT_REQUESTS_PER_MINUTE", "20")),
+                )
+            except ValueError:
+                raise ConfigurationError(
+                    "Agent requires a Cohere key, optional positive monthly budget "
+                    "and rate from 1 to 500 requests per minute."
+                ) from None
         return cls(
             environment,
             hosts,
@@ -143,4 +164,8 @@ class Settings:
             validator,
             WorkerSettings.from_environment(values),
             speech,
+            EmbeddingSettings(values["BUDDY_COHERE_API_KEY"])
+            if values.get("BUDDY_COHERE_API_KEY")
+            else None,
+            agent,
         )

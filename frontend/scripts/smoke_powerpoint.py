@@ -81,7 +81,7 @@ def main() -> int:
         window.setWindowTitle("Buddy — PowerPoint smoke test")
         window.resize(1280, 900)
         window.show()
-        window.navigation.setCurrentRow(2)
+        window.navigation.setCurrentRow(3)
         page = window.present
 
         def idle():
@@ -172,8 +172,6 @@ def main() -> int:
                 if canonical_path(office.SlideShowWindows.Item(i).Presentation.FullName)
                 == canonical_path(path)
             )
-            if show_type == 2:
-                active.Left, active.Top, active.Width, active.Height = 90, 70, 800, 600
             active.View.GotoSlide(1, 0)
             wait(lambda: page._powerpoint_info.slide_index == 1)
             wait(idle)
@@ -244,7 +242,7 @@ def main() -> int:
             controls.mode.setCurrentIndex(controls.mode.findData("pointer_pen"))
             click(controls.apply)
             assert active.View.PointerType == 2
-            window.pages.widget(2).ensureWidgetVisible(controls)
+            window.pages.widget(3).ensureWidgetVisible(controls)
             app.processEvents()
             hold(name + " all tools drawn")
             click(controls.erase)

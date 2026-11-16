@@ -87,6 +87,10 @@ For feature-specific contracts, read the linked guide before editing. Keep tests
 their owning component unless a test intentionally crosses a component boundary; those
 belong in `tests/integration/`.
 
+The offline agent replay commands, frozen contract gates, captured policy trace schema,
+release evidence requirements and recording retention are documented in
+[presentation replay evaluation](presentation-replay.md).
+
 Authenticated original-PPTX ingestion, storage limits, retry contracts and recovery are
 documented in [private uploads](uploads.md). Library includes PDF/PPTX upload controls.
 See [PDF presentations](pdf-presentations.md) for the built-in PDF viewer and page validation.
@@ -115,3 +119,12 @@ acceptance are documented in [speech recognition](speech-recognition.md).
 
 The ephemeral decision-input window and its capture-time invalidation rules are
 documented in [rolling speech context](transcript-context.md).
+
+The versioned, owner-scoped candidate resolver is documented in
+[presentation candidates](presentation-candidates.md).
+
+The opt-in decision loop, constrained tools, provider setup and manual suggestion check
+are documented in [presentation agent](presentation-agent.md).
+
+Presenter-owned opt-in execution, measured calibration, undo and the remaining PowerPoint
+dependency are documented in [transition policy](transition-policy.md).

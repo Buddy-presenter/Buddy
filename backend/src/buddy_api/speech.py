@@ -285,8 +285,11 @@ async def relay(
     principal: Principal,
 ) -> None:
     timeline = AudioTimeline(start.sample_rate)
+    audio: asyncio.Queue[tuple[bytes, float]] = asyncio.Queue(maxsize=8)
 
-    async def upload() -> None:
+    async def receive_audio() -> None:
+        # Keep observing disconnects even if the provider stops reading. A
+        # stalled send must not hide the native disconnect until its timeout.
         while True:
             message = await asyncio.wait_for(socket.receive(), 10)
             if message["type"] == "websocket.disconnect":
@@ -294,7 +297,20 @@ async def relay(
             packet = message.get("bytes")
             if packet is None:
                 raise SpeechFailure("invalid_audio")
-            await asyncio.wait_for(provider.send(timeline.accept(packet)), 5)
+            pcm = timeline.accept(packet)
+            try:
+                # Absorb a short socket/scheduler burst, but never wait long
+                # enough to hide disconnects behind an upstream write again.
+                await asyncio.wait_for(audio.put((pcm, time.monotonic())), 0.25)
+            except TimeoutError:
+                raise SpeechFailure("audio_backlog", True) from None
+
+    async def upload() -> None:
+        while True:
+            pcm, queued_at = await audio.get()
+            if time.monotonic() - queued_at > 0.5:
+                raise SpeechFailure("audio_backlog", True)
+            await asyncio.wait_for(provider.send(pcm), 5)
 
     async def download() -> None:
         sequence = 0
@@ -329,7 +345,9 @@ async def relay(
             await asyncio.sleep(5)
             await asyncio.wait_for(verify_session(request, identifier), 10)
 
-    tasks = [asyncio.create_task(operation()) for operation in (upload, download, verify)]
+    tasks = [
+        asyncio.create_task(operation()) for operation in (receive_audio, upload, download, verify)
+    ]
     try:
         done, _pending = await asyncio.wait(
             tasks, timeout=1800, return_when=asyncio.FIRST_COMPLETED
@@ -398,6 +416,7 @@ def speech_router(allowed_hosts: tuple[str, ...]) -> APIRouter:
         provider_status: int | None = None
         invalid_result_count: int | None = None
         exception_type: str | None = None
+        provider_close_code: int | None = None
         diagnostic_id = str(uuid4())
         await socket.accept()
         try:
@@ -434,8 +453,15 @@ def speech_router(allowed_hosts: tuple[str, ...]) -> APIRouter:
             provider_status = exc.provider_status
             invalid_result_count = exc.invalid_result_count
             await error(socket, outcome, diagnostic_id, exc.retryable)
-        except (TimeoutError, ConnectionClosed, OSError):
+        except ConnectionClosed as exc:
             outcome = "connection_lost"
+            exception_type = type(exc).__name__
+            if exc.rcvd is not None and 1000 <= exc.rcvd.code <= 4999:
+                provider_close_code = exc.rcvd.code
+            await error(socket, outcome, diagnostic_id, True)
+        except (TimeoutError, OSError) as exc:
+            outcome = "connection_lost"
+            exception_type = type(exc).__name__
             await error(socket, outcome, diagnostic_id, True)
         except WebSocketDisconnect:
             pass
@@ -455,7 +481,8 @@ def speech_router(allowed_hosts: tuple[str, ...]) -> APIRouter:
             if outcome != "closed":
                 logger.warning(
                     "speech_stream diagnostic_id=%s outcome=%s stage=%s duration_ms=%d "
-                    "provider_status=%s invalid_result_count=%s exception_type=%s",
+                    "provider_status=%s invalid_result_count=%s exception_type=%s "
+                    "provider_close_code=%s",
                     diagnostic_id,
                     outcome,
                     stage,
@@ -463,6 +490,7 @@ def speech_router(allowed_hosts: tuple[str, ...]) -> APIRouter:
                     provider_status if provider_status is not None else "none",
                     invalid_result_count if invalid_result_count is not None else "none",
                     exception_type or "none",
+                    provider_close_code if provider_close_code is not None else "none",
                 )
             with suppress(RuntimeError, WebSocketDisconnect):
                 await socket.close(code=1000)

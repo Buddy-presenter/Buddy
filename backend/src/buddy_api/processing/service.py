@@ -53,7 +53,7 @@ from buddy_api.persistence.models import (
     JobOutbox,
     ProcessingJob,
 )
-from buddy_api.processing import store
+from buddy_api.processing import checkpoints, store
 from buddy_api.processing.config import WorkerSettings
 from buddy_api.processing.contracts import (
     Message,
@@ -501,28 +501,79 @@ class Processor:
             if existing is None:
                 if hashlib.sha256(content).hexdigest() != source_digest:
                     raise UploadError(409, "source_mismatch", "Accepted PDF source changed.")
-                active_stage = "provider"
-                active_stage_started_at = time.perf_counter()
-                if not await persist_stage("provider", 60):
-                    return
-                alive, generated = await fenced(
-                    self._generate_analysis(content, extraction, str(deck_id), manifest)
-                )
-                if not alive:
-                    return
+                checkpoint = None
                 if _format == "pdf":
-                    alive, generated = await fenced(
-                        blocking(
-                            partial(
-                                execute_grounding,
-                                content,
-                                extraction,
-                                manifest,
-                                generated,
-                                min(120, self.settings.runtime_seconds - 15),
-                            )
+                    async with self.database.sessions() as session, session.begin():
+                        checkpoint = await checkpoints.load(
+                            session, job.id, token, extraction, manifest
                         )
+                if checkpoint is None:
+                    active_stage = "provider"
+                    active_stage_started_at = time.perf_counter()
+                    if not await persist_stage("provider", 60):
+                        return
+                    alive, generated = await fenced(
+                        self._generate_analysis(content, extraction, str(deck_id), manifest)
                     )
+                    if not alive:
+                        return
+                    pages: dict[str, Any] = {}
+                    if _format == "pdf":
+                        async with self.database.sessions() as session, session.begin():
+                            if not await checkpoints.save_provider(
+                                session, job.id, token, extraction, manifest, generated
+                            ):
+                                return
+                else:
+                    generated, pages = checkpoint
+                if _format == "pdf":
+                    active_stage = "grounding"
+                    active_stage_started_at = time.perf_counter()
+                    if not await persist_stage("grounding", 60):
+                        return
+                    for page in range(1, len(extraction.slides) + 1):
+                        if str(page) in pages:
+                            continue
+                        if (
+                            time.perf_counter() - job_started_at
+                            >= self.settings.runtime_seconds - 135
+                        ):
+                            async with self.database.sessions() as session, session.begin():
+                                await store.defer(session, job.id, token, 1)
+                            await blocking(lambda: self.queue.acknowledge(raw["ReceiptHandle"]))
+                            return
+                        page_started = time.perf_counter()
+                        try:
+                            alive, grounded_page = await fenced(
+                                blocking(
+                                    partial(
+                                        execute_grounding,
+                                        content,
+                                        extraction,
+                                        manifest,
+                                        generated,
+                                        min(120, self.settings.runtime_seconds - 15),
+                                        page_number=page,
+                                    )
+                                )
+                            )
+                        except TimeoutError:
+                            raise ProviderFailure("grounding_timeout") from None
+                        except ExtractionError:
+                            raise ProviderFailure("grounding_failed", permanent=True) from None
+                        if not alive:
+                            return
+                        async with self.database.sessions() as session, session.begin():
+                            if not await checkpoints.save_page(
+                                session, job.id, token, extraction, manifest, page, grounded_page
+                            ):
+                                return
+                        pages[str(page)] = {
+                            "slide": grounded_page.slides[0].model_dump(mode="json"),
+                            "action_limit_reached": grounded_page.action_limit_reached,
+                        }
+                        stage_metric("grounding", "success", page_started)
+                    generated = checkpoints.assemble(generated, pages)
                 if not alive:
                     return
                 active_stage = analysis_stage
@@ -577,6 +628,11 @@ class Processor:
             if analysis_hash is None:
                 raise ProviderFailure("stored_analysis_unavailable")
             visual_qa_pending = set(analysis_result.visual_qa_pending_instance_ids)
+            source_measured_text_ids = {
+                item.instance_id
+                for item in getattr(analysis_result.inputs, "grounding", ())
+                if item.trace.method == "pdf_candidate_line" and item.trace.target_id is not None
+            }
 
             def needs_validation(result: Any) -> bool:
                 return result.state == "candidate" or (
@@ -585,11 +641,14 @@ class Processor:
                     and POWERPOINT_BUSY_REASON in result.validation.reasons
                 )
 
-            has_candidates = any(
-                needs_validation(action) and action.action.instance_id not in visual_qa_pending
+            required_checks = [
+                action
                 for slide in analysis_result.slides
                 for action in slide.actions
-            )
+                if action.action.instance_id not in visual_qa_pending
+            ]
+            completed_checks = sum(not needs_validation(action) for action in required_checks)
+            has_candidates = completed_checks < len(required_checks)
             if has_candidates and self.validation is None:
                 raise ProviderFailure("validator_unavailable")
             if has_candidates and not await persist_stage("validation", 80):
@@ -629,7 +688,18 @@ class Processor:
                                 )
                             ),
                             source_content=content,
-                            precision=("line" if action.type == "highlight_region" else "standard"),
+                            # Measured entity IDs resolve to the exact union of their
+                            # source glyphs and may legitimately span wrapped lines
+                            # (paragraphs, bullets, table rows). Keep the narrow-line
+                            # cap for free-form model quote targets only.
+                            precision=(
+                                "standard"
+                                if action.type == "highlight_region"
+                                and action.instance_id in source_measured_text_ids
+                                else "line"
+                                if action.type == "highlight_region"
+                                else "standard"
+                            ),
                             duplicate_candidate=action.instance_id in duplicate_candidate_ids,
                         )
                     )
@@ -673,6 +743,11 @@ class Processor:
                             return
                         await Analyses(session).record_validation(
                             owner_id=owner_id, result=validation_input
+                        )
+                        completed_checks += 1
+                        current.progress = max(
+                            current.progress,
+                            80 + 15 * completed_checks // max(1, len(required_checks)),
                         )
             async with self.database.sessions() as session, session.begin():
                 completed = await store.complete(session, job.id, token, analysis_id)

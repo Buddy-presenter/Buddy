@@ -26,6 +26,42 @@ from buddy_api.persistence.settings import DatabaseSettings
 pytestmark = pytest.mark.postgres
 
 
+def test_agent_window_upgrade_preserves_usage_and_guards_unknown_recent_requests(database_settings):
+    async def check():
+        engine = create_engine(database_settings)
+        try:
+            async with engine.connect() as db:
+                await db.run_sync(
+                    lambda sync: command.upgrade(
+                        migration_config(database_settings, sync), "0021_agent_quotas"
+                    )
+                )
+            async with engine.begin() as db:
+                await db.execute(
+                    text(
+                        "INSERT INTO agent_quotas (key_hash, month, calls, last_called_at) "
+                        "VALUES (:key, '2020-01', 123, clock_timestamp())"
+                    ),
+                    {"key": "0" * 64},
+                )
+            await migrate(database_settings)
+            async with engine.connect() as db:
+                row = (
+                    await db.execute(
+                        text(
+                            "SELECT calls, request_times, blocked_until - last_called_at "
+                            "FROM agent_quotas"
+                        )
+                    )
+                ).one()
+                assert row[0] == 123 and row[1] == [] and row[2].total_seconds() == 60
+            await migrate(database_settings, "check")
+        finally:
+            await engine.dispose()
+
+    asyncio.run(check())
+
+
 def test_cognito_account_is_persisted_across_api_restart(database_settings, monkeypatch):
     from buddy_api.auth import CognitoVerifier, VerifiedIdentity
     from buddy_identity.config import IdentityConfig

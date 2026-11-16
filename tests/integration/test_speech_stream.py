@@ -8,6 +8,7 @@ import struct
 import threading
 import time
 import wave
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from urllib.request import Request, urlopen
 from uuid import uuid4
@@ -28,11 +29,13 @@ from buddy_api.config import Environment, Settings
 from buddy_api.persistence.database import Database
 from buddy_api.persistence.models import AnalysisSlide, ProcessingJob, SessionEvent
 from buddy_api.speech import SpeechSettings
+from buddy_desktop.candidate_service import CandidateService
 from buddy_desktop.config import AppConfig
 from buddy_desktop.microphone import MicrophoneController
 from buddy_desktop.presentation_session_service import parse_snapshot
 from buddy_desktop.session_events import SessionEventStream
 from buddy_desktop.speech import SpeechController
+from buddy_desktop.transcript_context import TranscriptContext
 from buddy_identity.config import IdentityConfig, SessionExpired
 
 CONFIG = IdentityConfig(
@@ -51,20 +54,22 @@ class DeterministicProvider:
         return self
 
     async def send(self, data):
-        if not self.sent:
+        self.audio_bytes = getattr(self, "audio_bytes", 0) + len(data)
+        if not self.sent and self.audio_bytes >= 4800:
             self.sent = True
-            for final in (False, True):
-                await self.queue.put(
-                    json.dumps(
-                        {
-                            "type": "Results",
-                            "start": 0,
-                            "duration": 0.05,
-                            "is_final": final,
-                            "channel": {"alternatives": [{"transcript": "Next slide"}]},
-                        }
+            for start, text in ((0, "Revenue growth"), (0.1, "Next slide")):
+                for final in (False, True):
+                    await self.queue.put(
+                        json.dumps(
+                            {
+                                "type": "Results",
+                                "start": start,
+                                "duration": 0.05,
+                                "is_final": final,
+                                "channel": {"alternatives": [{"transcript": text}]},
+                            }
+                        )
                     )
-                )
 
     async def recv(self):
         return await self.queue.get()
@@ -196,6 +201,10 @@ def test_qt_to_persisted_session_and_provider(database_settings, monkeypatch, qt
         headers = {"Authorization": "Bearer speech-test-access"}
         with urlopen(Request(endpoint, headers=headers), timeout=5) as response:
             initial = parse_snapshot(json.load(response))
+        context = TranscriptContext()
+        context.bind(initial.id, initial.state_version, "en-US")
+        control.transcript_received.connect(context.accept)
+        control.cleared.connect(context.invalidate)
         for index in range(2):
             observer = SessionEventStream()
             observers.append(observer)
@@ -285,7 +294,13 @@ def test_qt_to_persisted_session_and_provider(database_settings, monkeypatch, qt
             timer.timeout.connect(send)
             timer.start(50)
             qtbot.waitUntil(
-                lambda: not timer.isActive() and any(e["final"] for e in updates), timeout=30000
+                # Audio delivery can end before the async provider's final command
+                # reaches Qt. Wait for the result this test actually asserts.
+                lambda: (
+                    not timer.isActive()
+                    and any(e["final"] and "next slide" in e["text"].lower() for e in updates)
+                ),
+                timeout=30000,
             )
         finals = [e for e in updates if e["final"]]
         if live:
@@ -311,6 +326,19 @@ def test_qt_to_persisted_session_and_provider(database_settings, monkeypatch, qt
         assert any(not e["final"] for e in updates)
         assert all(e["session_id"] == session_id and e["latency_ms"] >= 0 for e in updates)
         assert control._active, statuses
+
+        if not live:
+            snapshot = context.snapshot()
+            assert snapshot.fresh
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                result = pool.submit(
+                    CandidateService(config).resolve, "speech-test-access", initial, snapshot
+                ).result(timeout=10)
+            assert result["state_version"] == initial.state_version
+            assert result["context_epoch"] == snapshot.epoch
+            assert result["candidates"][0]["kind"] == "no_change"
+            assert snapshot.text == "Revenue growth Next slide"
+            assert any(c["reason"] == "explicit_navigation" for c in result["candidates"])
 
         async def journal():
             database = Database(database_settings)
