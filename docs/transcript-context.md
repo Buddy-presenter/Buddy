@@ -35,9 +35,10 @@ existing memory-retention policy. Pauses are not a topic classifier.
 allows the agent to use consecutive final evidence plus only whole tokens shared by two
 consecutive hypotheses of the active interim segment. It never sends the changing tail.
 The desktop requests a provisional decision after 12 stable characters, then allows at
-most two follow-ups per segment with at least 20 additional stable characters each. A
-completed segment remains eligible immediately; there is no extra settling timer. Provider
-segmentation is not treated as sentence structure.
+most two follow-ups per segment when another whole word becomes stable. If a request is
+still running, only the newest materially changed stable prefix is retained and checked
+when that request finishes. A completed segment remains eligible immediately; there is
+no extra settling timer. Provider segmentation is not treated as sentence structure.
 `ContextSnapshot.matches(current)` remains an exact snapshot check. The agent-specific
 `matches_decision(current)` also accepts ordinary continuation if the submitted stable
 prefix stays intact, while rejecting a revision that changes that prefix, an explicit
@@ -65,10 +66,14 @@ straddle that boundary. New speech can populate the window once state is stable.
 This deliberately sacrifices an ambiguous utterance rather than attach it to a
 new slide. These rules do not reset the speech provider or consume retry attempts.
 
-No extra database retention, audio recording, operational logging or provider
-request is introduced. The existing five-minute session journal and backup policy
-remain as documented in [session events](session-events.md). The window is local
-memory only and never restored after restart. Snapshot and segment reprs omit text.
+No extra database retention, audio recording or provider request is introduced. Local
+desktop diagnostics record only bounded reason codes, timing values, action tool names,
+and opaque decision IDs; they never record transcript text, audio, credentials, tokens,
+or provider response bodies. On Windows the rotating log is
+`%LOCALAPPDATA%\Buddy\logs\desktop.log` (1 MB per file, two backups). The existing
+five-minute session journal and backup policy remain as documented in
+[session events](session-events.md). The window is local memory only and never restored
+after restart. Snapshot and segment reprs omit text.
 The recognition UI continues to show the latest result; this window supplies later
 decision consumers and does not itself change slides.
 

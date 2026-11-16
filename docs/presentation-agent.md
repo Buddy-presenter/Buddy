@@ -86,8 +86,10 @@ speech segments with sequence/text/final status. The passage must exactly join t
 segments, end with the latest segment, and fit 4096 characters. The latest segment may
 be a stable prefix corroborated by consecutive Deepgram interim hypotheses; only whole
 common tokens are sent. The desktop bounds provisional requests to three per segment,
-with at least 20 new stable characters between follow-up requests. Ordinary changing
-tail text is not sent. Only the desktop's validated fresh capture context is eligible;
+with follow-up requests admitted when another whole word becomes stable. While one request
+is running, the desktop coalesces updates to the newest materially changed stable prefix
+and checks it when the request finishes. Ordinary changing tail text is not sent. Only
+the desktop's validated fresh capture context is eligible;
 server timestamps bound transit, not proof that a remote client actually captured
 microphone audio. Bodies are bounded to 64 KiB and five seconds.
 

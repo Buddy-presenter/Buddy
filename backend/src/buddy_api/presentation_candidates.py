@@ -195,7 +195,7 @@ def tokens(text: str) -> frozenset[str]:
 
 
 def navigation_step(text: str) -> int | None:
-    """Whole, unambiguous relative commands; other speech stays on the semantic path."""
+    """Recognize a leading relative command while the presenter keeps talking."""
     text = unicodedata.normalize("NFKC", text).casefold().strip()
     # Keep questions/quoted examples out of the fast path. Apostrophes are allowed
     # only in the contraction below; stripping punctuation first loses this intent.
@@ -203,21 +203,87 @@ def navigation_step(text: str) -> int | None:
     if any(c in text for c in "?？\"'“”‘’«»"):
         return None
     normalized = " ".join(re.findall(r"[^\W_]+", text))
-    direct = re.fullmatch(
+    direct = re.match(
         r"(?:please )?(?:let us )?(?:(?:go|move|switch|advance) to (?:the )?)?"
-        r"(next|previous) (?:slide|page)(?: please)?",
+        r"(next|previous) (?:slide|page)(?: please)?(?=$|[.,;:!?]|\s)",
         normalized,
     )
-    if direct:
+    if direct and _safe_navigation_continuation(normalized[direct.end() :]):
         return 1 if direct[1] == "next" else -1
-    relative = re.fullmatch(
+    relative = re.match(
         r"(?:please )?(?:let us )?(?:go|move) (forward|back|backward) "
-        r"(?:by )?one (?:slide|page)(?: please)?",
+        r"(?:by )?one (?:slide|page)(?: please)?(?=$|[.,;:!?]|\s)",
         normalized,
     )
-    if relative:
+    if relative and _safe_navigation_continuation(normalized[relative.end() :]):
         return 1 if relative[1] == "forward" else -1
     return None
+
+
+def _safe_navigation_continuation(suffix: str) -> bool:
+    """Allow an imperative followed by explanation, but not a reversal or condition."""
+    remainder = " ".join(re.findall(r"[^\W_]+", suffix.casefold()))
+    if not remainder:
+        return True
+    words = set(remainder.split())
+    # A continuation can change an imperative into a conditional or explicitly
+    # tell Buddy not to move. Check the entire suffix, not just its first token.
+    if words & {
+        "if",
+        "unless",
+        "until",
+        "only",
+        "provided",
+        "assuming",
+        "depending",
+        "not",
+        "no",
+        "never",
+        "cannot",
+        "without",
+    } or re.search(
+        r"\b(?:don|doesn|didn|can|could|couldn|should|shouldn|would|wouldn|won|mustn|mightn) t\b",
+        remainder,
+    ):
+        return False
+    first = remainder.split()[0]
+    if any(
+        re.search(r"(?<!\w)" + marker + r"(?!\w)", remainder)
+        for marker in (
+            "actually",
+            "instead",
+            "rather",
+            "sorry",
+            "wait",
+            "never",
+            "cancel",
+            "forget",
+            "scratch",
+        )
+    ):
+        return False
+    return first in {
+        "and",
+        "as",
+        "because",
+        "since",
+        "so",
+        "then",
+        "where",
+        "which",
+        "while",
+        "we",
+        "i",
+        "you",
+        "it",
+        "this",
+        "that",
+        "the",
+        "now",
+        "um",
+        "uh",
+        "please",
+    }
 
 
 def _spoken_slide_number(tokens_: list[str]) -> int | None:
@@ -284,7 +350,7 @@ def _spoken_slide_number(tokens_: list[str]) -> int | None:
 
 
 def navigation_intent(text: str) -> tuple[Literal["relative", "absolute"], int] | None:
-    """Recognize exact English slide commands; ambiguous speech stays semantic."""
+    """Recognize an explicit leading slide command without waiting for sentence end."""
     text = unicodedata.normalize("NFKC", text).casefold().strip()
     text = re.sub(r"\blet['’]s\b", "let us", text)
     if any(c in text for c in "?？\"'“”‘’«»"):
@@ -300,17 +366,24 @@ def navigation_intent(text: str) -> tuple[Literal["relative", "absolute"], int] 
     prefixes = (
         r"(?:please )?(?:let us )?(?:go|move|jump|navigate|switch|turn) "
         r"(?:to|over to) (?:the )?(?:slide|page) (?:number )?",
+        r"(?:please )?(?:let us )?(?:go|move|return) back to "
+        r"(?:the )?(?:slide|page) (?:number )?",
         r"(?:please )?show (?:me )?(?:the )?(?:slide|page) (?:number )?",
         r"(?:please )?take me to (?:the )?(?:slide|page) (?:number )?",
         r"(?:please )?i want to (?:go|move|jump) to (?:the )?(?:slide|page) (?:number )?",
     )
     for prefix in prefixes:
-        match = re.fullmatch(prefix + r"(.+?)(?: please)?", normalized)
+        match = re.match(prefix + r"(.+)", normalized)
         if match is not None:
             number_words = match[1].split()
-            number = _spoken_slide_number(number_words)
-            if number is not None:
-                return ("absolute", number)
+            # The directive can be followed by the speaker's explanation. Try the
+            # longest valid cardinal first, then accept only a safe continuation.
+            for end in range(len(number_words), 0, -1):
+                number = _spoken_slide_number(number_words[:end])
+                if number is not None and _safe_navigation_continuation(
+                    " ".join(number_words[end:])
+                ):
+                    return ("absolute", number)
     return None
 
 

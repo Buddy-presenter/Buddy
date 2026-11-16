@@ -282,14 +282,13 @@ def test_loop_coalesces_and_invalidates_corrections_manual_changes_and_disable(q
             current[0] = replace(context, segments=(replace(context.segments[0], sequence=seq),))
             loop.update("token", session, current[0])
         service.release.set()
-        qtbot.waitUntil(lambda: not loop.runner.busy)
-        assert len(service.calls) == 1
-        assert not any(isinstance(value, dict) for value in received)
-        clock[0] += 3.3
-        loop.update("token", session, current[0])
-        qtbot.waitUntil(lambda: not loop.runner.busy)
+        qtbot.waitUntil(lambda: len(service.calls) == 2 and not loop.runner.busy)
+        assert len(service.calls) == 2
         assert service.calls[-1].segments[-1].sequence == 9
         assert received[-1]["sequence"] == 9
+        assert [value["sequence"] for value in received if isinstance(value, dict)] == [9]
+        loop.update("token", session, current[0])
+        assert len(service.calls) == 2
         assert received[-1]["_client_context"] is current[0]
         assert loop._submitted is None
         assert "Our sales are growing" not in repr(loop._last_revision)
@@ -349,7 +348,67 @@ def test_loop_submits_stable_interim_and_keeps_result_through_continuation(qtbot
         service.release.set()
         qtbot.waitUntil(lambda: not loop.runner.busy)
         assert isinstance(received[-1], dict)
-        assert received[-1]["_client_context"] is partial
+        assert len(service.calls) == 2
+        assert received[-1]["_client_context"].decision_segments[-1].text == (
+            "Let's look at the table of contents"
+        )
+    finally:
+        service.release.set()
+        loop.wait_for_shutdown()
+
+
+def test_loop_coalesces_latest_stable_word_while_request_is_in_flight(qtbot):
+    session, final = inputs()
+    initial = "Let's review the market"
+    first = replace(final.segments[0], final=False, text=initial, stable_text=initial)
+    current = [replace(final, segments=(first,))]
+    service = Service()
+    loop = AgentLoop(service, current_context=lambda: current[0])
+    loop._prepared_for = session.id
+    loop.set_enabled(True)
+    try:
+        loop.update("token", session, current[0])
+        qtbot.waitUntil(lambda: len(service.calls) == 1)
+        updated = "Let's review the market and then review these numbers"
+        current[0] = replace(
+            current[0],
+            segments=(replace(first, sequence=2, text=updated, stable_text=updated),),
+        )
+        loop.update("token", session, current[0])
+        assert loop._pending_update
+        service.release.set()
+        qtbot.waitUntil(lambda: len(service.calls) == 2 and not loop.runner.busy)
+        assert service.calls[1].decision_segments[-1].text == updated
+    finally:
+        service.release.set()
+        loop.wait_for_shutdown()
+
+
+def test_numbered_navigation_waits_for_destination_then_submits_immediately(qtbot):
+    session, final = inputs()
+    incomplete = "Go to slide"
+    segment = replace(final.segments[0], final=False, text=incomplete, stable_text=incomplete)
+    current = [replace(final, segments=(segment,))]
+    service = Service()
+    loop = AgentLoop(service, current_context=lambda: current[0])
+    loop._prepared_for = session.id
+    statuses = []
+    loop.status.connect(statuses.append)
+    loop.set_enabled(True)
+    try:
+        loop.update("token", session, current[0])
+        assert not service.calls
+        assert "slide number" in statuses[-1]
+
+        complete = "Go to slide 8"
+        current[0] = replace(
+            current[0],
+            segments=(replace(segment, sequence=2, text=complete, stable_text=complete),),
+        )
+        loop.update("token", session, current[0])
+        qtbot.waitUntil(lambda: len(service.calls) == 1)
+        qtbot.waitUntil(lambda: not loop.runner.busy)
+        assert service.calls[0].decision_segments[-1].text == complete
     finally:
         service.release.set()
         loop.wait_for_shutdown()
@@ -387,8 +446,10 @@ def test_loop_discards_interim_result_after_prefix_correction(qtbot):
         )
         loop.update("token", session, current[0])
         service.release.set()
-        qtbot.waitUntil(lambda: not loop.runner.busy)
-        assert not any(isinstance(value, dict) for value in received)
+        qtbot.waitUntil(lambda: len(service.calls) == 2 and not loop.runner.busy)
+        assert received[-1]["_client_context"].decision_segments[-1].text == (
+            "Let's look at the chart"
+        )
     finally:
         service.release.set()
         loop.wait_for_shutdown()
@@ -438,8 +499,8 @@ def test_interim_decision_requests_are_coalesced_and_bounded(qtbot):
         qtbot.waitUntil(lambda: not loop.runner.busy)
         assert len(service.calls) == 1
         for seq, suffix, expected_calls in (
-            (2, " with recent growth", 1),
-            (3, " with recent growth and customer numbers", 2),
+            (2, " with recent growth", 2),
+            (3, " with recent growth and customer numbers", 3),
             (
                 4,
                 " with recent growth and customer numbers we should explain "
@@ -512,7 +573,14 @@ def test_natural_pause_pronoun_correction_and_topic_change_keep_only_live_work(q
     base = time.monotonic_ns()
     clock = [base]
     monkeypatch.setattr(context_module, "time", SimpleNamespace(monotonic_ns=lambda: clock[0]))
-    monkeypatch.setattr(loop_module, "time", SimpleNamespace(monotonic=lambda: clock[0] / 1e9))
+    monkeypatch.setattr(
+        loop_module,
+        "time",
+        SimpleNamespace(
+            monotonic=lambda: clock[0] / 1e9,
+            monotonic_ns=lambda: clock[0],
+        ),
+    )
     context = TranscriptContext()
     context.bind(session.id, session.state_version, "en-US")
     service = Service()
@@ -579,7 +647,14 @@ def test_unspent_admission_is_deferred_without_losing_latest_input(
 
     session, context = inputs()
     clock = [100.0]
-    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(
+        module,
+        "time",
+        SimpleNamespace(
+            monotonic=lambda: clock[0],
+            monotonic_ns=lambda: round(clock[0] * 1e9),
+        ),
+    )
 
     class Paced(Service):
         def propose(self, access, session, snapshot, *, current_context):
