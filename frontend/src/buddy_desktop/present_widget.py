@@ -1883,7 +1883,23 @@ class PresentWidget(Page):
     @Slot(object)
     def _agent_proposed(self, result: object) -> None:
         if not isinstance(result, dict):
-            self._deferred_agent_proposal = None
+            # AgentLoop emits None while `_update_agent` deliberately marks its
+            # context stale during session synchronization. Keep the proposal
+            # evidence until the sync retry can revalidate it, or reject it as
+            # stale/corrected. Clearing it here loses valid actions on the next
+            # 100 ms timer tick.
+            syncing = any(
+                (
+                    self.executor.busy,
+                    self.session_runner.busy,
+                    self.powerpoint_runner.busy,
+                    self._session_pending_state is not None,
+                    self._session_restore_state is not None,
+                    self._stream_snapshot is not None,
+                )
+            )
+            if not syncing:
+                self._deferred_agent_proposal = None
             self.agent_proposal.clear()
             context = self.transcript_context.snapshot()
             candidates = context.decision_segments

@@ -225,6 +225,27 @@ def _safe_navigation_continuation(suffix: str) -> bool:
     remainder = " ".join(re.findall(r"[^\W_]+", suffix.casefold()))
     if not remainder:
         return True
+    words = set(remainder.split())
+    # A continuation can change an imperative into a conditional or explicitly
+    # tell Buddy not to move. Check the entire suffix, not just its first token.
+    if words & {
+        "if",
+        "unless",
+        "until",
+        "only",
+        "provided",
+        "assuming",
+        "depending",
+        "not",
+        "no",
+        "never",
+        "cannot",
+        "without",
+    } or re.search(
+        r"\b(?:don|doesn|didn|can|could|couldn|should|shouldn|would|wouldn|won|mustn|mightn) t\b",
+        remainder,
+    ):
+        return False
     first = remainder.split()[0]
     if any(
         re.search(r"(?<!\w)" + marker + r"(?!\w)", remainder)

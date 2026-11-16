@@ -246,6 +246,12 @@ def test_action_proposal_waits_for_transient_session_sync_then_executes(player, 
     assert page._deferred_agent_proposal is not None
     assert not checks
     assert page.executor.current_index == 0
+    # Exercise the actual 100 ms timer/update path. AgentLoop emits None while
+    # the context is intentionally stale during this sync gap.
+    page._agent_tick.start()
+    qtbot.wait(150)
+    page._agent_tick.stop()
+    assert page._deferred_agent_proposal is not None
     page._session_pending_state = None
     page._retry_deferred_policy()
     qtbot.waitUntil(lambda: page.executor.current_index == 1 and not page.executor.busy)
