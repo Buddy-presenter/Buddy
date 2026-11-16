@@ -110,8 +110,13 @@ class ContextSnapshot:
                 if not segment.stable_text:
                     continue
                 segment = ContextSegment(
-                    segment.segment_id, segment.sequence, segment.stable_text, False,
-                    segment.start_seconds, segment.end_seconds, segment.capture_end_ns,
+                    segment.segment_id,
+                    segment.sequence,
+                    segment.stable_text,
+                    False,
+                    segment.start_seconds,
+                    segment.end_seconds,
+                    segment.capture_end_ns,
                     segment.stable_text,
                 )
             extra = len(segment.text) + bool(selected)
@@ -139,7 +144,9 @@ class ContextSnapshot:
         """Accept ordinary continuation while rejecting corrected decision evidence."""
         submitted = self.decision_segments
         if not (
-            self.fresh and current.fresh and submitted
+            self.fresh
+            and current.fresh
+            and submitted
             and self.session_id == current.session_id
             and self.state_version == current.state_version
             and self.epoch == current.epoch
@@ -182,7 +189,8 @@ class ContextSnapshot:
         ):
             return False
         if any(
-            segment.final and segment.sequence <= newest_submitted
+            segment.final
+            and segment.sequence <= newest_submitted
             and segment.segment_id not in submitted_ids
             for segment in current.segments
         ):

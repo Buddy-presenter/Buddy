@@ -138,9 +138,7 @@ class AgentService:
         *,
         current_context: Callable[[], ContextSnapshot],
     ) -> dict[str, object]:
-        payload = completed_payload(
-            session, context, current_context, allow_provisional=True
-        )
+        payload = completed_payload(session, context, current_context, allow_provisional=True)
         payload["protocol"] = "presentation-agent.v1"
         payload["segments"] = [
             {"sequence": s.sequence, "text": s.text, "final": s.final}

@@ -472,9 +472,7 @@ def test_agent_payload_marks_stable_interim_without_changing_candidate_contract(
     text = "Let's look at the table of contents"
     segment = replace(final.segments[0], final=False, text=text, stable_text=text)
     partial = replace(final, segments=(segment,))
-    payload = completed_payload(
-        session, partial, lambda: partial, allow_provisional=True
-    )
+    payload = completed_payload(session, partial, lambda: partial, allow_provisional=True)
     assert payload["provisional"] is True
     assert payload["latest_utterance"] == text
     assert payload["sequence"] == segment.sequence

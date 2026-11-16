@@ -1509,11 +1509,7 @@ class PresentWidget(Page):
             self.agent_proposal.clear()
             context = self.transcript_context.snapshot()
             candidates = context.decision_segments
-            if (
-                not context.fresh
-                or not candidates
-                or not context.segments
-            ):
+            if not context.fresh or not candidates or not context.segments:
                 self.policy.clear_pending()
             return
         target = result["target"]

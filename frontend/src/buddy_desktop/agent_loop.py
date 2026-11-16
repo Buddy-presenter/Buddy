@@ -106,9 +106,7 @@ class AgentLoop(QObject):
             self._not_before = float("-inf")
         partial_key: tuple[int, str | None, str] | None = None
         partial_length = 0
-        correction_since_previous = (
-            previous is not None and context.has_correction_since(previous)
-        )
+        correction_since_previous = previous is not None and context.has_correction_since(previous)
         if not segments[-1].final:
             partial_key = (context.epoch, context.stream_id, segments[-1].segment_id)
             partial_length = len(segments[-1].text)
@@ -121,13 +119,13 @@ class AgentLoop(QObject):
                     ),
                     None,
                 )
-                if (
-                    previous_partial is not None
-                    and not segments[-1].text.startswith(previous_partial.text)
+                if previous_partial is not None and not segments[-1].text.startswith(
+                    previous_partial.text
                 ):
                     prior_length, attempts = self._partial_attempts.get(partial_key, (0, 0))
                     self._partial_attempts[partial_key] = (
-                        min(prior_length, partial_length - 20), attempts
+                        min(prior_length, partial_length - 20),
+                        attempts,
                     )
             prior_length, attempts = self._partial_attempts.get(partial_key, (0, 0))
             if (
