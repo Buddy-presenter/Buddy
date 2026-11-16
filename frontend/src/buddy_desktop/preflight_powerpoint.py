@@ -13,12 +13,14 @@ from typing import Any
 from xml.etree import ElementTree
 
 import psutil  # type: ignore[import-untyped]
+from PySide6.QtCore import QRectF, Qt
+from PySide6.QtGui import QImage, QPainter
 from PySide6.QtWidgets import QApplication
 
 from buddy_desktop.powerpoint import PowerPointAutomation
-from buddy_desktop.powerpoint_contract import PowerPointAction
+from buddy_desktop.powerpoint_contract import PowerPointAction, PresentationInfo
 from buddy_desktop.powerpoint_generated import generated_action
-from buddy_desktop.powerpoint_zoom_evidence import capture
+from buddy_desktop.powerpoint_zoom_evidence import capture, distance
 from buddy_desktop.slide_contract import ContractError
 from buddy_desktop.validation_worker import PROFILES
 
@@ -27,15 +29,21 @@ def safe_source(content: bytes) -> None:
     """Only bounded passive PPTX packages, even when a catalog came from analysis."""
     with zipfile.ZipFile(io.BytesIO(content)) as archive:
         entries = archive.infolist()
-        if len(entries) > 4096 or sum(i.file_size for i in entries) > 128 * 1024 * 1024:
+        if (
+            len(entries) > 4096
+            or len({i.filename for i in entries}) != len(entries)
+            or sum(i.file_size for i in entries) > 128 * 1024 * 1024
+        ):
             raise ContractError("unsafe_office_content")
         for entry in entries:
             name = entry.filename.lower()
+            if ".." in name.split("/") or name.startswith("/") or "\\" in name:
+                raise ContractError("unsafe_office_content")
             if any(part in name for part in ("vbaproject", "activex/", "embeddings/")):
                 raise ContractError("unsafe_office_content")
             if name.endswith(".rels"):
                 raw = archive.read(entry)
-                if b"<!DOCTYPE" in raw.upper() or b"<!ENTITY" in raw.upper():
+                if b"\x00" in raw or b"<!DOCTYPE" in raw.upper() or b"<!ENTITY" in raw.upper():
                     raise ContractError("unsafe_office_content")
                 root = ElementTree.fromstring(raw)
                 if any(r.attrib.get("TargetMode", "").lower() == "external" for r in root):
@@ -43,11 +51,33 @@ def safe_source(content: bytes) -> None:
 
 
 class OfficePlayer:
+    office: Any
+    presentation: Any
+    adapter: Any
+    request: dict[str, Any]
+    app: QApplication
+    pythoncom: Any
+    lease: Any
+    pid: int
+    info: PresentationInfo
+    current_id: str
+    runtime: dict[str, Any]
+
     def __init__(self, app: QApplication, folder: Path, request: dict[str, Any]) -> None:
         if sys.platform != "win32":
             raise ContractError("powerpoint_requires_windows_office")
         safe_source((folder / "source.pptx").read_bytes())
         if PowerPointAutomation._powerpoint_process_running():
+            raise ContractError("powerpoint_worker_busy_use_dedicated_session")
+        events = importlib.import_module("win32event")
+        self.lease = events.CreateMutex(None, False, "Local\\BuddyPreflightOffice")
+        if events.WaitForSingleObject(self.lease, 0) not in {0, 0x80}:
+            self.lease.Close()
+            raise ContractError("powerpoint_worker_busy_use_dedicated_session")
+        # Check again inside the process-wide test-session lease.
+        if PowerPointAutomation._powerpoint_process_running():
+            events.ReleaseMutex(self.lease)
+            self.lease.Close()
             raise ContractError("powerpoint_worker_busy_use_dedicated_session")
         self.office: Any = None
         self.presentation: Any = None
@@ -173,7 +203,37 @@ class OfficePlayer:
         self.app.processEvents()
         driver = self.adapter._zoom_driver()
         driver.focus(self.info)
-        return capture(self.info, driver)
+        try:
+            image = capture(self.info, driver)
+        except Exception as exc:
+            raise ContractError("desktop_capture_unavailable") from exc
+        try:
+            with driver._physical_pixels():
+                rect = driver.gui.GetClientRect(self.info.window_id)
+                origin = driver.gui.ClientToScreen(self.info.window_id, (0, 0))
+                # Reject another app/dialog covering any interior sample of the audience.
+                for x in (0.1, 0.3, 0.5, 0.7, 0.9):
+                    for y in (0.1, 0.3, 0.5, 0.7, 0.9):
+                        hit = driver.gui.WindowFromPoint(
+                            (origin[0] + round(rect[2] * x), origin[1] + round(rect[3] * y))
+                        )
+                        if driver.gui.GetAncestor(hit, 2) != self.info.window_id:
+                            raise ContractError("audience_viewport_occluded")
+        except Exception as exc:
+            raise ContractError("audience_viewport_occluded") from exc
+        source = QImage.fromData(self.adapter.preview(self.info).png)
+        if source.isNull():
+            raise ContractError("desktop_capture_unavailable")
+        reference = office_reference(
+            source,
+            image.size().width(),
+            image.size().height(),
+            self.runtime["viewport"],
+            driver.magnifier.owned,
+        )
+        if distance(image, reference) > 0.015:
+            raise ContractError("audience_viewport_occluded")
+        return image
 
     def close(self) -> None:
         if self.adapter is not None:
@@ -187,3 +247,24 @@ class OfficePlayer:
             with suppress(Exception):
                 self.office.Quit()
         self.pythoncom.CoUninitialize()
+        importlib.import_module("win32event").ReleaseMutex(self.lease)
+        self.lease.Close()
+
+
+def office_reference(
+    source: QImage, width: int, height: int, viewport: list[int], plan: Any
+) -> QImage:
+    """Occlusion guard only. Evidence always comes from the desktop, never this export."""
+    reference = QImage(width, height, QImage.Format.Format_RGB32)
+    reference.fill(Qt.GlobalColor.black)
+    painter = QPainter(reference)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+    painter.scale(width / viewport[0], height / viewport[1])
+    if plan is not None:
+        painter.scale(plan.scale, plan.scale)
+        painter.translate(-plan.x, -plan.y)
+    scale = min(viewport[0] / source.width(), viewport[1] / source.height())
+    w, h = source.width() * scale, source.height() * scale
+    painter.drawImage(QRectF((viewport[0] - w) / 2, (viewport[1] - h) / 2, w, h), source)
+    painter.end()
+    return reference

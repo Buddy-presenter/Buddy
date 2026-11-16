@@ -56,6 +56,11 @@ Office PID and audience window identity. It never connects to an existing slides
 Production zoom requires fullscreen on the primary display; the host must explicitly
 request that display's physical viewport. Mismatch fails closed. Office version/build,
 Windows runtime and actual viewport are recorded. macOS PowerPoint is unsupported.
+Native window hit tests and a source-render comparison reject obstructing dialogs/apps;
+the source export is an occlusion guard only and never replaces desktop evidence. Office
+activation/licensing prompts therefore make the case unsupported until the operator
+restores a licensed runtime and repeats the smoke. Do not dismiss account/security
+prompts automatically or count an obstructed capture as acceptance.
 This is process/resource isolation, not a sandbox for hostile native documents; run the
 Office host in a dedicated test account, not alongside personal documents/apps.
 

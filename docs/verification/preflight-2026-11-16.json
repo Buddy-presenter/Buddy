@@ -1,0 +1,33 @@
+{
+  "schema_version": "buddy.preflight-evidence.v1",
+  "issue": 48,
+  "date": "2026-11-16",
+  "inputs": "repository-owned synthetic fixtures; no user recording or model verdict",
+  "pdf": {
+    "state": "passed",
+    "runtime": "Windows; Qt 6.12.0; pdfium-5.14.0-144dpi",
+    "viewport": [1280, 720],
+    "display_scale": 1,
+    "source_sha256": "7f2706d21d400854f2e233f02005a19624f0d79aedc21322bbdd5377423601f9",
+    "baseline_capture_sha256": "422bc303e14267f02c6e5143533a04170e1426386a98311256df9d0ba71cc707",
+    "zoom_capture_sha256": "8e9b8b184d40b157cab1ce5fa612c155f30040de4842c29fce8dc4c5c75c8e83",
+    "reset_capture_sha256": "422bc303e14267f02c6e5143533a04170e1426386a98311256df9d0ba71cc707",
+    "baseline_repeated": true,
+    "result_repeated": true,
+    "visible_change": true,
+    "reset_restored": true
+  },
+  "powerpoint": {
+    "state": "unsupported",
+    "runtime": "Windows; desktop Office 16.0.20527",
+    "viewport": [1920, 1080],
+    "source_sha256": "6e2bc547cf4a9b3056df249dde24bdfe7af077cd1e4f900961df1d836892aafc",
+    "reason": "Office reported an inactive license and intermittently obstructed the audience with an account dialog. Native runs fail closed as needs-review; no clean PowerPoint acceptance is claimed.",
+    "follow_up": "Restore a licensed dedicated Office runtime, rerun smoke_preflight.py with the actual physical viewport, and inspect all native captures."
+  },
+  "macos": {
+    "state": "pending-ci",
+    "note": "Native capture requires an interactive Mac and screen-recording permission. An unavailable capture must remain unsupported."
+  },
+  "semantic_verified": false
+}

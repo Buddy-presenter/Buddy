@@ -212,6 +212,7 @@ def run(folder: Path) -> dict[str, Any]:
             "unsafe_office_content",
         }
         result["reason"] = str(exc) if str(exc) in known else "execution_failed"
+        result["failed_tool_index"] = len(result["trace"])
         errors = []
         cause: BaseException | None = exc
         for _ in range(4):
@@ -224,6 +225,11 @@ def run(folder: Path) -> dict[str, Any]:
         if player is not None:
             result.update(player.runtime)
             player.close()
+        result["source_unchanged"] = (
+            hashlib.sha256(source.read_bytes()).hexdigest() == request["source_sha256"]
+        )
+        if not result["source_unchanged"]:
+            result.update(state="needs-review", reason="source_modified")
         app.quit()
     return result
 

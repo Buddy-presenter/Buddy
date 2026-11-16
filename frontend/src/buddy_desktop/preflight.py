@@ -18,7 +18,7 @@ from uuid import uuid4
 
 import psutil  # type: ignore[import-untyped]
 
-from buddy_desktop.slide_contract import ContractError, read_json, validate
+from buddy_desktop.slide_contract import ContractError, validate
 from buddy_desktop.validation_worker import PROFILES
 
 
@@ -37,14 +37,16 @@ def check_tools(tools: object, catalog: dict[str, Any], slides: dict[str, Any]) 
         if not isinstance(tool, dict):
             raise ContractError("Invalid preflight tool.")
         op = tool.get("op")
+        if not isinstance(op, str):
+            raise ContractError("Invalid preflight operation.")
         keys = {"op"}
         if op == "load_slide":
             keys.add("slide_id")
-            if tool.get("slide_id") not in slides:
+            if not isinstance(tool.get("slide_id"), str) or tool["slide_id"] not in slides:
                 raise ContractError("Unknown preflight slide.")
         elif op == "apply_action":
             keys.add("action_id")
-            if tool.get("action_id") not in catalog:
+            if not isinstance(tool.get("action_id"), str) or tool["action_id"] not in catalog:
                 raise ContractError("Unknown preflight action.")
         elif op not in {"reset", "read_state", "capture"}:
             raise ContractError("Tool is not allowlisted.")
@@ -168,7 +170,6 @@ class PreflightRunner:
             shutil.rmtree(self._root / oldest)
             del self._runs[oldest]
         folder = self._root / run
-        folder.mkdir(mode=0o700)
         request = dict(
             source_format=source_format,
             deck_id=deck_id,
@@ -182,8 +183,8 @@ class PreflightRunner:
         )
         raw = json.dumps(request, allow_nan=False).encode()
         if len(raw) > 1024 * 1024:
-            shutil.rmtree(folder)
             raise ContractError("Preflight snapshot exceeds 1 MiB.")
+        folder.mkdir(mode=0o700)
         (folder / f"source.{source_format}").write_bytes(source)
         (folder / "request.json").write_bytes(raw)
         report: dict[str, Any] = dict(
@@ -195,13 +196,18 @@ class PreflightRunner:
             source_format=source_format,
             source_revision=revision,
             semantic_verified=False,
+            artifacts=[],
         )
         try:
             reason = self._launch(folder, profile, cancelled)
             if reason:
                 report["reason"] = reason
             else:
-                payload = read_json(folder / "result.json", 256 * 1024)
+                with (folder / "result.json").open("rb") as result_file:
+                    raw_result = result_file.read(256 * 1024 + 1)
+                if len(raw_result) > 256 * 1024:
+                    raise ContractError("Preflight trace exceeds bounds.")
+                payload = json.loads(raw_result)
                 if (
                     not isinstance(payload, dict)
                     or payload.get("source_sha256") != request["source_sha256"]
@@ -211,11 +217,13 @@ class PreflightRunner:
             total = 0
             artifacts = []
             for image in sorted(folder.glob("*.png")):
-                content = image.read_bytes()
+                with image.open("rb") as image_file:
+                    content = image_file.read(16 * 1024 * 1024 + 1)
                 total += len(content)
                 if (
                     image.name not in {f"{i}.png" for i in range(4)}
                     or len(content) > 16 * 1024 * 1024
+                    or not content.startswith(b"\x89PNG\r\n\x1a\n")
                 ):
                     raise ContractError("Preflight artifact exceeds bounds.")
                 artifacts.append(dict(name=image.name, sha256=hashlib.sha256(content).hexdigest()))
@@ -238,19 +246,25 @@ class PreflightRunner:
 
     @staticmethod
     def _launch(folder: Path, profile: str, cancelled: Event | None) -> str | None:
+        if cancelled is not None and cancelled.is_set():
+            return "cancelled"
+        for name in ("profile", "roaming", "local", "temp"):
+            (folder / name).mkdir()
+        for name in ("Desktop", "Documents", "AppData"):
+            (folder / "profile" / name).mkdir()
         environment = {
             key: value
             for key, value in os.environ.items()
             if key.upper() in {"PATH", "SYSTEMROOT", "WINDIR", "LANG", "LC_ALL"}
         }
         environment.update(
-            HOME=str(folder),
-            USERPROFILE=str(folder),
-            TEMP=str(folder),
-            TMP=str(folder),
-            TMPDIR=str(folder),
-            APPDATA=str(folder),
-            LOCALAPPDATA=str(folder),
+            HOME=str(folder / "profile"),
+            USERPROFILE=str(folder / "profile"),
+            TEMP=str(folder / "temp"),
+            TMP=str(folder / "temp"),
+            TMPDIR=str(folder / "temp"),
+            APPDATA=str(folder / "roaming"),
+            LOCALAPPDATA=str(folder / "local"),
             XDG_CONFIG_HOME=str(folder),
             XDG_CACHE_HOME=str(folder),
             QT_QPA_PLATFORM="windows"
@@ -272,11 +286,14 @@ class PreflightRunner:
             start_new_session=os.name != "nt",
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        monitor = psutil.Process(process.pid)
+        monitor: Any = None
         deadline = time.monotonic() + 90
         job: Any = None
+        jobs: Any = None
+        api: Any = None
         assigned_office: int | None = None
         try:
+            monitor = psutil.Process(process.pid)
             if sys.platform == "win32":
                 jobs = importlib.import_module("win32job")
                 api = importlib.import_module("win32api")
@@ -327,11 +344,13 @@ class PreflightRunner:
                     return "storage_limit"
                 time.sleep(0.02)
             return None if process.returncode == 0 else "worker_failed"
+        except Exception:
+            return "isolation_unavailable"
         finally:
             if job is not None:
                 job.Close()
             # Kill only the owned process tree, never discover or attach user apps.
-            with suppress(psutil.NoSuchProcess):
+            with suppress(psutil.NoSuchProcess, AttributeError):
                 for child in monitor.children(recursive=True):
                     with suppress(psutil.NoSuchProcess):
                         child.kill()

@@ -50,6 +50,8 @@ def snapshot():
         [{"op": "load_slide", "slide_id": "unknown"}],
         [{"op": "capture"}] * 5,
         [{"op": "read_state"}] * 17,
+        [{"op": []}],
+        [{"op": "apply_action", "action_id": []}],
     ],
 )
 def test_tool_allowlist_rejects_arbitrary_operations(tools):
@@ -150,3 +152,84 @@ def test_passive_powerpoint_package_and_external_content_rejection():
         )
     with pytest.raises(ContractError, match="unsafe_office_content"):
         safe_source(stream.getvalue())
+
+
+def test_office_dialog_cannot_be_accepted_as_an_audience_capture():
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QColor, QImage, QPainter
+
+    from buddy_desktop.powerpoint_zoom_evidence import distance
+    from buddy_desktop.preflight_powerpoint import office_reference
+
+    source = QImage(1280, 720, QImage.Format.Format_RGB32)
+    source.fill(QColor("#101820"))
+    clean = office_reference(source, 1280, 720, [1920, 1080], None)
+    obstructed = clean.copy()
+    painter = QPainter(obstructed)
+    painter.fillRect(QRect(290, 130, 700, 450), QColor("#282828"))
+    painter.end()
+    assert distance(source, clean) < 0.001
+    assert distance(obstructed, clean) > 0.015
+
+
+def test_real_child_crash_stays_unapproved_and_cleans_job(snapshot, monkeypatch):
+    import buddy_desktop.preflight as module
+
+    popen = module.subprocess.Popen
+
+    def crash(command, **kwargs):
+        return popen(
+            [command[0], "-c", "import sys; sys.stdin.buffer.read(1); sys.exit(7)"], **kwargs
+        )
+
+    monkeypatch.setattr(module.subprocess, "Popen", crash)
+    with PreflightRunner("owner") as runner:
+        report = runner.run("owner", **snapshot, tools=[{"op": "read_state"}])
+        assert report["state"] == "needs-review"
+        assert report["reason"] == "worker_failed"
+        assert report["semantic_verified"] is False
+
+
+def test_real_hung_child_is_stopped_at_deadline(snapshot, monkeypatch):
+    import itertools
+    import time
+    from types import SimpleNamespace
+
+    import buddy_desktop.preflight as module
+
+    popen = module.subprocess.Popen
+    children = []
+
+    def hang(command, **kwargs):
+        child = popen(
+            [command[0], "-c", "import sys,time; sys.stdin.buffer.read(1); time.sleep(300)"],
+            **kwargs,
+        )
+        children.append(child)
+        return child
+
+    ticks = itertools.count(step=100)
+    monkeypatch.setattr(
+        module, "time", SimpleNamespace(monotonic=lambda: next(ticks), sleep=time.sleep)
+    )
+    monkeypatch.setattr(module.subprocess, "Popen", hang)
+    with PreflightRunner("owner") as runner:
+        report = runner.run("owner", **snapshot, tools=[{"op": "read_state"}])
+        assert report["reason"] == "time_limit"
+        assert report["state"] == "needs-review"
+        assert children[0].poll() is not None
+
+
+def test_retention_expires_runs_and_caps_private_evidence(snapshot, monkeypatch):
+    with PreflightRunner("owner") as runner:
+        monkeypatch.setattr(runner, "_launch", lambda *args: "worker_failed")
+        first = runner.run("owner", **snapshot, tools=[{"op": "read_state"}])
+        for _ in range(8):
+            runner.run("owner", **snapshot, tools=[{"op": "read_state"}])
+        assert len(runner._runs) == 8
+        with pytest.raises(FileNotFoundError):
+            runner.artifact("owner", first["run_id"], "report.json")
+        latest = next(reversed(runner._runs))
+        runner._runs[latest] -= 3601
+        with pytest.raises(FileNotFoundError):
+            runner.artifact("owner", latest, "report.json")

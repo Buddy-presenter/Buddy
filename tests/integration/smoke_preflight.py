@@ -5,8 +5,11 @@ import json
 import sys
 from pathlib import Path
 
+from PySide6.QtGui import QImage
+
 from buddy_api.extraction.runner import extract_pptx
 from buddy_desktop.pdf_document import open_pdf
+from buddy_desktop.powerpoint_zoom_evidence import distance
 from buddy_desktop.preflight import PreflightRunner, _private
 
 
@@ -97,9 +100,28 @@ def main() -> int:
             )
             destination = args.output / snapshot["source_format"]
             destination.mkdir()
+            if report["state"] == "completed":
+                trace = report["trace"]
+                images = [
+                    QImage.fromData(
+                        runner.artifact("synthetic-test-owner", report["run_id"], f"{i}.png")
+                    )
+                    for i in range(3)
+                ]
+                checks = dict(
+                    baseline_repeated=trace[1]["baseline"] == trace[5]["baseline"],
+                    result_repeated=trace[1]["after"] == trace[5]["after"],
+                    visible_change=distance(images[0], images[1]) > 0.001,
+                    reset_restored=distance(images[0], images[2]) < 0.01,
+                )
+                report["smoke_checks"] = checks
+                if not all(checks.values()):
+                    report.update(state="needs-review", reason="smoke_visual_checks_failed")
             for artifact in ["report.json", *[a["name"] for a in report["artifacts"]]]:
                 (destination / artifact).write_bytes(
-                    runner.artifact("synthetic-test-owner", report["run_id"], artifact)
+                    json.dumps(report).encode()
+                    if artifact == "report.json"
+                    else runner.artifact("synthetic-test-owner", report["run_id"], artifact)
                 )
             reports.append(report)
             print(
