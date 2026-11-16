@@ -1,6 +1,10 @@
 import json
+from pathlib import Path
+from runpy import run_path
 
-from scripts.presentation_latency_report import build_report
+build_report = run_path(
+    str(Path(__file__).resolve().parents[2] / "scripts" / "presentation_latency_report.py")
+)["build_report"]
 
 
 def test_latency_report_groups_actions_and_percentiles_without_emitting_log_text(tmp_path):
