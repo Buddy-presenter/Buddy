@@ -4,6 +4,7 @@ from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -226,6 +227,22 @@ class SettingsPage(Page):
         motion_hint = QLabel("Keeps Buddy still while work is in progress.")
         motion_hint.setObjectName("caption")
         appearance.addWidget(motion_hint)
+        mini = group("Buddy Mini", self.body)
+        self.mini_corner = QComboBox()
+        self.mini_corner.setAccessibleName("Buddy Mini screen corner")
+        for corner_name, corner in (
+            ("Bottom right", "bottom-right"),
+            ("Bottom left", "bottom-left"),
+            ("Top right", "top-right"),
+            ("Top left", "top-left"),
+        ):
+            self.mini_corner.addItem(corner_name, corner)
+        corner_label = QLabel("Screen corner")
+        corner_label.setBuddy(self.mini_corner)
+        mini.addWidget(corner_label)
+        mini.addWidget(self.mini_corner)
+        self.mini_auto_start = QCheckBox("Open Buddy Mini when presenting a saved deck")
+        mini.addWidget(self.mini_auto_start)
         self.body.addSpacing(14)
         connection = group("Connection", self.body)
         label = QLabel("&Backend URL")

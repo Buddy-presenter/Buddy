@@ -1,8 +1,11 @@
 """Floating presenter controls preserve the session only while Mini is visible."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
+
+import buddy_desktop.buddy_mini as mini_module
 
 
 def test_mini_preserves_pdf_fullscreen_and_stops_on_overlay_close(
@@ -44,6 +47,39 @@ def test_mini_stops_when_bound_session_changes(desktop_window, monkeypatch):
     session = "second"
     window._sync_mini()
     assert window._mini is None and window.isVisible()
+
+
+def test_hover_crosses_the_gap_to_radial_controls(desktop_window, monkeypatch):
+    window = desktop_window()
+    monkeypatch.setattr(window.present, "mini_session_id", lambda: "saved-session")
+    window._toggle_mini()
+    mini = window._mini
+    assert mini is not None
+    mini._set_controls(True)
+    cursor = mini.mapToGlobal(QPoint(90, 72))
+    monkeypatch.setattr(mini_module, "QCursor", SimpleNamespace(pos=lambda: cursor))
+    mini._close_if_outside()
+    assert all(button.isVisible() for button in mini.buttons)
+    cursor = mini.mapToGlobal(QPoint(-30, -30))
+    mini._close_if_outside()
+    assert not any(button.isVisible() for button in mini.buttons)
+    window._leave_mini()
+
+
+def test_auto_mini_waits_for_the_requested_saved_deck(desktop_window, monkeypatch):
+    window = desktop_window()
+    launched = []
+    monkeypatch.setattr(window, "_toggle_mini", lambda: launched.append(True))
+    monkeypatch.setattr(window.present, "mini_session_id", lambda: "active")
+    window.preferences.mini_auto_start.setChecked(True)
+    window._schedule_auto_mini("new-deck")
+    window.present._session = SimpleNamespace(deck_id="old-deck")
+    window._maybe_auto_mini()
+    assert not launched
+    window.present._session = SimpleNamespace(deck_id="new-deck")
+    window._maybe_auto_mini()
+    assert launched == [True] and not window._mini_auto_poll.isActive()
+    window.present._session = None
 
 
 def test_completion_chime_pauses_capture_until_the_sound_finishes(desktop_window, monkeypatch):

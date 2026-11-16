@@ -3,13 +3,13 @@
 import math
 from importlib.resources import files
 
-from PySide6.QtCore import QPoint, QRect, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QCloseEvent,
     QColor,
+    QCursor,
     QHideEvent,
     QKeyEvent,
-    QMouseEvent,
     QPainter,
     QPen,
     QPixmap,
@@ -47,8 +47,8 @@ class BuddyMini(QWidget):
         self._listening = False
         self._state = "Mic off"
         self.reduced_motion = False
-        self._drag: QPoint | None = None
-        self._dragged = False
+        self._hover_close = QTimer(self, singleShot=True, interval=320)
+        self._hover_close.timeout.connect(self._close_if_outside)
         self._open = False
         self._timer = QTimer(self)
         self._timer.setInterval(40)
@@ -60,13 +60,12 @@ class BuddyMini(QWidget):
         self.mascot = QPushButton(self)
         self.mascot.setGeometry(58, 79, 64, 64)
         self.mascot.setAccessibleName("Buddy Mini controls")
-        self.mascot.setToolTip("Buddy Mini controls. Drag to reposition. Escape opens Buddy.")
+        self.mascot.setToolTip("Buddy Mini controls. Escape opens Buddy.")
         self.mascot.setStyleSheet(
             "QPushButton { background: transparent; border: none; border-radius: 32px; }"
             "QPushButton:focus { border: 2px solid #ff9f61; }"
         )
         self.mascot.setMouseTracking(True)
-        self.mascot.installEventFilter(self)
         self.mascot.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.mascot.customContextMenuRequested.connect(self._show_close_menu)
         controls = (
@@ -110,41 +109,30 @@ class BuddyMini(QWidget):
         self._open = visible
         for button in self.buttons:
             button.setVisible(visible)
+        self.update()
+
+    def set_top_corner(self, top: bool) -> None:
+        self._center.setY(47 if top else 111)
+        self.mascot.move(58, self._center.y() - 32)
+        for index, button in enumerate(self.buttons):
+            angle = math.radians(194 + index * 38)
+            x = round(74 + 68 * math.cos(angle))
+            y = round(95 + 68 * math.sin(angle))
+            button.move(x, self.height() - y - button.height() if top else y)
 
     def enterEvent(self, event) -> None:
-        self._set_controls(True)
+        self._hover_close.stop()
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:
-        if not any(button.hasFocus() for button in self.buttons):
-            self._set_controls(False)
+        self._hover_close.start()
         super().leaveEvent(event)
 
-    def eventFilter(self, watched, event) -> bool:
-        from PySide6.QtCore import QEvent
-
-        if watched is self.mascot and isinstance(event, QMouseEvent):
-            if (
-                event.type() == QEvent.Type.MouseButtonPress
-                and event.button() == Qt.MouseButton.LeftButton
-            ):
-                self._drag = event.globalPosition().toPoint() - self.pos()
-                self._dragged = False
-            elif event.type() == QEvent.Type.MouseMove and self._drag is not None:
-                target = event.globalPosition().toPoint() - self._drag
-                if self._dragged or (target - self.pos()).manhattanLength() > 5:
-                    area = self.screen().availableGeometry()
-                    self.move(
-                        max(area.left(), min(target.x(), area.right() - self.width() + 1)),
-                        max(area.top(), min(target.y(), area.bottom() - self.height() + 1)),
-                    )
-                    self._dragged = True
-            elif event.type() == QEvent.Type.MouseButtonRelease:
-                self._drag = None
-                if self._dragged:
-                    self.mascot.setDown(False)
-                    return True
-        return super().eventFilter(watched, event)
+    def _close_if_outside(self) -> None:
+        if not self.rect().contains(self.mapFromGlobal(QCursor.pos())) and not any(
+            button.hasFocus() for button in (self.mascot, *self.buttons)
+        ):
+            self._set_controls(False)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key.Key_Escape:
@@ -164,7 +152,7 @@ class BuddyMini(QWidget):
         self._listening = state == "Listening"
         self._state = state
         self.mascot.setAccessibleName(f"Buddy Mini — {state}")
-        self.mascot.setToolTip(f"{state}. Click for controls or drag to reposition.")
+        self.mascot.setToolTip(f"{state}. Click for controls.")
         for mini, full in zip(self.buttons, (mic, pause, undo), strict=False):
             mini.setEnabled(full.isEnabled())
             mini.setAccessibleName(full.text())
@@ -208,8 +196,18 @@ class BuddyMini(QWidget):
         self.update()
 
     def _tick(self) -> None:
-        if self.isVisible() and (self._reaction or (self._listening and not self.reduced_motion)):
-            self._phase = (self._phase + 1) % 36
+        if not self.isVisible():
+            return
+        cursor = self.mapFromGlobal(QCursor.pos())
+        if not self._open and self.mascot.geometry().contains(cursor):
+            self._set_controls(True)
+        elif self._open:
+            if self.rect().contains(cursor):
+                self._hover_close.stop()
+            elif not self._hover_close.isActive():
+                self._hover_close.start()
+        if self._reaction or not self.reduced_motion:
+            self._phase = (self._phase + 1) % 240
             self._reaction = max(0, self._reaction - 1)
             if not self._reaction and self._result:
                 self._result = ""
@@ -220,27 +218,48 @@ class BuddyMini(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        if self._open:
+            # Windows sends pointer events through fully transparent pixels.
+            # A nearly transparent bridge keeps the orbit reachable across the gaps.
+            painter.fillRect(self.rect(), QColor(0, 0, 0, 2))
+        y = self._center.y()
         if self._listening:
             for offset in (0, 12):
                 phase = 12 if self.reduced_motion else (self._phase + offset) % 24
                 radius = 34 + phase // 2
                 painter.setPen(QPen(QColor(255, 164, 80, 180 - phase * 5), 1.6))
-                painter.drawEllipse(self._center, radius, radius)
-        painter.drawPixmap(QRect(57, 78, 66, 66), self._asset)
+                circle = QRectF(90 - radius, y - radius, radius * 2, radius * 2)
+                painter.drawArc(circle, -32 * 16, 64 * 16)
+                painter.drawArc(circle, 148 * 16, 64 * 16)
+        motion = 0.0 if self.reduced_motion else self._phase * math.tau / 120
+        lift = -2 * math.sin(motion)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(15, 6, 0, 30))
+        painter.drawEllipse(QRectF(66, y + 27, 48, 9))
+        painter.save()
+        painter.translate(90, y + lift)
+        if not self.reduced_motion:
+            cursor = self.mapFromGlobal(QCursor.pos())
+            lean = max(-6.0, min(6.0, (cursor.x() - 90) / 10)) if self._open else 0.0
+            painter.rotate(3 * math.sin(motion + 0.5) + lean)
+            painter.scale(1 + 0.018 * math.sin(motion), 1 - 0.015 * math.sin(motion))
+        painter.drawPixmap(QRect(-33, -33, 66, 66), self._asset)
+        if self._reaction:
+            painter.setBrush(QColor(255, 215, 125, 220))
+            for x in (-8, 8):
+                painter.drawEllipse(QPoint(x, -2), 2, 2)
+        painter.restore()
         painter.setPen(QPen(QColor("#171717"), 1))
         painter.setBrush(
             QColor(
                 "#ffb977" if self._listening else "#e8e8e8" if self._state == "Muted" else "#777777"
             )
         )
-        painter.drawEllipse(QPoint(116, 136), 4, 4)
+        painter.drawEllipse(QPoint(116, y + 25), 4, 4)
         if self._reaction:
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(255, 215, 125, 220))
-            for x in (82, 98):
-                painter.drawEllipse(QPoint(x, 109), 2, 2)
             if self._result and not self._open:
-                badge = QRect(35, 46, 110, 24)
+                badge = QRect(35, 46 if y > 80 else 88, 110, 24)
                 painter.setBrush(QColor("#171717"))
                 painter.drawRoundedRect(badge, 12, 12)
                 painter.setPen(QColor("#fff4e9"))

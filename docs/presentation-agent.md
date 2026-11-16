@@ -81,14 +81,16 @@ automatic rollback step. The table contains credential hashes/counts/timestamps 
 On a synced saved PDF or PowerPoint session, click **Enter Buddy Mini** in Present.
 PDF opens its slideshow if needed. Buddy floats in its own window while the main
 workspace is hidden. With two displays, Mini stays off the slideshow display.
-With one display, the overlay can be visible in whole-screen shares. Drag the mascot
-to move it on the presenter display.
+With one display, the overlay can be visible in whole-screen shares. In Settings >
+Buddy Mini, choose the fixed screen corner or enable automatic entry when opening
+a saved deck from the library. Mini starts once the saved session is connected.
 
 Hover or click the mascot to reveal icon buttons for microphone, pause/resume, undo,
 Settings, and Open Buddy. Click the mascot or focus it and press Space, then Tab
 through the controls. Open Buddy or Escape restores the workspace. Closing Mini,
 opening Settings, ending the show, or losing the saved session stops capture.
-Listening ripples become static when Reduce motion is enabled.
+Listening ripples appear only to either side. Reduce motion keeps the mascot and
+listening marks still.
 
 Enable **Buddy Mini completion sound** in Present before entering Mini to hear a
 short chime after completed automatic moves. Capture pauses during playback and

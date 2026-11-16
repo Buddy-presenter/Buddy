@@ -113,6 +113,10 @@ class MainWindow(QMainWindow):
         self._mini_chime_paused = False
         self._mini_poll = QTimer(self, interval=100)
         self._mini_poll.timeout.connect(self._sync_mini)
+        self._mini_auto_poll = QTimer(self, interval=100)
+        self._mini_auto_poll.timeout.connect(self._maybe_auto_mini)
+        self._mini_auto_attempts = 0
+        self._mini_auto_deck: str | None = None
         self.present.mini_requested.connect(self._toggle_mini)
         self.present.transition_observed.connect(self._mini_completed)
         app = QGuiApplication.instance()
@@ -143,6 +147,25 @@ class MainWindow(QMainWindow):
             bool(settings.value("appearance/reduce_motion", False, type=bool))
         )
         self.preferences.reduce_motion.toggled.connect(self._motion_changed)
+        self.preferences.mini_corner.setCurrentIndex(
+            max(
+                0,
+                self.preferences.mini_corner.findData(
+                    settings.value("presentation/mini_corner", "bottom-right")
+                ),
+            )
+        )
+        self.preferences.mini_corner.currentIndexChanged.connect(
+            lambda _: settings.setValue(
+                "presentation/mini_corner", self.preferences.mini_corner.currentData()
+            )
+        )
+        self.preferences.mini_auto_start.setChecked(
+            bool(settings.value("presentation/mini_auto_start", False, type=bool))
+        )
+        self.preferences.mini_auto_start.toggled.connect(
+            lambda enabled: settings.setValue("presentation/mini_auto_start", enabled)
+        )
         self.account.activity_changed.connect(self._account_activity)
         page_widgets = [
             self.home,
@@ -278,6 +301,7 @@ class MainWindow(QMainWindow):
         self._private_presentation = True
         self.navigation.setCurrentRow(3)
         self.present.load_pdf(result.content, deck_id=result.deck_id, revision=result.revision)
+        self._schedule_auto_mini(result.deck_id)
 
     def _open_review(
         self, deck_id: object, title: str, status: str, source_format: str = "pdf"
@@ -301,6 +325,7 @@ class MainWindow(QMainWindow):
             return
         self.navigation.setCurrentRow(3)
         self.present.bind_saved_powerpoint(binding)
+        self._schedule_auto_mini(binding.deck_id)
 
     def _clear_private_pdf(self) -> None:
         if self._private_presentation:
@@ -442,6 +467,8 @@ class MainWindow(QMainWindow):
     @Slot(int)
     def navigate(self, index: int) -> None:
         if 0 <= index < self.pages.count():
+            if index != 3:
+                self._mini_auto_poll.stop()
             previous = self.pages.currentIndex()
             self.pages.setCurrentIndex(index)
             self.route_title.setText(
@@ -635,7 +662,29 @@ class MainWindow(QMainWindow):
         ):
             self.move(screens[0].availableGeometry().topLeft())
 
+    def _schedule_auto_mini(self, deck_id: str) -> None:
+        self._mini_auto_poll.stop()
+        if self.preferences.mini_auto_start.isChecked():
+            self._mini_auto_deck = deck_id
+            self._mini_auto_attempts = 0
+            self._mini_auto_poll.start()
+
+    def _maybe_auto_mini(self) -> None:
+        self._mini_auto_attempts += 1
+        if self._closing or self._mini is not None or self._mini_auto_attempts > 150:
+            self._mini_auto_poll.stop()
+            return
+        session = self.present._session
+        if (
+            session is not None
+            and session.deck_id == self._mini_auto_deck
+            and self.present.mini_session_id()
+        ):
+            self._mini_auto_poll.stop()
+            self._toggle_mini()
+
     def _toggle_mini(self) -> None:
+        self._mini_auto_poll.stop()
         if self._mini is not None:
             self._leave_mini(stop=True)
             return
@@ -669,7 +718,14 @@ class MainWindow(QMainWindow):
             mini.prepare_chime()
         self._mini, self._mini_session, self._mini_screen = mini, session_id, screen
         area = screen.availableGeometry()
-        mini.move(area.right() - mini.width() - 12, area.bottom() - mini.height() - 12)
+        corner = self.preferences.mini_corner.currentData()
+        top = corner in {"top-left", "top-right"}
+        left = corner in {"top-left", "bottom-left"}
+        mini.set_top_corner(top)
+        mini.move(
+            area.left() + 12 if left else area.right() - mini.width() - 12,
+            area.top() + 12 if top else area.bottom() - mini.height() - 12,
+        )
         if len(screens) == 1:
             mini.setToolTip("Buddy Mini may be visible when sharing this entire screen.")
         mini.show()
@@ -788,6 +844,7 @@ class MainWindow(QMainWindow):
             self.activateWindow()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self._mini_auto_poll.stop()
         self._leave_mini(stop=True, restore=False)
         self.account_popover.hide()
         self.profile.activate(False)
