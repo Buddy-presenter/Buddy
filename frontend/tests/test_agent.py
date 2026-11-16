@@ -189,6 +189,59 @@ def test_real_http_validates_proposals_and_context(corrupt, monkeypatch):
         thread.join()
 
 
+def test_real_http_accepts_deterministic_numbered_slide_navigation(monkeypatch):
+    session, context = inputs()
+    now = [context.observed_ns]
+    monkeypatch.setattr("buddy_desktop.candidate_service.time.monotonic_ns", lambda: now[0])
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            answer = {
+                "protocol": "presentation-agent.v1",
+                "decision_id": str(uuid4()),
+                "session_id": session.id,
+                "analysis_id": session.analysis_version_id,
+                "state_version": 3,
+                "context_epoch": 1,
+                "stream_id": context.stream_id,
+                "sequence": 1,
+                "input_sha256": "a" * 64,
+                "elapsed_ms": 1,
+                "retry_after_ms": None,
+                "target": {
+                    "tool": "go_to_slide",
+                    "slide_id": "slide-8",
+                    "action_id": None,
+                    "region": None,
+                },
+                "reason": "explicit",
+                "decision_source": "navigation",
+                "confidence": 1.0,
+                "evidence": [0],
+            }
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(json.dumps(answer).encode())
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        service = AgentService(AppConfig(f"http://127.0.0.1:{server.server_port}"))
+        answer = service.propose("private-token", session, context, current_context=lambda: context)
+        assert answer["decision_source"] == "navigation"
+        assert answer["target"]["tool"] == "go_to_slide"
+        assert answer["target"]["slide_id"] == "slide-8"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
 class Service:
     def __init__(self):
         self.release = threading.Event()

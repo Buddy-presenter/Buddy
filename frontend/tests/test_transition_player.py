@@ -2,10 +2,9 @@
 
 import time
 from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
-from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -176,7 +175,7 @@ def test_new_partial_while_loading_cannot_commit_or_report_an_applied_action(
     release.set()
     qtbot.waitUntil(lambda: not page.executor.busy)
     assert page.executor.current_index == 0 and not observed
-    assert not page.policy.enabled
+    assert page.policy.enabled and page.policy_enabled.isChecked()
     qtbot.waitUntil(lambda: not page.session_runner.busy and page._session_pending_state is None)
 
 
@@ -189,6 +188,16 @@ def test_powerpoint_without_saved_agent_session_cannot_enable_automation(player,
     assert not page.policy_enabled.isEnabled() and not page.policy.enabled
     assert not checks
     qtbot.waitUntil(lambda: not page.session_runner.busy and page._session_pending_state is None)
+
+
+def test_presenter_opt_in_stays_checked_during_temporary_session_sync_gap(player):
+    page, _, _, _, _ = player
+    page._update_agent()
+    assert page.policy.enabled and page.policy_enabled.isChecked()
+    page._session_pending_state = page._current_local_state()
+    page._update_agent()
+    assert page.policy.enabled and page.policy_enabled.isChecked()
+    assert "waiting" in page.policy_status.text().lower()
 
 
 @pytest.mark.parametrize("fail_at", [1, 2])
@@ -215,59 +224,58 @@ def test_guard_exception_fails_closed_with_one_terminal_completion(player, qtbot
     assert not persisted
 
 
-def test_provider_failure_breaks_a_model_confirmation_chain(player):
-    from buddy_desktop.transition_policy import Calibration
-
+def test_model_proposal_executes_without_a_calibration_file(player, qtbot):
     page, proposal, current, _, checks = player
-    page.policy.calibration = Calibration("pdf", 0.9, 200, 200, "a" * 64, date(2099, 1, 1), True)
     proposal.update(decision_source="model", reason="topic", confidence=0.99)
     page._agent_proposed(proposal)
-    assert not checks
-    page.agent._request_generation = page.agent._generation
-    page.agent._failed(0, "Suggestions unavailable")
-    segment = replace(current[0].segments[0], segment_id="b", sequence=2)
-    current[0] = replace(current[0], segments=(segment,))
-    proposal.update(decision_id=str(uuid4()), sequence=2)
+    qtbot.waitUntil(lambda: page.executor.current_index == 1 and not page.executor.busy)
+    qtbot.waitUntil(lambda: not page.session_runner.busy)
+    assert len(checks) == 1
+    assert page.policy.enabled and page.policy_enabled.isChecked()
+
+
+def test_numbered_navigation_flows_through_policy_and_executes(player, qtbot):
+    page, proposal, _, persisted, checks = player
+    target = page.executor.manifest.slides[2].slide_id
+    proposal.update(
+        decision_source="navigation",
+        reason="explicit",
+        target={"tool": "go_to_slide", "slide_id": target, "action_id": None, "region": None},
+    )
     page._agent_proposed(proposal)
-    assert not checks and page.executor.current_index == 0
+    qtbot.waitUntil(lambda: page.executor.current_index == 2 and not page.executor.busy)
+    qtbot.waitUntil(lambda: not page.session_runner.busy and bool(persisted))
+    assert len(checks) == 1
+    assert persisted[-1].active_slide_id == target
+    assert page.policy.enabled and page.policy_enabled.isChecked()
 
 
-def test_final_partial_agreeing_final_restarts_model_confirmation_before_scheduler_tick(
-    player, monkeypatch
-):
-    from buddy_desktop.transition_policy import Calibration
+def test_recoverable_preflight_failure_keeps_automatic_actions_enabled(player):
+    from buddy_desktop.transition_policy import Prediction, Target, View
 
-    page, proposal, current, persisted, checks = player
-    page.policy.calibration = Calibration("pdf", 0.9, 200, 200, "a" * 64, date(2099, 1, 1), True)
-    proposal.update(decision_source="model", reason="topic", confidence=0.99)
-    page._agent_proposed(proposal)
-    assert not checks
-    # Both events arrive before AgentLoop.update can emit an invalidated proposal.
-    # Only the ASR event boundary is substituted; use the real transcript slot/policy.
-    monkeypatch.setattr(page.transcript_context, "accept", lambda event: None)
-    partial = replace(current[0].segments[0], segment_id="b", sequence=2, final=False)
-    current[0] = replace(current[0], segments=(*current[0].segments, partial))
-    event = {
-        "final": False,
-        "start_seconds": 1.0,
-        "end_seconds": 2.0,
-        "latency_ms": 0,
-        "text": "Explain the sales comparison.",
-    }
-    page._speech_transcript(event)
-    # Give the agreeing final enough elapsed persistence time to expose the bug.
-    import buddy_desktop.present_widget as present_module
-
-    later = current[0].segments[0].capture_end_ns + 900_000_000
-    monkeypatch.setattr(present_module, "time", SimpleNamespace(monotonic_ns=lambda: later))
-    final = replace(partial, sequence=3, final=True, capture_end_ns=later)
-    current[0] = replace(current[0], segments=(final,))
-    page._speech_transcript({**event, "final": True})
-    proposal.update(decision_id=str(uuid4()), sequence=3)
-    page._agent_proposed(proposal)
-    assert not checks and not page.policy_runner.busy
-    assert page.executor.current_index == 0 and not persisted
-    assert page.policy_status.text() == "Waiting for a sustained, consistent reference."
+    page, proposal, current, _, _ = player
+    prediction = Prediction.from_validated(proposal, current[0])
+    manifest = page.executor.manifest
+    target = prediction.target
+    view = View(
+        page._session.id,
+        page._session.analysis_version_id,
+        manifest.deck_id + ":" + manifest.render_id,
+        "pdf",
+        page._session.state_version,
+        Target("slide", manifest.slides[0].slide_id),
+        (target,),
+    )
+    assert (
+        page.policy.consider(
+            prediction, current[0], view, now_ns=time.monotonic_ns(), today=datetime.now(UTC).date()
+        )
+        == "accepted"
+    )
+    page._policy_check = (prediction, current[0], manifest.render_id)
+    page._policy_failed(1, "Temporary preflight failure")
+    assert page.policy.enabled and page.policy_enabled.isChecked()
+    assert page._policy_check is None
 
 
 @pytest.fixture
@@ -337,6 +345,18 @@ def test_native_policy_observes_completion_persists_and_undoes(native_player, qt
     )
     assert not page.policy.enabled
     assert persisted[-1].autonomy_mode == "manual"
+
+
+def test_native_model_action_runs_without_a_calibration_file(native_player, qtbot):
+    page, proposal, _, persisted, checks, calls, _ = native_player
+    proposal.update(decision_source="model", reason="topic", confidence=0.99)
+    page._agent_proposed(proposal)
+    qtbot.waitUntil(
+        lambda: not page.policy_runner.busy and not page.powerpoint_runner.busy and bool(calls)
+    )
+    qtbot.waitUntil(lambda: not page.session_runner.busy and bool(persisted))
+    assert calls == ["next_slide"] and len(checks) == 1
+    assert page.policy.enabled and page.policy_enabled.isChecked()
 
 
 @pytest.mark.parametrize("change", ["source", "partial", "manual", "disconnect"])

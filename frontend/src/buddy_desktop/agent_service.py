@@ -258,6 +258,7 @@ class AgentService:
                 "no_action",
                 "next_slide",
                 "previous_slide",
+                "go_to_slide",
             }:
                 raise ValueError
             if result["reason"] == "paced" and result["decision_source"] != "fallback":
