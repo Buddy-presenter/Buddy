@@ -126,8 +126,8 @@ class BuddyMini(QWidget):
         self.mascot.move(48, self._center.y() - 42)
         for index, button in enumerate(self.buttons):
             angle = math.radians(194 + index * 38)
-            x = round(76 + 61 * math.cos(angle))
-            y = round(97 + 61 * math.sin(angle))
+            x = round(76 + 68 * math.cos(angle))
+            y = round(97 + 68 * math.sin(angle))
             button.move(x, self.height() - y - button.height() if top else y)
 
     def enterEvent(self, event) -> None:
