@@ -45,7 +45,6 @@ class BuddyMini(QWidget):
         self._reaction = 0
         self._result = ""
         self._listening = False
-        self._state = "Mic off"
         self.reduced_motion = False
         self._hover_close = QTimer(self, singleShot=True, interval=320)
         self._hover_close.timeout.connect(self._close_if_outside)
@@ -58,11 +57,11 @@ class BuddyMini(QWidget):
         self._chime_tail = QTimer(self, singleShot=True, interval=300)
         self._chime_tail.timeout.connect(self.chime_finished)
         self.mascot = QPushButton(self)
-        self.mascot.setGeometry(58, 79, 64, 64)
+        self.mascot.setGeometry(53, 74, 74, 74)
         self.mascot.setAccessibleName("Buddy Mini controls")
         self.mascot.setToolTip("Buddy Mini controls. Escape opens Buddy.")
         self.mascot.setStyleSheet(
-            "QPushButton { background: transparent; border: none; border-radius: 32px; }"
+            "QPushButton { background: transparent; border: none; border-radius: 37px; }"
             "QPushButton:focus { border: 2px solid #ff9f61; }"
         )
         self.mascot.setMouseTracking(True)
@@ -82,21 +81,21 @@ class BuddyMini(QWidget):
             ("external-link", "Open Buddy", self.restore_requested.emit),
         )
         self.buttons = []
-        for index, (glyph, name, callback) in enumerate(controls):
+        for glyph, name, callback in controls:
             button = QPushButton(self)
             button.setAccessibleName(name)
             button.setToolTip(name)
-            button.setIcon(icon(glyph))
+            button.setIcon(icon(glyph, "#000000"))
             button.setFixedSize(32, 32)
             button.setStyleSheet(
-                "QPushButton { background: #171717; border: 1px solid #666; border-radius: 16px; }"
-                "QPushButton:hover, QPushButton:focus { border: 2px solid #ff9f61; }"
-                "QPushButton:disabled { background: #393939; border-color: #393939; }"
+                "QPushButton { background: #ff9f61; border: 1px solid #e67a38; "
+                "border-radius: 16px; }"
+                "QPushButton:hover, QPushButton:focus { border: 2px solid #171717; }"
+                "QPushButton:disabled { background: #b88060; border-color: #b88060; }"
             )
-            angle = math.radians(194 + index * 38)
-            button.move(round(74 + 68 * math.cos(angle)), round(95 + 68 * math.sin(angle)))
             button.clicked.connect(callback)
             self.buttons.append(button)
+        self.set_top_corner(False)
         self._set_controls(False)
         self.mascot.clicked.connect(lambda: self._set_controls(True))
 
@@ -117,17 +116,17 @@ class BuddyMini(QWidget):
         button.setEnabled(available or enabled)
         if button.property("automationOn") != enabled:
             button.setProperty("automationOn", enabled)
-            button.setIcon(icon("pause" if enabled else "play"))
+            button.setIcon(icon("pause" if enabled else "play", "#000000"))
         button.setAccessibleName(label)
         button.setToolTip(label)
 
     def set_top_corner(self, top: bool) -> None:
         self._center.setY(47 if top else 111)
-        self.mascot.move(58, self._center.y() - 32)
+        self.mascot.move(53, self._center.y() - 37)
         for index, button in enumerate(self.buttons):
             angle = math.radians(194 + index * 38)
-            x = round(74 + 68 * math.cos(angle))
-            y = round(95 + 68 * math.sin(angle))
+            x = round(74 + 61 * math.cos(angle))
+            y = round(95 + 61 * math.sin(angle))
             button.move(x, self.height() - y - button.height() if top else y)
 
     def enterEvent(self, event) -> None:
@@ -158,7 +157,6 @@ class BuddyMini(QWidget):
         self, state: str, mic: QPushButton, undo: QPushButton, *, connected: bool = True
     ) -> None:
         self._listening = state == "Listening"
-        self._state = state
         self.mascot.setAccessibleName(f"Buddy Mini — {state}")
         self.mascot.setToolTip(f"{state}. Click for controls.")
         for mini, full in ((self.buttons[0], mic), (self.buttons[2], undo)):
@@ -230,7 +228,7 @@ class BuddyMini(QWidget):
         if self._listening:
             for offset in (0, 12):
                 phase = 12 if self.reduced_motion else (self._phase + offset) % 24
-                radius = 34 + phase // 2
+                radius = 39 + phase // 2
                 painter.setPen(QPen(QColor(255, 164, 80, 180 - phase * 5), 1.6))
                 circle = QRectF(90 - radius, y - radius, radius * 2, radius * 2)
                 painter.drawArc(circle, -32 * 16, 64 * 16)
@@ -239,7 +237,7 @@ class BuddyMini(QWidget):
         lift = -2 * math.sin(motion)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(15, 6, 0, 30))
-        painter.drawEllipse(QRectF(66, y + 27, 48, 9))
+        painter.drawEllipse(QRectF(63, y + 31, 54, 9))
         painter.save()
         painter.translate(90, y + lift)
         if not self.reduced_motion:
@@ -247,19 +245,12 @@ class BuddyMini(QWidget):
             lean = max(-6.0, min(6.0, (cursor.x() - 90) / 10)) if self._open else 0.0
             painter.rotate(3 * math.sin(motion + 0.5) + lean)
             painter.scale(1 + 0.018 * math.sin(motion), 1 - 0.015 * math.sin(motion))
-        painter.drawPixmap(QRect(-33, -33, 66, 66), self._asset)
+        painter.drawPixmap(QRect(-37, -37, 74, 74), self._asset)
         if self._reaction:
             painter.setBrush(QColor(255, 215, 125, 220))
-            for x in (-8, 8):
+            for x in (-9, 9):
                 painter.drawEllipse(QPoint(x, -2), 2, 2)
         painter.restore()
-        painter.setPen(QPen(QColor("#171717"), 1))
-        painter.setBrush(
-            QColor(
-                "#ffb977" if self._listening else "#e8e8e8" if self._state == "Muted" else "#777777"
-            )
-        )
-        painter.drawEllipse(QPoint(116, y + 25), 4, 4)
         if self._reaction:
             painter.setPen(Qt.PenStyle.NoPen)
             if self._result and not self._open:
