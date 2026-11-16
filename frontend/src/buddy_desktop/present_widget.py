@@ -3078,7 +3078,8 @@ class PresentWidget(Page):
     def _fullscreen_exited(self) -> None:
         self.fullscreen = None
         if self.mini_active:
-            self.mini_requested.emit()
+            self.microphone.stop()
+            self.agent_enabled.setChecked(False)
         if not self._closing:
             self.fullscreen_button.setFocus()
 
@@ -3349,7 +3350,7 @@ class PresentWidget(Page):
             not self._closing
             and (self.microphone.enabled or (mic_available and self.microphone_device.count() > 0))
         )
-        self.mini_button.setEnabled(bool(self.mini_session_id()))
+        self.mini_button.setEnabled(not self._closing)
         self.microphone_button.setToolTip(
             "No microphone was detected."
             if self.microphone_device.count() == 0

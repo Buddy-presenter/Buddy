@@ -686,24 +686,18 @@ class MainWindow(QMainWindow):
     def _toggle_mini(self) -> None:
         self._mini_auto_poll.stop()
         if self._mini is not None:
-            self._leave_mini(stop=True)
+            self._mini.show()
+            self.hide()
+            self._sync_mini()
             return
         session_id = self.present.mini_session_id()
-        if session_id is None:
-            return
-        if self.present._powerpoint_info is None and self.present.fullscreen is None:
+        if session_id and self.present._powerpoint_info is None and self.present.fullscreen is None:
             self.present.enter_fullscreen()
         screen = self.screen()
         audience = self._mini_audience_screen()
         screens = QGuiApplication.screens()
-        if len(screens) > 1:
-            if audience is None:
-                self.present.feedback.setText(
-                    "Buddy Mini could not identify the slideshow display."
-                )
-                return
-            if screen == audience:
-                screen = next(candidate for candidate in screens if candidate != audience)
+        if len(screens) > 1 and screen == audience:
+            screen = next(candidate for candidate in screens if candidate != audience)
         mini = BuddyMini(
             self.present.microphone_button,
             self.present.policy_undo_button,
@@ -717,6 +711,16 @@ class MainWindow(QMainWindow):
         if self.present.mini_chime.isChecked():
             mini.prepare_chime()
         self._mini, self._mini_session, self._mini_screen = mini, session_id, screen
+        self._position_mini(mini, screen)
+        if len(screens) == 1:
+            mini.setToolTip("Buddy Mini may be visible when sharing this entire screen.")
+        mini.show()
+        self.present.mini_active = True
+        self.hide()
+        self._mini_poll.start()
+        self._sync_mini()
+
+    def _position_mini(self, mini: BuddyMini, screen: QScreen) -> None:
         area = screen.availableGeometry()
         corner = self.preferences.mini_corner.currentData()
         top = corner in {"top-left", "top-right"}
@@ -726,13 +730,6 @@ class MainWindow(QMainWindow):
             area.left() + 12 if left else area.right() - mini.width() - 12,
             area.top() + 12 if top else area.bottom() - mini.height() - 12,
         )
-        if len(screens) == 1:
-            mini.setToolTip("Buddy Mini may be visible when sharing this entire screen.")
-        mini.show()
-        self.present.mini_active = True
-        self.hide()
-        self._mini_poll.start()
-        self._sync_mini()
 
     def _mini_audience_screen(self) -> QScreen | None:
         if self.present.fullscreen is not None and self.present._powerpoint_info is None:
@@ -762,29 +759,47 @@ class MainWindow(QMainWindow):
         if mini is None:
             return
         page = self.present
-        if not mini.isVisible() or page.mini_session_id() != self._mini_session:
-            self._leave_mini(stop=True)
-            return
-        if len(QGuiApplication.screens()) > 1:
+        session_id = page.mini_session_id()
+        # A PDF render can stay loaded after fullscreen ends. Treat that as
+        # standby until the presenter starts the slideshow again.
+        if page._powerpoint_info is None and page.fullscreen is None:
+            session_id = None
+        if not mini.isVisible() or session_id != self._mini_session:
+            self._mini_chime_paused = False
+            mini.stop_sound()
+            page.microphone.stop()
+            page.agent_enabled.setChecked(False)
+            self._mini_session = session_id
+            if not mini.isVisible():
+                mini.show()
+        screens = QGuiApplication.screens()
+        if screens:
             audience = self._mini_audience_screen()
-            if audience is None or audience == self._mini_screen:
-                self._leave_mini(stop=True)
-                return
+            presenters = [screen for screen in screens if screen != audience] or screens
+            if self._mini_screen not in presenters:
+                self._mini_screen = presenters[0]
+                self._position_mini(mini, self._mini_screen)
         state = (
-            "Muted"
+            "Disconnected"
+            if session_id is None
+            else "Muted"
             if page.microphone_mute.isChecked() or page.microphone_pause.isChecked()
             else "Listening"
             if page.microphone_status.text() == "Microphone on"
             else "Mic off"
         )
-        mini.sync(state, page.microphone_button, page.policy_undo_button)
+        mini.sync(
+            state, page.microphone_button, page.policy_undo_button, connected=bool(session_id)
+        )
         mini.sync_automation(
-            page.agent_enabled.isEnabled(),
-            page.agent_enabled.isChecked() and page.policy_enabled.isChecked(),
+            bool(session_id and page.agent_enabled.isEnabled()),
+            bool(session_id and page.agent_enabled.isChecked() and page.policy_enabled.isChecked()),
         )
 
     def _toggle_mini_automation(self) -> None:
         page = self.present
+        if not self._mini_session:
+            return
         if page.agent_enabled.isChecked() and page.policy_enabled.isChecked():
             page.agent_enabled.setChecked(False)
         elif page.agent_enabled.isEnabled():
@@ -831,13 +846,16 @@ class MainWindow(QMainWindow):
                 self.present.microphone_pause.setChecked(False)
 
     def _mini_screen_removed(self, screen: QScreen) -> None:
-        if self._mini is not None and (
-            screen == self._mini_screen or len(QGuiApplication.screens()) <= 1
-        ):
-            self._leave_mini(stop=True)
+        if self._mini is not None and screen == self._mini_screen:
+            self._mini_screen = None
+            QTimer.singleShot(0, self._sync_mini)
 
     def _mini_settings(self) -> None:
-        self._leave_mini(stop=True)
+        self.present.microphone.stop()
+        self.present.agent_enabled.setChecked(False)
+        self.show()
+        self.raise_()
+        self.activateWindow()
         self.navigation.setCurrentRow(4)
 
     def _leave_mini(self, *, stop: bool = False, restore: bool = True) -> None:

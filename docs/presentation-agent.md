@@ -90,6 +90,8 @@ and automatic moves together, undo,
 Settings, and Open Buddy. Click the mascot or focus it and press Space, then Tab
 through the controls. Open Buddy or Escape restores the workspace. Closing Mini,
 opening Settings, ending the show, or losing the saved session stops capture.
+Mini remains visible in standby when the slideshow or session disconnects. Its
+voice controls become available again when a verified show is connected.
 Listening ripples appear only to either side. Reduce motion keeps the mascot and
 listening marks still.
 

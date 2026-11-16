@@ -30,23 +30,60 @@ def test_mini_preserves_pdf_fullscreen_and_stops_on_overlay_close(
     assert all(button.isVisible() and not button.text() for button in mini.buttons)
     window._mini_completed({"target": {"tool": "next_slide"}})
     assert mini._reaction > 0
+    page.fullscreen.close()
+    window._sync_mini()
+    assert mini.isVisible() and "Disconnected" in mini.mascot.accessibleName()
     mini.close()
     assert window.isVisible() and window._mini is None
     assert not page.mini_active and not page.agent_enabled.isChecked()
 
 
-def test_mini_stops_when_bound_session_changes(desktop_window, monkeypatch):
+def test_mini_stays_visible_when_session_drops_and_recovers(desktop_window, monkeypatch):
     window = desktop_window()
     window.navigation.setCurrentRow(3)
     page = window.present
     page._agent_tick.stop()
     session = "first"
     monkeypatch.setattr(page, "mini_session_id", lambda: session)
+    page.fullscreen = SimpleNamespace(screen=window.screen, close=lambda: None)
     window._toggle_mini()
-    assert window._mini is not None
+    mini = window._mini
+    assert mini is not None
+    page.agent_enabled.setChecked(True)
+    session = None
+    window._sync_mini()
+    assert mini.isVisible() and not window.isVisible()
+    assert not page.agent_enabled.isChecked() and not mini.buttons[0].isEnabled()
     session = "second"
     window._sync_mini()
-    assert window._mini is None and window.isVisible()
+    assert mini.isVisible() and window._mini_session == "second"
+    assert not page.agent_enabled.isChecked()
+    window._leave_mini()
+    page.fullscreen = None
+
+
+def test_mini_can_open_without_a_session(desktop_window):
+    window = desktop_window()
+    window.navigation.setCurrentRow(3)
+    window.present.mini_button.click()
+    mini = window._mini
+    assert mini is not None and mini.isVisible()
+    assert "Disconnected" in mini.mascot.accessibleName()
+    assert not mini.buttons[0].isEnabled() and not mini.buttons[1].isEnabled()
+    mini.close()
+    assert window.isVisible()
+
+
+def test_mini_reappears_after_a_temporary_hide(desktop_window):
+    window = desktop_window()
+    window.navigation.setCurrentRow(3)
+    window.present.mini_button.click()
+    mini = window._mini
+    assert mini is not None
+    mini.hide()
+    window._sync_mini()
+    assert mini.isVisible() and window._mini is mini
+    window._leave_mini()
 
 
 def test_hover_crosses_the_gap_to_radial_controls(desktop_window, monkeypatch):
@@ -88,6 +125,7 @@ def test_completion_chime_pauses_capture_until_the_sound_finishes(desktop_window
     page = window.present
     page._agent_tick.stop()
     monkeypatch.setattr(page, "mini_session_id", lambda: "saved-session")
+    page.fullscreen = SimpleNamespace(screen=window.screen, close=lambda: None)
     window._toggle_mini()
     mini = window._mini
     assert mini is not None
@@ -103,6 +141,7 @@ def test_completion_chime_pauses_capture_until_the_sound_finishes(desktop_window
     mini.chime_finished.emit()
     assert events == [True, "play", False]
     window._leave_mini()
+    page.fullscreen = None
 
 
 def test_mini_automation_icon_toggles_suggestions_and_moves(desktop_window, monkeypatch):
@@ -110,6 +149,7 @@ def test_mini_automation_icon_toggles_suggestions_and_moves(desktop_window, monk
     page = window.present
     page._agent_tick.stop()
     monkeypatch.setattr(page, "mini_session_id", lambda: "saved-session")
+    page.fullscreen = SimpleNamespace(screen=window.screen, close=lambda: None)
     monkeypatch.setattr(page, "_queue_session_state", lambda: None)
     monkeypatch.setattr(page, "_update_agent", lambda: page.policy_enabled.setEnabled(True))
     page.agent_enabled.setEnabled(True)
@@ -121,6 +161,7 @@ def test_mini_automation_icon_toggles_suggestions_and_moves(desktop_window, monk
     mini.buttons[1].click()
     assert not page.agent_enabled.isChecked() and not page.policy_enabled.isChecked()
     window._leave_mini()
+    page.fullscreen = None
 
 
 def test_presentation_access_failure_rechecks_account_without_signing_out(

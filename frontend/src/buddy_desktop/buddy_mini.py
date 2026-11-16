@@ -8,7 +8,6 @@ from PySide6.QtGui import (
     QCloseEvent,
     QColor,
     QCursor,
-    QHideEvent,
     QKeyEvent,
     QPainter,
     QPen,
@@ -155,17 +154,15 @@ class BuddyMini(QWidget):
         self.closed.emit()
         super().closeEvent(event)
 
-    def hideEvent(self, event: QHideEvent) -> None:
-        self.closed.emit()
-        super().hideEvent(event)
-
-    def sync(self, state: str, mic: QPushButton, undo: QPushButton) -> None:
+    def sync(
+        self, state: str, mic: QPushButton, undo: QPushButton, *, connected: bool = True
+    ) -> None:
         self._listening = state == "Listening"
         self._state = state
         self.mascot.setAccessibleName(f"Buddy Mini — {state}")
         self.mascot.setToolTip(f"{state}. Click for controls.")
         for mini, full in ((self.buttons[0], mic), (self.buttons[2], undo)):
-            mini.setEnabled(full.isEnabled())
+            mini.setEnabled(connected and full.isEnabled())
             mini.setAccessibleName(full.text())
             mini.setToolTip(full.text())
         self.update()
