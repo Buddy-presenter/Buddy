@@ -989,9 +989,9 @@ class PresentWidget(Page):
             self.policy_status.setText("Suggestion is unavailable for the current Office source.")
             return
         self.policy_status.setText(
-            "Keeping the current PowerPoint view."
-            if reason != "accepted"
-            else "Checking the current PowerPoint action…"
+            "Checking the current PowerPoint action…"
+            if reason == "accepted"
+            else self._policy_rejection_message(reason)
         )
         if reason == "accepted" and self._session_access:
             access = self._session_access
@@ -1021,7 +1021,10 @@ class PresentWidget(Page):
             or not context.matches(self.transcript_context.snapshot())
         ):
             self.policy.completed(prediction.decision_id, success=False, now_ns=time.monotonic_ns())
-            self.policy_status.setText("Speech decision expired; waiting for fresh speech.")
+            self.policy_status.setText(
+                "Suggestion found, but speech or PowerPoint state changed before it could run. "
+                "Repeat it."
+            )
             return
         try:
             command_value = native.command(prediction.target, info)
@@ -1336,17 +1339,10 @@ class PresentWidget(Page):
             self.policy.clear_pending()
             self.policy_status.setText("Suggestion cannot execute in the current view.")
             return
-        labels = {
-            "current_focus": "Keeping the current focus.",
-            "cooldown": "Keeping the view steady after the latest move.",
-            "stale": "Speech decision expired; waiting for fresh speech.",
-            "weak_evidence": "Speech was unclear; waiting for a clearer reference.",
-            "ineligible": "That action is not available for the current slide.",
-        }
         self.policy_status.setText(
             "Checking the selected action…"
             if reason == "accepted"
-            else labels.get(reason, "Keeping the current view; automatic actions remain on.")
+            else self._policy_rejection_message(reason)
         )
         if reason != "accepted":
             return
@@ -1359,6 +1355,33 @@ class PresentWidget(Page):
             lambda: self.agent.service.check_transition(access, session, value["target"])
         )
         self.policy_status.setText("Checking the current action before moving…")
+
+    @staticmethod
+    def _policy_rejection_message(reason: str) -> str:
+        labels = {
+            "disabled": "Suggestion found; automatic transitions are off, so it was not run.",
+            "unsupported_format": (
+                "Suggestion found; automatic transitions do not support this file."
+            ),
+            "busy": "Suggestion found; a slide action or sync is still running. It was not run.",
+            "stale": (
+                "Suggestion found, but speech or slide state changed before it could run. "
+                "Repeat it."
+            ),
+            "no_action": "No action was selected; continue presenting manually.",
+            "current_focus": "Suggestion found, but that view is already active.",
+            "duplicate": "Suggestion found, but this speech segment was already handled.",
+            "cooldown": (
+                "Suggestion found just after the previous move; wait briefly and repeat it."
+            ),
+            "weak_evidence": (
+                "Suggestion found, but the latest speech did not support running it confidently."
+            ),
+            "ineligible": (
+                "Suggestion found, but that action is unavailable for the current slide."
+            ),
+        }
+        return labels.get(reason, "Suggestion found, but it was not run; continue manually.")
 
     @Slot(int, object)
     def _policy_checked(self, _identifier: int, _result: object) -> None:
@@ -1385,7 +1408,10 @@ class PresentWidget(Page):
             or not context.matches(self.transcript_context.snapshot())
         ):
             self.policy.completed(prediction.decision_id, success=False, now_ns=time.monotonic_ns())
-            self.policy_status.setText("Speech decision expired; waiting for fresh speech.")
+            self.policy_status.setText(
+                "Suggestion found, but speech or slide state changed while it was checked. "
+                "Repeat it."
+            )
             return
         self._policy_before = self._current_local_state()
         self._policy_execution = prediction
@@ -1465,7 +1491,13 @@ class PresentWidget(Page):
         if not isinstance(result, dict):
             self.agent_proposal.clear()
             context = self.transcript_context.snapshot()
-            if not context.fresh or context.segments != context.candidate_segments:
+            candidates = context.candidate_segments
+            if (
+                not context.fresh
+                or not candidates
+                or not context.segments
+                or context.segments[-1].sequence != candidates[-1].sequence
+            ):
                 self.policy.clear_pending()
             return
         target = result["target"]
@@ -2745,8 +2777,9 @@ class PresentWidget(Page):
                 self.policy_status.setText("Automatic move completed. Undo is available.")
             else:
                 self.policy_status.setText(
-                    "Automatic action failed; manual controls remain available. "
-                    "Automatic actions are still on."
+                    "Buddy found the action but did not complete it. "
+                    "Manual controls remain available; "
+                    "repeat the request. Automatic actions are still on."
                 )
             self._policy_before = None
         manifest, slide = self.executor.manifest, self.surface.slide

@@ -259,7 +259,11 @@ class TransitionPolicy:
             not view.connected
             or not context.fresh
             or not segments
-            or context.segments != segments  # An unfinished partial blocks the whole window.
+            or not context.segments
+            # candidate_segments is a bounded request window. Older finalized
+            # segments may be omitted once the transcript exceeds its size budget;
+            # only a newer unfinished segment should make this decision stale.
+            or context.segments[-1].sequence != segments[-1].sequence
             or not 0 <= now_ns - segments[-1].capture_end_ns <= 5_000_000_000
             or (prediction.session_id, prediction.analysis_id, prediction.state_version)
             != (view.session_id, view.analysis_id, view.state_version)

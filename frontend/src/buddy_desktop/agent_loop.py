@@ -76,7 +76,18 @@ class AgentLoop(QObject):
                 self.status.emit("Preparing presentation suggestions…")
                 self.runner.submit(lambda: self.service.prepare(access, session))
             return
-        if not access or session is None or not context.fresh or not context.candidate_segments:
+        segments = context.candidate_segments
+        if (
+            not access
+            or session is None
+            or not context.fresh
+            or not segments
+            or not context.segments
+            # Do not display a suggestion based on completed words while a newer,
+            # unfinished segment is already in the context. The execution gate
+            # cannot safely admit that proposal, so wait for the final update.
+            or context.segments[-1].sequence != segments[-1].sequence
+        ):
             self.proposed.emit(None)
             self.status.emit("Waiting for completed speech…")
             return
