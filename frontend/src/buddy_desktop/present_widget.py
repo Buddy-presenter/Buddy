@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMenu,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -62,6 +63,7 @@ from buddy_desktop.powerpoint_session_binding import PowerPointSessionBinding
 from buddy_desktop.presentation_session_service import (
     PresentationSession,
     PresentationSessionService,
+    SessionAccessDenied,
     SessionConflict,
     SessionState,
 )
@@ -298,6 +300,9 @@ class PresentWidget(Page):
         self.executor = SlideExecutor(self.surface)
         self.executor.completed.connect(self._completed)
         self.executor.idle.connect(self._refresh)
+        self.executor.pdf_warmup_progress.connect(self._pdf_warmup_progress)
+        self.executor.pdf_warmup_finished.connect(self._pdf_warmup_finished)
+        self._pdf_warming = False
         self.open_button = QPushButton("Open PDF…")
         command(self.open_button, "folder-open", primary=True)
         self.open_button.clicked.connect(self._choose_manifest)
@@ -403,6 +408,20 @@ class PresentWidget(Page):
             commands.addWidget(button)
         commands.addWidget(self.coordinates_button)
         pdf_actions.addLayout(commands)
+        self.pdf_warmup_status = QLabel()
+        self.pdf_warmup_status.setObjectName("muted")
+        self.pdf_warmup_status.setAccessibleName("PDF page preparation status")
+        self.pdf_warmup_status.setWordWrap(True)
+        self.pdf_warmup_status.hide()
+        pdf_actions.addWidget(self.pdf_warmup_status)
+        self.pdf_warmup_progress_bar = QProgressBar()
+        self.pdf_warmup_progress_bar.setObjectName("uploadProgress")
+        self.pdf_warmup_progress_bar.setAccessibleName("PDF pages prepared")
+        self.pdf_warmup_progress_bar.setTextVisible(False)
+        self.pdf_warmup_progress_bar.setRange(0, 1)
+        self.pdf_warmup_progress_bar.setValue(0)
+        self.pdf_warmup_progress_bar.hide()
+        pdf_actions.addWidget(self.pdf_warmup_progress_bar)
         pdf_actions.addWidget(self.coordinate_panel)
         session_row = QHBoxLayout()
         self.session_status = StatusLabel()
@@ -2002,6 +2021,9 @@ class PresentWidget(Page):
                 "budget": "Suggestion allowance reached; continue presenting manually.",
                 "disabled": "Suggestions are not enabled on this server.",
                 "paced": "Waiting for the next suggestion opportunity.",
+                "deadline": (
+                    "That decision timed out; Buddy is still listening for your next phrase."
+                ),
                 "stay": "Keep the current view.",
                 "uncertain": "Keep the current view.",
             }
@@ -2257,6 +2279,8 @@ class PresentWidget(Page):
                 return "conflict", None, None
             except LibraryAccessExpired as exc:
                 return "expired", None, str(exc)
+            except SessionAccessDenied as exc:
+                return "session_denied", None, str(exc)
             except ServiceError as exc:
                 return "error", None, str(exc)
 
@@ -2444,6 +2468,22 @@ class PresentWidget(Page):
                     self._session_followup = None
                     self._refresh()
                     return
+                if outcome == "session_denied":
+                    self._session = None
+                    self._session_pending_state = None
+                    self._session_followup = None
+                    self._session_attempt = None
+                    self._session_ended = True
+                    self._session_error = False
+                    self.session_status.setText(
+                        message
+                        or (
+                            "This presentation session is no longer available. "
+                            "Buddy sign-in is active."
+                        )
+                    )
+                    self._refresh()
+                    return
                 if self._session_pending_state is not None:
                     self._session_followup = "flush"
                 if (
@@ -2472,6 +2512,20 @@ class PresentWidget(Page):
             self._session_access = None
             self._session = None
             self.session_status.setText(message or "Sign in again to sync this presentation.")
+            self._refresh()
+            return
+        if outcome == "session_denied":
+            self.microphone.stop()
+            self._session = None
+            self._session_pending_state = None
+            self._session_followup = None
+            self._session_attempt = None
+            self._session_ended = True
+            self._session_error = False
+            self.session_status.setText(
+                message
+                or "This presentation session is no longer available. Buddy sign-in is active."
+            )
             self._refresh()
             return
         if outcome != "success" or not isinstance(session, PresentationSession):
@@ -2632,19 +2686,29 @@ class PresentWidget(Page):
         # replacement still uses the newest saved version and server validation.
         self._refresh()
 
-    @Slot(int, str, bool)
-    def _session_stream_failed(self, generation: int, message: str, access_ended: bool) -> None:
+    @Slot(int, str, str)
+    def _session_stream_failed(self, generation: int, message: str, reason: str) -> None:
         if generation != self.session_events.generation or self._closing:
             return
         self._context_connected = False
         self._invalidate_transcript_context()
         self.microphone.stop()
         self._session_error = True
-        if access_ended:
+        if reason == "auth_expired":
             self._session_access = None
             self._session = None
             self._session_pending_state = None
+            self._session_followup = None
             self.session_access_expired.emit(message)
+        elif reason in {"session_forbidden", "session_missing"}:
+            # End only the inaccessible presentation session. These responses do
+            # not prove that the user's Buddy authentication has expired.
+            self._session_access = None
+            self._session = None
+            self._session_pending_state = None
+            self._session_followup = None
+            self._session_attempt = None
+            self._session_ended = reason == "session_missing"
         self.session_status.setText(message)
         self._refresh()
 
@@ -3093,6 +3157,9 @@ class PresentWidget(Page):
     def load_pdf(
         self, source: Path | bytes, *, deck_id: str | None = None, revision: str | None = None
     ) -> None:
+        self._pdf_warming = False
+        self.pdf_warmup_status.hide()
+        self.pdf_warmup_progress_bar.hide()
         self.invalidate_saved_powerpoint()
         self.microphone.stop()
         self._session_generation += 1
@@ -3112,6 +3179,9 @@ class PresentWidget(Page):
         self._refresh()
 
     def load_manifest(self, path: Path) -> None:
+        self._pdf_warming = False
+        self.pdf_warmup_status.hide()
+        self.pdf_warmup_progress_bar.hide()
         self.microphone.stop()
         self._session_generation += 1
         self._session = None
@@ -3127,11 +3197,44 @@ class PresentWidget(Page):
         self.executor.load_manifest(path)
         self._refresh()
 
+    @Slot(int, int)
+    def _pdf_warmup_progress(self, completed: int, total: int) -> None:
+        if total <= 0:
+            return
+        self._pdf_warming = True
+        self.pdf_warmup_status.setText(f"Preparing PDF pages… {completed} of {total}")
+        self.pdf_warmup_status.show()
+        self.pdf_warmup_progress_bar.setRange(0, total)
+        self.pdf_warmup_progress_bar.setValue(min(completed, total))
+        self.pdf_warmup_progress_bar.show()
+        self._refresh()
+
+    @Slot(str)
+    def _pdf_warmup_finished(self, outcome: str) -> None:
+        self._pdf_warming = False
+        self.pdf_warmup_progress_bar.hide()
+        if outcome == "skipped":
+            self.pdf_warmup_status.setText(
+                "This PDF is above Buddy’s full-preload limit. It is ready; "
+                "pages will render as needed."
+            )
+            self.pdf_warmup_status.show()
+        elif outcome == "partial":
+            self.pdf_warmup_status.setText(
+                "Some pages could not be preloaded. The presentation is ready; "
+                "those pages will render as needed."
+            )
+            self.pdf_warmup_status.show()
+        else:
+            self.pdf_warmup_status.clear()
+            self.pdf_warmup_status.hide()
+        self._refresh()
+
     def enter_fullscreen(self) -> None:
         if self.fullscreen is not None:
             self.fullscreen.close()
             return
-        if self.executor.manifest is None or self._closing:
+        if self.executor.manifest is None or self._closing or self._pdf_warming:
             return
         self.fullscreen = FullscreenPresentation(
             self.surface,
@@ -3179,7 +3282,12 @@ class PresentWidget(Page):
         restoring: bool = False,
     ) -> None:
         manifest, slide = self.executor.manifest, self.surface.slide
-        if manifest is None or slide is None or self._closing:
+        if (
+            manifest is None
+            or slide is None
+            or self._closing
+            or (self._pdf_warming and manifest.pdf_content is not None)
+        ):
             return
         if not restoring:
             if self._policy_execution is not None:
@@ -3383,8 +3491,10 @@ class PresentWidget(Page):
         self.surface.setVisible(show_pdf_surface)
         self.surface.empty.setVisible(show_pdf_surface and self.surface.slide is None)
         self.pdf_controls.setVisible(loaded or not powerpoint_connected)
-        ready = loaded and not self.executor.busy
-        self.open_button.setEnabled(not self.executor.busy and not self._closing)
+        ready = loaded and not self.executor.busy and not self._pdf_warming
+        self.open_button.setEnabled(
+            not self.executor.busy and not self._pdf_warming and not self._closing
+        )
         # Fast status checks should not repeatedly disable and re-enable the visible
         # controls. Only user-initiated launch/connect/list operations lock them.
         powerpoint_action_busy = (
@@ -3406,11 +3516,11 @@ class PresentWidget(Page):
         )
         for widget in (self.target, self.go_button, self.fullscreen_button):
             widget.setVisible(loaded)
-        self.fullscreen_button.setEnabled(loaded)
+        self.fullscreen_button.setEnabled(ready)
         self.counter.setVisible(loaded)
         for widget in (self.previous_button, self.next_button, self.target, self.go_button):
             widget.setEnabled(ready)
-        self.reset_button.setEnabled(loaded)
+        self.reset_button.setEnabled(loaded and not self._pdf_warming)
         for field in self.fields.values():
             field.setEnabled(ready)
         selected = ready and self.surface.selection is not None
@@ -3421,7 +3531,7 @@ class PresentWidget(Page):
         mic_available = self._microphone_session_available()
         self.microphone_device.setEnabled(bool(mic_available) and not self.microphone.enabled)
         self.microphone_button.setEnabled(
-            bool(mic_available) and self.microphone_device.count() > 0
+            bool(mic_available) and self.microphone_device.count() > 0 and not self._pdf_warming
         )
         self.microphone_button.setToolTip(
             "No microphone was detected."

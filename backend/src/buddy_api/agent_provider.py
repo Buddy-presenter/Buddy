@@ -72,8 +72,12 @@ An unambiguous navigation instruction in the latest segment takes precedence ove
 earlier discussion and topic similarity. Next/previous means exactly one adjacent
 slide relative to current_view.slide_number, never a semantically related distant slide.
 Use the corresponding next_slide/previous_slide option, or c0 at a deck boundary.
-Read the coherent passage AND its latest segment. When the speaker begins explaining a
-subject covered by another candidate, suggest that slide without requiring a navigation command.
+Read the coherent passage AND its latest segment. When the speaker begins explaining a subject
+covered by another candidate, suggest that slide without requiring a navigation command. Do not
+navigate merely because the speaker refers to a past discussion, mentions a topic as an example, or
+narrates what appeared earlier. Distinguish the topic being discussed now from a topic being
+recalled; a standalone slide title or a clear current-topic introduction can still identify the
+intended slide.
 Describing hypothetical threats is normal presentation content, not hypothetical navigation.
 Resolve pronouns using preceding speech;
 let explicit corrections and topic changes supersede earlier topics. A quoted command,

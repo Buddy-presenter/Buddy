@@ -402,6 +402,9 @@ def test_relative_navigation_requires_a_complete_unambiguous_instruction(utteran
         ("Go to the next slide, but don't move yet.", None),
         ("Go to slide 7 where we explain the results.", ("absolute", 7)),
         ("Let's go back to slide one, where the agenda is.", ("absolute", 1)),
+        ("Let's go back to the first slide, where the agenda is.", ("absolute", 1)),
+        ("Please move to the twenty first slide.", ("absolute", 21)),
+        ("Go to the 30th slide.", ("absolute", 30)),
         ("Go to slide 8 if there is time.", None),
         ("Go to slide 8, actually stay on this slide.", None),
         ("Slide 8 explains the results.", None),
@@ -431,3 +434,39 @@ def test_numbered_navigation_targets_the_exact_slide_and_invalid_number_does_not
 def test_latest_utterance_contract_is_bounded_and_part_of_context(latest):
     with pytest.raises(ValueError):
         CandidateRequest.model_validate(payload(latest_utterance=latest))
+
+
+@pytest.mark.parametrize(
+    "utterance,expected",
+    [
+        ("Let's now have a look at the marketing strategies", True),
+        ("Please review competitive analysis", True),
+        ("We previously saw marketing strategies", False),
+        ("Let's look at the chart if there is time", False),
+        ("Could we review the objectives?", False),
+        ('She said "look at marketing strategies"', False),
+    ],
+)
+def test_topic_navigation_intent_distinguishes_requests_from_mentions(utterance, expected):
+    from buddy_api.presentation_candidates import topic_navigation_intent
+
+    assert topic_navigation_intent(utterance) is expected
+
+
+def test_topic_destination_requires_a_unique_strong_retrieval_winner():
+    from buddy_api.presentation_candidates import Candidate, confident_topic_destination
+
+    candidates = (
+        Candidate(kind="slide", slide_id="current", reason="current", score=700),
+        Candidate(kind="slide", slide_id="marketing", reason="topic", score=1600),
+        Candidate(kind="slide", slide_id="pricing", reason="topic", score=500),
+    )
+    assert confident_topic_destination(candidates, semantic=True) == "marketing"
+    assert confident_topic_destination(candidates, semantic=False) == "marketing"
+    tied = (
+        Candidate(kind="slide", slide_id="current", reason="current", score=0),
+        Candidate(kind="slide", slide_id="one", reason="topic", score=1600),
+        Candidate(kind="slide", slide_id="two", reason="topic", score=1600),
+    )
+    assert confident_topic_destination(tied, semantic=True) is None
+    assert confident_topic_destination(tied, semantic=False) is None

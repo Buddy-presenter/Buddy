@@ -21,6 +21,10 @@ class SessionConflict(ServiceError):
     """The server has a newer state version; fetch it before writing again."""
 
 
+class SessionAccessDenied(ServiceError):
+    """This presentation session is forbidden; account authentication may still be valid."""
+
+
 @dataclass(frozen=True)
 class SessionState:
     active_slide_id: str
@@ -189,9 +193,12 @@ class PresentationSessionService:
         except HTTPError as exc:
             status = exc.code
             exc.close()
-            if status in {401, 403}:
-                raise LibraryAccessExpired(
-                    "Sign in again to access the presentation session."
+            if status == 401:
+                raise LibraryAccessExpired("Buddy sign-in expired. Please sign in again.") from None
+            if status == 403:
+                raise SessionAccessDenied(
+                    "This account no longer has access to the presentation session. "
+                    "Buddy sign-in is still active."
                 ) from None
             if status == 409:
                 if method == "PATCH" or path.endswith(("/end", "/sync/commands")):

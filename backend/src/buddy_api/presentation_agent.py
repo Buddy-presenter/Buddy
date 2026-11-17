@@ -37,8 +37,10 @@ from buddy_api.presentation_candidates import (
     CandidateRequest,
     candidate_action_eligible,
     candidate_slides,
+    confident_topic_destination,
     navigation_intent,
     resolve,
+    topic_navigation_intent,
 )
 from buddy_api.presentation_sessions import current_ready_analysis, owned_session, snapshot
 
@@ -307,7 +309,9 @@ def options(
         slide = next((s for s in slides if s.slide_id == candidate.slide_id), None)
         if slide is None or candidate.kind == "no_change":
             continue
-        content = (slide.summary.text or "")[:1200]
+        # Keep the choice request focused: the selector needs a discriminating
+        # slide excerpt, not another full summary for every retrieved candidate.
+        content = (slide.summary.text or "")[:600]
         if candidate.kind == "slide":
             offset = positions[slide.slide_id] - positions[source.current]
             if offset == 0:
@@ -416,7 +420,7 @@ def decision_passage(
             ),
             "slide_count": len(source.analysis.slides),
             "focus": source.focus,
-            "summary": (current_slide.summary.text or "")[:1200],
+            "summary": (current_slide.summary.text or "")[:600],
             "focused_purpose": next(
                 (
                     a.action.purpose
@@ -452,6 +456,37 @@ def navigation_selection(
         {
             "choice": f"c{choice}",
             "reason": "explicit" if choice else "stay",
+            "confidence": 1.0,
+            "evidence": [segment_count - 1],
+        }
+    )
+
+
+def topic_navigation_selection(
+    targets: tuple[Target, ...],
+    candidates: tuple[Candidate, ...],
+    segment_count: int,
+    *,
+    semantic: bool,
+) -> Selection | None:
+    destination = confident_topic_destination(candidates, semantic=semantic)
+    if destination is None:
+        return None
+    choice = next(
+        (
+            index
+            for index, target in enumerate(targets)
+            if target.slide_id == destination
+            and target.tool in {"next_slide", "previous_slide", "go_to_slide"}
+        ),
+        None,
+    )
+    if choice is None:
+        return None
+    return Selection.model_validate(
+        {
+            "choice": f"c{choice}",
+            "reason": "topic",
             "confidence": 1.0,
             "evidence": [segment_count - 1],
         }
@@ -704,12 +739,28 @@ def agent_router() -> APIRouter:
                         )
                         targets, descriptions = options(source, candidates)
                         finish_phase()
-                        begin_phase("selection")
-                        selection = await runtime.provider.select(
-                            decision_passage(source, values, descriptions)
+                        fast_topic = (
+                            topic_navigation_selection(
+                                targets,
+                                candidates,
+                                len(values.segments),
+                                semantic=semantic is not None,
+                            )
+                            if topic_navigation_intent(values.latest_utterance)
+                            else None
                         )
-                        finish_phase()
-                        decision_source = "model"
+                        if fast_topic is not None:
+                            begin_phase("topic_navigation")
+                            selection = fast_topic
+                            decision_source = "navigation"
+                            finish_phase()
+                        else:
+                            begin_phase("selection")
+                            selection = await runtime.provider.select(
+                                decision_passage(source, values, descriptions)
+                            )
+                            finish_phase()
+                            decision_source = "model"
                     target = checked_selection(selection, targets, len(values.segments))
                     reason = (
                         "stay"

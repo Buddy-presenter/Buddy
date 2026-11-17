@@ -349,6 +349,63 @@ def _spoken_slide_number(tokens_: list[str]) -> int | None:
     return hundreds * 100 + value if value is not None and value > 0 else None
 
 
+def _spoken_slide_ordinal(tokens_: list[str]) -> int | None:
+    """Parse spoken English ordinals up to 999 and numeric ordinal forms."""
+    if len(tokens_) == 1:
+        numeric = re.fullmatch(r"(\d+)(?:st|nd|rd|th)", tokens_[0])
+        if numeric is not None:
+            value = int(numeric.group(1))
+            return value if 1 <= value <= 999 else None
+
+    units = {
+        "first": 1,
+        "second": 2,
+        "third": 3,
+        "fourth": 4,
+        "fifth": 5,
+        "sixth": 6,
+        "seventh": 7,
+        "eighth": 8,
+        "ninth": 9,
+        "tenth": 10,
+        "eleventh": 11,
+        "twelfth": 12,
+        "thirteenth": 13,
+        "fourteenth": 14,
+        "fifteenth": 15,
+        "sixteenth": 16,
+        "seventeenth": 17,
+        "eighteenth": 18,
+        "nineteenth": 19,
+    }
+    tens = {
+        "twentieth": 20,
+        "thirtieth": 30,
+        "fortieth": 40,
+        "fiftieth": 50,
+        "sixtieth": 60,
+        "seventieth": 70,
+        "eightieth": 80,
+        "ninetieth": 90,
+    }
+    if len(tokens_) == 1:
+        return units.get(tokens_[0], tens.get(tokens_[0]))
+    cardinal_tens = {
+        "twenty": 20,
+        "thirty": 30,
+        "forty": 40,
+        "fifty": 50,
+        "sixty": 60,
+        "seventy": 70,
+        "eighty": 80,
+        "ninety": 90,
+    }
+    if len(tokens_) == 2 and tokens_[0] in cardinal_tens and tokens_[1] in units:
+        unit = units[tokens_[1]]
+        return cardinal_tens[tokens_[0]] + unit if 1 <= unit <= 9 else None
+    return None
+
+
 def navigation_intent(text: str) -> tuple[Literal["relative", "absolute"], int] | None:
     """Recognize an explicit leading slide command without waiting for sentence end."""
     text = unicodedata.normalize("NFKC", text).casefold().strip()
@@ -358,6 +415,22 @@ def navigation_intent(text: str) -> tuple[Literal["relative", "absolute"], int] 
     step = navigation_step(text)
     if step is not None:
         return ("relative", step)
+
+    # Spoken ordinals are common in natural presentation commands. Recognize the
+    # ordinal before the noun as well as the existing "slide one" form, so an
+    # explicit command does not spend a retrieval and model-selection round trip.
+    normalized = " ".join(re.findall(r"[^\W_]+", text))
+    ordinal_prefix = re.match(
+        r"(?:please )?(?:let us )?(?:go|move|jump|navigate|switch|return) "
+        r"(?:back )?to (?:the )?(.+?) (?:slide|page)(?=$|[.,;:!?]|\s)",
+        normalized,
+    )
+    if ordinal_prefix is not None and _safe_navigation_continuation(
+        normalized[ordinal_prefix.end() :]
+    ):
+        ordinal = _spoken_slide_ordinal(ordinal_prefix.group(1).split())
+        if ordinal is not None:
+            return ("absolute", ordinal)
 
     # Keep a numeric sign attached until it has been validated. Stripping `-`
     # first would turn an invalid negative destination into a positive slide jump.
@@ -385,6 +458,72 @@ def navigation_intent(text: str) -> tuple[Literal["relative", "absolute"], int] 
                 ):
                     return ("absolute", number)
     return None
+
+
+def confident_topic_destination(candidates: tuple[Candidate, ...], *, semantic: bool) -> str | None:
+    """Return only a clearly dominant topic destination for an explicit command."""
+    destinations: dict[str, int] = {}
+    current_score = 0
+    for candidate in candidates:
+        if candidate.kind != "slide":
+            continue
+        if candidate.reason == "current":
+            current_score = candidate.score
+        elif candidate.reason == "topic":
+            destinations[candidate.slide_id] = max(
+                destinations.get(candidate.slide_id, 0), candidate.score
+            )
+    if not destinations:
+        return None
+    ranked = sorted(destinations.items(), key=lambda item: (-item[1], item[0]))
+    best_id, best_score = ranked[0]
+    runner_up = max(current_score, ranked[1][1] if len(ranked) > 1 else 0)
+    minimum, margin = (1000, 500) if semantic else (2, 1)
+    if best_score < minimum or best_score - runner_up < margin:
+        return None
+    return best_id
+
+
+def topic_navigation_intent(text: str) -> bool:
+    """Recognize an explicit topic-navigation phrase, not a passing mention."""
+    text = unicodedata.normalize("NFKC", text).casefold().strip()
+    text = re.sub(r"\blet['’]s\b", "let us", text)
+    if any(character in text for character in "?？\"'“”‘’«»"):
+        return False
+    normalized = " ".join(re.findall(r"[^\W_]+", text))
+    command = re.match(
+        r"(?:please )?(?:let us )?(?:now )?(?:have a look at|take a look at|look at|"
+        r"review|show me|open|go to|move to|switch to|jump to|return to|go back to) "
+        r"(?:the )?(.+)",
+        normalized,
+    )
+    if command is None:
+        return False
+    # Do not fast-path a command whose continuation negates, conditions, or
+    # corrects it. Such speech stays with the constrained selector.
+    continuation = command.group(1).split()
+    unsafe = {
+        "if",
+        "unless",
+        "until",
+        "only",
+        "provided",
+        "assuming",
+        "not",
+        "never",
+        "cannot",
+        "without",
+        "actually",
+        "instead",
+        "rather",
+        "sorry",
+        "wait",
+        "cancel",
+        "forget",
+        "scratch",
+        "stop",
+    }
+    return bool(continuation) and not (set(continuation) & unsafe)
 
 
 def resolve(

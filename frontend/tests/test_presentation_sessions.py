@@ -11,6 +11,7 @@ from buddy_desktop.library_service import LibraryAccessExpired
 from buddy_desktop.presentation_session_service import (
     PresentationSession,
     PresentationSessionService,
+    SessionAccessDenied,
     SessionConflict,
     SessionState,
     parse_snapshot,
@@ -136,3 +137,13 @@ def test_session_service_distinguishes_expiration_and_state_conflict(backend):
     with pytest.raises(ServiceError) as error:
         service.request("test-access", "/api/v1/sessions", method="POST", body={})
     assert not isinstance(error.value, SessionConflict)
+
+
+def test_forbidden_session_does_not_mean_account_signin_expired(backend):
+    service = PresentationSessionService(AppConfig(f"http://127.0.0.1:{backend.server_port}"))
+    backend.response_code = 403
+    with pytest.raises(SessionAccessDenied):
+        service.request("test-access", "/api/v1/sessions/00000000-0000-0000-0000-000000000001")
+    backend.response_code = 401
+    with pytest.raises(LibraryAccessExpired):
+        service.request("test-access", "/api/v1/sessions/00000000-0000-0000-0000-000000000001")
