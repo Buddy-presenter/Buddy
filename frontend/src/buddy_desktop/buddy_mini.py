@@ -35,7 +35,7 @@ from buddy_desktop.visuals import icon
 
 class BuddyMini(QWidget):
     _mascot_radius = 54
-    _control_radius = 79
+    _control_radius = 82
 
     restore_requested = Signal()
     settings_requested = Signal()
@@ -109,11 +109,11 @@ class BuddyMini(QWidget):
             button.setAccessibleName(name)
             button.setToolTip(name)
             button.setIcon(icon(glyph, "#000000"))
-            button.setIconSize(QSize(16, 16))
-            button.setFixedSize(28, 28)
+            button.setIconSize(QSize(17, 17))
+            button.setFixedSize(32, 32)
             button.setStyleSheet(
                 "QPushButton { background: #f5843d; border: 1px solid #e56c27; "
-                "border-radius: 14px; padding: 0; min-width: 0; min-height: 0; }"
+                "border-radius: 16px; padding: 0; min-width: 0; min-height: 0; }"
                 "QPushButton:hover, QPushButton:focus { border: 2px solid #171717; }"
                 "QPushButton:disabled { background: #b88060; border-color: #b88060; }"
             )
@@ -149,7 +149,7 @@ class BuddyMini(QWidget):
         self._center.setY(margin if top else self.height() - margin)
         self.mascot.move(self._center - QPoint(self._mascot_radius, self._mascot_radius))
         for index, button in enumerate(self.buttons):
-            angle = math.radians(222 + index * 24)
+            angle = math.radians(208 + index * 31)
             x = self._center.x() + self._control_radius * math.cos(angle)
             offset_y = self._control_radius * math.sin(angle)
             y = self._center.y() + (-offset_y if top else offset_y)
