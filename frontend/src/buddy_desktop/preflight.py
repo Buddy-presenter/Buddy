@@ -22,6 +22,17 @@ from buddy_desktop.slide_contract import ContractError, validate
 from buddy_desktop.validation_worker import PROFILES
 
 
+def _resident_bytes(processes: list[Any]) -> int:
+    resident = 0
+    for observed in processes:
+        try:
+            resident += observed.memory_info().rss
+        except psutil.NoSuchProcess:
+            # Exit between enumeration and sampling is normal; access denial is not.
+            continue
+    return resident
+
+
 class Tool(TypedDict, total=False):
     op: Literal["load_slide", "reset", "apply_action", "read_state", "capture"]
     slide_id: str
@@ -353,7 +364,8 @@ class PreflightRunner:
                     processes = {p.pid: p for p in [monitor, *monitor.children(recursive=True)]}
                     if assigned_office is not None:
                         processes[assigned_office] = psutil.Process(assigned_office)
-                    if sum(p.memory_info().rss for p in processes.values()) > 1536 * 1024 * 1024:
+                    resident = _resident_bytes(list(processes.values()))
+                    if resident > 1536 * 1024 * 1024:
                         return "memory_limit"
                 if (
                     sum(p.stat().st_size for p in folder.rglob("*") if p.is_file())
