@@ -130,6 +130,42 @@ def test_prefetch_result_is_discarded_after_presentation_is_cleared(
     assert page.executor._image_cache_bytes == 0
 
 
+def test_clearing_saved_pdf_cancels_warmup_and_restores_open_control(
+    desktop_window, qtbot, monkeypatch
+):
+    from threading import Event
+
+    import buddy_desktop.slide_executor as slide_executor
+
+    window = desktop_window()
+    page = window.present
+    release = Event()
+    original = slide_executor.load_image
+
+    def delayed_render(manifest, slide):
+        assert release.wait(5)
+        return original(manifest, slide)
+
+    monkeypatch.setattr(slide_executor, "load_image", delayed_render)
+    page.load_pdf(FIXTURE)
+    qtbot.waitUntil(
+        lambda: page._pdf_warming and bool(page.executor._warmup_workers), timeout=10000
+    )
+    assert not page.open_button.isEnabled()
+
+    try:
+        window._private_presentation = True
+        window._clear_private_pdf()
+        assert page.executor.manifest is None
+        assert not page._pdf_warming
+        assert page.open_button.isEnabled()
+        assert not page.pdf_warmup_progress_bar.isVisible()
+    finally:
+        release.set()
+
+    qtbot.waitUntil(lambda: page.executor.prefetch_pool.activeThreadCount() == 0, timeout=10000)
+
+
 @pytest.mark.parametrize("content", [b"not a PDF", b"%PDF-1.7\nbroken"])
 def test_invalid_pdf_leaves_previous_committed_presentation(desktop_window, qtbot, content):
     page = desktop_window().present

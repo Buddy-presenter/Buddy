@@ -221,11 +221,14 @@ class SlideExecutor(QObject):
         self.prefetch_pool.start(worker, priority=-1)
 
     def _cancel_pdf_warmup(self) -> None:
+        was_active = self._warmup_active
         self._warmup_generation += 1
         self._warmup_queue.clear()
         self._warmup_active = False
         self._warmup_total = 0
         self._warmup_completed = 0
+        if was_active:
+            self.pdf_warmup_finished.emit("cancelled")
 
     def _start_pdf_warmup(self, manifest: Manifest) -> None:
         if manifest.pdf_content is None:
