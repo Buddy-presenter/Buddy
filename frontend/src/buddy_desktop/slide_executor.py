@@ -24,7 +24,9 @@ from buddy_desktop.slide_contract import (
 from buddy_desktop.slide_surface import SlideSurface
 
 logger = logging.getLogger(__name__)
-_IMAGE_CACHE_LIMIT_BYTES = 64 * 1024 * 1024
+_IMAGE_CACHE_LIMIT_BYTES = 320 * 1024 * 1024
+_PDF_WARMUP_LIMIT_BYTES = _IMAGE_CACHE_LIMIT_BYTES
+_PDF_WARMUP_MAX_PAGES = 30
 
 
 def _guard_allows(guard: Callable[[], bool] | None) -> bool:
@@ -110,6 +112,8 @@ class SlideExecutor(QObject):
 
     completed = Signal(object)  # Completion, including rejected/failed/cancelled requests
     idle = Signal()
+    pdf_warmup_progress = Signal(int, int)
+    pdf_warmup_finished = Signal(str)
 
     def __init__(self, surface: SlideSurface) -> None:
         super().__init__(surface)
@@ -119,10 +123,20 @@ class SlideExecutor(QObject):
         self.pool = QThreadPool(self)
         self.pool.setMaxThreadCount(1)
         self.prefetch_pool = QThreadPool(self)
-        self.prefetch_pool.setMaxThreadCount(1)
+        # Two isolated PDF workers shorten the pre-presentation warmup without
+        # letting a deck's full raster set decode concurrently without bounds.
+        self.prefetch_pool.setMaxThreadCount(2)
         self._worker: _Work | None = None
         self._prefetch_worker: _Work | None = None
         self._prefetch_key: tuple[str, str, str] | None = None
+        self._warmup_workers: set[_Work] = set()
+        self._warmup_generation = 0
+        self._warmup_queue: list[Slide] = []
+        self._warmup_active = False
+        self._warmup_total = 0
+        self._warmup_completed = 0
+        self._warmup_failed = False
+        self._warmup_started_ns = 0
         self._image_cache: OrderedDict[tuple[str, str, str], QImage] = OrderedDict()
         self._image_cache_bytes = 0
         self._pending: tuple[int, str | None, Action | None] | None = None
@@ -132,7 +146,7 @@ class SlideExecutor(QObject):
 
     @property
     def busy(self) -> bool:
-        return self._worker is not None
+        return self._worker is not None or self._warmup_active
 
     def _request(self) -> int:
         self.surface.check_thread()
@@ -185,6 +199,7 @@ class SlideExecutor(QObject):
         manifest = self.manifest
         if (
             self._closed
+            or self._warmup_active
             or manifest is None
             or manifest.pdf_content is None
             or self._prefetch_worker is not None
@@ -204,6 +219,129 @@ class SlideExecutor(QObject):
         )
         self._prefetch_worker = worker
         self.prefetch_pool.start(worker, priority=-1)
+
+    def _cancel_pdf_warmup(self) -> None:
+        self._warmup_generation += 1
+        self._warmup_queue.clear()
+        self._warmup_active = False
+        self._warmup_total = 0
+        self._warmup_completed = 0
+
+    def _start_pdf_warmup(self, manifest: Manifest) -> None:
+        if manifest.pdf_content is None:
+            self.pdf_warmup_finished.emit("not_applicable")
+            return
+        decoded_bytes = sum(
+            slide.raster_width * slide.raster_height * 4 for slide in manifest.slides
+        )
+        if len(manifest.slides) > _PDF_WARMUP_MAX_PAGES or decoded_bytes > _PDF_WARMUP_LIMIT_BYTES:
+            logger.info(
+                "presentation_latency event=pdf_warmup outcome=skipped pages=%d "
+                "estimated_bytes=%d cache_limit_bytes=%d",
+                len(manifest.slides),
+                decoded_bytes,
+                _PDF_WARMUP_LIMIT_BYTES,
+            )
+            self.pdf_warmup_finished.emit("skipped")
+            return
+        self._warmup_generation += 1
+        self._warmup_active = True
+        self._warmup_failed = False
+        self._warmup_total = len(manifest.slides)
+        self._warmup_completed = 1  # The first page was rendered to open the PDF.
+        self._warmup_started_ns = time.monotonic_ns()
+        self._warmup_queue = list(manifest.slides[1:])
+        self.pdf_warmup_progress.emit(self._warmup_completed, self._warmup_total)
+        if not self._warmup_queue:
+            self._finish_pdf_warmup(self._warmup_generation)
+            return
+        self._start_next_pdf_warmup(self._warmup_generation)
+
+    def _start_next_pdf_warmup(self, generation: int) -> None:
+        if generation != self._warmup_generation or not self._warmup_active:
+            return
+        manifest = self.manifest
+        if manifest is None or manifest.pdf_content is None:
+            self._finish_pdf_warmup(generation)
+            return
+        while self._warmup_queue and len(self._warmup_workers) < 2:
+            slide = self._warmup_queue.pop(0)
+            key = self._cache_key(manifest, slide)
+            if self._cached_image(key) is not None:
+                self._warmup_completed += 1
+                self.pdf_warmup_progress.emit(self._warmup_completed, self._warmup_total)
+                continue
+
+            def render_page(
+                current_key: tuple[str, str, str] = key,
+                current_slide: Slide = slide,
+                current_manifest: Manifest = manifest,
+            ) -> tuple[tuple[str, str, str], QImage]:
+                return current_key, load_image(current_manifest, current_slide)
+
+            worker = _Work(0, render_page)
+            self._warmup_workers.add(worker)
+            worker.signals.done.connect(
+                lambda _request, result, error, worker=worker, key=key: self._pdf_warmup_page_done(
+                    generation, worker, key, result, error
+                )
+            )
+            self.prefetch_pool.start(worker)
+        if not self._warmup_queue and not self._warmup_workers:
+            self._finish_pdf_warmup(generation)
+
+    def _pdf_warmup_page_done(
+        self,
+        generation: int,
+        worker: _Work,
+        key: tuple[str, str, str],
+        result: Any,
+        error: str,
+    ) -> None:
+        self.surface.check_thread()
+        self._warmup_workers.discard(worker)
+        if generation != self._warmup_generation:
+            if self._warmup_active:
+                self._start_next_pdf_warmup(self._warmup_generation)
+            return
+        manifest = self.manifest
+        valid_manifest = (
+            not self._closed
+            and manifest is not None
+            and (manifest.deck_id, manifest.render_id) == key[:2]
+        )
+        image = result[1] if isinstance(result, tuple) and len(result) == 2 else None
+        if valid_manifest and not error and isinstance(image, QImage) and not image.isNull():
+            self._remember_image(key, image)
+        else:
+            self._warmup_failed = True
+        self._warmup_completed += 1
+        self.pdf_warmup_progress.emit(self._warmup_completed, self._warmup_total)
+        self._start_next_pdf_warmup(generation)
+
+    def _finish_pdf_warmup(self, generation: int) -> None:
+        if (
+            generation != self._warmup_generation
+            or not self._warmup_active
+            or self._warmup_queue
+            or self._warmup_workers
+        ):
+            return
+        self._warmup_active = False
+        manifest = self.manifest
+        if manifest is not None:
+            current = manifest.slides[self.current_index]
+            self._cached_image(self._cache_key(manifest, current))
+        outcome = "partial" if self._warmup_failed else "ready"
+        logger.info(
+            "presentation_latency event=pdf_warmup outcome=%s pages=%d elapsed_ms=%d "
+            "cache_bytes=%d",
+            outcome,
+            self._warmup_total,
+            max(0, (time.monotonic_ns() - self._warmup_started_ns) // 1_000_000),
+            self._image_cache_bytes,
+        )
+        self.pdf_warmup_finished.emit(outcome)
 
     def _prefetched(
         self,
@@ -236,6 +374,7 @@ class SlideExecutor(QObject):
         )
 
     def load_manifest(self, path: Path) -> int:
+        self._cancel_pdf_warmup()
         request = self._request()
         if self._closed or self.busy:
             self._finish(request, None, "rejected", "Executor is busy or closed.")
@@ -253,6 +392,7 @@ class SlideExecutor(QObject):
     ) -> int:
         from buddy_desktop.pdf_document import open_pdf
 
+        self._cancel_pdf_warmup()
         request = self._request()
         if self._closed or self.busy:
             self._finish(request, None, "rejected", "Executor is busy or closed.")
@@ -330,6 +470,7 @@ class SlideExecutor(QObject):
                 slide = manifest.slides[0]
                 self._remember_image(self._cache_key(manifest, slide), image)
                 self.surface.commit(slide, image, slide.full)
+                self._start_pdf_warmup(manifest)
                 self._finish(request, instance, "completed")
             else:
                 assert self.manifest is not None
@@ -354,11 +495,13 @@ class SlideExecutor(QObject):
         """Call before destroying the surface; wait_for_shutdown after the event loop exits."""
         self.surface.check_thread()
         self._closed = True
+        self._cancel_pdf_warmup()
         self._image_cache.clear()
         self._image_cache_bytes = 0
         self.cancel()
 
     def clear(self) -> None:
+        self._cancel_pdf_warmup()
         self.cancel()
         self.manifest = None
         self.current_index = 0

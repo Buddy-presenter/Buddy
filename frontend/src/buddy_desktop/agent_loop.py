@@ -336,7 +336,12 @@ class AgentLoop(QObject):
                     ],
                 }
             self.proposed.emit(result)
-            self.status.emit("Suggestion ready • slide controls remain manual")
+            reason = result.get("reason") if isinstance(result, dict) else None
+            self.status.emit(
+                "Decision timed out; Buddy is still listening."
+                if reason == "deadline"
+                else "Suggestion ready • slide controls remain manual"
+            )
 
     def _failed(self, _identifier: int, message: str) -> None:
         submitted_at_ns, self._submitted_at_ns = self._submitted_at_ns, None
