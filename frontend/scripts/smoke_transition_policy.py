@@ -192,6 +192,7 @@ def main():
                 "session_id": session.id,
                 "analysis_id": analysis_id,
                 "state_version": session.state_version,
+                "active_slide_id": slide_ids[0],
                 "context_epoch": 2,
                 "stream_id": context.stream_id,
                 "sequence": 1,
@@ -207,13 +208,16 @@ def main():
                 },
             }
             count = len(events)
+            saved_count = len(saves)
             started = time.monotonic_ns()
             page._agent_proposed(proposal)
             wait(lambda count=count: len(events) == count + 1)
             wait(lambda: not page.session_runner.busy and page._session_pending_state is None)
             elapsed = (events[-1]["completed_ns"] - started) / 1e6
             assert page._current_local_state().active_slide_id == slide_ids[1]
-            assert saves[-1]["active_slide_id"] == slide_ids[1]
+            # Automatic navigation stays local; recovery writes are not part of
+            # the navigation completion contract or a prerequisite for movement.
+            assert len(saves) == saved_count
             page._agent_proposed(proposal)
             app.processEvents()
             assert len(events) == count + 1
@@ -234,7 +238,8 @@ def main():
                     "navigation_ms": elapsed,
                     "undo_ms": (time.monotonic_ns() - undo_started) / 1e6,
                     "duplicate_suppressed": True,
-                    "observed_state_saved": True,
+                    "navigation_state_local": True,
+                    "navigation_position_writes": 0,
                     "animation_observed": events[-1]["animated"],
                 }
             )
