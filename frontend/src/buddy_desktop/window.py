@@ -1,11 +1,12 @@
 """Navigation and lifecycle for one desktop window and one application event loop."""
 
+import importlib
 import sys
 from dataclasses import replace
 from uuid import UUID
 
-from PySide6.QtCore import QByteArray, QSettings, QSize, Qt, Slot
-from PySide6.QtGui import QAction, QCloseEvent, QGuiApplication, QIcon, QKeySequence
+from PySide6.QtCore import QByteArray, QSettings, QSize, Qt, QTimer, Slot
+from PySide6.QtGui import QAction, QCloseEvent, QGuiApplication, QIcon, QKeySequence, QScreen
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from buddy_desktop.account_widget import AccountWidget
 from buddy_desktop.auth import AccountProfile
+from buddy_desktop.buddy_mini import BuddyMini
 from buddy_desktop.config import AppConfig, ConfigurationError, validate_api_url
 from buddy_desktop.library_widget import LibraryWidget
 from buddy_desktop.present_widget import PresentWidget
@@ -105,6 +107,21 @@ class MainWindow(QMainWindow):
         self.library = LibraryWidget(config, self.account)
         self.review = ReviewWidget(config, self.account)
         self.present = PresentWidget(config, settings)
+        self._mini: BuddyMini | None = None
+        self._mini_session: str | None = None
+        self._mini_screen: QScreen | None = None
+        self._mini_chime_paused = False
+        self._mini_poll = QTimer(self, interval=100)
+        self._mini_poll.timeout.connect(self._sync_mini)
+        self._mini_auto_poll = QTimer(self, interval=100)
+        self._mini_auto_poll.timeout.connect(self._maybe_auto_mini)
+        self._mini_auto_attempts = 0
+        self._mini_auto_deck: str | None = None
+        self.present.mini_requested.connect(self._toggle_mini)
+        self.present.transition_observed.connect(self._mini_completed)
+        app = QGuiApplication.instance()
+        if isinstance(app, QGuiApplication):
+            app.screenRemoved.connect(self._mini_screen_removed)
         self._private_presentation = False
         self.library.present_requested.connect(self._open_saved_pdf)
         self.library.powerpoint_present_requested.connect(self._open_saved_powerpoint)
@@ -130,6 +147,25 @@ class MainWindow(QMainWindow):
             bool(settings.value("appearance/reduce_motion", False, type=bool))
         )
         self.preferences.reduce_motion.toggled.connect(self._motion_changed)
+        self.preferences.mini_corner.setCurrentIndex(
+            max(
+                0,
+                self.preferences.mini_corner.findData(
+                    settings.value("presentation/mini_corner", "bottom-right")
+                ),
+            )
+        )
+        self.preferences.mini_corner.currentIndexChanged.connect(
+            lambda _: settings.setValue(
+                "presentation/mini_corner", self.preferences.mini_corner.currentData()
+            )
+        )
+        self.preferences.mini_auto_start.setChecked(
+            bool(settings.value("presentation/mini_auto_start", False, type=bool))
+        )
+        self.preferences.mini_auto_start.toggled.connect(
+            lambda enabled: settings.setValue("presentation/mini_auto_start", enabled)
+        )
         self.account.activity_changed.connect(self._account_activity)
         page_widgets = [
             self.home,
@@ -213,7 +249,7 @@ class MainWindow(QMainWindow):
         menu.addWidget(self.account)
         popover_layout.addLayout(menu)
         self.account.session_changed.connect(self._account_identity)
-        self.present.session_access_expired.connect(self.account.expire_session)
+        self.present.session_access_expired.connect(self.account.verify_resource_access)
         self.account.profile_loaded.connect(self._profile_identity)
         self._account_identity()
         self.library.signin_requested.connect(self._show_account_controls)
@@ -265,6 +301,7 @@ class MainWindow(QMainWindow):
         self._private_presentation = True
         self.navigation.setCurrentRow(3)
         self.present.load_pdf(result.content, deck_id=result.deck_id, revision=result.revision)
+        self._schedule_auto_mini(result.deck_id)
 
     def _open_review(
         self, deck_id: object, title: str, status: str, source_format: str = "pdf"
@@ -288,6 +325,7 @@ class MainWindow(QMainWindow):
             return
         self.navigation.setCurrentRow(3)
         self.present.bind_saved_powerpoint(binding)
+        self._schedule_auto_mini(binding.deck_id)
 
     def _clear_private_pdf(self) -> None:
         if self._private_presentation:
@@ -429,6 +467,8 @@ class MainWindow(QMainWindow):
     @Slot(int)
     def navigate(self, index: int) -> None:
         if 0 <= index < self.pages.count():
+            if index != 3:
+                self._mini_auto_poll.stop()
             previous = self.pages.currentIndex()
             self.pages.setCurrentIndex(index)
             self.route_title.setText(
@@ -622,7 +662,233 @@ class MainWindow(QMainWindow):
         ):
             self.move(screens[0].availableGeometry().topLeft())
 
+    def _schedule_auto_mini(self, deck_id: str) -> None:
+        self._mini_auto_poll.stop()
+        if self.preferences.mini_auto_start.isChecked():
+            self._mini_auto_deck = deck_id
+            self._mini_auto_attempts = 0
+            self._mini_auto_poll.start()
+
+    def _maybe_auto_mini(self) -> None:
+        self._mini_auto_attempts += 1
+        if self._closing or self._mini is not None or self._mini_auto_attempts > 150:
+            self._mini_auto_poll.stop()
+            return
+        session = self.present._session
+        if (
+            session is not None
+            and session.deck_id == self._mini_auto_deck
+            and self.present.mini_session_id()
+        ):
+            self._mini_auto_poll.stop()
+            self._toggle_mini()
+
+    def _toggle_mini(self) -> None:
+        self._mini_auto_poll.stop()
+        if self._mini is not None:
+            self._mini.show()
+            self.hide()
+            self._sync_mini()
+            return
+        session_id = self.present.mini_session_id()
+        if session_id and self.present._powerpoint_info is None and self.present.fullscreen is None:
+            self.present.enter_fullscreen()
+        screen = self.screen()
+        audience = self._mini_audience_screen()
+        screens = QGuiApplication.screens()
+        if len(screens) > 1 and screen == audience:
+            screen = next(candidate for candidate in screens if candidate != audience)
+        mini = BuddyMini(
+            self.present.microphone_button,
+            self.present.policy_undo_button,
+        )
+        mini.restore_requested.connect(self._leave_mini)
+        mini.settings_requested.connect(self._mini_settings)
+        mini.automation_requested.connect(self._toggle_mini_automation)
+        mini.closed.connect(lambda: self._leave_mini(stop=True))
+        mini.system_sleep.connect(self._mini_system_sleep, Qt.ConnectionType.QueuedConnection)
+        mini.chime_finished.connect(self._mini_chime_finished)
+        mini.reduced_motion = self.preferences.reduce_motion.isChecked()
+        if self.present.mini_chime.isChecked():
+            mini.prepare_chime()
+        self._mini, self._mini_session, self._mini_screen = mini, session_id, screen
+        self._position_mini(mini, screen)
+        if len(screens) == 1:
+            mini.setToolTip("Buddy Mini may be visible when sharing this entire screen.")
+        mini.show()
+        self.present.mini_active = True
+        self.hide()
+        self._mini_poll.start()
+        self._sync_mini()
+
+    def _position_mini(self, mini: BuddyMini, screen: QScreen) -> None:
+        area = screen.availableGeometry()
+        corner = self.preferences.mini_corner.currentData()
+        top = corner in {"top-left", "top-right"}
+        left = corner in {"top-left", "bottom-left"}
+        mini.set_top_corner(top)
+        mini.move(
+            area.left() + 12 if left else area.right() - mini.width() - 12,
+            area.top() + 12 if top else area.bottom() - mini.height() - 12,
+        )
+
+    def _mini_audience_screen(self) -> QScreen | None:
+        if self.present.fullscreen is not None and self.present._powerpoint_info is None:
+            return self.present.fullscreen.screen()
+        info = self.present._powerpoint_info
+        if sys.platform == "win32" and info is not None:
+            win32api = importlib.import_module("win32api")
+
+            try:
+                device = win32api.GetMonitorInfo(win32api.MonitorFromWindow(info.window_id))[
+                    "Device"
+                ]
+                return next(
+                    (
+                        screen
+                        for screen in QGuiApplication.screens()
+                        if screen.name().casefold() == device.casefold()
+                    ),
+                    None,
+                )
+            except (OSError, ValueError, win32api.error):
+                return None
+        return None
+
+    def _sync_mini(self) -> None:
+        mini = self._mini
+        if mini is None:
+            return
+        page = self.present
+        session_id = page.mini_session_id()
+        # A PDF render can stay loaded after fullscreen ends. Treat that as
+        # standby until the presenter starts the slideshow again.
+        if page._powerpoint_info is None and page.fullscreen is None:
+            session_id = None
+        if not mini.isVisible() or session_id != self._mini_session:
+            self._mini_chime_paused = False
+            mini.stop_sound()
+            page.microphone.stop()
+            page.agent_enabled.setChecked(False)
+            self._mini_session = session_id
+            if not mini.isVisible():
+                mini.show()
+        screens = QGuiApplication.screens()
+        if screens:
+            audience = self._mini_audience_screen()
+            presenters = [screen for screen in screens if screen != audience] or screens
+            if self._mini_screen not in presenters:
+                self._mini_screen = presenters[0]
+                self._position_mini(mini, self._mini_screen)
+        state = (
+            "Disconnected"
+            if session_id is None
+            else "Muted"
+            if page.microphone_mute.isChecked() or page.microphone_pause.isChecked()
+            else "Listening"
+            if page.microphone_status.text() == "Microphone on"
+            else "Mic off"
+        )
+        mini.sync(
+            state, page.microphone_button, page.policy_undo_button, connected=bool(session_id)
+        )
+        mini.sync_automation(
+            bool(session_id and page.agent_enabled.isEnabled()),
+            bool(session_id and page.agent_enabled.isChecked() and page.policy_enabled.isChecked()),
+        )
+
+    def _toggle_mini_automation(self) -> None:
+        page = self.present
+        if not self._mini_session:
+            return
+        if page.agent_enabled.isChecked() and page.policy_enabled.isChecked():
+            page.agent_enabled.setChecked(False)
+        elif page.agent_enabled.isEnabled():
+            suggestions_were_on = page.agent_enabled.isChecked()
+            page.agent_enabled.setChecked(True)
+            page._update_agent()
+            if page.policy_enabled.isEnabled():
+                page.policy_enabled.setChecked(True)
+            else:
+                page.agent_enabled.setChecked(suggestions_were_on)
+        self._sync_mini()
+
+    def _mini_completed(self, result: object) -> None:
+        if self._mini is None or not self._mini.isVisible():
+            return
+        page = self.present
+        target = result.get("target", {}) if isinstance(result, dict) else {}
+        tool = target.get("tool", "") if isinstance(target, dict) else ""
+        label = {
+            "zoom_region": "Zoomed in",
+            "highlight_region": "Highlighted",
+            "reset_view": "View reset",
+        }.get(tool)
+        if label is None:
+            info = page._powerpoint_info
+            number = info.slide_index if info is not None else page.executor.current_index + 1
+            label = f"Slide {number}"
+        self._mini.completed(label)
+        if page.mini_chime.isChecked() and self._mini.prepare_chime():
+            self._mini_chime_paused = (
+                page.microphone.enabled
+                and not page.microphone_pause.isChecked()
+                and not page.microphone_mute.isChecked()
+            )
+            if self._mini_chime_paused:
+                page.microphone_pause.setChecked(True)
+                page._invalidate_transcript_context()
+            self._mini.play_chime()
+
+    def _mini_chime_finished(self) -> None:
+        if self._mini_chime_paused:
+            self._mini_chime_paused = False
+            if self._mini is not None and self.present.mini_session_id() == self._mini_session:
+                self.present.microphone_pause.setChecked(False)
+
+    def _mini_screen_removed(self, screen: QScreen) -> None:
+        if self._mini is not None and screen == self._mini_screen:
+            self._mini_screen = None
+            QTimer.singleShot(0, self._sync_mini)
+
+    @Slot()
+    def _mini_system_sleep(self) -> None:
+        # Windows can send both suspend and resume, including for a Mini already closing.
+        if self._mini is not None and self.sender() is self._mini:
+            self._leave_mini(stop=True)
+
+    def _mini_settings(self) -> None:
+        self.present.microphone.stop()
+        self.present.agent_enabled.setChecked(False)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.navigation.setCurrentRow(4)
+
+    def _leave_mini(self, *, stop: bool = False, restore: bool = True) -> None:
+        mini, self._mini = self._mini, None
+        if mini is None:
+            return
+        stop = stop or mini.chiming
+        self._mini_chime_paused = False
+        self._mini_poll.stop()
+        self.present.mini_active = False
+        self._mini_session = None
+        self._mini_screen = None
+        if stop:
+            self.present.microphone.stop()
+            self.present.agent_enabled.setChecked(False)
+        mini.stop_sound()
+        mini.hide()
+        mini.deleteLater()
+        if restore:
+            self.show()
+            self.raise_()
+            self.activateWindow()
+
     def closeEvent(self, event: QCloseEvent) -> None:
+        self._mini_auto_poll.stop()
+        self._leave_mini(stop=True, restore=False)
         self.account_popover.hide()
         self.profile.activate(False)
         self.account.shutdown()
