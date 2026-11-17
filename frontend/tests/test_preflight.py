@@ -181,6 +181,42 @@ def test_worker_failure_is_not_visual_approval_and_source_is_cleaned(snapshot, m
         assert set(p.name for p in (runner._root / report["run_id"]).iterdir()) == {"report.json"}
 
 
+@pytest.mark.parametrize("invalid_capture", ["oversized", "bad-header", "unexpected-name"])
+def test_rejected_captures_are_deleted_and_unreadable(snapshot, monkeypatch, invalid_capture):
+    def capture(folder, *args):
+        (folder / "result.json").write_text(
+            json.dumps(
+                dict(
+                    source_sha256=hashlib.sha256(snapshot["source"]).hexdigest(),
+                    state="completed",
+                    artifacts=[{"name": "0.png", "sha256": "untrusted"}],
+                )
+            )
+        )
+        # Include a valid capture first, so a later rejection cannot retain a
+        # partially validated set that the report does not list.
+        (folder / "0.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+        rejected_name = "extra.png" if invalid_capture == "unexpected-name" else "1.png"
+        content = b"not a PNG" if invalid_capture == "bad-header" else b"\x89PNG\r\n\x1a\n"
+        with (folder / rejected_name).open("wb") as image:
+            image.write(content)
+            if invalid_capture == "oversized":
+                image.truncate(16 * 1024 * 1024 + 8)
+
+    with PreflightRunner("owner") as runner:
+        monkeypatch.setattr(runner, "_launch", capture)
+        report = runner.run("owner", **snapshot, tools=[{"op": "capture"}] * 2)
+        assert report["state"] == "needs-review"
+        assert report["reason"] == "invalid_worker_result"
+        assert report["artifacts"] == []
+        stored = json.loads(runner.artifact("owner", report["run_id"], "report.json"))
+        assert stored == report
+        assert {p.name for p in (runner._root / report["run_id"]).iterdir()} == {"report.json"}
+        for name in ("0.png", "1.png", "extra.png"):
+            with pytest.raises(FileNotFoundError):
+                runner.artifact("owner", report["run_id"], name)
+
+
 def test_passive_powerpoint_package_and_external_content_rejection():
     import io
     import zipfile

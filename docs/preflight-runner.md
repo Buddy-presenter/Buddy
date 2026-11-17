@@ -93,6 +93,9 @@ Artifacts are OS-account private (Windows protected owner DACL; POSIX mode 0700)
 owner checks and opaque run IDs at read time. The runner retains at most eight runs for
 one hour, expiring them on access/new runs. Source/job/profile data is removed immediately
 after each run; closing the runner removes all evidence. Use it as a context manager.
+Only a fully validated capture set is retained and listed in the report. Invalid worker
+results discard all captures, including any captures validated before a later rejection;
+rejected or unlisted files cannot be retrieved by an otherwise allowlisted filename.
 Do not publish raw private-deck screenshots in public CI artifacts. The trusted owner host
 may copy approved evidence to its existing owner-scoped storage with its retention policy.
 

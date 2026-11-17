@@ -198,6 +198,7 @@ class PreflightRunner:
             semantic_verified=False,
             artifacts=[],
         )
+        retained_captures: set[str] = set()
         try:
             reason = self._launch(folder, profile, cancelled, source_format)
             if reason:
@@ -230,12 +231,14 @@ class PreflightRunner:
             if total > 64 * 1024 * 1024:
                 raise ContractError("Preflight evidence exceeds bounds.")
             report["artifacts"] = artifacts
+            retained_captures = {artifact["name"] for artifact in artifacts}
         except (OSError, ValueError):
-            report.update(state="needs-review", reason="invalid_worker_result")
+            report.update(state="needs-review", reason="invalid_worker_result", artifacts=[])
         finally:
-            # Retain only versioned traces and captures; never retain source/private profile.
+            # Commit evidence only after the complete capture set passes validation.
+            # Rejected/unlisted captures must not remain readable by filename.
             for path in list(folder.iterdir()):
-                if path.suffix != ".png":
+                if path.name not in retained_captures:
                     if path.is_dir():
                         shutil.rmtree(path)
                     else:
