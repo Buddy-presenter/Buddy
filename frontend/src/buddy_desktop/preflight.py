@@ -212,12 +212,15 @@ class PreflightRunner:
                 if (
                     not isinstance(payload, dict)
                     or payload.get("source_sha256") != request["source_sha256"]
+                    or payload.get("state") not in ("completed", "needs-review")
+                    or payload.get("semantic_verified", False) is not False
                 ):
                     raise ContractError("Invalid preflight result.")
-                report.update(payload)
+                report.update({key: value for key, value in payload.items() if key not in report})
+                report.update(state=payload["state"], reason=payload.get("reason"))
             total = 0
             artifacts = []
-            for image in sorted(folder.glob("*.png")):
+            for image in sorted(folder.glob("*.png")) if reason is None else []:
                 with image.open("rb") as image_file:
                     content = image_file.read(16 * 1024 * 1024 + 1)
                 total += len(content)

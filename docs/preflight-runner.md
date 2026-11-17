@@ -96,6 +96,9 @@ after each run; closing the runner removes all evidence. Use it as a context man
 Only a fully validated capture set is retained and listed in the report. Invalid worker
 results discard all captures, including any captures validated before a later rejection;
 rejected or unlisted files cannot be retrieved by an otherwise allowlisted filename.
+Cancelled, crashed or resource-limited workers also discard partial captures. Worker
+output cannot replace the host's run identity, source revision, format or report version,
+or claim semantic approval; invalid result states fail closed.
 Do not publish raw private-deck screenshots in public CI artifacts. The trusted owner host
 may copy approved evidence to its existing owner-scoped storage with its retention policy.
 

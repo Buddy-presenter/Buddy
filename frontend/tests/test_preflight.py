@@ -181,6 +181,54 @@ def test_worker_failure_is_not_visual_approval_and_source_is_cleaned(snapshot, m
         assert set(p.name for p in (runner._root / report["run_id"]).iterdir()) == {"report.json"}
 
 
+@pytest.mark.parametrize("reason", ["worker_failed", "cancelled", "time_limit", "storage_limit"])
+def test_failed_launch_discards_partial_captures(snapshot, monkeypatch, reason):
+    def failed_launch(folder, *args):
+        (folder / "0.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+        return reason
+
+    with PreflightRunner("owner") as runner:
+        monkeypatch.setattr(runner, "_launch", failed_launch)
+        report = runner.run("owner", **snapshot, tools=[{"op": "capture"}])
+        assert report["reason"] == reason
+        assert report["artifacts"] == []
+        with pytest.raises(FileNotFoundError):
+            runner.artifact("owner", report["run_id"], "0.png")
+
+
+@pytest.mark.parametrize("state,verified", [("completed", False), ([], False), ("completed", True)])
+def test_worker_cannot_replace_host_identity_or_approve_actions(
+    snapshot, monkeypatch, state, verified
+):
+    def result(folder, *args):
+        (folder / "result.json").write_text(
+            json.dumps(
+                dict(
+                    source_sha256=hashlib.sha256(snapshot["source"]).hexdigest(),
+                    state=state,
+                    semantic_verified=verified,
+                    run_id="foreign",
+                    schema_version="foreign",
+                    source_revision="foreign",
+                    source_format="pptx",
+                )
+            )
+        )
+
+    with PreflightRunner("owner") as runner:
+        monkeypatch.setattr(runner, "_launch", result)
+        report = runner.run("owner", **snapshot, tools=[{"op": "read_state"}])
+        assert report["run_id"] != "foreign"
+        assert report["schema_version"] == "buddy.preflight.v1"
+        assert report["source_revision"] == snapshot["revision"]
+        assert report["source_format"] == "pdf"
+        assert report["semantic_verified"] is False
+        assert report["state"] == (
+            "completed" if state == "completed" and not verified else "needs-review"
+        )
+        assert json.loads(runner.artifact("owner", report["run_id"], "report.json")) == report
+
+
 @pytest.mark.parametrize("invalid_capture", ["oversized", "bad-header", "unexpected-name"])
 def test_rejected_captures_are_deleted_and_unreadable(snapshot, monkeypatch, invalid_capture):
     def capture(folder, *args):
