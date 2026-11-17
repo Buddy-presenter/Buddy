@@ -28,8 +28,10 @@ def test_release_rejects_mislabelled_powerpoint_data(tmp_path):
     for source_format in ("pdf", "pptx"):
         folder = tmp_path / source_format
         folder.mkdir()
-        for name in ("holdout.json", "holdout-gates.json"):
-            (folder / name).write_bytes((FIXTURES / name).read_bytes())
+        (folder / "holdout.json").write_bytes((FIXTURES / "holdout-v2.json").read_bytes())
+        (folder / "holdout-gates.json").write_bytes(
+            (FIXTURES / "holdout-v2-gates.json").read_bytes()
+        )
         corpus, digest = load_corpus(folder / "holdout.json")
         trace = asyncio.run(replay(corpus, digest))
         (folder / "service-policy-trace.json").write_text(trace.model_dump_json(), encoding="utf-8")

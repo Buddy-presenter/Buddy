@@ -3520,7 +3520,7 @@ class PresentWidget(Page):
         self.counter.setVisible(loaded)
         for widget in (self.previous_button, self.next_button, self.target, self.go_button):
             widget.setEnabled(ready)
-        self.reset_button.setEnabled(ready)
+        self.reset_button.setEnabled(loaded and not self._pdf_warming)
         for field in self.fields.values():
             field.setEnabled(ready)
         selected = ready and self.surface.selection is not None

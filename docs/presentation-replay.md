@@ -13,8 +13,8 @@ Install the backend development project as in [development](development.md), the
 from the repository root:
 
 ```sh
-python -m buddy_api.replay tests/fixtures/replay/development.json --gates tests/fixtures/replay/development-gates.json --output replay-artifacts/development
-python -m buddy_api.replay tests/fixtures/replay/holdout.json --gates tests/fixtures/replay/holdout-gates.json --output replay-artifacts/holdout
+python -m buddy_api.replay tests/fixtures/replay/development-v2.json --gates tests/fixtures/replay/development-v2-gates.json --output replay-artifacts/development-v2
+python -m buddy_api.replay tests/fixtures/replay/holdout-v2.json --gates tests/fixtures/replay/holdout-v2-gates.json --output replay-artifacts/holdout-v2
 python -m pytest backend/tests/evaluation/test_replay.py
 python scripts/check_replay_freeze.py
 ```
@@ -33,14 +33,21 @@ a second smoke partition with minor wording differences, not an independent huma
 recording benchmark. A passing result is not a natural-language accuracy, latency,
 PowerPoint, semantic retrieval, or autonomous-transition release claim.
 
+The `*-v2` development and holdout files are the current frozen split. They retain the
+authored scenarios and expected outcomes while binding each recorded provider reply to
+the updated production prompt. Previous versions stay unchanged for historical
+reproduction; when the prompt changes again, add another reviewed version instead of
+editing either version in place.
+
 Offline replay reads no microphone, credentials, database, or remote service. The HTTP transport
 boundary supplies frozen raw responses; reference targets are used only by the scorer,
 never by the runtime. A recorded response is bound to the SHA-256 of the exact outgoing
 provider request, including the current system prompt. Prompt drift fails replay instead
 of silently replaying answers to an obsolete request. Normal agent requests use the
-same extracted `decision_passage` and `navigation_selection` functions. Exact relative
-and numbered slide-navigation commands use the production deterministic path and do not
-consume frozen/live provider replies.
+same `decision_passage`, `navigation_selection` and `topic_navigation_selection`
+functions as the production path. Exact relative and numbered slide-navigation
+commands use the production deterministic path and do not consume frozen/live provider
+replies.
 
 ## Fresh provider evaluation
 
