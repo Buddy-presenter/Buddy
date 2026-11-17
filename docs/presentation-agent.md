@@ -53,8 +53,11 @@ candidates anchored to the visible slide even when the server's saved recovery p
 is behind. The API still checks ownership, active-session status, analysis/source identity
 and that the local slide belongs to that analysis. The desktop checks again that the local
 slide has not changed while a result was in flight. Older clients without a local slide ID
-retain the state-version check. Manual position is saved in the background for recovery;
-automatic navigation does not wait for or write a server position update.
+retain the state-version check. Manual PDF position is saved in the background for active
+session versioning, but opening a PDF starts on its first locally loaded slide and does
+not restore a position from an earlier session. Active-session conflict snapshots still
+use the existing conflict handling. Automatic navigation does not wait for or write a
+server position update.
 Local PowerPoint without a saved API session is not eligible for this runtime. A
 disconnected, changed or unverified Office slideshow stops transcription and discards
 the saved-session binding. The live slide is authoritative when resuming a PowerPoint
