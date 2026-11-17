@@ -111,6 +111,11 @@ Both formats suppressed the repeated proposal. The single local samples measured
 navigation/undo at 15/46 ms and PowerPoint at 387/1254 ms. These are not p95 estimates,
 speech latency, provider/model accuracy, or observed Office animation duration.
 See the [sanitized aggregate](verification/voice-readiness-2026-11-17.json).
+That aggregate also includes separate #25 synthetic development/holdout replay reports
+with their exact corpus and gate hashes. Both frozen suites passed (21 frames each,
+no outside-candidate targets or false transitions); `synthetic_contract` provenance,
+`agent_proposals` scope and `release_gate: false` remain explicit. Their recorded timing
+and synthetic cost units do not measure current live latency or provider billing.
 
 To repeat that supporting check without recording or sending microphone audio:
 
