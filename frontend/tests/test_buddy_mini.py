@@ -1,9 +1,14 @@
 """Floating presenter controls preserve the session only while Mini is visible."""
 
+import ctypes
+from ctypes import wintypes
 from pathlib import Path
 from types import SimpleNamespace
 
-from PySide6.QtCore import QPoint, Qt
+import pytest
+from PySide6.QtCore import QByteArray, QPoint, Qt
+from PySide6.QtGui import QGuiApplication
+from shiboken6 import isValid
 
 import buddy_desktop.buddy_mini as mini_module
 
@@ -178,3 +183,39 @@ def test_presentation_access_failure_rechecks_account_without_signing_out(
     assert checks == ["check"]
     assert account.account_id == "signed-in-account"
     account.session = None
+
+
+@pytest.mark.parametrize("power_event", [0x0004, 0x0012, 0x0007])
+def test_windows_sleep_restores_workspace_and_stops_capture(
+    desktop_window, qtbot, monkeypatch, power_event
+):
+    window = desktop_window()
+    page = window.present
+    page._agent_tick.stop()
+    monkeypatch.setattr(page, "mini_session_id", lambda: "saved-session")
+    fullscreen = SimpleNamespace(screen=window.screen, close=lambda: None)
+    page.fullscreen = fullscreen
+    window._toggle_mini()
+    mini = window._mini
+    assert mini is not None and mini.isVisible()
+    page.agent_enabled.setChecked(True)
+    stopped = []
+    monkeypatch.setattr(page.microphone, "stop", lambda: stopped.append(True))
+
+    if QGuiApplication.platformName() == "windows":
+        send_message = ctypes.windll.user32.SendMessageW
+        send_message.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        send_message(int(mini.winId()), 0x0218, power_event, 0)
+    else:
+        message = wintypes.MSG(message=0x0218, wParam=power_event)
+        assert mini.nativeEvent(QByteArray(b"windows_generic_MSG"), ctypes.addressof(message)) == (
+            True,
+            1,
+        )
+
+    qtbot.waitUntil(window.isVisible)
+    assert stopped and window._mini is None and not window._mini_poll.isActive()
+    qtbot.waitUntil(lambda: not isValid(mini))
+    assert not page.mini_active and not page.agent_enabled.isChecked()
+    assert page.fullscreen is fullscreen
+    page.fullscreen = None

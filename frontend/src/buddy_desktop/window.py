@@ -706,6 +706,7 @@ class MainWindow(QMainWindow):
         mini.settings_requested.connect(self._mini_settings)
         mini.automation_requested.connect(self._toggle_mini_automation)
         mini.closed.connect(lambda: self._leave_mini(stop=True))
+        mini.system_sleep.connect(self._mini_system_sleep, Qt.ConnectionType.QueuedConnection)
         mini.chime_finished.connect(self._mini_chime_finished)
         mini.reduced_motion = self.preferences.reduce_motion.isChecked()
         if self.present.mini_chime.isChecked():
@@ -849,6 +850,12 @@ class MainWindow(QMainWindow):
         if self._mini is not None and screen == self._mini_screen:
             self._mini_screen = None
             QTimer.singleShot(0, self._sync_mini)
+
+    @Slot()
+    def _mini_system_sleep(self) -> None:
+        # Windows can send both suspend and resume, including for a Mini already closing.
+        if self._mini is not None and self.sender() is self._mini:
+            self._leave_mini(stop=True)
 
     def _mini_settings(self) -> None:
         self.present.microphone.stop()

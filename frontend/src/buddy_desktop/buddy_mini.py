@@ -1,9 +1,21 @@
 """A separate desktop surface for the current presentation session."""
 
 import math
+from ctypes import wintypes
 from importlib.resources import files
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import (
+    QByteArray,
+    QEvent,
+    QPoint,
+    QRect,
+    QRectF,
+    QSize,
+    Qt,
+    QTimer,
+    QUrl,
+    Signal,
+)
 from PySide6.QtGui import (
     QCloseEvent,
     QColor,
@@ -27,6 +39,7 @@ class BuddyMini(QWidget):
     closed = Signal()
     chime_finished = Signal()
     automation_requested = Signal()
+    system_sleep = Signal()
 
     def __init__(self, mic: QPushButton, undo: QPushButton) -> None:
         super().__init__(
@@ -151,6 +164,17 @@ class BuddyMini(QWidget):
             self.restore_requested.emit()
         else:
             super().keyPressEvent(event)
+
+    def nativeEvent(
+        self, event_type: QByteArray | bytes | bytearray | memoryview, message: int
+    ) -> tuple[bool, int]:
+        if event_type == b"windows_generic_MSG":
+            event = wintypes.MSG.from_address(int(message))
+            # WM_POWERBROADCAST: suspend, automatic resume, or user-triggered resume.
+            if event.message == 0x0218 and event.wParam in {0x0004, 0x0012, 0x0007}:
+                self.system_sleep.emit()
+                return True, 1
+        return False, 0
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self.closed.emit()
