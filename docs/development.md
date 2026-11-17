@@ -116,6 +116,8 @@ Microphone setup, session gating, privacy, and real-device checks are documented
 [microphone capture](microphone.md). Qt Multimedia is installed with the desktop dependencies.
 Provider setup, authenticated streaming, transcript timing, privacy, recovery, and live
 acceptance are documented in [speech recognition](speech-recognition.md).
+The separate [voice-to-slide acceptance runbook](voice-navigation-acceptance.md) covers
+real spoken commands, safe abstention, cleanup and independent PDF/PowerPoint evidence.
 
 The ephemeral decision-input window and its capture-time invalidation rules are
 documented in [rolling speech context](transcript-context.md).
