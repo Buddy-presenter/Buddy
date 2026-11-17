@@ -34,8 +34,14 @@ from buddy_api.presentation_agent import (
     decision_passage,
     navigation_selection,
     options,
+    topic_navigation_selection,
 )
-from buddy_api.presentation_candidates import Candidate, navigation_intent, resolve
+from buddy_api.presentation_candidates import (
+    Candidate,
+    navigation_intent,
+    resolve,
+    topic_navigation_intent,
+)
 
 MAX_FILE_BYTES = 8 * 1024 * 1024
 TAGS = {"hesitation", "digression", "return", "silence", "ambiguity", "asr_error"}
@@ -279,7 +285,21 @@ async def replay(corpus: Corpus, digest: str, live: LiveProvider | None = None) 
                     if frame.provider is not None:
                         raise ValueError("Navigation fast path must not spend a provider response")
                 else:
-                    if live is not None:
+                    fast_topic = (
+                        topic_navigation_selection(
+                            targets,
+                            candidates,
+                            len(values.segments),
+                            semantic=frame.candidates is not None,
+                        )
+                        if topic_navigation_intent(values.latest_utterance)
+                        else None
+                    )
+                    if fast_topic is not None:
+                        selection = fast_topic
+                        target = checked_selection(selection, targets, len(values.segments))
+                        reason = selection.reason
+                    elif live is not None:
                         try:
                             selection = await live.select(
                                 decision_passage(source, values, descriptions)

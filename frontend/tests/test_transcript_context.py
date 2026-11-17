@@ -330,7 +330,7 @@ def test_presenter_consumes_live_results_and_clears_on_sync_gap(qtbot, tmp_path,
         widget.speech.transcript_received.emit(event(clock, sequence=3, latency_ms=10))
         assert widget.transcript_context.snapshot().text
         widget._session_stream_failed(
-            widget.session_events.generation, "Session updates stopped.", False
+            widget.session_events.generation, "Session updates stopped.", "disconnected"
         )
         assert not widget._context_connected
         assert not widget.transcript_context.snapshot().text
@@ -496,3 +496,33 @@ def test_snapshot_match_checks_all_bindings_and_expiration(monkeypatch):
         {"segments": ()},
     ):
         assert not snapshot.matches(replace(snapshot, **changes))
+
+
+def test_decision_survives_bounded_eviction_of_immutable_final_speech():
+    from buddy_desktop.transcript_context import ContextSegment, ContextSnapshot
+
+    submitted_at = 10_000_000_000
+    submitted_segment = ContextSegment(
+        "target", 7, "Go back to the first slide", True, 7.0, 7.5, submitted_at
+    )
+    submitted = ContextSnapshot(
+        "session", 1, 2, "stream", "en-US", (submitted_segment,), submitted_at, True
+    )
+    current = ContextSnapshot(
+        "session",
+        1,
+        2,
+        "stream",
+        "en-US",
+        (
+            ContextSegment(
+                "newer-1", 8, "and this slide covers the timeline", True, 8, 8.5, submitted_at
+            ),
+            ContextSegment(
+                "newer-2", 9, "we will compare the forecast", True, 9, 9.5, submitted_at
+            ),
+        ),
+        submitted_at + 100_000_000,
+        True,
+    )
+    assert submitted.matches_decision(current)

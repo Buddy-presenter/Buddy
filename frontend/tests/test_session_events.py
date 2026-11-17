@@ -161,7 +161,10 @@ def test_stream_access_failure_is_terminal_and_sanitized(qtbot, event_server, co
     )
     try:
         qtbot.waitUntil(lambda: len(errors) == 1)
-        assert errors[0][2] is True
+        expected_reason = {401: "auth_expired", 403: "session_forbidden", 404: "session_missing"}[
+            code
+        ]
+        assert errors[0][2] == expected_reason
         assert "private upstream" not in errors[0][1]
         assert len(event_server.requests) == 1
     finally:
@@ -185,7 +188,7 @@ def test_repeated_unavailable_frames_exhaust_reconnect_budget(qtbot, event_serve
     try:
         qtbot.waitUntil(lambda: len(errors) == 1)
         assert len(event_server.requests) == 9
-        assert errors[0][2] is False  # Transient provider failure must not sign the account out.
+        assert errors[0][2] == "disconnected"  # A transient failure never signs the account out.
     finally:
         stream.stop()
         stream._thread.join(timeout=3)

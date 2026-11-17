@@ -68,6 +68,7 @@ class AgentLoop(QObject):
         self._latest_access: str | None = None
         self._latest_session: PresentationSession | None = None
         self._submitted_at_ns: int | None = None
+        self._submitted_capture_end_ns: int | None = None
 
     def set_enabled(self, enabled: bool) -> None:
         if self.enabled != enabled:
@@ -185,6 +186,7 @@ class AgentLoop(QObject):
         self._request_generation = self._generation
         self._submitted_at_ns = time.monotonic_ns()
         submitted_segment = segments[-1]
+        self._submitted_capture_end_ns = submitted_segment.capture_end_ns
         if not submitted_segment.final:
             assert partial_key is not None
             _, attempt = self._partial_attempts[partial_key]
@@ -240,6 +242,10 @@ class AgentLoop(QObject):
             return
         submitted, self._submitted = self._submitted, None
         submitted_at_ns, self._submitted_at_ns = self._submitted_at_ns, None
+        capture_end_ns, self._submitted_capture_end_ns = (
+            self._submitted_capture_end_ns,
+            None,
+        )
         current = self.current_context() if self.current_context is not None else self._current
         valid = (
             self.enabled
@@ -268,14 +274,26 @@ class AgentLoop(QObject):
         assert submitted is not None
         if isinstance(result, dict):
             target = result.get("target")
+            now_ns = time.monotonic_ns()
+            capture_to_submit_ms = (
+                max(0, (submitted_at_ns - capture_end_ns) // 1_000_000)
+                if submitted_at_ns is not None and capture_end_ns is not None
+                else -1
+            )
+            capture_to_proposal_ms = (
+                max(0, (now_ns - capture_end_ns) // 1_000_000) if capture_end_ns is not None else -1
+            )
             logger.warning(
-                "presentation_speech event=decision_received decision_id=%s tool=%s "
-                "reason=%s server_elapsed_ms=%s request_age_ms=%d",
+                "presentation_latency event=proposal_received decision_id=%s tool=%s "
+                "reason=%s capture_to_submit_ms=%d submit_to_proposal_ms=%d "
+                "capture_to_proposal_ms=%d server_elapsed_ms=%s",
                 result.get("decision_id", "unknown"),
                 target.get("tool", "unknown") if isinstance(target, dict) else "unknown",
                 result.get("reason", "unknown"),
-                result.get("elapsed_ms", -1),
+                capture_to_submit_ms,
                 age_ms,
+                capture_to_proposal_ms,
+                result.get("elapsed_ms", -1),
             )
         if self._pending_update and isinstance(result, dict):
             target = result.get("target")
@@ -318,9 +336,29 @@ class AgentLoop(QObject):
                     ],
                 }
             self.proposed.emit(result)
-            self.status.emit("Suggestion ready • slide controls remain manual")
+            reason = result.get("reason") if isinstance(result, dict) else None
+            self.status.emit(
+                "Decision timed out; Buddy is still listening."
+                if reason == "deadline"
+                else "Suggestion ready • slide controls remain manual"
+            )
 
     def _failed(self, _identifier: int, message: str) -> None:
+        submitted_at_ns, self._submitted_at_ns = self._submitted_at_ns, None
+        capture_end_ns, self._submitted_capture_end_ns = (
+            self._submitted_capture_end_ns,
+            None,
+        )
+        if submitted_at_ns is not None:
+            now_ns = time.monotonic_ns()
+            logger.warning(
+                "presentation_latency event=proposal_failed submit_to_failure_ms=%d "
+                "capture_to_failure_ms=%d",
+                max(0, (now_ns - submitted_at_ns) // 1_000_000),
+                max(0, (now_ns - capture_end_ns) // 1_000_000)
+                if capture_end_ns is not None
+                else -1,
+            )
         self._submitted = None
         if self._preparing_for is not None:
             self._prepare_failed_for, self._preparing_for = self._preparing_for, None

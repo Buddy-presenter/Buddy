@@ -66,6 +66,44 @@ def test_continued_speech_does_not_cancel_an_already_dispatched_office_action(pr
     assert page._native_guard.is_set()
 
 
+def test_transcript_update_runs_agent_immediately_without_waiting_for_timer(present, monkeypatch):
+    _window, page = present
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    from buddy_desktop.presentation_session_service import PresentationSession, SessionState
+
+    session_id = str(uuid4())
+    page._session = PresentationSession(
+        session_id,
+        str(uuid4()),
+        str(uuid4()),
+        str(uuid4()),
+        "active",
+        1,
+        SessionState("slide-1"),
+        datetime.now(UTC),
+    )
+    page._context_connected = True
+    calls = []
+    monkeypatch.setattr(page, "_update_agent", lambda: calls.append("updated"))
+    page._speech_transcript(
+        {
+            "session_id": session_id,
+            "stream_id": "stream",
+            "sequence": 1,
+            "segment_id": "segment",
+            "text": "Let's go to the next slide now",
+            "final": False,
+            "start_seconds": 0.0,
+            "end_seconds": 0.8,
+            "capture_end_ns": monotonic_ns(),
+            "latency_ms": 10,
+        }
+    )
+    assert calls == ["updated"]
+
+
 def test_corrected_speech_revokes_dispatched_native_action(present):
     _window, page = present
     page.transcript_context.bind("session", 1, str(page.speech_language.currentData()))

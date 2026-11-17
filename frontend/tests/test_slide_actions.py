@@ -136,6 +136,25 @@ def test_letterboxing_and_resize(player):
     assert wait(executor.dispatch(action("next_slide"))).status == "completed"
 
 
+def test_pdf_image_cache_uses_lru_byte_limit_and_clears(player, monkeypatch):
+    import buddy_desktop.slide_executor as slide_executor
+
+    _surface, executor, _wait, _results = player
+    monkeypatch.setattr(slide_executor, "_IMAGE_CACHE_LIMIT_BYTES", 8192)
+    image = QImage(32, 32, QImage.Format.Format_ARGB32)
+    keys = [("deck", "render", name) for name in ("one", "two", "three")]
+
+    executor._remember_image(keys[0], image)
+    executor._remember_image(keys[1], image)
+    assert executor._cached_image(keys[0]) is image  # Refresh the LRU order.
+    executor._remember_image(keys[2], image)
+
+    assert list(executor._image_cache) == [keys[0], keys[2]]
+    assert executor._image_cache_bytes == 8192
+    executor.clear()
+    assert executor._image_cache_bytes == 0
+
+
 def test_boundaries_valid_jumps_and_navigation_resets_zoom(player):
     surface, executor, wait, _ = player
     for _ in range(2):

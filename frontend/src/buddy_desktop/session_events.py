@@ -14,7 +14,6 @@ from uuid import UUID
 from PySide6.QtCore import QObject, Signal
 
 from buddy_desktop.config import AppConfig
-from buddy_desktop.library_service import LibraryAccessExpired
 from buddy_desktop.presentation_session_service import PresentationSession, parse_snapshot
 from buddy_desktop.services import NoRedirects, ServiceError
 
@@ -129,7 +128,7 @@ def read_frames(stream: BinaryIO, stopped: Event) -> Iterator[list[str]]:
 
 class SessionEventStream(QObject):
     received = Signal(int, object)
-    failed = Signal(int, str, bool)
+    failed = Signal(int, str, str)
     connection_changed = Signal(int, str)
 
     def __init__(self, parent: QObject | None = None):
@@ -206,9 +205,19 @@ class SessionEventStream(QObject):
                     for frame in read_frames(cast(BinaryIO, response), stopped):
                         event_type = next((s[7:] for s in frame if s.startswith("event: ")), "")
                         if event_type == "access_closed":
-                            raise LibraryAccessExpired(
-                                "Session access ended. Sign in and sync again."
-                            )
+                            data = [line[6:] for line in frame if line.startswith("data: ")]
+                            if len(data) != 1:
+                                raise ValueError
+                            payload = json.loads(data[0])
+                            if not isinstance(payload, dict) or set(payload) != {"status"}:
+                                raise ValueError
+                            status = payload["status"]
+                            if type(status) is not int:
+                                raise ValueError
+                            message, reason = self._access_failure(status)
+                            if not stopped.is_set():
+                                self.failed.emit(generation, message, reason)
+                            return
                         if event_type == "unavailable":
                             raise ServiceError("Session updates are reconnecting.")
                         if event_type != "session_event":
@@ -252,20 +261,17 @@ class SessionEventStream(QObject):
                 exc.close()
                 if status in {401, 403, 404}:
                     if not stopped.is_set():
-                        self.failed.emit(
-                            generation, "Presentation session access ended. Reopen the deck.", True
-                        )
+                        message, reason = self._access_failure(status)
+                        self.failed.emit(generation, message, reason)
                     return
                 if status == 409:
                     cursor = None
-            except LibraryAccessExpired as exc:
-                if not stopped.is_set():
-                    self.failed.emit(generation, str(exc), True)
-                return
             except (ValueError, TypeError, KeyError, AttributeError):
                 if not stopped.is_set():
                     self.failed.emit(
-                        generation, "Session updates returned an invalid response.", False
+                        generation,
+                        "Session updates returned an invalid response.",
+                        "protocol_error",
                     )
                 return
             except (ServiceError, URLError, OSError, http.client.HTTPException):
@@ -274,9 +280,29 @@ class SessionEventStream(QObject):
             if failures > len(RETRY_DELAYS):
                 if not stopped.is_set():
                     self.failed.emit(
-                        generation, "Session updates disconnected. Retry session sync.", False
+                        generation,
+                        "Session updates disconnected. Retry session sync.",
+                        "disconnected",
                     )
                 return
             if not stopped.is_set():
                 self.connection_changed.emit(generation, "reconnecting")
             stopped.wait(RETRY_DELAYS[failures - 1])
+
+    @staticmethod
+    def _access_failure(status: int) -> tuple[str, str]:
+        if status == 401:
+            return "Buddy sign-in expired. Please sign in again.", "auth_expired"
+        if status == 403:
+            return (
+                "This account no longer has access to the presentation session. "
+                "Buddy sign-in is still active.",
+                "session_forbidden",
+            )
+        if status == 404:
+            return (
+                "The presentation session no longer exists. Start a new session. "
+                "Buddy sign-in is still active.",
+                "session_missing",
+            )
+        return "Presentation session access failed. Retry the session.", "session_error"

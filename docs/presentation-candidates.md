@@ -125,9 +125,11 @@ semantic graph or add a model/provider request. Candidate retrieval proposes tar
 #20 owns choosing an action and subsequent policy/executor checks still apply.
 
 `POST /api/v1/sessions/{id}/candidates` is authenticated, owner-scoped and read-only.
-The API checks the active session, expected state version, current deck/source/job
-and pinned analysis. It reads the actual typed analysis and current validation state
-in one repeatable-read transaction. Stale or changed state/analysis returns 409;
+The API checks the active session, current deck/source/job and pinned analysis. New
+clients send their current local slide ID, which is validated against the pinned analysis
+and used as the request origin. Older clients must match the expected persisted state
+version and use the saved slide. It reads the actual typed analysis and current validation
+state in one repeatable-read transaction. Stale analysis returns 409;
 missing/foreign identity follows existing 401/403/404 behavior. Invalid input is a
 redacted 422; oversized input is 413; dependency errors are recoverable 503 responses.
 Responses are no-store. Request bodies and speech are never added to ordinary logs
@@ -147,7 +149,8 @@ never speech, and cannot cache an authorization decision or enable a region.
 ## Protocol and freshness
 
 The versioned request `presentation-candidates.v1` carries expected_state_version,
-context_epoch, stream_id, sequence, an aware sent_at timestamp and at most 8192
+an optional `active_slide_id` for current desktop clients, context_epoch, stream_id,
+sequence, an aware sent_at timestamp and at most 8192
 characters of recent text. The optional `latest_utterance` preserves the final
 recognition segment separately (at most 4096 characters); when supplied it must
 be the whole text or an exact final segment suffix. It is also omitted from reprs.
@@ -163,6 +166,8 @@ capture age/window before returning a response, sends the
 bearer token only as a header and validates the bounded response. Call it outside the
 GUI thread. The caller must recheck the live session/version/epoch against the result
 before using it; a frozen snapshot or returned candidate cannot authorize an action.
+The current local slide is sent with the request so automatic moves do not depend on
+round-trip persistence of the session's recovery position.
 This service is the callable boundary for #20; Present does not yet run an autonomous
 agent or make a provider call for each partial transcript.
 

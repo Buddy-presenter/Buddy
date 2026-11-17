@@ -149,8 +149,9 @@ def create_app(
             if storage:
                 await asyncio.to_thread(storage.close)
             semantic = getattr(_app.state, "semantic_candidates", None)
-            if semantic is not None:
-                await semantic.provider.aclose()
+            semantic_provider = getattr(semantic, "provider", None)
+            if semantic_provider is not None:
+                await semantic_provider.aclose()
             if _app.state.presentation_agent is not None:
                 await _app.state.presentation_agent.provider.aclose()
             if database is not None:
