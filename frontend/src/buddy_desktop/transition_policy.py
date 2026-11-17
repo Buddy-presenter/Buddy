@@ -163,6 +163,7 @@ class Prediction:
     session_id: str
     analysis_id: str
     state_version: int
+    active_slide_id: str
     epoch: int
     stream_id: str
     sequence: int
@@ -180,6 +181,7 @@ class Prediction:
             value["session_id"],
             value["analysis_id"],
             value["state_version"],
+            value["active_slide_id"],
             value["context_epoch"],
             value["stream_id"],
             value["sequence"],
@@ -207,6 +209,7 @@ class TransitionPolicy:
         self._binding: tuple[object, ...] | None = None
         self._hold_until = 0
         self._inflight: str | None = None
+        self._inflight_tool: str | None = None
         self._seen: OrderedDict[tuple[object, ...], None] = OrderedDict()
 
     def clear_pending(self) -> None:
@@ -229,9 +232,17 @@ class TransitionPolicy:
     def completed(self, decision_id: str, *, success: bool, now_ns: int) -> None:
         if decision_id != self._inflight:
             return
+        tool = self._inflight_tool
         self._inflight = None
+        self._inflight_tool = None
         self.reset()
-        self._hold_until = now_ns + self.settings.cooldown_ms * 1_000_000
+        # Slide navigation must be available immediately after a completed move;
+        # suppressing it for the generic action cooldown made consecutive commands lag.
+        self._hold_until = (
+            now_ns
+            if tool in {"next_slide", "previous_slide", "go_to_slide"}
+            else now_ns + self.settings.cooldown_ms * 1_000_000
+        )
 
     def consider(
         self,
@@ -266,6 +277,7 @@ class TransitionPolicy:
             or (context.session_id, context.state_version, context.epoch, context.stream_id)
             != (view.session_id, view.state_version, prediction.epoch, prediction.stream_id)
             or prediction.sequence != max(segment.sequence for segment in segments)
+            or prediction.active_slide_id != view.current.slide_id
         ):
             return reject("stale")
         binding = (
@@ -310,7 +322,7 @@ class TransitionPolicy:
         ):
             return reject("weak_evidence")
         if prediction.source == "navigation":
-            if prediction.reason != "explicit" or target.tool not in {
+            if prediction.reason not in {"explicit", "topic"} or target.tool not in {
                 "next_slide",
                 "previous_slide",
                 "go_to_slide",
@@ -325,6 +337,7 @@ class TransitionPolicy:
         if len(self._seen) > 2048:
             self._seen.popitem(last=False)
         self._inflight = prediction.decision_id
+        self._inflight_tool = target.tool
         self.clear_pending()
         return "accepted"
 

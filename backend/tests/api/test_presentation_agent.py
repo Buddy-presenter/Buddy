@@ -18,12 +18,14 @@ from buddy_api.agent_provider import AgentFailure, AgentSettings, CohereDecision
 from buddy_api.persistence.models import AgentQuota, PresentationSession
 from buddy_api.presentation_agent import (
     AgentInput,
+    AgentProposal,
     AgentRequest,
     AgentRuntime,
     Target,
     checked_selection,
     navigation_selection,
     options,
+    request_focus,
 )
 from buddy_api.presentation_candidates import Candidate
 
@@ -41,6 +43,53 @@ def payload(**changes):
         "segments": [{"sequence": 1, "text": "private speech"}],
         **changes,
     }
+
+
+def test_agent_response_echoes_local_slide_only_for_new_clients():
+    common = {
+        "protocol": "presentation-agent.v1",
+        "decision_id": uuid4(),
+        "session_id": uuid4(),
+        "analysis_id": uuid4(),
+        "state_version": 4,
+        "context_epoch": 1,
+        "stream_id": uuid4(),
+        "sequence": 1,
+        "input_sha256": "a" * 64,
+        "target": Target(tool="no_action", slide_id="slide-a"),
+        "decision_source": "fallback",
+        "reason": "uncertain",
+        "confidence": None,
+        "evidence": (),
+        "elapsed_ms": 1,
+        "retry_after_ms": None,
+    }
+    legacy = AgentProposal.model_validate(common).model_dump(mode="json", exclude_unset=True)
+    assert "active_slide_id" not in legacy
+    current = AgentProposal.model_validate({**common, "active_slide_id": "slide-a"})
+    assert current.model_dump(mode="json", exclude_unset=True)["active_slide_id"] == "slide-a"
+
+
+def test_request_focus_never_reuses_focus_from_another_slide():
+    saved_region = {"x": 10, "y": 20, "width": 30, "height": 40}
+    assert request_focus(
+        persisted_slide_id="slide-a",
+        persisted_focus_view="zoom_region",
+        persisted_focus_region=saved_region,
+        local_slide_id="slide-b",
+        local_focus_view=None,
+        local_focus_region=None,
+    ) == ("slide", None)
+    # The requester can also explicitly report a full-slide local view after returning to
+    # the same slide that was saved with a different focus.
+    assert request_focus(
+        persisted_slide_id="slide-a",
+        persisted_focus_view="zoom_region",
+        persisted_focus_region=saved_region,
+        local_slide_id="slide-a",
+        local_focus_view="slide",
+        local_focus_region=None,
+    ) == ("slide", None)
 
 
 class Provider:
@@ -177,6 +226,8 @@ def test_options_derive_navigation_and_only_usable_authoritative_regions():
     assert checked_selection(selected, targets, 1) == targets[-1]
     assert [d["id"] for d in descriptions] == [f"c{i}" for i in range(6)]
     assert not descriptions[-1]["is_current_view"]
+    full_slide = AgentInput(analysis, "1", "slide", "hash")
+    assert "reset_view" not in {target.tool for target in options(full_slide, candidates)[0]}
     focused = replace(source, focus_region=action.action.params.region)
     assert options(focused, candidates)[1][-1]["is_current_view"]
     action.semantic_verified = False
@@ -307,6 +358,10 @@ def test_exact_navigation_boundary_does_not_spend_provider_allowance(agent_api, 
     ]
     assert len(traces) == 1
     assert traces[0]["decision_id"] == reply.json()["decision_id"]
+    assert traces[0]["phase"] == "validation"
+    timings = traces[0]["phase_timings_ms"]
+    assert {"session", "admission", "navigation", "validation"} <= timings.keys()
+    assert all(type(value) is int and value >= 0 for value in timings.values())
     assert phrase not in json.dumps(traces)
 
 
@@ -327,6 +382,95 @@ def test_numbered_navigation_is_deterministic_and_does_not_call_provider(agent_a
     assert reply.json()["target"]["tool"] == "next_slide"
     assert reply.json()["target"]["slide_id"] == "slide-b"
     assert reply.json()["decision_source"] == "navigation"
+    assert not provider.calls
+
+
+@pytest.mark.postgres
+def test_relative_navigation_uses_local_slide_when_saved_position_lags(agent_api):
+    client, ids, provider = agent_api
+    phrase = "Go to the previous slide."
+    reply = client.post(
+        f"/api/v1/sessions/{ids['sessions']}/agent",
+        headers={"Authorization": "Bearer owner"},
+        json=payload(
+            expected_state_version=3,
+            active_slide_id="slide-b",
+            text=phrase,
+            latest_utterance=phrase,
+            segments=[{"sequence": 1, "text": phrase}],
+        ),
+    )
+    assert reply.status_code == 200, reply.text
+    assert reply.json()["active_slide_id"] == "slide-b"
+    assert reply.json()["target"] == {
+        "tool": "previous_slide",
+        "slide_id": "slide-a",
+        "action_id": None,
+        "region": None,
+    }
+    assert not provider.calls
+
+
+@pytest.mark.postgres
+def test_transition_check_uses_local_slide_and_accepts_saved_position_lag(agent_api):
+    client, ids, _ = agent_api
+
+    async def enable_autonomy():
+        async with client.app.state.database.sessions() as db, db.begin():
+            record = await db.get(PresentationSession, ids["sessions"])
+            record.autonomy_mode = "autonomous"
+
+    client.portal.call(enable_autonomy)
+    reply = client.post(
+        f"/api/v1/sessions/{ids['sessions']}/transition-check",
+        headers={"Authorization": "Bearer owner"},
+        json={
+            "expected_state_version": 3,
+            "analysis_id": str(ids["analyses"]),
+            "active_slide_id": "slide-b",
+            "target": {
+                "tool": "previous_slide",
+                "slide_id": "slide-a",
+                "action_id": None,
+                "region": None,
+            },
+        },
+    )
+    assert reply.status_code == 200, reply.text
+    assert reply.json()["state_version"] == 3
+    assert reply.json()["target"]["slide_id"] == "slide-a"
+
+
+@pytest.mark.postgres
+def test_explicit_topic_navigation_returns_executable_topic_source(agent_api):
+    client, ids, provider = agent_api
+
+    class SemanticCandidates:
+        async def retrieve(self, analysis, principal_id, active_slide_id, query, full_text):
+            assert active_slide_id == "slide-b"
+            return (
+                Candidate(kind="slide", slide_id="slide-b", reason="current", score=0),
+                Candidate(kind="slide", slide_id="slide-a", reason="topic", score=2000),
+            )
+
+    client.app.state.semantic_candidates = SemanticCandidates()
+    phrase = "Let's now have a look at marketing strategies."
+    reply = client.post(
+        f"/api/v1/sessions/{ids['sessions']}/agent",
+        headers={"Authorization": "Bearer owner"},
+        json=payload(
+            active_slide_id="slide-b",
+            text=phrase,
+            latest_utterance=phrase,
+            segments=[{"sequence": 1, "text": phrase}],
+        ),
+    )
+    assert reply.status_code == 200, reply.text
+    assert reply.json()["active_slide_id"] == "slide-b"
+    assert reply.json()["decision_source"] == "navigation"
+    assert reply.json()["reason"] == "topic"
+    assert reply.json()["target"]["tool"] == "previous_slide"
+    assert reply.json()["target"]["slide_id"] == "slide-a"
     assert not provider.calls
 
 

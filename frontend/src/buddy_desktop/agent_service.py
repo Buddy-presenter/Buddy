@@ -101,6 +101,9 @@ class AgentService:
                 {
                     "expected_state_version": session.state_version,
                     "analysis_id": session.analysis_version_id,
+                    "active_slide_id": session.state.active_slide_id if session.state else None,
+                    "focus_view": session.state.focus_view if session.state else None,
+                    "focus_region": session.state.focus_region if session.state else None,
                     "target": target,
                 },
                 allow_nan=False,
@@ -140,6 +143,8 @@ class AgentService:
     ) -> dict[str, object]:
         payload = completed_payload(session, context, current_context, allow_provisional=True)
         payload["protocol"] = "presentation-agent.v1"
+        payload["focus_view"] = session.state.focus_view if session.state else None
+        payload["focus_region"] = session.state.focus_region if session.state else None
         payload["segments"] = [
             {"sequence": s.sequence, "text": s.text, "final": s.final}
             for s in context.decision_segments
@@ -162,6 +167,7 @@ class AgentService:
                 "session_id",
                 "analysis_id",
                 "state_version",
+                "active_slide_id",
                 "context_epoch",
                 "stream_id",
                 "sequence",
@@ -180,6 +186,7 @@ class AgentService:
                 ("session_id", session.id),
                 ("analysis_id", session.analysis_version_id),
                 ("state_version", context.state_version),
+                ("active_slide_id", payload["active_slide_id"]),
                 ("context_epoch", context.epoch),
                 ("stream_id", context.stream_id),
                 ("sequence", payload["sequence"]),
@@ -261,6 +268,12 @@ class AgentService:
                 "previous_slide",
                 "go_to_slide",
             }:
+                raise ValueError
+            if (
+                result["decision_source"] == "navigation"
+                and result["reason"] == "topic"
+                and (target["tool"] not in {"next_slide", "previous_slide", "go_to_slide"})
+            ):
                 raise ValueError
             if result["reason"] == "paced" and result["decision_source"] != "fallback":
                 raise ValueError

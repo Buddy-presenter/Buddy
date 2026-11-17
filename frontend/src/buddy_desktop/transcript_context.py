@@ -167,6 +167,13 @@ class ContextSnapshot:
         for segment in submitted:
             latest = now_by_id.get(segment.segment_id)
             if latest is None:
+                # Final ASR segments are immutable. They can age out of the
+                # bounded rolling buffer while a decision is in flight; that
+                # eviction alone is not a correction or a reason to drop it.
+                # Provisional evidence must remain present so its stable prefix
+                # can still be checked against later hypotheses.
+                if segment.final:
+                    continue
                 return "submitted_segment_missing"
             if segment.final:
                 if (
