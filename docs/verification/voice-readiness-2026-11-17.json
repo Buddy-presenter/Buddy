@@ -1,0 +1,37 @@
+{
+  "scope": "scripted_live_players",
+  "input_kind": "generated",
+  "office_runtime": "16.0.20527",
+  "substituted_boundaries": [
+    "speech input",
+    "eligibility HTTP",
+    "session transport"
+  ],
+  "model_accuracy_measured": false,
+  "independent_holdout": false,
+  "results": [
+    {
+      "source_format": "pdf",
+      "navigation_ms": 15.0135,
+      "undo_ms": 45.8423,
+      "duplicate_suppressed": true,
+      "navigation_state_local": true,
+      "navigation_position_writes": 0,
+      "animation_observed": false
+    },
+    {
+      "source_format": "pptx",
+      "navigation_ms": 386.6297,
+      "undo_ms": 1254.1914,
+      "duplicate_suppressed": true,
+      "navigation_state_local": true,
+      "navigation_position_writes": 0,
+      "animation_observed": null
+    }
+  ],
+  "measured_at": "2026-11-17",
+  "application_base_commit": "efb9695e8fc62421819df98e0d68e69d8db15c92",
+  "smoke_script_sha256": "3587485482a6821ecc521021c431a06a3529ca3014ecfaaac231eafee7be83a8",
+  "sample_count_per_format": 1,
+  "live_voice_acceptance": "not-run"
+}
