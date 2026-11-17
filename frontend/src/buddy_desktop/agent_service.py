@@ -102,6 +102,8 @@ class AgentService:
                     "expected_state_version": session.state_version,
                     "analysis_id": session.analysis_version_id,
                     "active_slide_id": session.state.active_slide_id if session.state else None,
+                    "focus_view": session.state.focus_view if session.state else None,
+                    "focus_region": session.state.focus_region if session.state else None,
                     "target": target,
                 },
                 allow_nan=False,
@@ -141,6 +143,8 @@ class AgentService:
     ) -> dict[str, object]:
         payload = completed_payload(session, context, current_context, allow_provisional=True)
         payload["protocol"] = "presentation-agent.v1"
+        payload["focus_view"] = session.state.focus_view if session.state else None
+        payload["focus_region"] = session.state.focus_region if session.state else None
         payload["segments"] = [
             {"sequence": s.sequence, "text": s.text, "final": s.final}
             for s in context.decision_segments

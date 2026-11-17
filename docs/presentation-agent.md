@@ -139,6 +139,11 @@ indexes and elapsed_ms. It contains no free-form model explanation. A successful
 response may legitimately be no action because of uncertainty, budget, pacing, disabled
 configuration, invalid provider output, provider failure, stale eligibility or a deadline.
 
+New desktop requests also send the local focus view and region alongside the local slide.
+This prevents a saved zoom or highlight on an older slide from being treated as the current
+view after automatic navigation. Older clients without these fields retain the persisted
+focus behavior; a changed local slide defaults to full-slide focus.
+
 ## Provider, scheduling and limits
 
 `DecisionProvider` separates the selection contract from its replaceable adapter.

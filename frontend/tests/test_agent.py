@@ -203,7 +203,9 @@ def test_real_http_accepts_slide_navigation_reasons(monkeypatch, reason):
             pass
 
         def do_POST(self):
-            self.rfile.read(int(self.headers["Content-Length"]))
+            request_body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            assert request_body["focus_view"] == "slide"
+            assert request_body["focus_region"] is None
             answer = {
                 "protocol": "presentation-agent.v1",
                 "decision_id": str(uuid4()),

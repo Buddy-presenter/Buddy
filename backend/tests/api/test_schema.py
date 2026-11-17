@@ -25,7 +25,14 @@ def test_request_only_widening_is_compatible_but_narrowing_and_response_changes_
 
 def test_openapi_snapshot_matches_real_routes_and_contracts():
     snapshot = Path(__file__).resolve().parents[3] / "docs" / "api" / "openapi.json"
-    assert json.loads(snapshot.read_text(encoding="utf-8")) == generate_schema()
+    schema = generate_schema()
+    assert json.loads(snapshot.read_text(encoding="utf-8")) == schema
+    agent_request = schema["paths"]["/api/v1/sessions/{identifier}/agent"]["post"]["requestBody"][
+        "content"
+    ]["application/json"]["schema"]
+    focus_ref = agent_request["properties"]["focus_region"]["anyOf"][0]["$ref"]
+    assert focus_ref == "#/components/schemas/FocusRegion"
+    assert "FocusRegion" in schema["components"]["schemas"]
 
 
 def test_removed_endpoint_is_a_breaking_change():

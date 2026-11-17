@@ -25,6 +25,7 @@ from buddy_api.presentation_agent import (
     checked_selection,
     navigation_selection,
     options,
+    request_focus,
 )
 from buddy_api.presentation_candidates import Candidate
 
@@ -67,6 +68,28 @@ def test_agent_response_echoes_local_slide_only_for_new_clients():
     assert "active_slide_id" not in legacy
     current = AgentProposal.model_validate({**common, "active_slide_id": "slide-a"})
     assert current.model_dump(mode="json", exclude_unset=True)["active_slide_id"] == "slide-a"
+
+
+def test_request_focus_never_reuses_focus_from_another_slide():
+    saved_region = {"x": 10, "y": 20, "width": 30, "height": 40}
+    assert request_focus(
+        persisted_slide_id="slide-a",
+        persisted_focus_view="zoom_region",
+        persisted_focus_region=saved_region,
+        local_slide_id="slide-b",
+        local_focus_view=None,
+        local_focus_region=None,
+    ) == ("slide", None)
+    # The requester can also explicitly report a full-slide local view after returning to
+    # the same slide that was saved with a different focus.
+    assert request_focus(
+        persisted_slide_id="slide-a",
+        persisted_focus_view="zoom_region",
+        persisted_focus_region=saved_region,
+        local_slide_id="slide-a",
+        local_focus_view="slide",
+        local_focus_region=None,
+    ) == ("slide", None)
 
 
 class Provider:
@@ -203,6 +226,8 @@ def test_options_derive_navigation_and_only_usable_authoritative_regions():
     assert checked_selection(selected, targets, 1) == targets[-1]
     assert [d["id"] for d in descriptions] == [f"c{i}" for i in range(6)]
     assert not descriptions[-1]["is_current_view"]
+    full_slide = AgentInput(analysis, "1", "slide", "hash")
+    assert "reset_view" not in {target.tool for target in options(full_slide, candidates)[0]}
     focused = replace(source, focus_region=action.action.params.region)
     assert options(focused, candidates)[1][-1]["is_current_view"]
     action.semantic_verified = False

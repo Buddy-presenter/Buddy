@@ -6723,6 +6723,32 @@
                     "title": "Expected State Version",
                     "type": "integer"
                   },
+                  "focus_region": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/FocusRegion"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "focus_view": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "slide",
+                          "zoom_region",
+                          "highlight_region"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Focus View"
+                  },
                   "latest_utterance": {
                     "maxLength": 4096,
                     "minLength": 1,
@@ -7952,6 +7978,32 @@
                     "minimum": 0,
                     "title": "Expected State Version",
                     "type": "integer"
+                  },
+                  "focus_region": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/FocusRegion"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "focus_view": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "slide",
+                          "zoom_region",
+                          "highlight_region"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Focus View"
                   },
                   "target": {
                     "$ref": "#/components/schemas/Target"
