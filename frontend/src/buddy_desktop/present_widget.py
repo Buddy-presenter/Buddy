@@ -2295,7 +2295,7 @@ class PresentWidget(Page):
             return
         self._session_error = False
         self._session_ended = False
-        self.session_status.setText("Restoring saved presentation position…")
+        self.session_status.setText("Connecting presentation session…")
         access, generation, service = (
             self._session_access,
             self._session_generation,
@@ -2600,7 +2600,22 @@ class PresentWidget(Page):
         self._session = session
         if kind == "start":
             if self._session_pending_state is None:
-                self._restore_session_state(session.state)
+                if self._powerpoint_binding is not None:
+                    # Office owns the audience's live position, so reconcile its
+                    # verified slide with the saved session as before.
+                    self._restore_session_state(session.state)
+                else:
+                    # A newly opened PDF always starts on the page loaded locally.
+                    # Its previous server position must not block speech or compete
+                    # with PDF warmup; active-session snapshots still use the normal
+                    # conflict path below.
+                    if session.state is not None:
+                        self._accepted_action_id = session.state.last_accepted_action_id
+                    self._session_restore_state = None
+                    self._session_restore_action = None
+                    self.session_status.setText(
+                        "Presentation session connected; starting at the first slide."
+                    )
             else:
                 if session.state is not None:
                     pending_state = self._session_pending_state
