@@ -93,6 +93,7 @@ from buddy_desktop.views import Page, StatusLabel
 from buddy_desktop.visuals import BuddyMark, command
 
 logger = logging.getLogger(__name__)
+NAVIGATION_TOOLS = {"next_slide", "previous_slide", "go_to_slide"}
 
 
 def proposal_context(value: dict[str, Any], live: ContextSnapshot) -> ContextSnapshot | None:
@@ -785,13 +786,7 @@ class PresentWidget(Page):
             and self._session is not None
             and self._session.status == "active"
             and self._session_access
-            and self._session_pending_state is None
-            and (
-                self._powerpoint_binding is None
-                or (
-                    self._powerpoint_verified and self._session.state == self._current_local_state()
-                )
-            )
+            and (self._powerpoint_binding is None or self._powerpoint_verified)
         ):
             self.speech.start(
                 self.config,
@@ -843,12 +838,9 @@ class PresentWidget(Page):
                 or (self._powerpoint_binding is not None and self._powerpoint_verified)
             )
         )
-        synced = (
-            connected
-            and session is not None
-            and self._session_pending_state is None
-            and (self._powerpoint_binding is None or session.state == self._current_local_state())
-        )
+        local_state = self._current_local_state() if connected else None
+        live = connected and session is not None and local_state is not None
+        decision_session = replace(session, state=local_state) if live and session else session
         self.agent_enabled.setEnabled(connected)
         # A temporary connection/verification gap pauses proposals, but it must not
         # silently revoke the presenter's opt-in. Session identity changes below reset
@@ -857,21 +849,21 @@ class PresentWidget(Page):
             # A locally opened Office show has no saved, owner-checked session contract.
             self.policy_enabled.setChecked(False)
         self.policy_enabled.setEnabled(
-            (synced or self.policy.enabled) and self.agent_enabled.isChecked()
+            (live or self.policy.enabled) and self.agent_enabled.isChecked()
         )
         if not self.agent_enabled.isChecked():
             self.policy_enabled.setChecked(False)
-        elif self.policy.enabled and not synced:
+        elif self.policy.enabled and not live:
             self.policy_status.setText(
-                "Automatic actions on; waiting for the presentation to sync."
+                "Automatic actions on; waiting for the local presentation to be ready."
             )
         self.policy_pause_button.setEnabled(self.policy.enabled or self.policy_enabled.isEnabled())
         self._retry_deferred_policy()
         context = self.transcript_context.snapshot()
         self.agent.update(
-            self._session_access if synced else None,
-            session,
-            context if synced else replace(context, fresh=False),
+            self._session_access if live else None,
+            decision_session,
+            context if live else replace(context, fresh=False),
         )
 
     @Slot(bool)
@@ -1060,15 +1052,15 @@ class PresentWidget(Page):
         if context is None:
             self.policy_status.setText("Speech changed before the action could run; repeat it.")
             return
+        target_value = value.get("target")
+        navigation = isinstance(target_value, dict) and target_value.get("tool") in NAVIGATION_TOOLS
         busy_reasons = []
         if self.powerpoint_runner.busy:
             busy_reasons.append("powerpoint_operation")
-        if self.session_runner.busy:
-            busy_reasons.append("session_sync")
         if self._stream_snapshot is not None:
             busy_reasons.append("session_event")
-        if self._session_pending_state is not None:
-            busy_reasons.append("pending_session_state")
+        if not navigation and (self.session_runner.busy or self._session_pending_state is not None):
+            busy_reasons.append("session_sync")
         if (
             busy_reasons
             and not self.policy_runner.busy
@@ -1088,6 +1080,7 @@ class PresentWidget(Page):
         if state is None:
             self.policy.clear_pending()
             return
+        decision_session = replace(session, state=state)
         try:
             prediction = Prediction.from_validated(value, context)
             eligible: tuple[PolicyTarget, ...] = ()
@@ -1112,10 +1105,12 @@ class PresentWidget(Page):
                     ),
                     eligible,
                     busy=self.powerpoint_runner.busy
-                    or self.session_runner.busy
                     or self.policy_runner.busy
                     or self._stream_snapshot is not None
-                    or self._session_pending_state is not None,
+                    or (
+                        not navigation
+                        and (self.session_runner.busy or self._session_pending_state is not None)
+                    ),
                     connected=self._context_connected
                     and self._powerpoint_verified
                     and self.microphone.enabled
@@ -1141,13 +1136,16 @@ class PresentWidget(Page):
             self._policy_check = (prediction, context, native.binding.source_sha256)
             self._start_policy_latency(prediction, context, proposal_received_ns)
             self.policy_runner.submit(
-                lambda: self.agent.service.check_transition(access, session, value["target"])
+                lambda: self.agent.service.check_transition(
+                    access, decision_session, value["target"]
+                )
             )
 
     def _native_policy_checked(
         self, prediction: Prediction, context: ContextSnapshot, source: str
     ) -> None:
         native, session, info = self._native_present, self._session, self._powerpoint_info
+        local_state = self._current_local_state()
         reason = None
         if native is None or session is None or info is None:
             reason = "powerpoint_or_session_missing"
@@ -1157,7 +1155,11 @@ class PresentWidget(Page):
             reason = "powerpoint_session_disconnected"
         elif not self.microphone.enabled:
             reason = "microphone_stopped"
-        elif session.state_version != prediction.state_version:
+        elif local_state is None or local_state.active_slide_id != prediction.active_slide_id:
+            reason = "active_slide_changed"
+        elif prediction.target.tool not in NAVIGATION_TOOLS and (
+            session.state_version != prediction.state_version
+        ):
             reason = "session_state_version_changed"
         elif native.binding.source_sha256 != source:
             reason = "powerpoint_source_changed"
@@ -1165,8 +1167,10 @@ class PresentWidget(Page):
             reason = context.decision_mismatch_reason(self.transcript_context.snapshot())
             if reason is None and (
                 self.powerpoint_runner.busy
-                or self.session_runner.busy
-                or self._session_pending_state is not None
+                or (
+                    prediction.target.tool not in NAVIGATION_TOOLS
+                    and (self.session_runner.busy or self._session_pending_state is not None)
+                )
             ):
                 reason = "powerpoint_or_session_sync_in_progress"
         if reason is not None:
@@ -1214,7 +1218,10 @@ class PresentWidget(Page):
                 and time.monotonic_ns() <= deadline
                 and self._session is not None
                 and self._session.id == session.id
-                and self._session.state_version == session.state_version
+                and (
+                    prediction.target.tool in NAVIGATION_TOOLS
+                    or self._session.state_version == session.state_version
+                )
             )
 
         self._submit_powerpoint_task(
@@ -1266,7 +1273,8 @@ class PresentWidget(Page):
                     "settings_sha256": self.policy.settings_sha256,
                 }
             )
-        self._queue_session_state()
+        if prediction is None or prediction.target.tool not in NAVIGATION_TOOLS:
+            self._queue_session_state()
         self.generated_status.setText(
             "Native action completed."
             if kind != "undo_policy"
@@ -1476,13 +1484,14 @@ class PresentWidget(Page):
             return
         if state is None or self._powerpoint_info is not None:
             return
+        decision_session = replace(session, state=state)
+        target_value = value.get("target")
+        navigation = isinstance(target_value, dict) and target_value.get("tool") in NAVIGATION_TOOLS
         busy_reasons = []
         if self.executor.busy:
             busy_reasons.append("slide_executor")
-        if self.session_runner.busy:
+        if not navigation and (self.session_runner.busy or self._session_pending_state is not None):
             busy_reasons.append("session_sync")
-        if self._session_pending_state is not None:
-            busy_reasons.append("pending_session_state")
         if self._session_restore_state is not None:
             busy_reasons.append("session_restore")
         if self._stream_snapshot is not None:
@@ -1526,9 +1535,11 @@ class PresentWidget(Page):
                     ),
                     eligible,
                     busy=self.executor.busy
-                    or self.session_runner.busy
                     or self.policy_runner.busy
-                    or self._session_pending_state is not None
+                    or (
+                        not navigation
+                        and (self.session_runner.busy or self._session_pending_state is not None)
+                    )
                     or self._session_restore_state is not None
                     or self._stream_snapshot is not None,
                     connected=self._context_connected
@@ -1562,7 +1573,7 @@ class PresentWidget(Page):
         if prediction.target.tool in {"next_slide", "previous_slide", "go_to_slide"}:
             self.executor.prefetch_slide(prediction.target.slide_id)
         self.policy_runner.submit(
-            lambda: self.agent.service.check_transition(access, session, value["target"])
+            lambda: self.agent.service.check_transition(access, decision_session, value["target"])
         )
         self.policy_status.setText("Checking the current action before moving…")
 
@@ -1661,8 +1672,13 @@ class PresentWidget(Page):
                 and self.microphone.enabled
                 and self._session is not None
                 and self._session.id == prediction.session_id
-                and self._session.state_version == prediction.state_version
-                and self._session_pending_state is None
+                and (
+                    prediction.target.tool in NAVIGATION_TOOLS
+                    or (
+                        self._session.state_version == prediction.state_version
+                        and self._session_pending_state is None
+                    )
+                )
                 and self._stream_snapshot is None
                 and context.matches_decision(self.transcript_context.snapshot())
             )
@@ -1685,7 +1701,11 @@ class PresentWidget(Page):
             return "session_missing"
         if manifest is None:
             return "slide_manifest_missing"
-        if session.state_version != prediction.state_version:
+        local_state = self._current_local_state()
+        if local_state is None or local_state.active_slide_id != prediction.active_slide_id:
+            return "active_slide_changed"
+        navigation = prediction.target.tool in NAVIGATION_TOOLS
+        if not navigation and session.state_version != prediction.state_version:
             return "session_state_version_changed"
         if manifest.render_id != render:
             return "slide_render_changed"
@@ -1699,11 +1719,8 @@ class PresentWidget(Page):
         if self.executor.busy:
             return "slide_executor_busy"
         if (
-            self.session_runner.busy
-            or self._session_pending_state is not None
-            or self._session_restore_state is not None
-            or self._stream_snapshot is not None
-        ):
+            not navigation and (self.session_runner.busy or self._session_pending_state is not None)
+        ) or (self._session_restore_state is not None or self._stream_snapshot is not None):
             return "session_sync_in_progress"
         return None
 
@@ -1722,6 +1739,7 @@ class PresentWidget(Page):
             "session_state_version_changed",
             "slide_render_changed",
             "session_disconnected",
+            "active_slide_changed",
         }:
             return "Presentation state changed before the action could run; repeat the instruction."
         if reason == "microphone_stopped":
@@ -1789,8 +1807,14 @@ class PresentWidget(Page):
             self._policy_check = (prediction, context, render)
             access = self._session_access
             target = self._prediction_target_payload(prediction)
+            local_state = self._current_local_state()
+            if local_state is None:
+                self._deferred_transition_check = None
+                self.policy.completed(prediction.decision_id, success=False, now_ns=now)
+                return
+            decision_session = replace(session, state=local_state)
             self.policy_runner.submit(
-                lambda: self.agent.service.check_transition(access, session, target)
+                lambda: self.agent.service.check_transition(access, decision_session, target)
             )
             logger.warning(
                 "presentation_policy event=deferred_action_rechecked decision_id=%s",
@@ -1912,8 +1936,13 @@ class PresentWidget(Page):
         self._policy_check = (prediction, context, source)
         access = self._session_access
         target = self._prediction_target_payload(prediction)
+        local_state = self._current_local_state()
+        if local_state is None:
+            self.policy.completed(prediction.decision_id, success=False, now_ns=now_ns)
+            return
+        decision_session = replace(session, state=local_state)
         self.policy_runner.submit(
-            lambda: self.agent.service.check_transition(access, session, target)
+            lambda: self.agent.service.check_transition(access, decision_session, target)
         )
         logger.warning(
             "presentation_policy event=deferred_action_rechecked decision_id=%s",
@@ -3034,7 +3063,9 @@ class PresentWidget(Page):
         if binding is not None and self._session_access is not None:
             if self._session is None:
                 self._ensure_session()
-            elif previous is None or previous.slide_key != info.slide_key:
+            elif (
+                previous is None or previous.slide_key != info.slide_key
+            ) and self._native_completion is None:
                 self._queue_session_state()
         if (previous is None or previous.slide_key != info.slide_key) and min(
             info.slide_width, info.slide_height
@@ -3364,6 +3395,7 @@ class PresentWidget(Page):
     @Slot(object)
     def _completed(self, result: Completion) -> None:
         prediction = self._policy_execution
+        local_navigation = False
         if prediction is not None and result.instance_id == "policy:" + prediction.decision_id:
             self._policy_execution = None
             success = result.status == "completed"
@@ -3371,6 +3403,7 @@ class PresentWidget(Page):
             self._log_policy_completion(prediction, None, "pdf", completed_ns, result.status)
             self.policy.completed(prediction.decision_id, success=success, now_ns=completed_ns)
             if success:
+                local_navigation = prediction.target.tool in NAVIGATION_TOOLS
                 self._accepted_action_id = prediction.target.action_id
                 manifest = self.executor.manifest
                 if self._policy_before is not None and manifest is not None:
@@ -3451,6 +3484,7 @@ class PresentWidget(Page):
             result.status == "completed"
             and result.instance_id is not None
             and self._session_restore_state is None
+            and not local_navigation
         ):
             self._queue_session_state()
 

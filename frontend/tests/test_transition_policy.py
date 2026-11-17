@@ -59,6 +59,7 @@ def inputs(sequence=1, now=NOW, *, source_format="pdf", target=NEXT, source="mod
         "session",
         "analysis",
         3,
+        "one",
         4,
         "stream",
         sequence,
@@ -115,8 +116,49 @@ def test_failed_execution_keeps_opt_in_and_requires_fresh_speech():
     policy.completed(proposal[0].decision_id, success=False, now_ns=NOW)
     assert policy.enabled
     assert consider(policy, proposal) == "duplicate"
-    assert consider(policy, inputs(2, NOW + 500_000_000), NOW + 500_000_000) == "cooldown"
-    assert consider(policy, inputs(3, NOW + 900_000_000), NOW + 900_000_000) == "accepted"
+    assert consider(policy, inputs(2, NOW + 1_000_000), NOW + 1_000_000) == "accepted"
+
+
+def test_semantic_topic_navigation_requires_topic_reason_and_runs():
+    policy = enabled()
+    prediction, context, view = inputs(source="navigation", target=NUMBERED)
+    prediction = replace(prediction, reason="topic")
+    assert prediction.reason == "topic"
+    assert consider(policy, (prediction, context, view)) == "accepted"
+
+
+def test_many_immediate_navigation_changes_accept_fresh_targets_without_cooldown():
+    policy = enabled()
+    slide_ids = ("one", "two", "three", "four")
+    current_index = 0
+    now = NOW
+
+    for sequence in range(1, 101):
+        target_index = (current_index + 1) % len(slide_ids)
+        target = Target("go_to_slide", slide_ids[target_index])
+        proposal, context, view = inputs(sequence, now, target=target, source="navigation")
+        proposal = replace(
+            proposal,
+            active_slide_id=slide_ids[current_index],
+            evidence_sequences=(sequence,),
+        )
+        context = replace(
+            context,
+            segments=(replace(context.segments[-1], capture_end_ns=now),),
+            observed_ns=now,
+        )
+        view = replace(
+            view,
+            current=Target("slide", slide_ids[current_index]),
+            eligible=tuple(Target("go_to_slide", slide) for slide in slide_ids),
+        )
+
+        assert consider(policy, (proposal, context, view), now) == "accepted"
+        policy.completed(proposal.decision_id, success=True, now_ns=now)
+        current_index = target_index
+        now += 1_000_000  # A new utterance arrives 1 ms after each completed move.
+
+    assert policy.enabled
 
 
 def test_duplicate_http_decisions_for_same_completed_speech_cannot_repeat():
@@ -145,7 +187,7 @@ def test_duplicate_http_decisions_for_same_completed_speech_cannot_repeat():
         "missing_evidence",
         "bad_confidence",
         "unknown_source",
-        "nonexplicit_navigation",
+        "invalid_navigation_reason",
     ],
 )
 def test_invalid_or_stale_decisions_are_rejected(change):
@@ -183,8 +225,8 @@ def test_invalid_or_stale_decisions_are_rejected(change):
         prediction = replace(prediction, confidence=float("nan"))
     elif change == "unknown_source":
         prediction = replace(prediction, source="fallback")
-    elif change == "nonexplicit_navigation":
-        prediction = replace(prediction, source="navigation", reason="topic")
+    elif change == "invalid_navigation_reason":
+        prediction = replace(prediction, source="navigation", reason="correction")
     result = consider(policy, (prediction, context, view), now)
     assert result in {"stale", "busy", "ineligible", "weak_evidence"}
     assert policy.enabled

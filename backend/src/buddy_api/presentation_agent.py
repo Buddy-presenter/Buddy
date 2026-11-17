@@ -42,7 +42,7 @@ from buddy_api.presentation_candidates import (
     resolve,
     topic_navigation_intent,
 )
-from buddy_api.presentation_sessions import current_ready_analysis, owned_session, snapshot
+from buddy_api.presentation_sessions import FocusRegion, current_ready_analysis, owned_session
 
 
 class SpeechSegment(Model):
@@ -54,6 +54,11 @@ class SpeechSegment(Model):
 class AgentRequest(Model):
     protocol: Literal["presentation-agent.v1"] = "presentation-agent.v1"
     expected_state_version: int = Field(ge=0, strict=True)
+    # New desktop clients send their local slide; older clients keep the persisted
+    # session snapshot contract until they are upgraded.
+    active_slide_id: str | None = Field(default=None, min_length=1, max_length=128)
+    focus_view: Literal["slide", "zoom_region", "highlight_region"] | None = None
+    focus_region: FocusRegion | None = None
     context_epoch: int = Field(ge=0, strict=True)
     stream_id: UUID
     sequence: int = Field(ge=1, strict=True)
@@ -67,10 +72,18 @@ class AgentRequest(Model):
     def coherent(self) -> "AgentRequest":
         CandidateRequest.model_validate(
             {
-                **self.model_dump(exclude={"segments", "provisional"}),
+                **self.model_dump(
+                    exclude={"segments", "provisional", "focus_view", "focus_region"}
+                ),
                 "protocol": "presentation-candidates.v1",
             }
         )
+        if self.focus_view is None and self.focus_region is not None:
+            raise ValueError("A local focus region requires a focus view")
+        if self.focus_view is not None and (
+            (self.focus_view == "slide") != (self.focus_region is None)
+        ):
+            raise ValueError("Local focus view and region are inconsistent")
         if (
             len(self.text) > 4096
             or self.text != " ".join(s.text for s in self.segments)
@@ -142,7 +155,20 @@ class Target(Model):
 class TransitionCheck(Model):
     expected_state_version: int = Field(ge=0, strict=True)
     analysis_id: UUID
+    active_slide_id: str | None = Field(default=None, min_length=1, max_length=128)
+    focus_view: Literal["slide", "zoom_region", "highlight_region"] | None = None
+    focus_region: FocusRegion | None = None
     target: Target
+
+    @model_validator(mode="after")
+    def coherent_focus(self) -> "TransitionCheck":
+        if self.focus_view is None and self.focus_region is not None:
+            raise ValueError("A local focus region requires a focus view")
+        if self.focus_view is not None and (
+            (self.focus_view == "slide") != (self.focus_region is None)
+        ):
+            raise ValueError("Local focus view and region are inconsistent")
+        return self
 
 
 class TransitionApproval(Model):
@@ -179,6 +205,7 @@ class AgentProposal(Model):
     session_id: UUID
     analysis_id: UUID
     state_version: int
+    active_slide_id: str | None = Field(default=None, min_length=1, max_length=128)
     context_epoch: int
     stream_id: UUID
     sequence: int
@@ -218,6 +245,33 @@ class AgentInput:
     focus_region: Region | None = None
 
 
+def request_focus(
+    *,
+    persisted_slide_id: str | None,
+    persisted_focus_view: str,
+    persisted_focus_region: object,
+    local_slide_id: str,
+    local_focus_view: str | None,
+    local_focus_region: FocusRegion | None,
+) -> tuple[str, Region | None]:
+    """Bind focus to the request's actual local slide, never a prior slide's focus."""
+    if local_focus_view is not None:
+        return (
+            local_focus_view,
+            Region.model_validate(local_focus_region.model_dump())
+            if local_focus_region is not None
+            else None,
+        )
+    if local_slide_id != persisted_slide_id:
+        return "slide", None
+    return (
+        persisted_focus_view,
+        Region.model_validate(persisted_focus_region)
+        if persisted_focus_region is not None
+        else None,
+    )
+
+
 async def read_input(
     request: Request, principal: Principal, identifier: UUID, values: AgentRequest
 ) -> AgentInput:
@@ -231,7 +285,10 @@ async def read_input(
                 "session_inactive",
                 "Presentation session is no longer active.",
             )
-        if session.state_version != values.expected_state_version:
+        if (
+            values.active_slide_id is None
+            and session.state_version != values.expected_state_version
+        ):
             raise agent_conflict(
                 request,
                 "session_state_changed",
@@ -271,21 +328,30 @@ async def read_input(
         # Include all validation eligibility/geometry, even if the analysis id is unchanged.
         identity = hashlib.sha256(
             (
-                snapshot(session).model_dump_json()
+                f"{session.id}:{session.status}:{session.deck_id}:{session.analysis_version_id}:"
                 + analysis.model_dump_json()
                 + str(deck.source_revision)
                 + str(deck.source_sha256)
                 + str(deck.source_version_id)
             ).encode()
         ).hexdigest()
+        active_slide_id = values.active_slide_id or session.active_slide_id or ""
+        if active_slide_id not in {slide.slide_id for slide in analysis.slides}:
+            raise HTTPException(422, "The active slide is not part of this analysis.")
+        focus_view, focus_region = request_focus(
+            persisted_slide_id=session.active_slide_id,
+            persisted_focus_view=session.focus_view,
+            persisted_focus_region=session.focus_region,
+            local_slide_id=active_slide_id,
+            local_focus_view=values.focus_view,
+            local_focus_region=values.focus_region,
+        )
         return AgentInput(
             analysis,
-            session.active_slide_id or "",
-            session.focus_view,
+            active_slide_id,
+            focus_view,
             identity,
-            Region.model_validate(session.focus_region)
-            if session.focus_region is not None
-            else None,
+            focus_region,
         )
 
 
@@ -585,7 +651,10 @@ def agent_router() -> APIRouter:
                 if (
                     session.status != "active"
                     or session.autonomy_mode != "autonomous"
-                    or session.state_version != values.expected_state_version
+                    or (
+                        values.active_slide_id is None
+                        and session.state_version != values.expected_state_version
+                    )
                     or session.analysis_version_id != values.analysis_id
                 ):
                     raise HTTPException(409, "Automatic transition state changed.")
@@ -596,13 +665,24 @@ def agent_router() -> APIRouter:
                 if record.id != values.analysis_id or record.source_format not in {"pdf", "pptx"}:
                     raise HTTPException(409, "This source has no compatible live agent runtime.")
                 analysis = await request.app.state.candidate_analyses.read(db, record, principal.id)
+                active_slide_id = values.active_slide_id or session.active_slide_id or ""
+                focus_view, focus_region = request_focus(
+                    persisted_slide_id=session.active_slide_id,
+                    persisted_focus_view=session.focus_view,
+                    persisted_focus_region=session.focus_region,
+                    local_slide_id=active_slide_id,
+                    local_focus_view=values.focus_view,
+                    local_focus_region=values.focus_region,
+                )
                 source = AgentInput(
                     analysis,
-                    session.active_slide_id or "",
-                    session.focus_view,
+                    active_slide_id,
+                    focus_view,
                     "transition",
-                    Region.model_validate(session.focus_region) if session.focus_region else None,
+                    focus_region,
                 )
+                if source.current not in {slide.slide_id for slide in analysis.slides}:
+                    raise HTTPException(422, "The active slide is not part of this analysis.")
                 target = values.target
                 if target.tool == "no_action":
                     raise HTTPException(422, "No action cannot execute a transition.")
@@ -621,20 +701,27 @@ def agent_router() -> APIRouter:
                 return TransitionApproval(
                     session_id=identifier,
                     analysis_id=record.id,
-                    state_version=session.state_version,
+                    state_version=(
+                        values.expected_state_version
+                        if values.active_slide_id is not None
+                        else session.state_version
+                    ),
                     target=target,
                 )
         except (TimeoutError, SQLAlchemyError, PersistenceError, OSError):
             raise HTTPException(503, "Transition check unavailable; continue manually.") from None
 
     input_schema = AgentRequest.model_json_schema()
-    # Manual bounded body receipt must still publish resolvable OpenAPI schemas.
+    # Rebase FocusRegion to the shared OpenAPI component before dropping request-local defs.
+    focus_schema = input_schema["properties"]["focus_region"]
+    focus_schema["anyOf"][0]["$ref"] = "#/components/schemas/FocusRegion"
     input_schema.pop("$defs", None)
     input_schema["properties"]["segments"]["items"] = SpeechSegment.model_json_schema()
 
     @router.post(
         "/{identifier}/agent",
         response_model=AgentProposal,
+        response_model_exclude_unset=True,
         openapi_extra={
             "requestBody": {
                 "required": True,
@@ -824,23 +911,29 @@ def agent_router() -> APIRouter:
                 finish_phase()
             if admitted and runtime is not None:
                 runtime.active.discard(principal.id)
-        proposal = AgentProposal(
-            decision_id=uuid4(),
-            session_id=identifier,
-            analysis_id=source.analysis.id,
-            state_version=values.expected_state_version,
-            context_epoch=values.context_epoch,
-            stream_id=values.stream_id,
-            sequence=values.sequence,
-            input_sha256=hashlib.sha256(values.model_dump_json().encode()).hexdigest(),
-            target=target,
-            decision_source=decision_source,
-            reason=reason,
-            confidence=selection.confidence if selection else None,
-            evidence=selection.evidence if selection else (),
-            elapsed_ms=round((time.monotonic() - started) * 1000),
-            retry_after_ms=retry_after_ms,
-        )
+        proposal_values: dict[str, object] = {
+            "protocol": "presentation-agent.v1",
+            "decision_id": uuid4(),
+            "session_id": identifier,
+            "analysis_id": source.analysis.id,
+            "state_version": values.expected_state_version,
+            "context_epoch": values.context_epoch,
+            "stream_id": values.stream_id,
+            "sequence": values.sequence,
+            "input_sha256": hashlib.sha256(values.model_dump_json().encode()).hexdigest(),
+            # Serialize optional target members explicitly so adding an optional
+            # proposal field does not silently strip existing response fields.
+            "target": target.model_dump(),
+            "decision_source": decision_source,
+            "reason": reason,
+            "confidence": selection.confidence if selection else None,
+            "evidence": selection.evidence if selection else (),
+            "elapsed_ms": round((time.monotonic() - started) * 1000),
+            "retry_after_ms": retry_after_ms,
+        }
+        if values.active_slide_id is not None:
+            proposal_values["active_slide_id"] = source.current
+        proposal = AgentProposal.model_validate(proposal_values)
         # Raw structured event, like existing EMF events: independent of Uvicorn's
         # warning-only logger. Only locally typed finite fields reach this boundary.
         trace = {

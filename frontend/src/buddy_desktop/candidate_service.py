@@ -49,6 +49,7 @@ def completed_payload(
     payload = {
         "protocol": "presentation-candidates.v1",
         "expected_state_version": context.state_version,
+        "active_slide_id": session.state.active_slide_id if session.state else None,
         "context_epoch": context.epoch,
         "stream_id": context.stream_id,
         "sequence": max(segment.sequence for segment in segments),
