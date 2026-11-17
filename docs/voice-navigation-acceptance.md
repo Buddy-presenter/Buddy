@@ -3,7 +3,13 @@
 This is the runbook for a signed-in human speaker using a real microphone, deployed
 speech recognition and the configured intent provider. It does not establish acceptance
 by itself. Run each case independently with an analyzed PDF and a supported saved
-PowerPoint deck. Keep #146 open until both formats have real evidence for the matrix.
+PowerPoint deck. The matrix remains a reference for future repeat runs.
+
+On 2026-11-17, the requester instructed: "assume 146 is done everything has been tried".
+This records requester acceptance of #146's live testing scope; another live run is not
+a workflow blocker. The agent did not independently observe that live run, and no new
+provider accuracy, latency or per-case results are inferred from the confirmation.
+Keep the issue open until its linked PR merges, following the repository workflow.
 
 ## Prepare the session
 

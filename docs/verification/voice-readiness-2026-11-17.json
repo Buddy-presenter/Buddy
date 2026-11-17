@@ -33,7 +33,13 @@
   "application_base_commit": "efb9695e8fc62421819df98e0d68e69d8db15c92",
   "smoke_script_sha256": "3587485482a6821ecc521021c431a06a3529ca3014ecfaaac231eafee7be83a8",
   "sample_count_per_format": 1,
-  "live_voice_acceptance": "not-run",
+  "agent_live_voice_acceptance": "not-run",
+  "requester_acceptance": {
+    "date": "2026-11-17",
+    "state": "accepted-by-requester",
+    "statement": "assume 146 is done everything has been tried",
+    "independently_observed_by_agent": false
+  },
   "replay_results": [
     {
       "protocol": "presentation-replay-report.v1",
