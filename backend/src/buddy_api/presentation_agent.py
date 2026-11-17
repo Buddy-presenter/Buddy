@@ -921,7 +921,9 @@ def agent_router() -> APIRouter:
             "stream_id": values.stream_id,
             "sequence": values.sequence,
             "input_sha256": hashlib.sha256(values.model_dump_json().encode()).hexdigest(),
-            "target": target,
+            # Serialize optional target members explicitly so adding an optional
+            # proposal field does not silently strip existing response fields.
+            "target": target.model_dump(),
             "decision_source": decision_source,
             "reason": reason,
             "confidence": selection.confidence if selection else None,
