@@ -107,6 +107,9 @@ The isolated PDF action validation API, private evidence, runtime setup and test
 are documented in [action validation](action-validation.md). It uses predefined actions;
 no model generation or document text extraction is required.
 
+Bounded native desktop test-session tools and separate PDF/Office capture requirements
+are documented in [isolated preflight](preflight-runner.md).
+
 Durable PDF metadata scheduling, SQS workers, owner job controls and opt-in staging
 verification are documented in [PDF workers](pdf-workers.md).
 
