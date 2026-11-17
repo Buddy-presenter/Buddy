@@ -34,6 +34,9 @@ from buddy_desktop.visuals import icon
 
 
 class BuddyMini(QWidget):
+    _mascot_radius = 54
+    _control_radius = 79
+
     restore_requested = Signal()
     settings_requested = Signal()
     closed = Signal()
@@ -52,10 +55,14 @@ class BuddyMini(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setMouseTracking(True)
-        self.setFixedSize(180, 158)
+        self.setFixedSize(206, 174)
         self._asset = QPixmap()
         self._asset.loadFromData(files("buddy_desktop").joinpath("assets/buddy.png").read_bytes())
-        self._center = QPoint(90, 111)
+        tint = QPainter(self._asset)
+        tint.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceAtop)
+        tint.fillRect(self._asset.rect(), QColor(255, 225, 175, 18))
+        tint.end()
+        self._center = QPoint(self.width() // 2, 0)
         self._phase = 0
         self._reaction = 0
         self._result = ""
@@ -72,11 +79,12 @@ class BuddyMini(QWidget):
         self._chime_tail = QTimer(self, singleShot=True, interval=300)
         self._chime_tail.timeout.connect(self.chime_finished)
         self.mascot = QPushButton(self)
-        self.mascot.setGeometry(48, 69, 84, 84)
+        self.mascot.setFixedSize(2 * self._mascot_radius, 2 * self._mascot_radius)
         self.mascot.setAccessibleName("Buddy Mini controls")
         self.mascot.setToolTip("Buddy Mini controls. Escape opens Buddy.")
         self.mascot.setStyleSheet(
-            "QPushButton { background: transparent; border: none; border-radius: 42px; }"
+            f"QPushButton {{ background: transparent; border: none; "
+            f"border-radius: {self._mascot_radius}px; }}"
             "QPushButton:focus { border: 2px solid #ff9f61; }"
         )
         self.mascot.setMouseTracking(True)
@@ -105,7 +113,7 @@ class BuddyMini(QWidget):
             button.setFixedSize(28, 28)
             button.setStyleSheet(
                 "QPushButton { background: #f5843d; border: 1px solid #e56c27; "
-                "border-radius: 14px; }"
+                "border-radius: 14px; padding: 0; min-width: 0; min-height: 0; }"
                 "QPushButton:hover, QPushButton:focus { border: 2px solid #171717; }"
                 "QPushButton:disabled { background: #b88060; border-color: #b88060; }"
             )
@@ -137,13 +145,15 @@ class BuddyMini(QWidget):
         button.setToolTip(label)
 
     def set_top_corner(self, top: bool) -> None:
-        self._center.setY(47 if top else 111)
-        self.mascot.move(48, self._center.y() - 42)
+        margin = self._mascot_radius + 7
+        self._center.setY(margin if top else self.height() - margin)
+        self.mascot.move(self._center - QPoint(self._mascot_radius, self._mascot_radius))
         for index, button in enumerate(self.buttons):
-            angle = math.radians(194 + index * 38)
-            x = round(76 + 68 * math.cos(angle))
-            y = round(97 + 68 * math.sin(angle))
-            button.move(x, self.height() - y - button.height() if top else y)
+            angle = math.radians(222 + index * 24)
+            x = self._center.x() + self._control_radius * math.cos(angle)
+            offset_y = self._control_radius * math.sin(angle)
+            y = self._center.y() + (-offset_y if top else offset_y)
+            button.move(round(x - button.width() / 2), round(y - button.height() / 2))
 
     def enterEvent(self, event: QEnterEvent) -> None:
         self._hover_close.stop()
@@ -251,37 +261,39 @@ class BuddyMini(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        y = self._center.y()
+        x, y = self._center.x(), self._center.y()
         if self._listening:
             for offset in (0, 12):
                 phase = 12 if self.reduced_motion else (self._phase + offset) % 24
-                radius = 44 + phase // 2
+                radius = self._mascot_radius + 2 + phase // 2
                 painter.setPen(QPen(QColor(255, 164, 80, 180 - phase * 5), 1.6))
-                circle = QRectF(90 - radius, y - radius, radius * 2, radius * 2)
+                circle = QRectF(x - radius, y - radius, radius * 2, radius * 2)
                 painter.drawArc(circle, -32 * 16, 64 * 16)
                 painter.drawArc(circle, 148 * 16, 64 * 16)
         motion = 0.0 if self.reduced_motion else self._phase * math.tau / 120
         lift = -2 * math.sin(motion)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(15, 6, 0, 30))
-        painter.drawEllipse(QRectF(60, y + 35, 60, 9))
+        painter.drawEllipse(QRectF(x - 38, y + self._mascot_radius - 7, 76, 9))
         painter.save()
-        painter.translate(90, y + lift)
+        painter.translate(x, y + lift)
         if not self.reduced_motion:
             cursor = self.mapFromGlobal(QCursor.pos())
-            lean = max(-6.0, min(6.0, (cursor.x() - 90) / 10)) if self._open else 0.0
+            lean = max(-6.0, min(6.0, (cursor.x() - x) / 10)) if self._open else 0.0
             painter.rotate(3 * math.sin(motion + 0.5) + lean)
             painter.scale(1 + 0.018 * math.sin(motion), 1 - 0.015 * math.sin(motion))
-        painter.drawPixmap(QRect(-42, -42, 84, 84), self._asset)
+        radius = self._mascot_radius
+        painter.drawPixmap(QRect(-radius, -radius, 2 * radius, 2 * radius), self._asset)
         if self._reaction:
             painter.setBrush(QColor(255, 215, 125, 220))
-            for x in (-10, 10):
-                painter.drawEllipse(QPoint(x, -2), 2, 2)
+            for eye_x in (-13, 13):
+                painter.drawEllipse(QPoint(eye_x, -3), 2, 2)
         painter.restore()
         if self._reaction:
             painter.setPen(Qt.PenStyle.NoPen)
             if self._result and not self._open:
-                badge = QRect(35, 46 if y > 80 else 88, 110, 24)
+                badge_y = y - radius - 28 if y > self.height() / 2 else y + radius + 4
+                badge = QRect(x - 55, badge_y, 110, 24)
                 painter.setBrush(QColor("#171717"))
                 painter.drawRoundedRect(badge, 12, 12)
                 painter.setPen(QColor("#fff4e9"))
