@@ -110,6 +110,19 @@
       "AgentProposal": {
         "additionalProperties": false,
         "properties": {
+          "active_slide_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Slide Id"
+          },
           "analysis_id": {
             "format": "uuid",
             "title": "Analysis Id",
@@ -6687,6 +6700,19 @@
               "schema": {
                 "additionalProperties": false,
                 "properties": {
+                  "active_slide_id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Active Slide Id"
+                  },
                   "context_epoch": {
                     "minimum": 0,
                     "title": "Context Epoch",
@@ -6851,6 +6877,19 @@
               "schema": {
                 "additionalProperties": false,
                 "properties": {
+                  "active_slide_id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Active Slide Id"
+                  },
                   "context_epoch": {
                     "minimum": 0,
                     "title": "Context Epoch",
@@ -7891,6 +7930,19 @@
               "schema": {
                 "additionalProperties": false,
                 "properties": {
+                  "active_slide_id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Active Slide Id"
+                  },
                   "analysis_id": {
                     "format": "uuid",
                     "title": "Analysis Id",

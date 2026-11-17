@@ -101,6 +101,7 @@ class AgentService:
                 {
                     "expected_state_version": session.state_version,
                     "analysis_id": session.analysis_version_id,
+                    "active_slide_id": session.state.active_slide_id if session.state else None,
                     "target": target,
                 },
                 allow_nan=False,
@@ -162,6 +163,7 @@ class AgentService:
                 "session_id",
                 "analysis_id",
                 "state_version",
+                "active_slide_id",
                 "context_epoch",
                 "stream_id",
                 "sequence",
@@ -180,6 +182,7 @@ class AgentService:
                 ("session_id", session.id),
                 ("analysis_id", session.analysis_version_id),
                 ("state_version", context.state_version),
+                ("active_slide_id", payload["active_slide_id"]),
                 ("context_epoch", context.epoch),
                 ("stream_id", context.stream_id),
                 ("sequence", payload["sequence"]),
@@ -261,6 +264,12 @@ class AgentService:
                 "previous_slide",
                 "go_to_slide",
             }:
+                raise ValueError
+            if (
+                result["decision_source"] == "navigation"
+                and result["reason"] == "topic"
+                and (target["tool"] not in {"next_slide", "previous_slide", "go_to_slide"})
+            ):
                 raise ValueError
             if result["reason"] == "paced" and result["decision_source"] != "fallback":
                 raise ValueError

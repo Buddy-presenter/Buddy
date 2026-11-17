@@ -115,6 +115,7 @@ def test_real_http_validates_proposals_and_context(corrupt, monkeypatch):
                 "session_id": session.id,
                 "analysis_id": session.analysis_version_id,
                 "state_version": 3,
+                "active_slide_id": session.state.active_slide_id,
                 "context_epoch": 1,
                 "stream_id": context.stream_id,
                 "sequence": 1,
@@ -191,7 +192,8 @@ def test_real_http_validates_proposals_and_context(corrupt, monkeypatch):
         thread.join()
 
 
-def test_real_http_accepts_deterministic_numbered_slide_navigation(monkeypatch):
+@pytest.mark.parametrize("reason", ["explicit", "topic"])
+def test_real_http_accepts_slide_navigation_reasons(monkeypatch, reason):
     session, context = inputs()
     now = [context.observed_ns]
     monkeypatch.setattr("buddy_desktop.candidate_service.time.monotonic_ns", lambda: now[0])
@@ -208,6 +210,7 @@ def test_real_http_accepts_deterministic_numbered_slide_navigation(monkeypatch):
                 "session_id": session.id,
                 "analysis_id": session.analysis_version_id,
                 "state_version": 3,
+                "active_slide_id": session.state.active_slide_id,
                 "context_epoch": 1,
                 "stream_id": context.stream_id,
                 "sequence": 1,
@@ -220,7 +223,7 @@ def test_real_http_accepts_deterministic_numbered_slide_navigation(monkeypatch):
                     "action_id": None,
                     "region": None,
                 },
-                "reason": "explicit",
+                "reason": reason,
                 "decision_source": "navigation",
                 "confidence": 1.0,
                 "evidence": [0],
@@ -236,6 +239,7 @@ def test_real_http_accepts_deterministic_numbered_slide_navigation(monkeypatch):
         service = AgentService(AppConfig(f"http://127.0.0.1:{server.server_port}"))
         answer = service.propose("private-token", session, context, current_context=lambda: context)
         assert answer["decision_source"] == "navigation"
+        assert answer["reason"] == reason
         assert answer["target"]["tool"] == "go_to_slide"
         assert answer["target"]["slide_id"] == "slide-8"
     finally:

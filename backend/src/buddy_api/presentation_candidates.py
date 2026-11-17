@@ -92,6 +92,9 @@ def candidate_action_eligible(action: ActionResult | PowerPointActionResult) -> 
 class CandidateRequest(Model):
     protocol: Literal["presentation-candidates.v1"] = "presentation-candidates.v1"
     expected_state_version: int = Field(ge=0, strict=True)
+    # Optional for compatibility with existing clients. New clients provide the
+    # locally observed slide so a position write is not a prerequisite for retrieval.
+    active_slide_id: str | None = Field(default=None, min_length=1, max_length=128)
     context_epoch: int = Field(ge=0, strict=True)
     stream_id: UUID
     sequence: int = Field(ge=1, strict=True)
@@ -661,9 +664,9 @@ def candidate_router() -> APIRouter:
             ):
                 await db.connection(execution_options={"isolation_level": "REPEATABLE READ"})
                 session = await owned_session(db, principal, identifier)
-                if (
-                    session.status != "active"
-                    or session.state_version != values.expected_state_version
+                if session.status != "active" or (
+                    values.active_slide_id is None
+                    and session.state_version != values.expected_state_version
                 ):
                     raise HTTPException(409, "The session changed; refresh context.")
                 deck = await db.get(Deck, session.deck_id)
@@ -674,11 +677,14 @@ def candidate_router() -> APIRouter:
                     raise HTTPException(409, "The analysis changed; reconnect the session.")
                 analysis = await request.app.state.candidate_analyses.read(db, record, principal.id)
                 semantic: SemanticCandidates | None = request.app.state.semantic_candidates
+                active_slide_id = values.active_slide_id or session.active_slide_id or ""
+                if active_slide_id not in {slide.slide_id for slide in analysis.slides}:
+                    raise HTTPException(422, "The active slide is not part of this analysis.")
                 if semantic is not None:
                     targets = await semantic.retrieve(
                         analysis,
                         principal.id,
-                        session.active_slide_id or "",
+                        active_slide_id,
                         values.latest_utterance or values.text,
                         values.text,
                     )
@@ -687,7 +693,7 @@ def candidate_router() -> APIRouter:
                         asyncio.to_thread(
                             resolve,
                             analysis,
-                            session.active_slide_id or "",
+                            active_slide_id,
                             values.text,
                             values.latest_utterance,
                         ),
@@ -699,7 +705,11 @@ def candidate_router() -> APIRouter:
                     else "summary-overlap-2",
                     session_id=identifier,
                     analysis_id=record.id,
-                    state_version=session.state_version,
+                    state_version=(
+                        values.expected_state_version
+                        if values.active_slide_id is not None
+                        else session.state_version
+                    ),
                     context_epoch=values.context_epoch,
                     stream_id=values.stream_id,
                     sequence=values.sequence,

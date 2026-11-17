@@ -42,7 +42,7 @@ from buddy_api.presentation_candidates import (
     resolve,
     topic_navigation_intent,
 )
-from buddy_api.presentation_sessions import current_ready_analysis, owned_session, snapshot
+from buddy_api.presentation_sessions import current_ready_analysis, owned_session
 
 
 class SpeechSegment(Model):
@@ -54,6 +54,9 @@ class SpeechSegment(Model):
 class AgentRequest(Model):
     protocol: Literal["presentation-agent.v1"] = "presentation-agent.v1"
     expected_state_version: int = Field(ge=0, strict=True)
+    # New desktop clients send their local slide; older clients keep the persisted
+    # session snapshot contract until they are upgraded.
+    active_slide_id: str | None = Field(default=None, min_length=1, max_length=128)
     context_epoch: int = Field(ge=0, strict=True)
     stream_id: UUID
     sequence: int = Field(ge=1, strict=True)
@@ -142,6 +145,7 @@ class Target(Model):
 class TransitionCheck(Model):
     expected_state_version: int = Field(ge=0, strict=True)
     analysis_id: UUID
+    active_slide_id: str | None = Field(default=None, min_length=1, max_length=128)
     target: Target
 
 
@@ -179,6 +183,7 @@ class AgentProposal(Model):
     session_id: UUID
     analysis_id: UUID
     state_version: int
+    active_slide_id: str | None = Field(default=None, min_length=1, max_length=128)
     context_epoch: int
     stream_id: UUID
     sequence: int
@@ -231,7 +236,10 @@ async def read_input(
                 "session_inactive",
                 "Presentation session is no longer active.",
             )
-        if session.state_version != values.expected_state_version:
+        if (
+            values.active_slide_id is None
+            and session.state_version != values.expected_state_version
+        ):
             raise agent_conflict(
                 request,
                 "session_state_changed",
@@ -271,16 +279,19 @@ async def read_input(
         # Include all validation eligibility/geometry, even if the analysis id is unchanged.
         identity = hashlib.sha256(
             (
-                snapshot(session).model_dump_json()
+                f"{session.id}:{session.status}:{session.deck_id}:{session.analysis_version_id}:"
                 + analysis.model_dump_json()
                 + str(deck.source_revision)
                 + str(deck.source_sha256)
                 + str(deck.source_version_id)
             ).encode()
         ).hexdigest()
+        active_slide_id = values.active_slide_id or session.active_slide_id or ""
+        if active_slide_id not in {slide.slide_id for slide in analysis.slides}:
+            raise HTTPException(422, "The active slide is not part of this analysis.")
         return AgentInput(
             analysis,
-            session.active_slide_id or "",
+            active_slide_id,
             session.focus_view,
             identity,
             Region.model_validate(session.focus_region)
@@ -585,7 +596,10 @@ def agent_router() -> APIRouter:
                 if (
                     session.status != "active"
                     or session.autonomy_mode != "autonomous"
-                    or session.state_version != values.expected_state_version
+                    or (
+                        values.active_slide_id is None
+                        and session.state_version != values.expected_state_version
+                    )
                     or session.analysis_version_id != values.analysis_id
                 ):
                     raise HTTPException(409, "Automatic transition state changed.")
@@ -598,11 +612,13 @@ def agent_router() -> APIRouter:
                 analysis = await request.app.state.candidate_analyses.read(db, record, principal.id)
                 source = AgentInput(
                     analysis,
-                    session.active_slide_id or "",
+                    values.active_slide_id or session.active_slide_id or "",
                     session.focus_view,
                     "transition",
                     Region.model_validate(session.focus_region) if session.focus_region else None,
                 )
+                if source.current not in {slide.slide_id for slide in analysis.slides}:
+                    raise HTTPException(422, "The active slide is not part of this analysis.")
                 target = values.target
                 if target.tool == "no_action":
                     raise HTTPException(422, "No action cannot execute a transition.")
@@ -621,7 +637,11 @@ def agent_router() -> APIRouter:
                 return TransitionApproval(
                     session_id=identifier,
                     analysis_id=record.id,
-                    state_version=session.state_version,
+                    state_version=(
+                        values.expected_state_version
+                        if values.active_slide_id is not None
+                        else session.state_version
+                    ),
                     target=target,
                 )
         except (TimeoutError, SQLAlchemyError, PersistenceError, OSError):
@@ -635,6 +655,7 @@ def agent_router() -> APIRouter:
     @router.post(
         "/{identifier}/agent",
         response_model=AgentProposal,
+        response_model_exclude_unset=True,
         openapi_extra={
             "requestBody": {
                 "required": True,
@@ -824,23 +845,27 @@ def agent_router() -> APIRouter:
                 finish_phase()
             if admitted and runtime is not None:
                 runtime.active.discard(principal.id)
-        proposal = AgentProposal(
-            decision_id=uuid4(),
-            session_id=identifier,
-            analysis_id=source.analysis.id,
-            state_version=values.expected_state_version,
-            context_epoch=values.context_epoch,
-            stream_id=values.stream_id,
-            sequence=values.sequence,
-            input_sha256=hashlib.sha256(values.model_dump_json().encode()).hexdigest(),
-            target=target,
-            decision_source=decision_source,
-            reason=reason,
-            confidence=selection.confidence if selection else None,
-            evidence=selection.evidence if selection else (),
-            elapsed_ms=round((time.monotonic() - started) * 1000),
-            retry_after_ms=retry_after_ms,
-        )
+        proposal_values: dict[str, object] = {
+            "protocol": "presentation-agent.v1",
+            "decision_id": uuid4(),
+            "session_id": identifier,
+            "analysis_id": source.analysis.id,
+            "state_version": values.expected_state_version,
+            "context_epoch": values.context_epoch,
+            "stream_id": values.stream_id,
+            "sequence": values.sequence,
+            "input_sha256": hashlib.sha256(values.model_dump_json().encode()).hexdigest(),
+            "target": target,
+            "decision_source": decision_source,
+            "reason": reason,
+            "confidence": selection.confidence if selection else None,
+            "evidence": selection.evidence if selection else (),
+            "elapsed_ms": round((time.monotonic() - started) * 1000),
+            "retry_after_ms": retry_after_ms,
+        }
+        if values.active_slide_id is not None:
+            proposal_values["active_slide_id"] = source.current
+        proposal = AgentProposal.model_validate(proposal_values)
         # Raw structured event, like existing EMF events: independent of Uvicorn's
         # warning-only logger. Only locally typed finite fields reach this boundary.
         trace = {

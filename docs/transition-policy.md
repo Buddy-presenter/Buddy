@@ -48,16 +48,17 @@ PDF changes use the existing immediate player commits and respect reduced-motion
 It retains bounded completed-evidence identities, not speech text/history. `Settings`
 controls post-action cooldown and manual hold without modifying the decision provider.
 
-- Check the current session, analysis, immutable source, state version, stream, context
+- Check the current session, analysis, immutable source, local active slide, stream, context
   epoch, language, submitted evidence and five-second capture freshness.
 - Interim speech is eligible only through its stable whole-token prefix, corroborated by
   consecutive recognition hypotheses. A result remains current while that prefix remains
   intact and the presenter continues speaking; an explicit correction/negation, manual
   change or session change supersedes it. Unknown targets, current focus and
   disconnected or changed presentations are rejected. A suggestion that encounters a
-  transient local slide/session sync is retained as one bounded pending item, then its
-  freshness and server admission are checked again after sync; changed or expired input
-  is discarded. Each submitted speech watermark can trigger at most once, even if
+  a local slide change while a result is in flight rejects that result. Navigation does
+  not wait for saved-position synchronization; the server checks the request's local
+  slide ID against the pinned analysis. Regional actions retain their session-state
+  checks. Changed or expired input is discarded. Each submitted speech watermark can trigger at most once, even if
   duplicate HTTP decisions arrive. There is no multi-utterance confirmation queue and no
   locally loaded user profile.
 - Model-selected actions require a finite provider score, evidence in the submitted
@@ -66,8 +67,9 @@ controls post-action cooldown and manual hold without modifying the decision pro
   can still select the wrong eligible action, so use the explicit opt-in and evaluate
   closed-loop target accuracy and false transitions separately.
 - Deterministic next/previous and absolute slide-number commands bypass semantic retrieval
-  and model selection. Every branch still checks freshness, target bounds, cooldown,
-  session/source identity and opt-in.
+  and model selection. Every branch still checks freshness, target bounds, deduplication,
+  session/source identity and opt-in. Completed slide-navigation moves skip the generic
+  post-action cooldown so a fresh next command can execute immediately.
 - Recheck the target through authenticated
   `POST /api/v1/sessions/{id}/transition-check`. The server uses current ownership, active
   autonomous session state, exact analysis/source lineage and canonical eligibility/geometry.
@@ -76,7 +78,10 @@ controls post-action cooldown and manual hold without modifying the decision pro
 - Recheck on the GUI thread immediately before dispatch and again before an asynchronous
   image load commits. Partials, manual changes, remote session updates, expiry and disconnect
   discard the old load without moving the committed view. Only a real successful player
-  completion records the accepted action and queues the existing versioned session write.
+  completion records the accepted action. Regional actions continue to queue a versioned
+  session write; automatic slide navigation keeps its position locally and does not update
+  the saved server position. Closing and reopening can therefore restore the last manually
+  saved slide, which is accepted for this live-presentation behavior.
   Saving failures leave the existing retry/conflict recovery available; no unsaved state
   can trigger another policy move.
 

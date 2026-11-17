@@ -47,8 +47,14 @@ In Present, pause or resume automatic moves with the dedicated button or
 **Ctrl+Shift+P**. Use **Undo automatic move** (**Ctrl+Shift+Z**) to return to the
 previous view after an automatic transition. Undo pauses automatic moves.
 These controls apply to saved PDFs and verified PowerPoint shows. The PowerPoint
-shortcuts work while Buddy has keyboard focus. After a manual move, Buddy syncs
-the new slide before requesting another suggestion.
+shortcuts work while Buddy has keyboard focus. The desktop sends its current local slide
+ID with each agent request and transition check. This keeps relative commands and topic
+candidates anchored to the visible slide even when the server's saved recovery position
+is behind. The API still checks ownership, active-session status, analysis/source identity
+and that the local slide belongs to that analysis. The desktop checks again that the local
+slide has not changed while a result was in flight. Older clients without a local slide ID
+retain the state-version check. Manual position is saved in the background for recovery;
+automatic navigation does not wait for or write a server position update.
 Local PowerPoint without a saved API session is not eligible for this runtime. A
 disconnected, changed or unverified Office slideshow stops transcription and discards
 the saved-session binding. The live slide is authoritative when resuming a PowerPoint
@@ -94,7 +100,10 @@ server timestamps bound transit, not proof that a remote client actually capture
 microphone audio. Bodies are bounded to 64 KiB and five seconds.
 
 The server reads active session, current source/job/analysis and canonical region
-eligibility in a short repeatable-read transaction. It closes the transaction before
+eligibility in a short repeatable-read transaction. New clients include the locally
+visible slide ID; the server validates it against the pinned analysis and uses it as the
+navigation origin. If that optional field is absent, the server requires the persisted
+state version to match and uses the saved slide. It closes the transaction before
 embeddings or Chat, builds at most ten options including no action, and resolves the
 provider's opaque `c0`–`c9` choice back to a server-owned target. Missing options,
 invented ids, invalid evidence, malformed JSON, tools/code, truncation and nonfinite
@@ -116,12 +125,14 @@ for either format. Office execution proof alone does not qualify a PowerPoint ac
 when independent visual checks are unavailable, PowerPoint still offers slide-level
 retrieval and navigation suggestions without unsafe regional actions.
 
-After selection, a new transaction rechecks session/version/source/analysis and action
-eligibility/geometry. Changed state, analysis content or eligibility becomes no action. Ownership failures remain 401/403/404. A request rejected before provider selection returns 409 with a stable, safe reason code and request ID: `speech_context_expired`, `session_inactive`, `session_state_changed`, `analysis_changed`, or `analysis_unavailable`. The API emits a `presentation_agent_rejected` structured log containing only the request ID, reason, request age when relevant, and expected/current state versions when relevant. It never logs transcript text, tokens, or credentials. The native client shows a specific recovery hint and request reference for these known conflicts; unknown conflicts remain generic. Fresh speech is required after a stale request; rejected input is never replayed. No authorization decision is cached. The native client validates
+After selection, a new transaction rechecks session/source/analysis and action
+eligibility/geometry. Legacy requests also require the persisted state version to match;
+new requests stay anchored to the validated local slide ID. The desktop rechecks its local
+slide, source, speech freshness and opt-in before execution. Ownership failures remain 401/403/404. A request rejected before provider selection returns 409 with a stable, safe reason code and request ID: `speech_context_expired`, `session_inactive`, `session_state_changed`, `analysis_changed`, or `analysis_unavailable`. The API emits a `presentation_agent_rejected` structured log containing only the request ID, reason, request age when relevant, and expected/current state versions when relevant. It never logs transcript text, tokens, or credentials. The native client shows a specific recovery hint and request reference for these known conflicts; unknown conflicts remain generic. Fresh speech is required after a stale request; rejected input is never replayed. No authorization decision is cached. The native client validates
 the response and rechecks the complete live snapshot both after HTTP and at GUI
 consumption, including changes that occur before the next scheduling timer.
 
-Output binds a decision UUID, session/analysis/version, epoch/stream/sequence and input
+Output binds a decision UUID, session/analysis/version/local active slide, epoch/stream/sequence and input
 digest; it includes a typed target, decision_source (model/navigation/fallback), finite
 reason, optional confidence, evidence segment
 indexes and elapsed_ms. It contains no free-form model explanation. A successful HTTP
