@@ -38,11 +38,13 @@ def test_capture_uses_player_completion_not_proposals(request, qtbot, kind):
     assert not Trace.model_validate(capture.document()).observations[0].applied
     page._agent_proposed(proposal)
     qtbot.waitUntil(lambda: bool(capture.document()["observations"][0]["applied"]))
-    qtbot.waitUntil(lambda: not page.session_runner.busy and bool(persisted))
+    qtbot.waitUntil(lambda: not page.session_runner.busy)
     trace = Trace.model_validate(capture.document())
     assert trace.observations[0].applied[0].target == trace.observations[0].proposed
     assert trace.observations[0].applied[0].animated is (None if kind == "pptx" else False)
-    assert persisted[-1].active_slide_id == proposal["target"]["slide_id"]
+    # Automatic moves stay in the live desktop session; saving/reopening position
+    # is deliberately outside the presentation behavior under test.
+    assert not any(state.active_slide_id == proposal["target"]["slide_id"] for state in persisted)
     source, context = page._session, fixture[2][0]
     summary = {"status": "available", "text": "Navigation", "reason": None}
     initial = observation["allowed"][0]["slide_id"]
