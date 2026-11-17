@@ -177,7 +177,10 @@ def test_real_library_loading_responsive_refresh_and_keyboard(desktop_window, ba
     assert library.sort.hasFocus()
 
 
-def test_failure_retry_empty_and_access_expiry(desktop_window, backend, qtbot):
+@pytest.mark.parametrize("identity_expired", [False, True])
+def test_failure_retry_empty_and_access_expiry(desktop_window, backend, qtbot, identity_expired):
+    from buddy_identity.config import SessionExpired
+
     backend.response_code = 503
     window = desktop_window(f"http://127.0.0.1:{backend.server_port}")
     library = signed_in(window)
@@ -195,11 +198,20 @@ def test_failure_retry_empty_and_access_expiry(desktop_window, backend, qtbot):
     library.reload()
     qtbot.waitUntil(lambda: not library.runner.busy)
     assert library.state.title.text() == "No matching decks"
+    window.account.account_id = "same-account"
+
+    def verify_account():
+        if identity_expired:
+            raise SessionExpired("Account session expired.")
+        return "same-account"
+
+    window.account.session.account = verify_account
     backend.response_code = 401
     library.reload()
-    qtbot.waitUntil(lambda: not library.runner.busy)
-    assert window.account.session.tokens is None
-    assert library.table.rowCount() == 0 and not library.refresh.isEnabled()
+    qtbot.waitUntil(lambda: not library.runner.busy and not window.account.runner.busy)
+    assert (window.account.session.tokens is None) == identity_expired
+    assert library.table.rowCount() == 0
+    assert library.refresh.isEnabled() != identity_expired
 
 
 def test_near_expiry_account_check_keeps_library_visible(desktop_window, backend, qtbot):

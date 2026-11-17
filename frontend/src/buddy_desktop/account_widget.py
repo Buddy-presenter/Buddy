@@ -22,6 +22,7 @@ class AccountWidget(QWidget):
 
     def __init__(self, api_url: str) -> None:
         super().__init__()
+        self._resource_checked_token_id: int | None = None
         self.setObjectName("accountPanel")
         self.session: AccountSession | None = None
         self.account_id: str | None = None
@@ -288,6 +289,18 @@ class AccountWidget(QWidget):
         self.timer.stop()
         self.message.setText(message)
         self.idle()
+
+    def verify_resource_access(self, _message: str) -> None:
+        # A deck or presentation can be inaccessible while the account is valid.
+        # Only the identity check may invalidate the signed-in account.
+        session = self.session
+        tokens = session.tokens if session else None
+        if (
+            tokens is not None
+            and id(tokens) != self._resource_checked_token_id
+            and self.start("check") is not None
+        ):
+            self._resource_checked_token_id = id(tokens)
 
     def check_session(self) -> None:
         if self.session and self.session.tokens and not self.runner.busy:
