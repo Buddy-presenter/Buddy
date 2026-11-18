@@ -58,12 +58,13 @@ def source_target(
                 if page.get_rotation():
                     raise ContractError("Rotated PDF correction requires a target mapping.")
                 scale_x, scale_y = width / page.get_width(), height / page.get_height()
+                crop_left, _, _, crop_top = page.get_bbox()
                 candidates = []
-                for obj in page.get_objects():
+                for obj in page.get_objects(max_depth=1):
                     left, bottom, right, top = obj.get_bounds()
                     candidate = dict(
-                        x=left * scale_x,
-                        y=height - top * scale_y,
+                        x=(left - crop_left) * scale_x,
+                        y=(crop_top - top) * scale_y,
                         width=(right - left) * scale_x,
                         height=(top - bottom) * scale_y,
                     )

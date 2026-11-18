@@ -243,3 +243,33 @@ def test_retry_exhaustion_keeps_corrected_action_ineligible(correction_source, t
     assert report["state"] == "rejected"
     assert report["corrected_action"] is None
     assert not report["semantic_verified"]
+
+
+def test_pdf_crop_origin_is_applied_to_source_target_geometry(correction_source):
+    import io
+
+    import pypdfium2 as pdfium
+
+    source, _, _ = correction_source
+    buffer = io.BytesIO()
+    with pdfium.PdfDocument(source) as document:
+        page = document[0]
+        page.set_cropbox(24, 24, 720, 405)
+        page.close()
+        document.save(buffer)
+    cropped = buffer.getvalue()
+    manifest, _ = open_pdf(cropped, deck_id="cropped", revision="cropped-source")
+    region = dict(x=48, y=410, width=240, height=240)
+    action = dict(
+        version="1.1",
+        instance_id="crop",
+        purpose="Highlight the whole orange rectangle",
+        deck_id=manifest.deck_id,
+        render_id=manifest.render_id,
+        slide_id=manifest.slides[0].slide_id,
+        type="highlight_region",
+        params={"region": region},
+    )
+    target, dimensions = source_target(cropped, action, manifest, {})
+    assert target == pytest.approx(dict(x=48, y=410, width=480, height=240))
+    assert dimensions == (1392, 762)
