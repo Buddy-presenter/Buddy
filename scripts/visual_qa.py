@@ -8,6 +8,7 @@ from pathlib import Path
 from botocore.config import Config  # type: ignore[import-untyped]
 from botocore.session import get_session  # type: ignore[import-untyped]
 
+from buddy_desktop.correction_qa import CORRECTION_SCHEMA, inspect_with_corrections
 from buddy_desktop.preflight import PreflightRunner
 from buddy_desktop.visual_qa import VERDICT_SCHEMA, inspect_action
 
@@ -18,7 +19,9 @@ SYSTEM_PROMPT = (
     "When target_text is provided, it is the precise saved target. The purpose supplies "
     "context. Otherwise infer the intended target from the purpose and the baseline. "
     "Validate when the action visibly emphasizes the intended content and it remains "
-    "readable. Allow normal padding, translucent fills, cosmetic color shifts, and nearby "
+    "readable. A highlight is a translucent fill: a localized color shift over its target "
+    "is the expected effect, including on an already colored object. It does not require "
+    "an outline, border or frame. Allow normal padding, cosmetic color shifts, and nearby "
     "context. An underline can sit below the text and a frame can enclose it with a margin. "
     "For an arrow inspect where the tip points. For zoom inspect the intended detail and "
     "whether critical parts are cut off. Exclude letterboxing and chrome from comparison. "
@@ -42,6 +45,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--region", required=True)
+    parser.add_argument("--correct", action="store_true")
     args = parser.parse_args()
     if args.output.exists():
         parser.error("Choose a fresh private output directory.")
@@ -61,6 +65,7 @@ def main() -> int:
         parser.error("Action key must match the saved instance ID.")
     aws = get_session()
     client = None
+    schema = CORRECTION_SCHEMA if args.correct else VERDICT_SCHEMA
 
     def judge(target: dict[str, object], before: bytes, after: bytes) -> object:
         nonlocal client
@@ -74,7 +79,22 @@ def main() -> int:
             )
         response = client.converse(
             modelId=args.model,
-            system=[{"text": SYSTEM_PROMPT}],
+            system=[
+                {
+                    "text": SYSTEM_PROMPT
+                    + (
+                        " A correction context may give source-measured target bounds and current "
+                        "coordinates. If rejected and a safe region adjustment can help, "
+                        "propose only x,y,width,height in the same source coordinates, keeping the "
+                        "same target. Padding is clamped to 15 percent of target size. "
+                        "Never change action type, target text or source identity. Do not propose "
+                        "a correction when remaining_attempts is zero. Return correction=null for "
+                        "validated actions, absent source bounds, or when no safe fix exists."
+                        if args.correct
+                        else ""
+                    )
+                }
+            ],
             messages=[
                 {
                     "role": "user",
@@ -92,7 +112,7 @@ def main() -> int:
                         "toolSpec": {
                             "name": "visual_verdict",
                             "description": "Record the verdict and any visual issue.",
-                            "inputSchema": {"json": VERDICT_SCHEMA},
+                            "inputSchema": {"json": schema},
                         }
                     }
                 ],
@@ -115,7 +135,8 @@ def main() -> int:
     owner = snapshot["owner"]
     try:
         with PreflightRunner(owner) as runner:
-            report = inspect_action(
+            inspect = inspect_with_corrections if args.correct else inspect_action
+            report = inspect(
                 runner,
                 owner,
                 source=source,

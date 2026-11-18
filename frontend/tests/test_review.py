@@ -231,10 +231,12 @@ def test_review_widget_loads_read_only_saved_page_and_clears_on_signout(
 
     def qa(analysis, action, source, **options):
         submissions.append((analysis, action, source, options["owner"]))
+        assert options["correct"] is True
         return review_widget.ReviewQAResult("validated", None, tmp_path / "report.json")
 
     monkeypatch.setattr(review_widget, "run_review_qa", qa)
     assert review.visual_qa_button.isEnabled()
+    review.visual_qa_correct.setChecked(True)
     review.visual_qa_button.click()
     qtbot.waitUntil(lambda: "Visual QA: validated" in review.visual_qa_status.text())
     assert submissions == [(record, record.slides[0].actions[0], content, "test-owner")]
@@ -255,6 +257,7 @@ def test_review_widget_loads_read_only_saved_page_and_clears_on_signout(
     window.account.session.tokens = None
     window.account.session_changed.emit()
     assert review.visual_qa_status.text() == ""
+    assert not review.visual_qa_correct.isChecked()
     assert review.pdf_content is None
     assert review.analysis is None
     assert review.action_table.rowCount() == 0

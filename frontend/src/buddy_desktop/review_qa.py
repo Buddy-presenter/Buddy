@@ -40,6 +40,7 @@ def run_review_qa(
     profile: str,
     viewport: tuple[int, int],
     reports: Path,
+    correct: bool = False,
 ) -> ReviewQAResult:
     script = review_qa_operator()
     if script is None:
@@ -109,12 +110,13 @@ def run_review_qa(
                     "eu-central-1",
                     "--model",
                     "eu.anthropic.claude-sonnet-4-6",
+                    *(["--correct"] if correct else []),
                 ],
                 env=environment,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                timeout=165,
+                timeout=450 if correct else 165,
                 check=False,
             )
             report_path = output / "report.json"

@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QStandardPaths, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QImage, QImageReader, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QHBoxLayout,
@@ -373,6 +374,12 @@ class ReviewWidget(Page):
         action_header.addWidget(self.visual_qa_all_button)
         action_header.addWidget(self.run_powerpoint)
         content_layout.addLayout(action_header)
+        self.visual_qa_correct = QCheckBox("Try bounded corrections")
+        self.visual_qa_correct.setToolTip(
+            "If an action is rejected, try up to two source-bounded region corrections "
+            "and recheck each in the real player. Saves every attempt."
+        )
+        content_layout.addWidget(self.visual_qa_correct)
         self.visual_qa_status = QLabel()
         self.visual_qa_status.setWordWrap(True)
         self.visual_qa_status.setTextFormat(Qt.TextFormat.PlainText)
@@ -509,6 +516,7 @@ class ReviewWidget(Page):
         if not root:
             self.visual_qa_status.setText("Buddy could not locate a private report directory.")
             return
+        correct = self.visual_qa_correct.isChecked()
         reports = Path(root) / "visual-qa"
         if batch:
             reports = reports / uuid4().hex
@@ -542,6 +550,7 @@ class ReviewWidget(Page):
                     profile=profile,
                     viewport=viewport,
                     reports=reports,
+                    correct=correct,
                 )
 
             if not batch:
@@ -702,6 +711,7 @@ class ReviewWidget(Page):
         self.visual_qa_cancel.set()
         self.visual_qa_all_button.setEnabled(False)
         self.visual_qa_status.clear()
+        self.visual_qa_correct.setChecked(False)
         self.pending_load = False
         if not keep_deck:
             self.deck_id = None

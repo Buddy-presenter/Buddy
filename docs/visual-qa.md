@@ -90,3 +90,59 @@ Run automated checks with
 These tests can substitute the external model response while retaining real
 native PDF capture. Unsupported or obstructed desktops cannot yield an approved
 verdict.
+
+
+
+## Bounded correction and revalidation (#51)
+
+In Review, enable **Try bounded corrections**, then run visual QA on the selected
+action or the whole deck. The same operator can run from PowerShell with
+`--correct`. A valid first attempt finishes immediately. On rejection, the model
+may propose a new rectangle using the source coordinate system.
+
+The host resolves the original target against measured PDF source objects or
+native PPTX shape metadata. Only the region can change. Action type, instance ID,
+source slide, render identity, target text and shape identity are fixed. Proposals
+are clamped to the target with at most 15 percent padding, retain at least 80
+percent of its source area, and pass the existing format-specific geometry/camera
+checks. The corrected action then runs in a fresh isolated player and gets a new
+independent visual verdict. There are at most two corrections (three executions).
+Repeated/unchanged, out-of-bounds or unsupported proposals stop safely.
+
+Native PowerPoint text annotations and zoom are pinned by the existing executor
+to measured text/complete source shapes. Those source bindings are preserved.
+When adjusting the raw region cannot change the actual target, the report records
+`correction_outside_supported_bounds`; the host does not remove the binding.
+Coordinate-bound native annotations can be corrected. Ambiguous source objects,
+rotated PDFs and grouped/rotated native shapes without a supported source mapping
+remain unavailable for automatic correction. A validated original can still pass
+without a correction mapping.
+
+The top-level `report.json` contains `history`, original/final hashes and the final
+verdict. Every `attempt-N` directory retains the executed parameters, independent
+verdict and exact before/after screenshots. Only a validated final attempt has a
+`corrected_action`; failed/rejected attempts never provide an eligible action.
+Live eligibility publication and server-side persistence remain owned by #53.
+
+### Manual test
+
+1. Save and close unrelated PowerPoint windows, open Buddy and sign in.
+2. Go to **Library → Review**, select an analyzed PDF or PowerPoint.
+3. Select a rejected action with an incorrectly sized region. Enable **Try bounded
+   corrections** and click **Run visual QA**. Leave the native player unobstructed.
+4. Open the report path displayed in Buddy. Inspect `history`: version 0 is the
+   saved action, each later version is the corrected region. Inspect both images
+   under each attempt and verify the final result matches the intended target.
+5. Test an already correct action. It should finish with one attempt.
+6. Test an unsupported correction or a persistently incorrect action. It must stop
+   at the bound and keep `corrected_action` null. Manual presentation remains usable.
+7. Repeat with the other source format. PDF evidence does not establish Office support.
+
+The 2026-11-18 Windows acceptance used synthetic PDF and PPTX title highlights that
+initially covered half of their headings. Real Bedrock Sonnet 4.6 proposed full
+source-bound regions. Both players replayed the corrections and the independent
+visual verdict accepted the full headings. Windows Office was 16.0.20527; PDF used
+Qt/PDFium with a 2x logical profile; Office captured a 2560×1600 physical display.
+A uniform orange-box highlight case remained rejected after correction because the
+vision model did not consider its subtle tint sufficient emphasis. It stopped safely.
+Native macOS correction capture has not been verified.

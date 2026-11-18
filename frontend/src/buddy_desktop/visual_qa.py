@@ -57,6 +57,7 @@ def inspect_action(
     profile: str = "wide-1x",
     viewport: tuple[int, int] | None = None,
     cancelled: Event | None = None,
+    correction_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Inspect one immutable saved action, retaining its private report and captures."""
     if output.exists():
@@ -152,6 +153,7 @@ def inspect_action(
                         "type": action["type"],
                         "source": source_format,
                         "target_text": action["params"].get("target_text"),
+                        **({"correction": correction_context} if correction_context else {}),
                     },
                     *images,
                 )
