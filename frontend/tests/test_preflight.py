@@ -425,8 +425,8 @@ def test_retention_expires_runs_and_caps_private_evidence(snapshot, monkeypatch)
         ),
         (
             {"verdict": "validated", "confidence": 0.61, "issue": None},
-            "needs-review",
-            "low_confidence",
+            "validated",
+            None,
         ),
         (
             {"verdict": "validated", "confidence": 1, "issue": "clipped"},
@@ -437,6 +437,16 @@ def test_retention_expires_runs_and_caps_private_evidence(snapshot, monkeypatch)
             {"verdict": "validated", "confidence": True, "issue": None},
             "needs-review",
             "visual_verdict_unavailable",
+        ),
+        (
+            {"verdict": "rejected", "confidence": 0.92, "issue": "partial_target"},
+            "needs-review",
+            "partial_target",
+        ),
+        (
+            {"verdict": "needs-review", "confidence": 0.5, "issue": "uncertain"},
+            "needs-review",
+            "uncertain",
         ),
         (None, "needs-review", "visual_verdict_unavailable"),
     ],
@@ -458,7 +468,7 @@ def test_visual_qa_binds_real_pdf_captures_and_persists_verdict(
         received.extend((before, after))
         if verdict is None:
             raise TimeoutError("synthetic provider timeout")
-        return verdict
+        return {**verdict, "observation": "The viewport changed around the intended region."}
 
     with PreflightRunner("owner") as runner:
         with pytest.raises(PermissionError):
@@ -492,6 +502,9 @@ def test_visual_qa_binds_real_pdf_captures_and_persists_verdict(
     assert report["reason"] == reason
     assert report["semantic_verified"] is (state == "validated")
     assert report["preflight"]["semantic_verified"] is False
+    if report["model_verdict"] is not None:
+        assert report["model_verdict"]["confidence"] == verdict["confidence"]
+        assert report["model_verdict"]["observation"]
     result = tmp_path / "report"
     assert json.loads((result / "report.json").read_text(encoding="utf-8")) == report
     for role, content in zip(("before", "after"), received, strict=True):

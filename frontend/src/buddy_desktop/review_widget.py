@@ -375,6 +375,7 @@ class ReviewWidget(Page):
         content_layout.addLayout(action_header)
         self.visual_qa_status = QLabel()
         self.visual_qa_status.setWordWrap(True)
+        self.visual_qa_status.setTextFormat(Qt.TextFormat.PlainText)
         self.visual_qa_status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         content_layout.addWidget(self.visual_qa_status)
         self.action_table = ActionTable(0, 4)
@@ -842,6 +843,7 @@ class ReviewWidget(Page):
             self.visual_qa_status.setText(
                 f"Visual QA: {result.state}"
                 + (f" ({reason}). " if reason else ". ")
+                + (f"{result.observation} " if result.observation else "")
                 + f"Report saved to {result.report}"
             )
         elif isinstance(result, UpdatedChecks):

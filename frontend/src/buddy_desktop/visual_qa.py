@@ -12,15 +12,24 @@ from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 
 from buddy_desktop.preflight import PreflightRunner, Tool, _private
 
-ISSUES = ("wrong_target", "clipped", "obscured", "unreadable", "no_visible_effect", "uncertain")
+ISSUES = (
+    "wrong_target",
+    "partial_target",
+    "clipped",
+    "obscured",
+    "unreadable",
+    "no_visible_effect",
+    "uncertain",
+)
 VERDICT_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["verdict", "confidence", "issue"],
+    "required": ["verdict", "confidence", "issue", "observation"],
     "properties": {
         "verdict": {"enum": ["validated", "rejected", "needs-review"]},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
         "issue": {"enum": [None, *ISSUES]},
+        "observation": {"type": "string", "minLength": 1, "maxLength": 400},
     },
 }
 Judge = Callable[[dict[str, Any], bytes, bytes], object]
@@ -90,6 +99,7 @@ def inspect_action(
         "state": "needs-review",
         "reason": run["reason"],
         "confidence": None,
+        "model_verdict": None,
         "semantic_verified": False,
         "preflight": run,
         "evidence": {},
@@ -137,7 +147,12 @@ def inspect_action(
         else:
             try:
                 verdict = judge(
-                    {"purpose": action["purpose"], "type": action["type"], "source": source_format},
+                    {
+                        "purpose": action["purpose"],
+                        "type": action["type"],
+                        "source": source_format,
+                        "target_text": action["params"].get("target_text"),
+                    },
                     *images,
                 )
                 if not Draft202012Validator(VERDICT_SCHEMA).is_valid(verdict):
@@ -148,14 +163,15 @@ def inspect_action(
                     verdict["confidence"],
                     verdict["issue"],
                 )
-                if not 0 <= confidence <= 1:
-                    raise ValueError("Invalid confidence")
+                if not 0 <= confidence <= 1 or not verdict["observation"].strip():
+                    raise ValueError("Invalid visual observation")
+                report.update(confidence=confidence, model_verdict=verdict)
                 if cancelled and cancelled.is_set():
                     report["reason"] = "cancelled"
                 elif (state == "validated") != (issue is None):
                     report.update(reason="conflicting_verdict", confidence=confidence)
-                elif confidence < 0.8:
-                    report.update(reason="low_confidence", confidence=confidence)
+                elif issue in {"partial_target", "uncertain"}:
+                    report.update(reason=issue)
                 else:
                     report.update(
                         state=state,

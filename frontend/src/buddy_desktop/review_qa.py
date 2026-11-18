@@ -21,6 +21,7 @@ class ReviewQAResult:
     state: str
     reason: str | None
     report: Path
+    observation: str | None = None
 
 
 def review_qa_operator() -> Path | None:
@@ -119,10 +120,13 @@ def run_review_qa(
             report_path = output / "report.json"
             report = json.loads(report_path.read_bytes())
             state, reason = report["state"], report["reason"]
+            observation = (report.get("model_verdict") or {}).get("observation")
+            if not isinstance(observation, str):
+                observation = None
             if state not in {"validated", "rejected", "needs-review"} or (
                 reason is not None and not isinstance(reason, str)
             ):
                 raise ValueError("Unexpected report")
         except (OSError, subprocess.TimeoutExpired, KeyError, ValueError) as exc:
             raise ServiceError("The local visual QA operator could not finish.") from exc
-    return ReviewQAResult(state, reason, report_path)
+    return ReviewQAResult(state, reason, report_path, observation)
