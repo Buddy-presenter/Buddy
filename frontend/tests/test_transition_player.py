@@ -345,9 +345,7 @@ def test_local_navigation_uses_current_player_position_after_prior_move(player, 
         text="Go to the next slide",
         capture_end_ns=time.monotonic_ns(),
     )
-    context = replace(
-        current[0], segments=(segment,), observed_ns=time.monotonic_ns()
-    )
+    context = replace(current[0], segments=(segment,), observed_ns=time.monotonic_ns())
     next_proposal = page._local_navigation_proposal(page._session, context)
 
     assert next_proposal is not None
