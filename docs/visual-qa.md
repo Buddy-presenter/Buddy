@@ -11,11 +11,12 @@ The host verifies that both captures belong to the exact action and slide.
 The independent vision call receives the two images, the action type and the
 intended purpose. It cannot invoke the runner or modify the saved action.
 The response must contain one structured verdict and a visual observation.
-Malformed, conflicting, uncertain or partial-target verdicts stay in needs-review.
+Completed visual checks return validated or rejected. Technical failures and
+malformed or conflicting responses return unavailable.
 Confidence is recorded alongside the original model verdict for inspection. A successful action with
 identical before/after captures is rejected without a provider call. An image
-above the Bedrock input size limit is retained for inspection and stays in
-needs-review with `visual_image_limit`.
+above the Bedrock input size limit is retained for inspection and stays
+unavailable with `visual_image_limit`.
 
 Each run writes a private, versioned report and, when available, its exact PNG
 evidence. The report binds the source revision/hash, action hash, slide map,
@@ -79,7 +80,7 @@ Open each output's **before.png**, **after.png** and **report.json**. The
 before image shows a full slide and the after image shows the action from the
 audience's view. Compare the verdict with what you see in both images. To test
 rejection, change the synthetic action's purpose to name a different visible
-target and rerun in a new output directory. A rejected or uncertain verdict
+target and rerun in a new output directory. A rejected or unavailable result
 returns exit code 1 and retains the report and available captures. For
 PowerPoint zoom, generate another snapshot directory with
 `--office-action zoom_region` and use action ID `test-zoom_region`.

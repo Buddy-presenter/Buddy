@@ -22,10 +22,14 @@ SYSTEM_PROMPT = (
     "context. An underline can sit below the text and a frame can enclose it with a margin. "
     "For an arrow inspect where the tip points. For zoom inspect the intended detail and "
     "whether critical parts are cut off. Exclude letterboxing and chrome from comparison. "
-    "Reject only for a concrete visual defect. Use wrong_target only when the action "
-    "emphasizes different content. If the purpose names several required targets and only "
-    "some are covered, use partial_target and needs-review. If the target or evidence is "
-    "unclear, use uncertain and needs-review. Confidence is informational. Provide a short "
+    "Use a lenient functional standard. Accept useful emphasis on the intended entity "
+    "even when boundaries, positioning or appearance are imperfect. Broad purpose language "
+    "can describe the surrounding context; highlighting one relevant entity can satisfy it. "
+    "Reject for a concrete problem such as a different target, unreadable content, harmful "
+    "occlusion or no useful visible effect. If explicit target_text requires multiple "
+    "entities and essential content is missing, reject with partial_target. If the images "
+    "cannot establish that the action is correct, reject with uncertain and explain what "
+    "cannot be verified. Confidence is informational. Provide a short "
     "observation describing the visible evidence that supports the verdict."
 )
 

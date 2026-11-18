@@ -26,7 +26,7 @@ VERDICT_SCHEMA = {
     "additionalProperties": False,
     "required": ["verdict", "confidence", "issue", "observation"],
     "properties": {
-        "verdict": {"enum": ["validated", "rejected", "needs-review"]},
+        "verdict": {"enum": ["validated", "rejected"]},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
         "issue": {"enum": [None, *ISSUES]},
         "observation": {"type": "string", "minLength": 1, "maxLength": 400},
@@ -96,7 +96,7 @@ def inspect_action(
         "slide_id": slide_id,
         "target": action["purpose"],
         "model_id": model_id,
-        "state": "needs-review",
+        "state": "unavailable",
         "reason": run["reason"],
         "confidence": None,
         "model_verdict": None,
@@ -170,8 +170,6 @@ def inspect_action(
                     report["reason"] = "cancelled"
                 elif (state == "validated") != (issue is None):
                     report.update(reason="conflicting_verdict", confidence=confidence)
-                elif issue in {"partial_target", "uncertain"}:
-                    report.update(reason=issue)
                 else:
                     report.update(
                         state=state,

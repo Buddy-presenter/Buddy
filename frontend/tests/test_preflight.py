@@ -430,25 +430,25 @@ def test_retention_expires_runs_and_caps_private_evidence(snapshot, monkeypatch)
         ),
         (
             {"verdict": "validated", "confidence": 1, "issue": "clipped"},
-            "needs-review",
+            "unavailable",
             "conflicting_verdict",
         ),
         (
             {"verdict": "validated", "confidence": True, "issue": None},
-            "needs-review",
+            "unavailable",
             "visual_verdict_unavailable",
         ),
         (
             {"verdict": "rejected", "confidence": 0.92, "issue": "partial_target"},
-            "needs-review",
+            "rejected",
             "partial_target",
         ),
         (
-            {"verdict": "needs-review", "confidence": 0.5, "issue": "uncertain"},
-            "needs-review",
+            {"verdict": "rejected", "confidence": 0.5, "issue": "uncertain"},
+            "rejected",
             "uncertain",
         ),
-        (None, "needs-review", "visual_verdict_unavailable"),
+        (None, "unavailable", "visual_verdict_unavailable"),
     ],
 )
 def test_visual_qa_binds_real_pdf_captures_and_persists_verdict(
@@ -496,7 +496,7 @@ def test_visual_qa_binds_real_pdf_captures_and_persists_verdict(
         sys.platform == "darwin"
         and report["reason"] in {"desktop_capture_unavailable", "audience_viewport_occluded"}
     ):
-        assert report["state"] == "needs-review" and not received
+        assert report["state"] == "unavailable" and not received
         return
     assert report["state"] == state, report
     assert report["reason"] == reason
@@ -527,6 +527,6 @@ def test_visual_qa_cancelled_attempt_persists_safe_fallback(snapshot, tmp_path):
             judge=lambda *_: pytest.fail("must not run"),
             cancelled=cancelled,
         )
-    assert report["state"] == "needs-review"
+    assert report["state"] == "unavailable"
     assert report["reason"] == "cancelled"
     assert not report["evidence"] and not report["semantic_verified"]

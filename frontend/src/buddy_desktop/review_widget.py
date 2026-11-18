@@ -826,7 +826,7 @@ class ReviewWidget(Page):
             self.visual_qa_status.setText(
                 f"Visual QA · {completed} of {result.total} checked. "
                 f"{counts['validated']} validated, {counts['rejected']} rejected, "
-                f"{counts['needs-review']} need review, {counts['failed']} failed. "
+                f"{counts['unavailable']} unavailable, {counts['failed']} failed. "
                 f"Reports: {result.reports}"
             )
         elif isinstance(result, ReviewQAResult):
@@ -840,8 +840,9 @@ class ReviewWidget(Page):
                 ),
             }
             reason = reasons.get(result.reason or "", (result.reason or "").replace("_", " "))
+            label = "Check unavailable" if result.state == "unavailable" else result.state
             self.visual_qa_status.setText(
-                f"Visual QA: {result.state}"
+                f"Visual QA: {label}"
                 + (f" ({reason}). " if reason else ". ")
                 + (f"{result.observation} " if result.observation else "")
                 + f"Report saved to {result.report}"

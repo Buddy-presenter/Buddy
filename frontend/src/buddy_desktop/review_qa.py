@@ -123,7 +123,7 @@ def run_review_qa(
             observation = (report.get("model_verdict") or {}).get("observation")
             if not isinstance(observation, str):
                 observation = None
-            if state not in {"validated", "rejected", "needs-review"} or (
+            if state not in {"validated", "rejected", "unavailable"} or (
                 reason is not None and not isinstance(reason, str)
             ):
                 raise ValueError("Unexpected report")
