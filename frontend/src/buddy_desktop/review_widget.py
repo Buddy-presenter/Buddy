@@ -4,9 +4,11 @@ import hashlib
 import json
 import sys
 import time
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from uuid import UUID
+from threading import Event
+from uuid import UUID, uuid4
 
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QStandardPaths, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QImage, QImageReader, QPainter, QPen, QPixmap
@@ -67,6 +69,13 @@ class EvidenceResult:
 @dataclass(frozen=True)
 class UpdatedChecks:
     analysis: ReviewAnalysis
+
+
+@dataclass(frozen=True)
+class ReviewQABatch:
+    counts: Counter[str]
+    total: int
+    reports: Path
 
 
 class ActionTable(QTableWidget):
@@ -194,6 +203,7 @@ class ReviewWidget(Page):
     back_requested = Signal()
     powerpoint_present_requested = Signal(object)
     powerpoint_invalidated = Signal()
+    visual_qa_progress = Signal(int, int, int)
 
     def __init__(self, config: AppConfig, account: AccountWidget) -> None:
         super().__init__(
@@ -350,7 +360,17 @@ class ReviewWidget(Page):
         self.visual_qa_button.setEnabled(False)
         self.visual_qa_button.setVisible(review_qa_operator() is not None)
         self.visual_qa_button.clicked.connect(self.run_selected_visual_qa)
+        self.visual_qa_cancel = Event()
+        self.visual_qa_progress.connect(self._show_visual_qa_progress)
         action_header.addWidget(self.visual_qa_button)
+        self.visual_qa_all_button = QPushButton("Run visual QA on all actions")
+        self.visual_qa_all_button.setToolTip(
+            "Check every saved action in this deck. Each action is checked separately in Bedrock."
+        )
+        self.visual_qa_all_button.setVisible(review_qa_operator() is not None)
+        self.visual_qa_all_button.setEnabled(False)
+        self.visual_qa_all_button.clicked.connect(self.run_all_visual_qa)
+        action_header.addWidget(self.visual_qa_all_button)
         action_header.addWidget(self.run_powerpoint)
         content_layout.addLayout(action_header)
         self.visual_qa_status = QLabel()
@@ -438,9 +458,32 @@ class ReviewWidget(Page):
         return session.tokens.access
 
     def run_selected_visual_qa(self) -> None:
+        row = self.action_table.currentRow()
+        if 0 <= row < len(self.action_rows):
+            self._run_visual_qa((self.action_rows[row],), batch=False)
+
+    def run_all_visual_qa(self) -> None:
+        if self.pending_operation == "visual_qa_all" and self.runner.busy:
+            self.visual_qa_cancel.set()
+            self.visual_qa_all_button.setEnabled(False)
+            self.visual_qa_status.setText("Stopping after the current action…")
+            return
+        if self.analysis is not None:
+            actions = tuple(
+                action
+                for slide in self.analysis.slides
+                for action in slide.actions
+                if action.raw is not None
+            )
+            self._run_visual_qa(actions, batch=True)
+
+    def _show_visual_qa_progress(self, generation: int, completed: int, total: int) -> None:
+        if generation == self.generation and not self.visual_qa_cancel.is_set():
+            self.visual_qa_status.setText(f"Running visual QA · {completed} of {total} checked")
+
+    def _run_visual_qa(self, actions: tuple[ReviewAction, ...], *, batch: bool) -> None:
         analysis, content = self.analysis, self.pdf_content
         owner = self.account.account_id
-        row = self.action_table.currentRow()
         if (
             self.runner.busy
             or self.cleanup_runner.busy
@@ -449,10 +492,9 @@ class ReviewWidget(Page):
             or not owner
             or analysis is None
             or content is None
-            or not 0 <= row < len(self.action_rows)
+            or not actions
         ):
             return
-        action = self.action_rows[row]
         screen = QGuiApplication.primaryScreen() or self.screen()
         scale = screen.devicePixelRatio()
         profile = "wide-2x" if analysis.source_format == "pdf" and scale == 2 else "wide-1x"
@@ -467,25 +509,52 @@ class ReviewWidget(Page):
             self.visual_qa_status.setText("Buddy could not locate a private report directory.")
             return
         reports = Path(root) / "visual-qa"
+        if batch:
+            reports = reports / uuid4().hex
         preview, self._pptx_session = self._pptx_session, None
-        self.request_generation, self.pending_operation = self.generation, "visual_qa"
+        generation = self.generation
+        self.request_generation = generation
+        self.pending_operation = "visual_qa_all" if batch else "visual_qa"
+        cancelled = self.visual_qa_cancel = Event()
         self.visual_qa_button.setEnabled(False)
+        self.visual_qa_all_button.setEnabled(batch)
+        if batch:
+            self.visual_qa_all_button.setText("Stop visual QA")
         self.run_powerpoint.setEnabled(False)
-        self.visual_qa_status.setText("Running visual QA on the selected action…")
+        self.visual_qa_status.setText(
+            f"Running visual QA · 0 of {len(actions)} checked"
+            if batch
+            else "Running visual QA on the selected action…"
+        )
         self.activity_changed.emit(True)
 
-        def work() -> ReviewQAResult:
+        def work() -> ReviewQAResult | ReviewQABatch:
             if preview is not None:
                 preview.close()
-            return run_review_qa(
-                analysis,
-                action,
-                content,
-                owner=owner,
-                profile=profile,
-                viewport=viewport,
-                reports=reports,
-            )
+
+            def check(action: ReviewAction) -> ReviewQAResult:
+                return run_review_qa(
+                    analysis,
+                    action,
+                    content,
+                    owner=owner,
+                    profile=profile,
+                    viewport=viewport,
+                    reports=reports,
+                )
+
+            if not batch:
+                return check(actions[0])
+            counts: Counter[str] = Counter()
+            for index, action in enumerate(actions, 1):
+                if cancelled.is_set():
+                    break
+                try:
+                    counts[check(action).state] += 1
+                except ServiceError:
+                    counts["failed"] += 1
+                self.visual_qa_progress.emit(generation, index, len(actions))
+            return ReviewQABatch(counts, len(actions), reports)
 
         self.runner.submit(work)
 
@@ -629,6 +698,8 @@ class ReviewWidget(Page):
         self.present_powerpoint.setEnabled(False)
         self.refresh_checks_button.setEnabled(False)
         self.visual_qa_button.setEnabled(False)
+        self.visual_qa_cancel.set()
+        self.visual_qa_all_button.setEnabled(False)
         self.visual_qa_status.clear()
         self.pending_load = False
         if not keep_deck:
@@ -748,6 +819,15 @@ class ReviewWidget(Page):
                 "Review unavailable", "Could not verify access to this presentation.", retry=True
             )
             self.content.hide()
+        elif isinstance(result, ReviewQABatch):
+            counts = result.counts
+            completed = sum(counts.values())
+            self.visual_qa_status.setText(
+                f"Visual QA · {completed} of {result.total} checked. "
+                f"{counts['validated']} validated, {counts['rejected']} rejected, "
+                f"{counts['needs-review']} need review, {counts['failed']} failed. "
+                f"Reports: {result.reports}"
+            )
         elif isinstance(result, ReviewQAResult):
             reasons = {
                 "audience_viewport_occluded": (
@@ -884,7 +964,7 @@ class ReviewWidget(Page):
             self.notice.setText("Validation evidence unavailable: " + message)
             self.open_evidence.setEnabled(self.evidence_choice.count() > 0)
             return
-        if operation == "visual_qa":
+        if operation in {"visual_qa", "visual_qa_all"}:
             self.visual_qa_status.setText("Visual QA unavailable: " + message)
             return
         if operation == "checks":
@@ -919,6 +999,15 @@ class ReviewWidget(Page):
         ):
             self.load()
             return
+        self.visual_qa_all_button.setText("Run visual QA on all actions")
+        self.visual_qa_all_button.setEnabled(
+            not self.closing
+            and bool(self.token())
+            and self.analysis is not None
+            and any(
+                action.raw is not None for slide in self.analysis.slides for action in slide.actions
+            )
+        )
         row = self.action_table.currentRow()
         self.visual_qa_button.setEnabled(
             0 <= row < len(self.action_rows)
