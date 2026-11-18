@@ -375,6 +375,7 @@ class ReviewWidget(Page):
         action_header.addWidget(self.run_powerpoint)
         content_layout.addLayout(action_header)
         self.visual_qa_correct = QCheckBox("Try bounded corrections")
+        self.visual_qa_correct.setVisible(review_qa_operator() is not None)
         self.visual_qa_correct.setToolTip(
             "If an action is rejected, try up to two source-bounded region corrections "
             "and recheck each in the real player. Saves every attempt."
