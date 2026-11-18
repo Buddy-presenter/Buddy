@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 
-from buddy_desktop.action_correction import corrected_action, source_target
+from buddy_desktop.action_correction import corrected_action, rect, source_target
 from buddy_desktop.pdf_document import open_pdf
 from buddy_desktop.preflight import PreflightRunner, _private
 from buddy_desktop.slide_contract import ContractError
@@ -75,6 +75,9 @@ def inspect_with_corrections(
                 raise ContractError("Invalid correction verdict.")
             assert isinstance(response, dict)
             proposal = response["correction"]
+            if proposal is not None:
+                # JSON parsers can accept NaN/Infinity. Never persist such a proposal.
+                proposal = rect(proposal)
             return {key: value for key, value in response.items() if key != "correction"}
 
         context = None
@@ -111,6 +114,7 @@ def inspect_with_corrections(
             "reason": final["reason"],
             "report": f"attempt-{attempt}/report.json",
             "observation": (final.get("model_verdict") or {}).get("observation"),
+            "source_target_bounds": target,
             "proposed_region": proposal,
         }
         history.append(entry)
