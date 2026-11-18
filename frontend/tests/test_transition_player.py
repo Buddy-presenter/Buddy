@@ -104,13 +104,12 @@ def test_policy_moves_real_player_without_position_sync_and_undo_restores(player
     page._agent_proposed(proposal)
     qtbot.waitUntil(lambda: page.executor.current_index == 1 and not page.executor.busy)
     qtbot.waitUntil(lambda: not page.session_runner.busy)
-    assert len(checks) == 1 and len(observed) == 1
+    assert not checks and len(observed) == 1
     assert observed[0]["animated"] is False
     # Session writes persist explicit/manual state only; automatic navigation stays local.
     assert all(
         state.active_slide_id == page.executor.manifest.slides[0].slide_id for state in persisted
     )
-    assert checks[0][1]["slide_id"] == proposal["target"]["slide_id"]
     assert page.policy_undo_button.isEnabled()
     page.policy_undo_button.click()
     qtbot.waitUntil(lambda: page.executor.current_index == 0 and not page.executor.busy)
@@ -142,45 +141,30 @@ def test_back_to_back_local_moves_use_latest_slide_and_do_not_sync_position(play
     page._agent_proposed(next_proposal)
     qtbot.waitUntil(lambda: page.executor.current_index == 2 and not page.executor.busy)
     qtbot.waitUntil(lambda: not page.session_runner.busy)
-    assert len(checks) == 2
-    assert checks[0][0].state.active_slide_id == page.executor.manifest.slides[0].slide_id
-    assert checks[1][0].state.active_slide_id == page.executor.manifest.slides[1].slide_id
+    assert not checks
     assert not any(
         state.active_slide_id != page.executor.manifest.slides[0].slide_id for state in persisted
     )
 
 
 @pytest.mark.parametrize("change", ["partial", "disconnect", "signout", "manual", "disable"])
-def test_delayed_check_cannot_move_after_context_or_controller_changes(
-    player, qtbot, monkeypatch, change
-):
+def test_local_navigation_still_obeys_context_and_controller_guards(player, qtbot, change):
     page, proposal, current, persisted, _ = player
-    entered, release = Event(), Event()
-
-    def delayed(*args):
-        entered.set()
-        assert release.wait(5)
-        return {}
-
-    monkeypatch.setattr(page.agent.service, "check_transition", delayed)
+    if change == "partial":
+        current[0] = replace(current[0], fresh=False)
+    elif change == "disconnect":
+        page._context_connected = False
+    elif change == "signout":
+        page.clear_session_binding()
+    elif change == "manual":
+        current[0] = replace(current[0], fresh=False)
+        page._invalidate_transcript_context()
+    else:
+        page.policy_enabled.setChecked(False)
     page._agent_proposed(proposal)
-    qtbot.waitUntil(entered.is_set)
-    try:
-        if change == "partial":
-            current[0] = replace(current[0], fresh=False)
-        elif change == "disconnect":
-            page._context_connected = False
-        elif change == "signout":
-            page.clear_session_binding()
-        elif change == "manual":
-            page.send("reset_view")
-        else:
-            page.policy_enabled.setChecked(False)
-    finally:
-        release.set()
-    qtbot.waitUntil(lambda: not page.policy_runner.busy)
     qtbot.waitUntil(lambda: not page.session_runner.busy and page._session_pending_state is None)
     assert page.executor.current_index == 0
+    assert not page.policy_runner.busy
     assert not any(s.active_slide_id == proposal["target"]["slide_id"] for s in persisted)
 
 
@@ -224,13 +208,17 @@ def test_powerpoint_without_saved_agent_session_cannot_enable_automation(player,
 
 
 def test_presenter_opt_in_stays_checked_during_temporary_session_sync_gap(player):
-    page, _, _, _, _ = player
+    page, _, current, _, _ = player
+    current[0] = replace(
+        current[0],
+        segments=(replace(current[0].segments[-1], text="We are reviewing the agenda."),),
+    )
     page._update_agent()
     assert page.policy.enabled and page.policy_enabled.isChecked()
     page._session_pending_state = page._current_local_state()
     page._update_agent()
     assert page.policy.enabled and page.policy_enabled.isChecked()
-    assert "automatic actions on" in page.policy_status.text().lower()
+    assert "automatic transitions paused" not in page.policy_status.text().lower()
 
 
 @pytest.mark.parametrize("fail_at", [1, 2])
@@ -263,7 +251,7 @@ def test_model_proposal_executes_without_a_calibration_file(player, qtbot):
     page._agent_proposed(proposal)
     qtbot.waitUntil(lambda: page.executor.current_index == 1 and not page.executor.busy)
     qtbot.waitUntil(lambda: not page.session_runner.busy)
-    assert len(checks) == 1
+    assert not checks
     assert page.policy.enabled and page.policy_enabled.isChecked()
 
 
@@ -279,42 +267,25 @@ def test_navigation_runs_while_position_sync_is_pending(player, qtbot):
     qtbot.waitUntil(lambda: page.executor.current_index == 1 and not page.executor.busy)
     qtbot.waitUntil(lambda: not page.session_runner.busy)
     assert page._deferred_agent_proposal is None
-    assert len(checks) == 1
+    assert not checks
     assert page.policy.enabled and page.policy_enabled.isChecked()
 
 
-def test_preflight_result_is_rechecked_after_transient_sync(player, qtbot, monkeypatch):
+def test_navigation_bypasses_remote_preflight_during_position_sync(player, qtbot):
     page, proposal, current, persisted, _ = player
     segment = replace(current[0].segments[-1], capture_end_ns=time.monotonic_ns())
     current[0] = replace(current[0], segments=(segment,), observed_ns=segment.capture_end_ns)
     proposal["_client_context"] = current[0]
-    entered, release = Event(), Event()
-    checks = []
-
-    def delayed_first_check(*args):
-        checks.append(args)
-        if len(checks) == 1:
-            entered.set()
-            assert release.wait(5)
-        return {}
-
-    monkeypatch.setattr(page.agent.service, "check_transition", delayed_first_check)
-    page._agent_proposed(proposal)
-    qtbot.waitUntil(entered.is_set)
     page._session_pending_state = page._current_local_state()
-    release.set()
+    page._agent_proposed(proposal)
     qtbot.waitUntil(lambda: page.executor.current_index == 1 and not page.executor.busy)
     qtbot.waitUntil(lambda: not page.session_runner.busy)
     assert page._deferred_transition_check is None
-    assert len(checks) == 1
+    assert not page.policy_runner.busy
     assert page.policy.enabled and page.policy_enabled.isChecked()
 
 
-def test_manual_slide_change_during_preflight_rejects_old_absolute_target(
-    player, qtbot, monkeypatch
-):
-    from buddy_desktop.transition_policy import Target
-
+def test_navigation_checks_local_slide_state_without_remote_preflight(player, qtbot):
     page, proposal, _, _, _ = player
     target_slide = page.executor.manifest.slides[2].slide_id
     proposal.update(
@@ -322,26 +293,10 @@ def test_manual_slide_change_during_preflight_rejects_old_absolute_target(
         reason="explicit",
         target={"tool": "go_to_slide", "slide_id": target_slide, "action_id": None, "region": None},
     )
-    entered, release = Event(), Event()
-
-    def delayed_check(*_args):
-        entered.set()
-        assert release.wait(5)
-        return {}
-
-    monkeypatch.setattr(page.agent.service, "check_transition", delayed_check)
     page._agent_proposed(proposal)
-    qtbot.waitUntil(entered.is_set)
-
-    manual = page._policy_command(Target("next_slide", page.executor.manifest.slides[1].slide_id))
-    manual["instance_id"] = "manual:next"
-    page.executor.dispatch(manual)
-    qtbot.waitUntil(lambda: page.executor.current_index == 1 and not page.executor.busy)
-    release.set()
-    qtbot.waitUntil(lambda: not page.policy_runner.busy)
-    assert page.executor.current_index == 1
+    qtbot.waitUntil(lambda: page.executor.current_index == 2 and not page.executor.busy)
     assert page.policy.enabled
-    assert "state changed" in page.policy_status.text().lower()
+    assert not page.policy_runner.busy
 
 
 def test_numbered_navigation_flows_through_policy_and_executes(player, qtbot):
@@ -356,8 +311,68 @@ def test_numbered_navigation_flows_through_policy_and_executes(player, qtbot):
     qtbot.waitUntil(lambda: page.executor.current_index == 2 and not page.executor.busy)
     qtbot.waitUntil(lambda: not page.session_runner.busy)
     assert not any(state.active_slide_id == target for state in persisted)
-    assert len(checks) == 1
+    assert not checks
     assert page.policy.enabled and page.policy_enabled.isChecked()
+
+
+def test_local_navigation_resolves_destination_from_loaded_deck(player):
+    page, _, current, _, _ = player
+    segment = replace(
+        current[0].segments[-1],
+        text="Let's go back to the third slide",
+        capture_end_ns=time.monotonic_ns(),
+    )
+    context = replace(current[0], segments=(segment,), observed_ns=time.monotonic_ns())
+    proposal = page._local_navigation_proposal(page._session, context)
+    assert proposal is not None
+    assert proposal["target"] == {
+        "tool": "go_to_slide",
+        "slide_id": page.executor.manifest.slides[2].slide_id,
+        "action_id": None,
+        "region": None,
+    }
+
+
+def test_local_navigation_uses_current_player_position_after_prior_move(player, qtbot):
+    page, proposal, current, _, checks = player
+    page._agent_proposed(proposal)
+    qtbot.waitUntil(lambda: page.executor.current_index == 1 and not page.executor.busy)
+    assert page._session.state.active_slide_id == page.executor.manifest.slides[0].slide_id
+
+    segment = replace(
+        current[0].segments[-1],
+        sequence=2,
+        text="Go to the next slide",
+        capture_end_ns=time.monotonic_ns(),
+    )
+    context = replace(
+        current[0], segments=(segment,), observed_ns=time.monotonic_ns()
+    )
+    next_proposal = page._local_navigation_proposal(page._session, context)
+
+    assert next_proposal is not None
+    assert next_proposal["active_slide_id"] == page.executor.manifest.slides[1].slide_id
+    assert next_proposal["target"]["slide_id"] == page.executor.manifest.slides[2].slide_id
+    assert not checks
+
+
+def test_zoom_highlight_retains_server_preflight(player, qtbot):
+    page, proposal, _, _, checks = player
+    proposal.update(
+        decision_source="model",
+        reason="topic",
+        confidence=0.99,
+        target={
+            "tool": "highlight_region",
+            "slide_id": page.executor.manifest.slides[0].slide_id,
+            "action_id": "validated-highlight",
+            "region": {"x": 0.1, "y": 0.1, "width": 0.2, "height": 0.2},
+        },
+    )
+    page._agent_proposed(proposal)
+    qtbot.waitUntil(lambda: not page.policy_runner.busy and bool(page.surface.highlight))
+    assert len(checks) == 1
+    assert checks[0][1]["tool"] == "highlight_region"
 
 
 def test_recoverable_preflight_failure_keeps_automatic_actions_enabled(player):
@@ -445,7 +460,7 @@ def test_native_policy_observes_completion_without_position_sync_and_undoes(nati
         lambda: not page.policy_runner.busy and not page.powerpoint_runner.busy and bool(observed)
     )
     qtbot.waitUntil(lambda: not page.session_runner.busy)
-    assert calls == ["next_slide"] and len(checks) == 1
+    assert calls == ["next_slide"] and not checks
     assert not any(state.active_slide_id == "slide-2" for state in persisted)
     assert observed[0]["source_format"] == "pptx"
     assert observed[0]["animated"] is None  # Office animation has not been measured.
@@ -466,37 +481,26 @@ def test_native_model_action_runs_without_a_calibration_file(native_player, qtbo
         lambda: not page.policy_runner.busy and not page.powerpoint_runner.busy and bool(calls)
     )
     qtbot.waitUntil(lambda: not page.session_runner.busy)
-    assert calls == ["next_slide"] and len(checks) == 1
+    assert calls == ["next_slide"] and not checks
     assert page.policy.enabled and page.policy_enabled.isChecked()
 
 
-@pytest.mark.parametrize("change", ["source", "partial", "manual", "disconnect"])
-def test_native_policy_rechecks_delayed_admission(native_player, qtbot, monkeypatch, change):
-    page, proposal, context, persisted, _, calls, path = native_player
-    entered, release = Event(), Event()
-
-    def delayed(*args):
-        entered.set()
-        assert release.wait(5)
-        return {}
-
-    monkeypatch.setattr(page.agent.service, "check_transition", delayed)
+@pytest.mark.parametrize("change", ["partial", "manual", "disconnect", "disable"])
+def test_native_local_navigation_keeps_speech_and_controller_guards(native_player, qtbot, change):
+    page, proposal, context, persisted, checks, calls, _ = native_player
+    if change == "partial":
+        context[0] = replace(context[0], fresh=False)
+    elif change == "manual":
+        context[0] = replace(context[0], fresh=False)
+        page._native_manual_intent()
+    elif change == "disconnect":
+        page._context_connected = False
+    else:
+        page.policy_enabled.setChecked(False)
     page._agent_proposed(proposal)
-    qtbot.waitUntil(entered.is_set)
-    try:
-        if change == "source":
-            path.write_bytes(b"changed")
-        elif change == "partial":
-            context[0] = replace(context[0], fresh=False)
-        elif change == "manual":
-            page._native_manual_intent()
-        else:
-            page._context_connected = False
-    finally:
-        release.set()
     qtbot.waitUntil(lambda: not page.policy_runner.busy and not page.powerpoint_runner.busy)
     qtbot.waitUntil(lambda: not page.session_runner.busy and page._session_pending_state is None)
-    assert not calls
+    assert not calls and not checks
     assert not any(s.active_slide_id == "slide-2" for s in persisted)
 
 

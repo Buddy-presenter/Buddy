@@ -390,6 +390,101 @@ def test_loop_coalesces_latest_stable_word_while_request_is_in_flight(qtbot):
         loop.wait_for_shutdown()
 
 
+def test_local_slide_command_bypasses_slow_contextual_request(qtbot):
+    from buddy_desktop.navigation import navigation_intent
+
+    session, context = inputs()
+    current = [context]
+    service = Service()
+
+    def local_navigation(active_session, snapshot):
+        segments = snapshot.decision_segments
+        intent = navigation_intent(segments[-1].text) if segments else None
+        if intent != ("absolute", 8):
+            return None
+        return {
+            "decision_id": str(uuid4()),
+            "session_id": active_session.id,
+            "target": {"tool": "go_to_slide", "slide_id": "slide-8"},
+        }
+
+    loop = AgentLoop(
+        service,
+        current_context=lambda: current[0],
+        local_navigation=local_navigation,
+    )
+    loop._prepared_for = session.id
+    loop.set_enabled(True)
+    received = []
+    loop.proposed.connect(received.append)
+    try:
+        loop.update("token", session, context)
+        qtbot.waitUntil(lambda: len(service.calls) == 1)
+        newer = replace(
+            context,
+            segments=(
+                replace(
+                    context.segments[0],
+                    segment_id="b",
+                    sequence=2,
+                    text="Go to slide 8 and then review the chart",
+                    capture_end_ns=time.monotonic_ns(),
+                ),
+            ),
+            observed_ns=time.monotonic_ns(),
+        )
+        current[0] = newer
+        loop.update("token", session, newer)
+        assert received[-1]["target"]["tool"] == "go_to_slide"
+        assert received[-1]["target"]["slide_id"] == "slide-8"
+        assert not loop._pending_update
+        service.release.set()
+        qtbot.waitUntil(lambda: not loop.runner.busy)
+        assert len(service.calls) == 1
+        assert len(received) == 1
+    finally:
+        service.release.set()
+        loop.wait_for_shutdown()
+
+
+def test_local_navigation_bypasses_prepare_and_retry_cooldown(qtbot):
+    from buddy_desktop.navigation import navigation_intent
+
+    session, context = inputs()
+    segment = replace(
+        context.segments[-1],
+        text="Go to slide 8",
+        capture_end_ns=time.monotonic_ns(),
+    )
+    context = replace(context, segments=(segment,), observed_ns=time.monotonic_ns())
+    service = Service()
+
+    def local_navigation(active_session, snapshot):
+        if navigation_intent(snapshot.decision_segments[-1].text) != ("absolute", 8):
+            return None
+        return {
+            "decision_id": str(uuid4()),
+            "session_id": active_session.id,
+            "target": {"tool": "go_to_slide", "slide_id": "slide-8"},
+        }
+
+    loop = AgentLoop(service, local_navigation=local_navigation)
+    # Simulate initial preparation and a model retry cooldown both being pending.
+    loop._not_before = time.monotonic() + 30
+    loop.set_enabled(True)
+    received = []
+    loop.proposed.connect(received.append)
+    try:
+        loop.update("token", session, context)
+        assert received[-1]["target"]["tool"] == "go_to_slide"
+        assert received[-1]["target"]["slide_id"] == "slide-8"
+        assert not service.prepares
+        assert not service.calls
+    finally:
+        service.release.set()
+        loop.wait_for_shutdown()
+
+
 def test_numbered_navigation_waits_for_destination_then_submits_immediately(qtbot):
     session, final = inputs()
     incomplete = "Go to slide"

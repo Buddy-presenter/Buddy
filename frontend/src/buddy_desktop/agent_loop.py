@@ -43,10 +43,13 @@ class AgentLoop(QObject):
         service: AgentService,
         parent: QObject | None = None,
         current_context: Callable[[], ContextSnapshot] | None = None,
+        local_navigation: Callable[[PresentationSession, ContextSnapshot], dict[str, object] | None]
+        | None = None,
     ):
         super().__init__(parent)
         self.service = service
         self.current_context = current_context
+        self.local_navigation = local_navigation
         self.runner = TaskRunner(self)
         self.runner.succeeded.connect(self._succeeded)
         self.runner.failed.connect(self._failed)
@@ -96,26 +99,8 @@ class AgentLoop(QObject):
             self.proposed.emit(None)
         if not self.enabled:
             return
-        if (
-            access
-            and session is not None
-            and session.status == "active"
-            and self._prepared_for != session.id
-        ):
-            if not self.runner.busy and self._prepare_failed_for != session.id:
-                self._preparing_for = session.id
-                self._request_generation = self._generation
-                self.status.emit("Preparing presentation suggestions…")
-                self.runner.submit(lambda: self.service.prepare(access, session))
-            return
         segments = context.decision_segments
-        if (
-            not access
-            or session is None
-            or not context.fresh
-            or not segments
-            or not context.segments
-        ):
+        if session is None or not context.fresh or not segments or not context.segments:
             self._pending_update = False
             self.proposed.emit(None)
             self.status.emit("Listening for a clear phrase…")
@@ -169,7 +154,43 @@ class AgentLoop(QObject):
             ):
                 self.status.emit("Waiting for the next stable word…")
                 return
-        if revision == self._last_revision or time.monotonic() < self._not_before:
+        if revision == self._last_revision:
+            return
+        # Explicit slide commands are cheap to resolve from the locally loaded
+        # presentation. They can also supersede an older remote decision in flight.
+        local = self.local_navigation(session, context) if self.local_navigation else None
+        if local is not None:
+            self._generation += 1
+            self._last_revision = revision
+            self._pending_update = False
+            self._deferred_revision = None
+            self._deferrals = 0
+            proposed_ns = time.monotonic_ns()
+            target = local.get("target")
+            tool = target.get("tool", "unknown") if isinstance(target, dict) else "unknown"
+            logger.info(
+                "presentation_latency event=local_navigation decision_id=%s tool=%s "
+                "capture_to_proposal_ms=%d",
+                local.get("decision_id", "unknown"),
+                tool,
+                max(0, (proposed_ns - segments[-1].capture_end_ns) // 1_000_000),
+            )
+            self.proposed.emit(local)
+            self.status.emit("Suggestion ready • slide controls remain manual")
+            return
+        if time.monotonic() < self._not_before:
+            return
+        if not access:
+            self._pending_update = False
+            self.proposed.emit(None)
+            self.status.emit("Sign in to request live suggestions…")
+            return
+        if session.status == "active" and self._prepared_for != session.id:
+            if not self.runner.busy and self._prepare_failed_for != session.id:
+                self._preparing_for = session.id
+                self._request_generation = self._generation
+                self.status.emit("Preparing presentation suggestions…")
+                self.runner.submit(lambda: self.service.prepare(access, session))
             return
         if self.runner.busy:
             if self._extends_submitted_decision(context):
