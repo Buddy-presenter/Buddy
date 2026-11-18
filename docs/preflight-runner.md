@@ -130,3 +130,5 @@ automated macOS compatibility checks. See the [recorded evidence](verification/p
 This adds a desktop library/worker, not a server feature switch. Rebuild/install the desktop
 wheel on the dedicated runner host for changes to take effect. Committing or deploying the
 API alone does not install this worker; no staging infrastructure/migration is required.
+
+For the independent model verdict and private report, see [Visual QA](visual-qa.md).
