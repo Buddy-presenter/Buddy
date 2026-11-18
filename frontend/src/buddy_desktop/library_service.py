@@ -64,9 +64,171 @@ class LibraryPage:
     page_size: int
 
 
+@dataclass(frozen=True)
+class DeckDetails:
+    id: UUID
+    title: str
+    created_at: datetime
+    source_format: str
+    processing: ProcessingDetail
+    analysis_status: str
+    analysis_version: int | None
+    slide_count: int
+
+
+def parse_processing(value: object) -> ProcessingDetail:
+    if not isinstance(value, dict):
+        raise ValueError
+    state, stage, progress = value["state"], value["stage"], value["progress"]
+    attempts, error_code = value["attempts"], value["error_code"]
+    retry, cancel = value["can_retry"], value["can_cancel"]
+    if (
+        state
+        not in {
+            "uploaded",
+            "queued",
+            "inspecting_pdf_metadata",
+            "analyzing",
+            "validating",
+            "review_ready",
+            "partial",
+            "failed",
+            "cancelled",
+        }
+        or (stage is not None and not isinstance(stage, str))
+        or type(progress) is not int
+        or not 0 <= progress <= 100
+        or type(attempts) is not int
+        or attempts < 0
+        or (error_code is not None and not isinstance(error_code, str))
+        or type(retry) is not bool
+        or type(cancel) is not bool
+    ):
+        raise ValueError
+    return ProcessingDetail(
+        UUID(value["job_id"]) if value["job_id"] is not None else None,
+        state,
+        stage,
+        progress,
+        attempts,
+        error_code,
+        retry,
+        cancel,
+    )
+
+
 class LibraryService:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
+
+    def deck_details(self, access: str, deck_id: UUID) -> DeckDetails:
+        return self._deck_details(access, deck_id)
+
+    def rename_deck(self, access: str, deck_id: UUID, title: str) -> DeckDetails:
+        title = title.strip()
+        if not 1 <= len(title) <= 256 or any(ord(c) < 32 or ord(c) == 127 for c in title):
+            raise ServiceError(
+                "Enter a presentation name of 1 to 256 characters without control characters."
+            )
+        result = self._deck_details(access, deck_id, title=title)
+        if result.title != title:
+            raise ServiceError(
+                "The server did not confirm the saved presentation name. Refresh details."
+            )
+        return result
+
+    def _deck_details(self, access: str, deck_id: UUID, *, title: str | None = None) -> DeckDetails:
+        if not access or len(access) > 16300:
+            raise LibraryAccessExpired("Sign in again to open this presentation.")
+        request = Request(
+            self.config.api_url + f"/api/v1/decks/{deck_id}",
+            data=json.dumps({"title": title}, ensure_ascii=False).encode()
+            if title is not None
+            else None,
+            method="PATCH" if title is not None else "GET",
+            headers={
+                "Authorization": "Bearer " + access,
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Cache-Control": "no-store",
+            },
+        )
+        try:
+            with build_opener(NoRedirects()).open(
+                request, timeout=self.config.request_timeout
+            ) as response:
+                content = response.read(16385)
+                if (
+                    len(content) > 16384
+                    or response.headers.get_content_type() != "application/json"
+                ):
+                    raise ValueError
+        except HTTPError as exc:
+            code = exc.code
+            exc.close()
+            if code in {401, 403}:
+                raise LibraryAccessExpired("Sign in again to access this presentation.") from None
+            if code == 404:
+                raise ServiceError(
+                    "This presentation is no longer available. Return to Library."
+                ) from None
+            if code == 422:
+                raise ServiceError(
+                    "The presentation name was rejected. Check it and try again."
+                ) from None
+            raise ServiceError(
+                "Could not load or save this presentation. Refresh details and try again."
+            ) from None
+        except (URLError, OSError, http.client.HTTPException):
+            raise ServiceError(
+                "Cannot reach the library. Check your connection and refresh details."
+            ) from None
+        except ValueError:
+            raise ServiceError("The server returned invalid deck details.") from None
+        try:
+            data = json.loads(content)["data"]
+            if set(data) != {
+                "id",
+                "title",
+                "created_at",
+                "source_format",
+                "processing",
+                "analysis",
+            }:
+                raise ValueError
+            identifier, name = UUID(data["id"]), data["title"]
+            created = datetime.fromisoformat(data["created_at"])
+            analysis = data["analysis"]
+            status, version, slides = (
+                analysis["status"],
+                analysis["version"],
+                analysis["slide_count"],
+            )
+            if (
+                identifier != deck_id
+                or not isinstance(name, str)
+                or not 1 <= len(name) <= 256
+                or created.tzinfo is None
+                or data["source_format"] not in {"pdf", "pptx"}
+                or status
+                not in {"unavailable", "stale", "partial", "awaiting_validation", "published"}
+                or (version is not None and (type(version) is not int or version < 1))
+                or type(slides) is not int
+                or not 0 <= slides <= 500
+            ):
+                raise ValueError
+            return DeckDetails(
+                identifier,
+                name,
+                created,
+                data["source_format"],
+                parse_processing(data["processing"]),
+                status,
+                version,
+                slides,
+            )
+        except (ValueError, TypeError, KeyError, AttributeError):
+            raise ServiceError("The server returned invalid deck details.") from None
 
     def list(self, access: str, *, search: str, sort: str, page: int) -> LibraryPage:
         if not access or len(access) > 16300 or sort not in SORTS or not 1 <= page <= 100000:
@@ -140,52 +302,10 @@ class LibraryService:
                     raise ValueError
                 if can_present and source_format != "pdf":
                     raise ValueError
-                processing = None
                 raw_processing = row.get("processing")
-                if raw_processing is not None:
-                    state = raw_processing["state"]
-                    stage = raw_processing["stage"]
-                    progress = raw_processing["progress"]
-                    processing_attempts = raw_processing["attempts"]
-                    error_code = raw_processing["error_code"]
-                    can_retry, can_cancel = (
-                        raw_processing["can_retry"],
-                        raw_processing["can_cancel"],
-                    )
-                    if (
-                        state
-                        not in {
-                            "uploaded",
-                            "queued",
-                            "inspecting_pdf_metadata",
-                            "analyzing",
-                            "validating",
-                            "review_ready",
-                            "partial",
-                            "failed",
-                            "cancelled",
-                        }
-                        or (stage is not None and not isinstance(stage, str))
-                        or type(progress) is not int
-                        or not 0 <= progress <= 100
-                        or type(processing_attempts) is not int
-                        or processing_attempts < 0
-                        or (error_code is not None and not isinstance(error_code, str))
-                        or type(can_retry) is not bool
-                        or type(can_cancel) is not bool
-                    ):
-                        raise ValueError
-                    raw_job_id = raw_processing["job_id"]
-                    processing = ProcessingDetail(
-                        UUID(raw_job_id) if raw_job_id is not None else None,
-                        state,
-                        stage,
-                        progress,
-                        processing_attempts,
-                        error_code,
-                        can_retry,
-                        can_cancel,
-                    )
+                processing = (
+                    parse_processing(raw_processing) if raw_processing is not None else None
+                )
                 items.append(
                     DeckSummary(
                         UUID(row["id"]),
