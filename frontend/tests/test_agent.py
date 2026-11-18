@@ -265,6 +265,25 @@ class Service:
         return {"sequence": context.segments[-1].sequence}
 
 
+def test_bound_local_navigation_callback_does_not_retain_widget_owner():
+    import gc
+    import weakref
+
+    class Owner:
+        def resolve(self, _session, _context):
+            return None
+
+    owner = Owner()
+    reference = weakref.ref(owner)
+    loop = AgentLoop(Service(), local_navigation=owner.resolve)
+    del owner
+    gc.collect()
+    try:
+        assert reference() is None
+    finally:
+        loop.wait_for_shutdown()
+
+
 def test_loop_coalesces_and_invalidates_corrections_manual_changes_and_disable(qtbot, monkeypatch):
     session, context = inputs()
     clock = [100.0]

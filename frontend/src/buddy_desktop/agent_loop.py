@@ -4,6 +4,7 @@ import hashlib
 import logging
 import re
 import time
+import weakref
 from collections.abc import Callable
 from dataclasses import replace
 
@@ -49,7 +50,15 @@ class AgentLoop(QObject):
         super().__init__(parent)
         self.service = service
         self.current_context = current_context
-        self.local_navigation = local_navigation
+        self._local_navigation_method = (
+            weakref.WeakMethod(local_navigation)
+            if local_navigation is not None
+            and getattr(local_navigation, "__self__", None) is not None
+            else None
+        )
+        self.local_navigation = (
+            None if self._local_navigation_method is not None else local_navigation
+        )
         self.runner = TaskRunner(self)
         self.runner.succeeded.connect(self._succeeded)
         self.runner.failed.connect(self._failed)
@@ -158,7 +167,12 @@ class AgentLoop(QObject):
             return
         # Explicit slide commands are cheap to resolve from the locally loaded
         # presentation. They can also supersede an older remote decision in flight.
-        local = self.local_navigation(session, context) if self.local_navigation else None
+        local_navigation = (
+            self._local_navigation_method()
+            if self._local_navigation_method is not None
+            else self.local_navigation
+        )
+        local = local_navigation(session, context) if local_navigation else None
         if local is not None:
             self._generation += 1
             self._last_revision = revision
