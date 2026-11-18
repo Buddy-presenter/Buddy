@@ -225,6 +225,10 @@ class OfficePlayer:
         driver = self.adapter._zoom_driver()
         driver.focus(self.info)
         try:
+            # This is the isolated slideshow. Hide its pointer and navigation chrome
+            # before collecting evidence, including after zoom re-enables the pointer.
+            window = self.adapter._target_window(self.office, self.info)
+            window.View.PointerType = 3  # ppSlideShowPointerAlwaysHidden
             image = capture(self.info, driver)
         except Exception as exc:
             raise ContractError("desktop_capture_unavailable") from exc

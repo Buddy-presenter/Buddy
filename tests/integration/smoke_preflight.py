@@ -66,7 +66,7 @@ def main() -> int:
             source_format="pptx",
             version="powerpoint-2",
             instance_id="test-" + args.office_action,
-            purpose="Inspect synthetic object",
+            purpose="Emphasize the title: Clear slides. Confident delivery.",
             deck_id="preflight-test",
             render_id="pptx-" + extracted.source_sha256,
             slide_id=slide.id,
@@ -93,7 +93,7 @@ def main() -> int:
             )
         )
     for snapshot in snapshots:
-        snapshot["profile"] = args.profile
+        snapshot["profile"] = args.profile if snapshot["source_format"] == "pdf" else "wide-1x"
     if args.qa_snapshots:
         for snapshot in snapshots:
             source_format = snapshot["source_format"]

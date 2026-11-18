@@ -36,7 +36,8 @@ vision model that supports tool use. Private screenshots are sent to the
 configured Bedrock region/model. Use synthetic fixtures for a first test.
 Save and close existing PowerPoint decks and use an idle interactive desktop.
 Use the physical pixel dimensions of the primary display for Office and
-choose the matching 1x or 2x display profile.
+choose the matching 1x or 2x PDF display profile. Office uses physical capture
+with the runner’s `wide-1x` profile independently of PDF scaling.
 
 ```powershell
 $env:AWS_PROFILE = "buddy-staging-tools"
