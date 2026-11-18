@@ -33,7 +33,8 @@ SYSTEM_PROMPT = (
     "entities and essential content is missing, reject with partial_target. If the images "
     "cannot establish that the action is correct, reject with uncertain and explain what "
     "cannot be verified. Confidence is informational. Provide a short "
-    "observation describing the visible evidence that supports the verdict."
+    "observation describing the visible evidence that supports the verdict. Keep the "
+    "observation to one or two sentences, ideally under 400 characters."
 )
 
 
@@ -105,7 +106,7 @@ def main() -> int:
                     ],
                 }
             ],
-            inferenceConfig={"maxTokens": 350, "temperature": 0},
+            inferenceConfig={"maxTokens": 700, "temperature": 0},
             toolConfig={
                 "tools": [
                     {

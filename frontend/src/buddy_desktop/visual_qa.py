@@ -29,7 +29,7 @@ VERDICT_SCHEMA = {
         "verdict": {"enum": ["validated", "rejected"]},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
         "issue": {"enum": [None, *ISSUES]},
-        "observation": {"type": "string", "minLength": 1, "maxLength": 400},
+        "observation": {"type": "string", "minLength": 1, "maxLength": 1200},
     },
 }
 Judge = Callable[[dict[str, Any], bytes, bytes], object]

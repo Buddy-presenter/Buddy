@@ -11,6 +11,9 @@ The host verifies that both captures belong to the exact action and slide.
 The independent vision call receives the two images, the action type and the
 intended purpose. It cannot invoke the runner or modify the saved action.
 The response must contain one structured verdict and a visual observation.
+The model is asked for one or two short sentences. The host accepts up to 1,200
+characters so a useful detailed explanation does not discard an otherwise valid
+verdict; empty, oversized or malformed responses still remain unavailable.
 Completed visual checks return validated or rejected. Technical failures and
 malformed or conflicting responses return unavailable.
 Confidence is recorded alongside the original model verdict for inspection. A successful action with
