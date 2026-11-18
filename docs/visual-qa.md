@@ -24,9 +24,21 @@ the owner's approved storage. The CLI is an operator entry point: the trusted
 host supplies an already authorized saved snapshot and owns the output
 directory. Use the owner-scoped runner to retrieve transient evidence.
 
-This command runs separately from Library upload and Review. Correction and
-revalidation orchestration is tracked by #51, and showing reports in Review
-and gating Live tools is tracked by #53.
+## Run a saved action from Buddy
+
+In the source development build, sign in to Buddy and go to **Library → Review**.
+Select a slide and one of its generated actions, then click **Run visual QA**.
+Buddy uses its authenticated Review download to prepare the exact source and action
+automatically. The result and private report path appear above the action list.
+Close unrelated PowerPoint presentations before testing PPTX. Buddy closes its own
+Review preview before starting the isolated Office player.
+
+The source build runs the local operator using the configured AWS profile, or
+`buddy-staging-tools` by default. The development virtual environment must have
+the backend development dependencies and an active AWS login for the operator.
+The packaged app needs a deployed QA service for end-user operation.
+Correction and revalidation orchestration is tracked by #51. Publishing reports
+in Review and gating Live tools is tracked by #53.
 
 ## Run synthetic PDF and PowerPoint cases on Windows
 

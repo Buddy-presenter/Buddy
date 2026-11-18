@@ -5,10 +5,11 @@ import json
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from uuid import UUID
 
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QImage, QImageReader, QPainter, QPen, QPixmap
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QStandardPaths, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QGuiApplication, QImage, QImageReader, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -29,6 +30,7 @@ from buddy_desktop.library_service import LibraryAccessExpired
 from buddy_desktop.pdf_document import render
 from buddy_desktop.powerpoint_review import PowerPointReviewSession
 from buddy_desktop.powerpoint_session_binding import PowerPointSessionBinding
+from buddy_desktop.review_qa import ReviewQAResult, review_qa_operator, run_review_qa
 from buddy_desktop.review_service import (
     ReviewAction,
     ReviewAnalysis,
@@ -340,8 +342,21 @@ class ReviewWidget(Page):
         self.refresh_checks_button.setEnabled(False)
         self.refresh_checks_button.clicked.connect(self.refresh_checks)
         action_header.addWidget(self.refresh_checks_button)
+        self.visual_qa_button = QPushButton("Run visual QA")
+        self.visual_qa_button.setToolTip(
+            "Test the selected saved action in an isolated player and send the "
+            "audience screenshots to Amazon Bedrock for a visual verdict."
+        )
+        self.visual_qa_button.setEnabled(False)
+        self.visual_qa_button.setVisible(review_qa_operator() is not None)
+        self.visual_qa_button.clicked.connect(self.run_selected_visual_qa)
+        action_header.addWidget(self.visual_qa_button)
         action_header.addWidget(self.run_powerpoint)
         content_layout.addLayout(action_header)
+        self.visual_qa_status = QLabel()
+        self.visual_qa_status.setWordWrap(True)
+        self.visual_qa_status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        content_layout.addWidget(self.visual_qa_status)
         self.action_table = ActionTable(0, 4)
         self.action_table.setObjectName("reviewActions")
         self.action_table.setHorizontalHeaderLabels(["What it does", "Tool", "Availability", ""])
@@ -421,6 +436,58 @@ class ReviewWidget(Page):
         if time.monotonic() >= session.tokens.expires - 30:
             return None
         return session.tokens.access
+
+    def run_selected_visual_qa(self) -> None:
+        analysis, content = self.analysis, self.pdf_content
+        owner = self.account.account_id
+        row = self.action_table.currentRow()
+        if (
+            self.runner.busy
+            or self.cleanup_runner.busy
+            or self.closing
+            or not self.token()
+            or not owner
+            or analysis is None
+            or content is None
+            or not 0 <= row < len(self.action_rows)
+        ):
+            return
+        action = self.action_rows[row]
+        screen = QGuiApplication.primaryScreen() or self.screen()
+        scale = screen.devicePixelRatio()
+        profile = "wide-2x" if analysis.source_format == "pdf" and scale == 2 else "wide-1x"
+        size = screen.geometry().size()
+        viewport = (
+            (round(size.width() * scale), round(size.height() * scale))
+            if analysis.source_format == "pptx"
+            else (1280, 720)
+        )
+        root = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation)
+        if not root:
+            self.visual_qa_status.setText("Buddy could not locate a private report directory.")
+            return
+        reports = Path(root) / "visual-qa"
+        preview, self._pptx_session = self._pptx_session, None
+        self.request_generation, self.pending_operation = self.generation, "visual_qa"
+        self.visual_qa_button.setEnabled(False)
+        self.run_powerpoint.setEnabled(False)
+        self.visual_qa_status.setText("Running visual QA on the selected action…")
+        self.activity_changed.emit(True)
+
+        def work() -> ReviewQAResult:
+            if preview is not None:
+                preview.close()
+            return run_review_qa(
+                analysis,
+                action,
+                content,
+                owner=owner,
+                profile=profile,
+                viewport=viewport,
+                reports=reports,
+            )
+
+        self.runner.submit(work)
 
     def refresh_checks(self) -> None:
         access = self.token()
@@ -561,6 +628,8 @@ class ReviewWidget(Page):
         self.open_powerpoint.setEnabled(False)
         self.present_powerpoint.setEnabled(False)
         self.refresh_checks_button.setEnabled(False)
+        self.visual_qa_button.setEnabled(False)
+        self.visual_qa_status.clear()
         self.pending_load = False
         if not keep_deck:
             self.deck_id = None
@@ -679,6 +748,13 @@ class ReviewWidget(Page):
                 "Review unavailable", "Could not verify access to this presentation.", retry=True
             )
             self.content.hide()
+        elif isinstance(result, ReviewQAResult):
+            reason = result.reason.replace("_", " ") if result.reason else ""
+            self.visual_qa_status.setText(
+                f"Visual QA: {result.state}"
+                + (f" ({reason}). " if reason else ". ")
+                + f"Report saved to {result.report}"
+            )
         elif isinstance(result, UpdatedChecks):
             current = self.analysis
             if current is None or (
@@ -799,6 +875,9 @@ class ReviewWidget(Page):
             self.notice.setText("Validation evidence unavailable: " + message)
             self.open_evidence.setEnabled(self.evidence_choice.count() > 0)
             return
+        if operation == "visual_qa":
+            self.visual_qa_status.setText("Visual QA unavailable: " + message)
+            return
         if operation == "checks":
             self.notice.setText("Could not refresh checks: " + message)
             return
@@ -831,6 +910,12 @@ class ReviewWidget(Page):
         ):
             self.load()
             return
+        row = self.action_table.currentRow()
+        self.visual_qa_button.setEnabled(
+            0 <= row < len(self.action_rows)
+            and self.action_rows[row].raw is not None
+            and bool(self.token())
+        )
         if self.source_format == "pptx" and self.action_rows:
             self.action_selected()
         if self._present_on_load and self.active and not self.runner.busy:
@@ -1052,6 +1137,7 @@ class ReviewWidget(Page):
 
     def action_selected(self) -> None:
         self.run_powerpoint.setEnabled(False)
+        self.visual_qa_button.setEnabled(False)
         self.evidence_choice.clear()
         self.open_evidence.setEnabled(False)
         row = self.action_table.currentRow()
@@ -1059,6 +1145,9 @@ class ReviewWidget(Page):
             self.preview.set_page(self.image, None)
             return
         action = self.action_rows[row]
+        self.visual_qa_button.setEnabled(
+            action.raw is not None and not self.runner.busy and bool(self.token())
+        )
         self.details_toggle.setChecked(False)
         self.action_status.setText(
             "Ready for direct screen zoom. This reference stays full-size; zoom resets when "

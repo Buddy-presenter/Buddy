@@ -415,7 +415,7 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                     else validator,
                     renderer,
                     validation_id,
-                    action if powerpoint else None,
+                    action,
                     runtime_version,
                     hashlib.sha256(
                         json.dumps(
