@@ -749,7 +749,16 @@ class ReviewWidget(Page):
             )
             self.content.hide()
         elif isinstance(result, ReviewQAResult):
-            reason = result.reason.replace("_", " ") if result.reason else ""
+            reasons = {
+                "audience_viewport_occluded": (
+                    "Buddy could not capture an unobstructed slideshow. Retry and leave "
+                    "the mouse and keyboard idle until PowerPoint closes."
+                ),
+                "powerpoint_worker_busy_use_dedicated_session": (
+                    "Save and quit other PowerPoint windows, then retry."
+                ),
+            }
+            reason = reasons.get(result.reason or "", (result.reason or "").replace("_", " "))
             self.visual_qa_status.setText(
                 f"Visual QA: {result.state}"
                 + (f" ({reason}). " if reason else ". ")

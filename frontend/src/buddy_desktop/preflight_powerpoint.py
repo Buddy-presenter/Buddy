@@ -219,33 +219,47 @@ class OfficePlayer:
             zoom=None if plan is None else dict(scale=plan.scale, x=plan.x, y=plan.y),
         )
 
+    def _require_clear_viewport(self, driver: Any) -> None:
+        with driver._physical_pixels():
+            rect = driver.gui.GetClientRect(self.info.window_id)
+            origin = driver.gui.ClientToScreen(self.info.window_id, (0, 0))
+            for x in (0.1, 0.3, 0.5, 0.7, 0.9):
+                for y in (0.1, 0.3, 0.5, 0.7, 0.9):
+                    hit = driver.gui.WindowFromPoint(
+                        (origin[0] + round(rect[2] * x), origin[1] + round(rect[3] * y))
+                    )
+                    if driver.gui.GetAncestor(hit, 2) != self.info.window_id:
+                        raise ContractError("audience_viewport_occluded")
+
     def capture(self) -> Any:
         self._guard()
         self.app.processEvents()
         driver = self.adapter._zoom_driver()
         driver.focus(self.info)
         try:
-            # This is the isolated slideshow. Hide its pointer and navigation chrome
-            # before collecting evidence, including after zoom re-enables the pointer.
+            # Keep the isolated slideshow's navigation chrome out of the evidence.
             window = self.adapter._target_window(self.office, self.info)
             window.View.PointerType = 3  # ppSlideShowPointerAlwaysHidden
-            image = capture(self.info, driver)
         except Exception as exc:
             raise ContractError("desktop_capture_unavailable") from exc
-        try:
-            with driver._physical_pixels():
-                rect = driver.gui.GetClientRect(self.info.window_id)
-                origin = driver.gui.ClientToScreen(self.info.window_id, (0, 0))
-                # Reject another app/dialog covering any interior sample of the audience.
-                for x in (0.1, 0.3, 0.5, 0.7, 0.9):
-                    for y in (0.1, 0.3, 0.5, 0.7, 0.9):
-                        hit = driver.gui.WindowFromPoint(
-                            (origin[0] + round(rect[2] * x), origin[1] + round(rect[3] * y))
-                        )
-                        if driver.gui.GetAncestor(hit, 2) != self.info.window_id:
-                            raise ContractError("audience_viewport_occluded")
-        except Exception as exc:
-            raise ContractError("audience_viewport_occluded") from exc
+
+        # A window can briefly cover the slideshow while Office is activating.
+        # Require a clear viewport on both sides of the accepted capture.
+        for attempt in range(2):
+            try:
+                self._require_clear_viewport(driver)
+                image = capture(self.info, driver)
+                self._require_clear_viewport(driver)
+                break
+            except ContractError:
+                if attempt:
+                    raise
+                time.sleep(0.4)
+                self.app.processEvents()
+                driver.focus(self.info)
+            except Exception as exc:
+                raise ContractError("desktop_capture_unavailable") from exc
+
         source = QImage.fromData(self.adapter.preview(self.info).png)
         if source.isNull():
             raise ContractError("desktop_capture_unavailable")
