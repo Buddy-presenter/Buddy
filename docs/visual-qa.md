@@ -16,6 +16,12 @@ characters so a useful detailed explanation does not discard an otherwise valid
 verdict; empty, oversized or malformed responses still remain unavailable.
 Completed visual checks return validated or rejected. Technical failures and
 malformed or conflicting responses return unavailable.
+Visual judgment uses a functional standard: target text locates the intended
+entity rather than defining an exact coverage mask. Useful emphasis may include
+extra words, a card's identifying heading, a connector to the same unambiguous
+card, or zoomed surrounding context. These are not failures on their own.
+Missing an explicitly requested entity/comparison, emphasizing a different
+entity, obscuring essential content, or producing no useful effect still fails.
 Confidence is recorded alongside the original model verdict for inspection. A successful action with
 identical before/after captures is rejected without a provider call. An image
 above the Bedrock input size limit is retained for inspection and stays
