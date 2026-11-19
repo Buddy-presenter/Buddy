@@ -13,6 +13,7 @@ from buddy_desktop.pdf_document import open_pdf
 from buddy_desktop.preflight import PreflightRunner, check_tools
 from buddy_desktop.preflight_powerpoint import safe_source
 from buddy_desktop.slide_contract import ContractError
+from buddy_desktop.visual_qa import inspect_action
 
 FIXTURE = Path(__file__).resolve().parents[2] / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf"
 
@@ -59,12 +60,19 @@ def test_tool_allowlist_rejects_arbitrary_operations(tools):
         check_tools(tools, {}, {})
 
 
-def test_real_pdf_process_capture_and_deterministic_action_baselines(snapshot):
+@pytest.fixture
+def native_profile(qapp):
+    screen = qapp.primaryScreen()
+    return "wide-2x" if screen is not None and screen.devicePixelRatio() == 2 else "wide-1x"
+
+
+def test_real_pdf_process_capture_and_deterministic_action_baselines(snapshot, native_profile):
     with PreflightRunner("owner") as runner:
         root = runner._root
         report = runner.run(
             "owner",
             **snapshot,
+            profile=native_profile,
             tools=[
                 {"op": "capture"},
                 {"op": "apply_action", "action_id": "zoom"},
@@ -404,3 +412,121 @@ def test_retention_expires_runs_and_caps_private_evidence(snapshot, monkeypatch)
         runner._runs[latest] -= 3601
         with pytest.raises(FileNotFoundError):
             runner.artifact("owner", latest, "report.json")
+
+
+@pytest.mark.parametrize(
+    ("verdict", "state", "reason"),
+    [
+        ({"verdict": "validated", "confidence": 0.97, "issue": None}, "validated", None),
+        (
+            {"verdict": "rejected", "confidence": 0.95, "issue": "wrong_target"},
+            "rejected",
+            "wrong_target",
+        ),
+        (
+            {"verdict": "validated", "confidence": 0.61, "issue": None},
+            "validated",
+            None,
+        ),
+        (
+            {"verdict": "validated", "confidence": 1, "issue": "clipped"},
+            "unavailable",
+            "conflicting_verdict",
+        ),
+        (
+            {"verdict": "validated", "confidence": True, "issue": None},
+            "unavailable",
+            "visual_verdict_unavailable",
+        ),
+        (
+            {"verdict": "rejected", "confidence": 0.92, "issue": "partial_target"},
+            "rejected",
+            "partial_target",
+        ),
+        (
+            {"verdict": "rejected", "confidence": 0.5, "issue": "uncertain"},
+            "rejected",
+            "uncertain",
+        ),
+        (None, "unavailable", "visual_verdict_unavailable"),
+    ],
+)
+def test_visual_qa_binds_real_pdf_captures_and_persists_verdict(
+    snapshot,
+    tmp_path,
+    verdict,
+    state,
+    reason,
+    native_profile,
+):
+    action = snapshot.pop("catalog")["zoom"]
+    received = []
+
+    def judge(target, before, after):
+        assert target["purpose"] == action["purpose"]
+        assert before != after
+        received.extend((before, after))
+        if verdict is None:
+            raise TimeoutError("synthetic provider timeout")
+        return {**verdict, "observation": "The viewport changed around the intended region."}
+
+    with PreflightRunner("owner") as runner:
+        with pytest.raises(PermissionError):
+            inspect_action(
+                runner,
+                "other",
+                **snapshot,
+                action=action,
+                model_id="test",
+                output=tmp_path / "foreign",
+                judge=judge,
+            )
+        assert not (tmp_path / "foreign").exists()
+        report = inspect_action(
+            runner,
+            "owner",
+            **snapshot,
+            action=action,
+            model_id="test",
+            output=tmp_path / "report",
+            judge=judge,
+            profile=native_profile,
+        )
+    if sys.platform not in {"win32", "darwin"} or (
+        sys.platform == "darwin"
+        and report["reason"] in {"desktop_capture_unavailable", "audience_viewport_occluded"}
+    ):
+        assert report["state"] == "unavailable" and not received
+        return
+    assert report["state"] == state, report
+    assert report["reason"] == reason
+    assert report["semantic_verified"] is (state == "validated")
+    assert report["preflight"]["semantic_verified"] is False
+    if report["model_verdict"] is not None:
+        assert report["model_verdict"]["confidence"] == verdict["confidence"]
+        assert report["model_verdict"]["observation"]
+    result = tmp_path / "report"
+    assert json.loads((result / "report.json").read_text(encoding="utf-8")) == report
+    for role, content in zip(("before", "after"), received, strict=True):
+        assert (result / f"{role}.png").read_bytes() == content
+        assert report["evidence"][role]["sha256"] == hashlib.sha256(content).hexdigest()
+
+
+def test_visual_qa_cancelled_attempt_persists_safe_fallback(snapshot, tmp_path):
+    action = snapshot.pop("catalog")["zoom"]
+    cancelled = Event()
+    cancelled.set()
+    with PreflightRunner("owner") as runner:
+        report = inspect_action(
+            runner,
+            "owner",
+            **snapshot,
+            action=action,
+            model_id="test",
+            output=tmp_path / "cancelled",
+            judge=lambda *_: pytest.fail("must not run"),
+            cancelled=cancelled,
+        )
+    assert report["state"] == "unavailable"
+    assert report["reason"] == "cancelled"
+    assert not report["evidence"] and not report["semantic_verified"]

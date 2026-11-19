@@ -2,6 +2,7 @@ import hashlib
 import json
 import time
 from copy import deepcopy
+from dataclasses import replace
 from threading import Event
 from types import SimpleNamespace
 from uuid import uuid4
@@ -191,7 +192,7 @@ def test_review_evidence_checksum_is_verified(backend, monkeypatch):
 
 
 def test_review_widget_loads_read_only_saved_page_and_clears_on_signout(
-    desktop_window, monkeypatch, qtbot
+    desktop_window, monkeypatch, qtbot, tmp_path
 ):
     content = b"%PDF-1.7 saved review fixture"
     digest = hashlib.sha256(content).hexdigest()
@@ -225,8 +226,35 @@ def test_review_widget_loads_read_only_saved_page_and_clears_on_signout(
     assert review.action_table.rowCount() == 1
     assert "not usable" in review.action_detail.toPlainText()
     assert not any("execute" in child.text().lower() for child in review.findChildren(QPushButton))
+    window.account.account_id = "test-owner"
+    submissions = []
+
+    def qa(analysis, action, source, **options):
+        submissions.append((analysis, action, source, options["owner"]))
+        return review_widget.ReviewQAResult("validated", None, tmp_path / "report.json")
+
+    monkeypatch.setattr(review_widget, "run_review_qa", qa)
+    assert review.visual_qa_button.isEnabled()
+    review.visual_qa_button.click()
+    qtbot.waitUntil(lambda: "Visual QA: validated" in review.visual_qa_status.text())
+    assert submissions == [(record, record.slides[0].actions[0], content, "test-owner")]
+    assert not review.action_rows[0].usable
+    second_action = replace(record.slides[0].actions[0], instance_id="second-action")
+    second_slide = replace(record.slides[0], slide_id="second-slide", actions=(second_action,))
+    full_deck = replace(record, slides=(*record.slides, second_slide))
+    review.analysis = full_deck
+    submissions.clear()
+    assert review.visual_qa_all_button.isEnabled()
+    review.visual_qa_all_button.click()
+    qtbot.waitUntil(lambda: "2 validated" in review.visual_qa_status.text())
+    assert submissions == [
+        (full_deck, record.slides[0].actions[0], content, "test-owner"),
+        (full_deck, second_action, content, "test-owner"),
+    ]
+    assert "2 of 2 checked" in review.visual_qa_status.text()
     window.account.session.tokens = None
     window.account.session_changed.emit()
+    assert review.visual_qa_status.text() == ""
     assert review.pdf_content is None
     assert review.analysis is None
     assert review.action_table.rowCount() == 0

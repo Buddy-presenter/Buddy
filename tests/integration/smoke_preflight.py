@@ -1,6 +1,7 @@
 """Opt-in native PDF + Office evidence. Uses only repository-owned synthetic fixtures."""
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -20,6 +21,12 @@ def main() -> int:
     parser.add_argument(
         "--office-action", choices=("highlight_region", "zoom_region"), default="highlight_region"
     )
+    parser.add_argument(
+        "--qa-snapshots",
+        action="store_true",
+        help="Write synthetic source and snapshot files for the visual QA command.",
+    )
+    parser.add_argument("--profile", choices=("wide-1x", "wide-2x"), default="wide-1x")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     _private(args.output)
@@ -59,7 +66,7 @@ def main() -> int:
             source_format="pptx",
             version="powerpoint-2",
             instance_id="test-" + args.office_action,
-            purpose="Inspect synthetic object",
+            purpose="Emphasize the title: Clear slides. Confident delivery.",
             deck_id="preflight-test",
             render_id="pptx-" + extracted.source_sha256,
             slide_id=slide.id,
@@ -85,6 +92,26 @@ def main() -> int:
                 viewport=tuple(args.office_viewport),
             )
         )
+    for snapshot in snapshots:
+        snapshot["profile"] = args.profile if snapshot["source_format"] == "pdf" else "wide-1x"
+    if args.qa_snapshots:
+        for snapshot in snapshots:
+            source_format = snapshot["source_format"]
+            source = snapshot["source"]
+            snapshot_file = {
+                key: value for key, value in snapshot.items() if key not in {"source", "catalog"}
+            }
+            snapshot_file.update(
+                owner="synthetic-test-owner",
+                source_sha256=hashlib.sha256(source).hexdigest(),
+                catalog={action["instance_id"]: action for action in snapshot["catalog"].values()},
+            )
+            (args.output / f"source.{source_format}").write_bytes(source)
+            (args.output / f"{source_format}-snapshot.json").write_text(
+                json.dumps(snapshot_file, indent=2),
+                encoding="utf-8",
+            )
+        return 0
     reports = []
     with PreflightRunner("synthetic-test-owner") as runner:
         for snapshot in snapshots:
