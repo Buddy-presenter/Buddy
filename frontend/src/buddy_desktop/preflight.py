@@ -33,6 +33,18 @@ def _resident_bytes(processes: list[Any]) -> int:
     return resident
 
 
+def _scratch_bytes(folder: Path) -> int:
+    total = 0
+    for path in folder.rglob("*"):
+        try:
+            if path.is_file():
+                total += path.stat().st_size
+        except FileNotFoundError:
+            # Rendering removes temporary files concurrently with resource sampling.
+            continue
+    return total
+
+
 class Tool(TypedDict, total=False):
     op: Literal["load_slide", "reset", "apply_action", "read_state", "capture"]
     slide_id: str
@@ -367,10 +379,7 @@ class PreflightRunner:
                     resident = _resident_bytes(list(processes.values()))
                     if resident > 1536 * 1024 * 1024:
                         return "memory_limit"
-                if (
-                    sum(p.stat().st_size for p in folder.rglob("*") if p.is_file())
-                    > 256 * 1024 * 1024
-                ):
+                if _scratch_bytes(folder) > 256 * 1024 * 1024:
                     return "storage_limit"
                 time.sleep(0.02)
             return None if process.returncode == 0 else "worker_failed"

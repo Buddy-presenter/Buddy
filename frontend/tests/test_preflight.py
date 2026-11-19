@@ -449,6 +449,21 @@ def test_retention_expires_runs_and_caps_private_evidence(snapshot, monkeypatch)
             "uncertain",
         ),
         (None, "unavailable", "visual_verdict_unavailable"),
+        (
+            {
+                "verdict": "validated",
+                "confidence": 0.95,
+                "issue": None,
+                "observation": "The intended target remains readable. " * 14,
+            },
+            "validated",
+            None,
+        ),
+        (
+            {"verdict": "validated", "confidence": 0.95, "issue": None, "observation": "x" * 1201},
+            "unavailable",
+            "visual_verdict_unavailable",
+        ),
     ],
 )
 def test_visual_qa_binds_real_pdf_captures_and_persists_verdict(
@@ -468,7 +483,7 @@ def test_visual_qa_binds_real_pdf_captures_and_persists_verdict(
         received.extend((before, after))
         if verdict is None:
             raise TimeoutError("synthetic provider timeout")
-        return {**verdict, "observation": "The viewport changed around the intended region."}
+        return {"observation": "The viewport changed around the intended region.", **verdict}
 
     with PreflightRunner("owner") as runner:
         with pytest.raises(PermissionError):

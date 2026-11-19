@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QStandardPaths, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QImage, QImageReader, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QHBoxLayout,
@@ -203,7 +204,7 @@ class ReviewWidget(Page):
     back_requested = Signal()
     powerpoint_present_requested = Signal(object)
     powerpoint_invalidated = Signal()
-    visual_qa_progress = Signal(int, int, int)
+    visual_qa_progress = Signal(int, int, int, object)
 
     def __init__(self, config: AppConfig, account: AccountWidget) -> None:
         super().__init__(
@@ -373,6 +374,13 @@ class ReviewWidget(Page):
         action_header.addWidget(self.visual_qa_all_button)
         action_header.addWidget(self.run_powerpoint)
         content_layout.addLayout(action_header)
+        self.visual_qa_correct = QCheckBox("Try bounded corrections")
+        self.visual_qa_correct.setVisible(review_qa_operator() is not None)
+        self.visual_qa_correct.setToolTip(
+            "If an action is rejected, try up to two source-bounded region corrections "
+            "and recheck each in the real player. Saves every attempt."
+        )
+        content_layout.addWidget(self.visual_qa_correct)
         self.visual_qa_status = QLabel()
         self.visual_qa_status.setWordWrap(True)
         self.visual_qa_status.setTextFormat(Qt.TextFormat.PlainText)
@@ -478,9 +486,15 @@ class ReviewWidget(Page):
             )
             self._run_visual_qa(actions, batch=True)
 
-    def _show_visual_qa_progress(self, generation: int, completed: int, total: int) -> None:
+    def _show_visual_qa_progress(
+        self, generation: int, completed: int, total: int, counts: dict[str, int]
+    ) -> None:
         if generation == self.generation and not self.visual_qa_cancel.is_set():
-            self.visual_qa_status.setText(f"Running visual QA · {completed} of {total} checked")
+            self.visual_qa_status.setText(
+                f"Running visual QA · {completed} of {total} checked · "
+                f"V {counts.get('validated', 0)} · R {counts.get('rejected', 0)} · "
+                f"Unavailable {counts.get('unavailable', 0)} · Failed {counts.get('failed', 0)}"
+            )
 
     def _run_visual_qa(self, actions: tuple[ReviewAction, ...], *, batch: bool) -> None:
         analysis, content = self.analysis, self.pdf_content
@@ -509,6 +523,7 @@ class ReviewWidget(Page):
         if not root:
             self.visual_qa_status.setText("Buddy could not locate a private report directory.")
             return
+        correct = self.visual_qa_correct.isChecked()
         reports = Path(root) / "visual-qa"
         if batch:
             reports = reports / uuid4().hex
@@ -523,7 +538,8 @@ class ReviewWidget(Page):
             self.visual_qa_all_button.setText("Stop visual QA")
         self.run_powerpoint.setEnabled(False)
         self.visual_qa_status.setText(
-            f"Running visual QA · 0 of {len(actions)} checked"
+            f"Running visual QA · 0 of {len(actions)} checked · "
+            "V 0 · R 0 · Unavailable 0 · Failed 0"
             if batch
             else "Running visual QA on the selected action…"
         )
@@ -542,6 +558,7 @@ class ReviewWidget(Page):
                     profile=profile,
                     viewport=viewport,
                     reports=reports,
+                    correct=correct,
                 )
 
             if not batch:
@@ -554,7 +571,7 @@ class ReviewWidget(Page):
                     counts[check(action).state] += 1
                 except ServiceError:
                     counts["failed"] += 1
-                self.visual_qa_progress.emit(generation, index, len(actions))
+                self.visual_qa_progress.emit(generation, index, len(actions), dict(counts))
             return ReviewQABatch(counts, len(actions), reports)
 
         self.runner.submit(work)
@@ -702,6 +719,7 @@ class ReviewWidget(Page):
         self.visual_qa_cancel.set()
         self.visual_qa_all_button.setEnabled(False)
         self.visual_qa_status.clear()
+        self.visual_qa_correct.setChecked(False)
         self.pending_load = False
         if not keep_deck:
             self.deck_id = None
