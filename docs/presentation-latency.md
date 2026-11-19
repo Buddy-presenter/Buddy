@@ -16,6 +16,12 @@ Desktop records use the `presentation_latency` prefix:
   backend's total `elapsed_ms` for comparison.
 - `action_finished`: total capture-to-execution completion, proposal-to-completion,
   server preflight time, local executor time, source format, action tool, and outcome.
+- `local_navigation`: explicit next/previous/numbered commands resolved from the locally
+  loaded presentation, including capture-to-proposal time. These commands bypass Cohere
+  and the network request used for contextual suggestions.
+- `preflight_skipped`: the proposal already represents validated slide navigation, so the
+  additional transition-check request was skipped. Its `action_finished preflight_ms`
+  value is zero; freshness, source, and execution guards still run locally.
 - `pdf_prefetch`: whether a selected PDF destination was rendered in the background,
   discarded as stale, unavailable, or reused from cache; includes render time and the
   bounded cache size. Prefetch only renders the already selected target and never
