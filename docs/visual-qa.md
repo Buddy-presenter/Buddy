@@ -48,6 +48,9 @@ Choose **Run visual QA on all actions** to check the full deck, including saved
 actions that Review marks unavailable. Each action gets its own report. The
 status shows progress and totals. **Stop visual QA** lets the current check finish
 and leaves the remaining actions unchecked.
+During a batch, **V** counts validated actions and **R** counts rejected actions.
+Unavailable checks and execution failures have separate counters. Counts update
+after each completed action, including checks from other slides in the deck.
 
 The source build runs the local operator using the configured AWS profile, or
 `buddy-staging-tools` by default. The development virtual environment must have

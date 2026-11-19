@@ -228,10 +228,18 @@ def test_review_widget_loads_read_only_saved_page_and_clears_on_signout(
     assert not any("execute" in child.text().lower() for child in review.findChildren(QPushButton))
     window.account.account_id = "test-owner"
     submissions = []
+    second_started, release_second = Event(), Event()
 
     def qa(analysis, action, source, **options):
         submissions.append((analysis, action, source, options["owner"]))
         assert options["correct"] is True
+        if action.instance_id == "second-action":
+            second_started.set()
+            if not release_second.wait(5):
+                raise TimeoutError("Second QA action was not released.")
+            return review_widget.ReviewQAResult(
+                "rejected", "wrong_target", tmp_path / "report.json"
+            )
         return review_widget.ReviewQAResult("validated", None, tmp_path / "report.json")
 
     monkeypatch.setattr(review_widget, "run_review_qa", qa)
@@ -248,7 +256,14 @@ def test_review_widget_loads_read_only_saved_page_and_clears_on_signout(
     submissions.clear()
     assert review.visual_qa_all_button.isEnabled()
     review.visual_qa_all_button.click()
-    qtbot.waitUntil(lambda: "2 validated" in review.visual_qa_status.text())
+    try:
+        qtbot.waitUntil(second_started.is_set)
+        qtbot.waitUntil(lambda: "1 of 2 checked" in review.visual_qa_status.text())
+        assert "V 1 · R 0 · Unavailable 0 · Failed 0" in review.visual_qa_status.text()
+        assert review.runner.busy
+    finally:
+        release_second.set()
+    qtbot.waitUntil(lambda: "1 validated, 1 rejected" in review.visual_qa_status.text())
     assert submissions == [
         (full_deck, record.slides[0].actions[0], content, "test-owner"),
         (full_deck, second_action, content, "test-owner"),

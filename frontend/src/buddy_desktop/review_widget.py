@@ -204,7 +204,7 @@ class ReviewWidget(Page):
     back_requested = Signal()
     powerpoint_present_requested = Signal(object)
     powerpoint_invalidated = Signal()
-    visual_qa_progress = Signal(int, int, int)
+    visual_qa_progress = Signal(int, int, int, object)
 
     def __init__(self, config: AppConfig, account: AccountWidget) -> None:
         super().__init__(
@@ -486,9 +486,15 @@ class ReviewWidget(Page):
             )
             self._run_visual_qa(actions, batch=True)
 
-    def _show_visual_qa_progress(self, generation: int, completed: int, total: int) -> None:
+    def _show_visual_qa_progress(
+        self, generation: int, completed: int, total: int, counts: dict[str, int]
+    ) -> None:
         if generation == self.generation and not self.visual_qa_cancel.is_set():
-            self.visual_qa_status.setText(f"Running visual QA · {completed} of {total} checked")
+            self.visual_qa_status.setText(
+                f"Running visual QA · {completed} of {total} checked · "
+                f"V {counts.get('validated', 0)} · R {counts.get('rejected', 0)} · "
+                f"Unavailable {counts.get('unavailable', 0)} · Failed {counts.get('failed', 0)}"
+            )
 
     def _run_visual_qa(self, actions: tuple[ReviewAction, ...], *, batch: bool) -> None:
         analysis, content = self.analysis, self.pdf_content
@@ -532,7 +538,8 @@ class ReviewWidget(Page):
             self.visual_qa_all_button.setText("Stop visual QA")
         self.run_powerpoint.setEnabled(False)
         self.visual_qa_status.setText(
-            f"Running visual QA · 0 of {len(actions)} checked"
+            f"Running visual QA · 0 of {len(actions)} checked · "
+            "V 0 · R 0 · Unavailable 0 · Failed 0"
             if batch
             else "Running visual QA on the selected action…"
         )
@@ -564,7 +571,7 @@ class ReviewWidget(Page):
                     counts[check(action).state] += 1
                 except ServiceError:
                     counts["failed"] += 1
-                self.visual_qa_progress.emit(generation, index, len(actions))
+                self.visual_qa_progress.emit(generation, index, len(actions), dict(counts))
             return ReviewQABatch(counts, len(actions), reports)
 
         self.runner.submit(work)
