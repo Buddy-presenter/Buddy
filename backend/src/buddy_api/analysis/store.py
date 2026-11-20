@@ -35,6 +35,7 @@ from buddy_api.analysis.contracts import (
 from buddy_api.extraction.contracts import Extraction
 from buddy_api.persistence.errors import PersistenceConflict, PersistenceUnavailable, RecordNotFound
 from buddy_api.persistence.models import (
+    ActionCheck,
     ActionValidation,
     AnalysisSlide,
     AnalysisVersion,
@@ -468,7 +469,11 @@ class Analyses:
         )
 
     async def record_validation(
-        self, *, owner_id: UUID, result: ValidationInput
+        self,
+        *,
+        owner_id: UUID,
+        result: ValidationInput,
+        evidence_source_validation_id: UUID | None = None,
     ) -> AnalysisResult | PowerPointAnalysisResult:
         """Trusted validator boundary only. There is intentionally no HTTP write endpoint."""
         result = ValidationInput.model_validate(result.model_dump(mode="json"))
@@ -495,6 +500,23 @@ class Analyses:
         if action is None:
             raise RecordNotFound("Owned action was not found.")
         check_validation_evidence(value, action, result)
+        if evidence_source_validation_id is not None:
+            source_check = await self.session.scalar(
+                select(ActionCheck).where(
+                    ActionCheck.id == evidence_source_validation_id,
+                    ActionCheck.owner_id == owner_id,
+                    ActionCheck.deck_id == value.deck_id,
+                    ActionCheck.status == "complete",
+                )
+            )
+            if source_check is None:
+                raise RecordNotFound("Copied validation evidence was not found.")
+            expected_evidence = {
+                (str(item["id"]), item["kind"], item["sha256"]) for item in source_check.artifacts
+            }
+            supplied_evidence = {(str(item.id), item.kind, item.sha256) for item in result.evidence}
+            if not expected_evidence or supplied_evidence != expected_evidence:
+                raise PersistenceConflict("Copied evidence does not match its source validation.")
         existing = await self.session.get(ActionValidation, result.validation_id)
         document = result.model_dump(mode="json")
         if existing is not None:
@@ -502,6 +524,7 @@ class Analyses:
                 existing.owner_id != owner_id
                 or existing.action_id != action.id
                 or existing.document != document
+                or existing.evidence_source_validation_id != evidence_source_validation_id
             ):
                 raise PersistenceConflict("Validation ID already has different content.")
             return await self.read(value.id, owner_id=owner_id)
@@ -527,6 +550,7 @@ class Analyses:
                 sequence=sequence,
                 state=result.state,
                 document=document,
+                evidence_source_validation_id=evidence_source_validation_id,
             )
         )
         await self.session.flush()

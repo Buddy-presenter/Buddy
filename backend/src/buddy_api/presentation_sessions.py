@@ -179,13 +179,19 @@ async def current_ready_analysis(
     published = (
         job.status in {"analysis_ready", "succeeded"} and analysis.publication == "published"
     )
+    # A correction creates a new analysis revision before its changed action is
+    # ready. Keep the deck presentable in manual mode while that action is gated.
+    awaiting_actions = (
+        job.status in {"analysis_ready", "succeeded", "analysis_partial"}
+        and analysis.publication == "awaiting_validation"
+    )
     partial_pdf = (
         deck.source_format == "pdf"
         and job.status == "analysis_partial"
         and analysis.publication in {"partial", "awaiting_validation"}
     )
     if (
-        not (published or partial_pdf)
+        not (published or partial_pdf or awaiting_actions)
         or job.source_revision != deck.source_revision
         or analysis.job_id != job.id
         or analysis.source_format != deck.source_format

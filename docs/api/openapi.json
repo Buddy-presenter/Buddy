@@ -48,6 +48,136 @@
         "title": "AccountResponse",
         "type": "object"
       },
+      "ActionCorrectionOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "action_instance_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Action Instance Id",
+            "type": "string"
+          },
+          "action_state": {
+            "anyOf": [
+              {
+                "enum": [
+                  "candidate",
+                  "validated",
+                  "rejected",
+                  "needs-review"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action State"
+          },
+          "operation": {
+            "enum": [
+              "set_region",
+              "disable"
+            ],
+            "title": "Operation",
+            "type": "string"
+          },
+          "result_analysis_id": {
+            "format": "uuid",
+            "title": "Result Analysis Id",
+            "type": "string"
+          },
+          "result_version": {
+            "minimum": 2.0,
+            "title": "Result Version",
+            "type": "integer"
+          },
+          "source_analysis_id": {
+            "format": "uuid",
+            "title": "Source Analysis Id",
+            "type": "string"
+          },
+          "source_version": {
+            "minimum": 1.0,
+            "title": "Source Version",
+            "type": "integer"
+          },
+          "usable": {
+            "title": "Usable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "source_analysis_id",
+          "result_analysis_id",
+          "source_version",
+          "result_version",
+          "action_instance_id",
+          "operation",
+          "action_state",
+          "usable"
+        ],
+        "title": "ActionCorrectionOutcome",
+        "type": "object"
+      },
+      "ActionCorrectionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_action_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Expected Action Sha256",
+            "type": "string"
+          },
+          "expected_analysis_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Expected Analysis Sha256",
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "set_region",
+              "disable"
+            ],
+            "title": "Operation",
+            "type": "string"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Region"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "expected_analysis_sha256",
+          "expected_action_sha256",
+          "operation"
+        ],
+        "title": "ActionCorrectionRequest",
+        "type": "object"
+      },
+      "ActionCorrectionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ActionCorrectionOutcome"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "request_id"
+        ],
+        "title": "ActionCorrectionResponse",
+        "type": "object"
+      },
       "ActionGrounding": {
         "additionalProperties": false,
         "properties": {
@@ -4665,6 +4795,135 @@
           }
         },
         "summary": "Read",
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/api/v1/analyses/{identifier}/actions/{instance_id}/correction": {
+      "post": {
+        "description": "Save an owner correction as a new immutable analysis revision.",
+        "operationId": "correct_api_v1_analyses__identifier__actions__instance_id__correction_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "instance_id",
+            "required": true,
+            "schema": {
+              "title": "Instance Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActionCorrectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionCorrectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Correct",
         "tags": [
           "analysis"
         ]

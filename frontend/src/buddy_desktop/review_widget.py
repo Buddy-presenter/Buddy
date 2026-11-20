@@ -1,4 +1,4 @@
-"""Read-only desktop review of persisted PDF analyses and their validation evidence."""
+"""Desktop review of persisted PDF analyses and their validation evidence."""
 
 import hashlib
 import json
@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QDoubleSpinBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -70,6 +71,12 @@ class EvidenceResult:
 @dataclass(frozen=True)
 class UpdatedChecks:
     analysis: ReviewAnalysis
+
+
+@dataclass(frozen=True)
+class CorrectedAnalysis:
+    analysis: ReviewAnalysis
+    operation: str
 
 
 @dataclass(frozen=True)
@@ -414,6 +421,28 @@ class ReviewWidget(Page):
         self.action_status.setWordWrap(True)
         self.action_status.setTextFormat(Qt.TextFormat.PlainText)
         content_layout.addWidget(self.action_status)
+        self.correction_panel = QWidget()
+        correction_layout = QHBoxLayout(self.correction_panel)
+        correction_layout.setContentsMargins(0, 0, 0, 0)
+        correction_layout.addWidget(QLabel("Focus region"))
+        self.region_inputs: list[QDoubleSpinBox] = []
+        for name in ("X", "Y", "Width", "Height"):
+            field = QDoubleSpinBox()
+            field.setAccessibleName(f"Correct action region {name.lower()}")
+            field.setDecimals(2)
+            field.setRange(0, 100000)
+            if name in {"Width", "Height"}:
+                field.setMinimum(0.01)
+            field.setSingleStep(1)
+            self.region_inputs.append(field)
+            correction_layout.addWidget(field)
+        self.save_correction = QPushButton("Save region")
+        self.save_correction.clicked.connect(self.save_action_region)
+        correction_layout.addWidget(self.save_correction)
+        self.disable_action = QPushButton("Disable action")
+        self.disable_action.clicked.connect(self.disable_selected_action)
+        correction_layout.addWidget(self.disable_action)
+        content_layout.addWidget(self.correction_panel)
         self.details_toggle = QPushButton("Action details & evidence")
         self.details_toggle.setCheckable(True)
         command(self.details_toggle, "chevron-right")
@@ -600,6 +629,55 @@ class ReviewWidget(Page):
                 return exc
 
         self.runner.submit(work)
+
+    def _submit_correction(
+        self,
+        *,
+        region: tuple[float, float, float, float] | None = None,
+        disable: bool = False,
+    ) -> None:
+        row = self.action_table.currentRow()
+        if self.runner.busy or not 0 <= row < len(self.action_rows) or self.analysis is None:
+            return
+        action, analysis, access = self.action_rows[row], self.analysis, self.token()
+        if not access:
+            return
+        service = ReviewService(self.config, access)
+        self.request_generation = self.generation
+        self.pending_operation = "correction"
+        self.save_correction.setEnabled(False)
+        self.disable_action.setEnabled(False)
+        self.notice.setText("Saving a new analysis revision…")
+        self.activity_changed.emit(True)
+
+        def work() -> CorrectedAnalysis | LibraryAccessExpired:
+            try:
+                updated = service.correct_action(
+                    analysis,
+                    action,
+                    region=region,
+                    disable=disable,
+                )
+                return CorrectedAnalysis(updated, "disable" if disable else "set_region")
+            except LibraryAccessExpired as exc:
+                return exc
+
+        self.runner.submit(work)
+
+    def save_action_region(self) -> None:
+        if not 0 <= self.action_table.currentRow() < len(self.action_rows):
+            return
+        self._submit_correction(
+            region=(
+                self.region_inputs[0].value(),
+                self.region_inputs[1].value(),
+                self.region_inputs[2].value(),
+                self.region_inputs[3].value(),
+            )
+        )
+
+    def disable_selected_action(self) -> None:
+        self._submit_correction(disable=True)
 
     def configure(self, config: AppConfig) -> None:
         self.config = config
@@ -884,6 +962,20 @@ class ReviewWidget(Page):
                 f"of {len(actions)} actions Ready. "
                 "Pending checks resume automatically when PowerPoint is closed."
             )
+        elif isinstance(result, CorrectedAnalysis):
+            self.analysis = result.analysis
+            self._display_page()
+            if result.operation == "disable":
+                self.notice.setText(
+                    f"Action disabled in analysis version {result.analysis.version}. "
+                    "Existing presentation sessions keep their original actions."
+                )
+            else:
+                self.notice.setText(
+                    f"Region saved in analysis version {result.analysis.version}. "
+                    "The corrected action remains gated until validation; existing sessions "
+                    "are unchanged."
+                )
         elif isinstance(result, LoadedReview):
             self.analysis = result.analysis
             self.pdf_content = result.pdf_content
@@ -991,6 +1083,11 @@ class ReviewWidget(Page):
         if operation == "checks":
             self.notice.setText("Could not refresh checks: " + message)
             return
+        if operation == "correction":
+            self.notice.setText("Could not save the correction: " + message)
+            self.save_correction.setEnabled(True)
+            self.disable_action.setEnabled(True)
+            return
         if operation == "page":
             self.notice.setText("Page could not be rendered: " + message)
             return
@@ -1011,6 +1108,15 @@ class ReviewWidget(Page):
         self.refresh_checks_button.setEnabled(
             self.analysis is not None and self.token() is not None
         )
+        row = self.action_table.currentRow()
+        can_correct = (
+            self.analysis is not None
+            and self.token() is not None
+            and 0 <= row < len(self.action_rows)
+            and self.action_rows[row].raw is not None
+        )
+        self.save_correction.setEnabled(can_correct)
+        self.disable_action.setEnabled(can_correct)
         if (
             self.pending_load
             and self.active
@@ -1303,6 +1409,18 @@ class ReviewWidget(Page):
             and action.usable
             and not self.runner.busy
         )
+        self.correction_panel.setEnabled(
+            action.raw is not None and bool(self.token()) and not self.runner.busy
+        )
+        if slide is not None:
+            self.region_inputs[0].setMaximum(slide.width)
+            self.region_inputs[1].setMaximum(slide.height)
+            self.region_inputs[2].setMaximum(max(0.01, slide.width - x))
+            self.region_inputs[3].setMaximum(max(0.01, slide.height - y))
+        for field, value in zip(self.region_inputs, action.region, strict=True):
+            field.blockSignals(True)
+            field.setValue(value)
+            field.blockSignals(False)
         validation = (
             f"\nValidation profile: {action.profile}\nValidator: {action.validator_version}\n"
             f"Renderer: {action.renderer_version}\nValidation record: "
