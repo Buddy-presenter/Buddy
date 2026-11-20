@@ -20,11 +20,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSessionTransaction
 from starlette.requests import Request
 
+from buddy_api.analysis.contracts import Region, digest
+from buddy_api.analysis.corrections import ActionCorrectionRequest, correct_action
 from buddy_api.app import create_app
 from buddy_api.auth import CognitoVerifier, VerifiedIdentity
 from buddy_api.config import Environment, Settings
-from buddy_api.analysis.contracts import Region, digest
-from buddy_api.analysis.corrections import ActionCorrectionRequest, correct_action
 from buddy_api.persistence.models import (
     ActionCheck,
     ActionValidation,

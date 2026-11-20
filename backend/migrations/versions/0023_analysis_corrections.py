@@ -71,7 +71,8 @@ def downgrade() -> None:
     op.drop_table("analysis_corrections")
     if op.get_bind().scalar(
         sa.text(
-            "SELECT count(*) FROM action_validations WHERE evidence_source_validation_id IS NOT NULL"
+            "SELECT count(*) FROM action_validations "
+            "WHERE evidence_source_validation_id IS NOT NULL"
         )
     ):
         raise RuntimeError("Preserve copied validation evidence before downgrading")
