@@ -20,12 +20,15 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSessionTransaction
 from starlette.requests import Request
 
+from buddy_api.analysis.contracts import Region, digest
+from buddy_api.analysis.corrections import ActionCorrectionRequest, correct_action
 from buddy_api.app import create_app
 from buddy_api.auth import CognitoVerifier, VerifiedIdentity
 from buddy_api.config import Environment, Settings
 from buddy_api.persistence.models import (
     ActionCheck,
     ActionValidation,
+    AnalysisCorrection,
     AnalysisSlide,
     AnalysisVersion,
     Deck,
@@ -328,13 +331,47 @@ def test_analyzed_deck_cleanup_removes_immutable_revision_tree(upload_app, monke
                     job_id=job_id,
                     actions=True,
                 )
+                original = await repos.analyses.read(analysis.id, owner_id=owner_id)
+                assert original.inputs is not None
+                deck.source_revision = original.inputs.source_revision
+                deck.source_sha256 = original.inputs.source_sha256
+                deck.source_version_id = "fixture-source-version"
+                deck.source_slide_count = len(original.inputs.slides)
+                action = original.slides[0].actions[0].action
+                region = action.params.region
+                corrected = await correct_action(
+                    session,
+                    owner_id=owner_id,
+                    analysis_id=analysis.id,
+                    instance_id=action.instance_id,
+                    request_id=uuid4(),
+                    inputs=ActionCorrectionRequest(
+                        expected_analysis_sha256=original.analysis_sha256,
+                        expected_action_sha256=digest(action),
+                        operation="set_region",
+                        region=Region(
+                            x=region.x + 1,
+                            y=region.y,
+                            width=region.width,
+                            height=region.height,
+                        ),
+                    ),
+                )
+                assert (
+                    await session.scalar(
+                        select(func.count())
+                        .select_from(AnalysisCorrection)
+                        .where(AnalysisCorrection.deck_id == deck_id)
+                    )
+                    == 1
+                )
                 session.add(
                     LegacyAnalysisPayload(analysis_id=analysis.id, payload={"legacy": True})
                 )
                 await session.flush()
-                return deck_id, owner_id, analysis.id
+                return deck_id, owner_id, analysis.id, corrected.result_analysis_id
 
-        deck_id, owner_id, analysis_id = client.portal.call(seed_analysis)
+        deck_id, owner_id, analysis_id, _corrected_analysis_id = client.portal.call(seed_analysis)
         monkeypatch.setattr(service.storage, "remove_prefix", lambda _prefix: None)
         assert client.portal.call(service.request_deck_deletion, owner_id, deck_id)
         client.portal.call(service.cleanup_deleted_deck, deck_id)
@@ -344,6 +381,7 @@ def test_analyzed_deck_cleanup_removes_immutable_revision_tree(upload_app, monke
                 assert await session.get(Deck, deck_id) is None
                 for model in (
                     ActionValidation,
+                    AnalysisCorrection,
                     SlideAction,
                     AnalysisSlide,
                     AnalysisVersion,

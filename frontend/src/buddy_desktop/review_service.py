@@ -9,7 +9,7 @@ from importlib.resources import files
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, build_opener
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 
@@ -82,6 +82,7 @@ class ReviewAnalysis:
     source_format: str = "pdf"
     render_id: str = ""
     office_safe: bool = False
+    analysis_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -421,9 +422,7 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                         json.dumps(
                             action, sort_keys=True, separators=(",", ":"), allow_nan=False
                         ).encode()
-                    ).hexdigest()
-                    if powerpoint
-                    else None,
+                    ).hexdigest(),
                 )
             )
         slides.append(
@@ -443,6 +442,12 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
         raise ValueError
     if inputs is None and (data["publication"] != "legacy" or slides):
         raise ValueError
+    analysis_sha256 = _text(data.get("analysis_sha256"), optional=True)
+    if analysis_sha256 is not None and (
+        len(analysis_sha256) != 64
+        or any(char not in "0123456789abcdef" for char in analysis_sha256)
+    ):
+        raise ValueError
     return ReviewAnalysis(
         identifier,
         deck_id,
@@ -456,6 +461,7 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
         source_format,
         render_id,
         office_safe,
+        analysis_sha256,
     )
 
 
@@ -541,6 +547,88 @@ class ReviewService:
             raise ServiceError(
                 "The saved analysis is inconsistent. Refresh or contact support."
             ) from None
+
+    def correct_action(
+        self,
+        analysis: ReviewAnalysis,
+        action: ReviewAction,
+        *,
+        region: tuple[float, float, float, float] | None = None,
+        disable: bool = False,
+    ) -> ReviewAnalysis:
+        """Persist an owner correction, then fetch the new immutable revision."""
+        if (region is None) == (not disable) or action.raw is None or not action.action_sha256:
+            raise ServiceError("Select a supported action correction.")
+        if analysis.analysis_sha256 is None:
+            raise ServiceError("This analysis cannot be edited. Refresh the saved review.")
+        body: dict[str, Any] = {
+            "expected_analysis_sha256": analysis.analysis_sha256,
+            "expected_action_sha256": action.action_sha256,
+            "operation": "disable" if disable else "set_region",
+        }
+        if region is not None:
+            body["region"] = dict(zip(("x", "y", "width", "height"), region, strict=True))
+        path = f"/api/v1/analyses/{analysis.id}/actions/{action.instance_id}/correction"
+        request = Request(
+            self.config.api_url + path,
+            data=json.dumps(body, separators=(",", ":"), allow_nan=False).encode(),
+            headers={
+                "Authorization": "Bearer " + self.access,
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Idempotency-Key": str(uuid4()),
+            },
+            method="POST",
+        )
+        try:
+            with build_opener(NoRedirects()).open(
+                request, timeout=self.config.request_timeout
+            ) as response:
+                content = response.read(65537)
+                if (
+                    len(content) > 65536
+                    or response.headers.get_content_type() != "application/json"
+                ):
+                    raise ValueError
+            result = _dict(json.loads(content))
+            data = _dict(result.get("data"))
+            if (
+                data.get("source_analysis_id") != str(analysis.id)
+                or data.get("source_version") != analysis.version
+                or data.get("result_version") != analysis.version + 1
+                or data.get("operation") != body["operation"]
+            ):
+                raise ValueError
+            updated = self.analysis(analysis.deck_id, analysis.source_format)
+            if updated.version != data["result_version"]:
+                raise ValueError
+            return updated
+        except HTTPError as exc:
+            status = exc.code
+            message = "Correction could not be saved. Refresh the review and try again."
+            try:
+                error_body = json.loads(exc.read(65536))
+                detail = error_body.get("detail") if isinstance(error_body, dict) else None
+                if isinstance(detail, str) and detail:
+                    message = detail[:500]
+            except (ValueError, OSError):
+                pass
+            exc.close()
+            if status in {401, 403}:
+                raise LibraryAccessExpired("Sign in again to edit this saved review.") from None
+            if status == 409:
+                raise ServiceError(message) from None
+            if status == 404:
+                raise ServiceError("This action or presentation is no longer available.") from None
+            if status == 422:
+                raise ServiceError(message) from None
+            raise ServiceError(
+                "Correction could not be saved. Check the backend and retry."
+            ) from None
+        except (URLError, OSError, http.client.HTTPException):
+            raise ServiceError("Cannot reach saved Review. Retry the correction.") from None
+        except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
+            raise ServiceError("The backend returned an invalid correction result.") from None
 
     def source(
         self, deck_id: UUID, source_format: str = "pdf"

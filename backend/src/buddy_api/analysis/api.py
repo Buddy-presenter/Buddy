@@ -3,7 +3,8 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Header, Request, Response
+from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException
 
@@ -13,6 +14,11 @@ from buddy_api.analysis.contracts import (
     PDFAnalysisResultV2,
     PowerPointAnalysisResult,
 )
+from buddy_api.analysis.corrections import (
+    ActionCorrectionOutcome,
+    ActionCorrectionRequest,
+    correct_action,
+)
 from buddy_api.analysis.powerpoint_v1 import (
     PowerPointAnalysisResult as LegacyPowerPointAnalysisResult,
 )
@@ -20,7 +26,7 @@ from buddy_api.analysis.store import Analyses
 from buddy_api.auth import Principal, authenticated
 from buddy_api.authorization import ResourceKind, owned_resource
 from buddy_api.contracts import ErrorResponse
-from buddy_api.persistence.errors import PersistenceError, RecordNotFound
+from buddy_api.persistence.errors import PersistenceConflict, PersistenceError, RecordNotFound
 
 
 class AnalysisResponse(Model):
@@ -40,6 +46,11 @@ class PowerPointAnalysisResponse(Model):
 
 class PowerPointAnalysisResponseV2(Model):
     data: PowerPointAnalysisResult
+    request_id: str
+
+
+class ActionCorrectionResponse(Model):
+    data: ActionCorrectionOutcome
     request_id: str
 
 
@@ -72,6 +83,46 @@ def analysis_router() -> APIRouter:
                 if isinstance(result, PDFAnalysisResultV2):
                     raise HTTPException(409, "Upgrade Buddy to read this PDF analysis.")
                 return AnalysisResponse(data=result, request_id=request.state.request_id)
+        except (PersistenceError, SQLAlchemyError, OSError, TimeoutError):
+            raise HTTPException(503) from None
+
+    @router.post(
+        "/{identifier}/actions/{instance_id}/correction",
+        response_model=ActionCorrectionResponse,
+    )
+    async def correct(
+        identifier: UUID,
+        instance_id: str,
+        body: ActionCorrectionRequest,
+        request: Request,
+        response: Response,
+        principal: Annotated[Principal, Depends(authenticated)],
+        idempotency_key: Annotated[UUID, Header(alias="Idempotency-Key")],
+    ) -> ActionCorrectionResponse:
+        """Save an owner correction as a new immutable analysis revision."""
+        response.headers["Cache-Control"] = "no-store"
+        if not instance_id or len(instance_id) > 128 or not instance_id.strip():
+            raise HTTPException(422, "Invalid action identifier.")
+        try:
+            async with request.app.state.database.sessions() as session, session.begin():
+                await owned_resource(session, principal, ResourceKind.ANALYSES, identifier)
+                outcome = await correct_action(
+                    session,
+                    owner_id=principal.id,
+                    analysis_id=identifier,
+                    instance_id=instance_id,
+                    request_id=idempotency_key,
+                    inputs=body,
+                )
+                return ActionCorrectionResponse(data=outcome, request_id=request.state.request_id)
+        except PersistenceConflict as exc:
+            raise HTTPException(409, str(exc)) from None
+        except RecordNotFound:
+            raise HTTPException(404) from None
+        except ValidationError as exc:
+            raise HTTPException(422, "The corrected action is outside the source bounds.") from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
         except (PersistenceError, SQLAlchemyError, OSError, TimeoutError):
             raise HTTPException(503) from None
 
