@@ -357,11 +357,14 @@ def test_analyzed_deck_cleanup_removes_immutable_revision_tree(upload_app, monke
                         ),
                     ),
                 )
-                assert await session.scalar(
-                    select(func.count())
-                    .select_from(AnalysisCorrection)
-                    .where(AnalysisCorrection.deck_id == deck_id)
-                ) == 1
+                assert (
+                    await session.scalar(
+                        select(func.count())
+                        .select_from(AnalysisCorrection)
+                        .where(AnalysisCorrection.deck_id == deck_id)
+                    )
+                    == 1
+                )
                 session.add(
                     LegacyAnalysisPayload(analysis_id=analysis.id, payload={"legacy": True})
                 )

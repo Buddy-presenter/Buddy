@@ -44,7 +44,9 @@ def upgrade() -> None:
         sa.Column("request_id", sa.Uuid(), nullable=False),
         sa.Column("request_sha256", sa.String(64), nullable=False),
         sa.Column("document", postgresql.JSONB(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.ForeignKeyConstraint(
             ["source_analysis_id", "deck_id", "owner_id"],
             ["analysis_versions.id", "analysis_versions.deck_id", "analysis_versions.owner_id"],
@@ -68,7 +70,9 @@ def downgrade() -> None:
         raise RuntimeError("Preserve owner correction history before downgrading")
     op.drop_table("analysis_corrections")
     if op.get_bind().scalar(
-        sa.text("SELECT count(*) FROM action_validations WHERE evidence_source_validation_id IS NOT NULL")
+        sa.text(
+            "SELECT count(*) FROM action_validations WHERE evidence_source_validation_id IS NOT NULL"
+        )
     ):
         raise RuntimeError("Preserve copied validation evidence before downgrading")
     op.drop_constraint(
