@@ -243,6 +243,7 @@ def test_review_widget_loads_read_only_saved_page_and_clears_on_signout(
         return review_widget.ReviewQAResult("validated", None, tmp_path / "report.json")
 
     monkeypatch.setattr(review_widget, "run_review_qa", qa)
+
     def server_qa(current, action):
         state = "validated" if action.instance_id == "action-1" else "rejected"
         verified = state == "validated"

@@ -135,8 +135,7 @@ def run_review_qa(
                 if isinstance(region, dict) and set(region) == {"x", "y", "width", "height"}:
                     values = tuple(region[key] for key in ("x", "y", "width", "height"))
                     if all(
-                        type(value) in (int, float) and math.isfinite(value)
-                        for value in values
+                        type(value) in (int, float) and math.isfinite(value) for value in values
                     ):
                         corrected_region = tuple(float(value) for value in values)
             if state not in {"validated", "rejected", "unavailable"} or (

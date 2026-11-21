@@ -1538,9 +1538,7 @@ class PresentWidget(Page):
                 )
                 for action in slide.actions if slide else ():
                     eligible = (
-                        action.usable
-                        and action.state == "validated"
-                        and action.semantic_verified
+                        action.usable and action.state == "validated" and action.semantic_verified
                     )
                     label = f"{action.purpose} · {action.action_type}" + (
                         ""
