@@ -515,7 +515,6 @@ class PowerPointActionResultV2(Model):
     action: PowerPointContentActionV2
     state: ValidationState
     usable: bool
-    semantic_verified: bool = False
     validation: ValidationInput | None
 
 

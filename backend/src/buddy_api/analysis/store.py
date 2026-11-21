@@ -413,7 +413,11 @@ class Analyses:
                         action=instance,
                         state=state,
                         usable=action_is_usable(value.source_format, state, semantic_verified),
-                        semantic_verified=semantic_verified,
+                        **(
+                            {"semantic_verified": semantic_verified}
+                            if value.source_format == "pdf"
+                            else {}
+                        ),
                         validation=evidence,
                     )
                 )

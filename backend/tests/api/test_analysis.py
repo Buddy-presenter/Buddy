@@ -88,7 +88,11 @@ def test_pdf_requires_visual_proof_and_powerpoint_keeps_existing_gate(migrated_d
                     )
                     result = checked.slides[0].actions[0]
                     assert result.usable is (source_format == "pptx")
-                    assert not result.semantic_verified
+                    if source_format == "pdf":
+                        assert not result.semantic_verified
+                    else:
+                        assert result.validation is not None
+                        assert not result.validation.semantic_verified
                     if source_format == "pptx":
                         assert "visual_qa_pending_instance_ids" not in checked.inputs.model_dump()
         finally:
