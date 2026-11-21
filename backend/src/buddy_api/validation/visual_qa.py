@@ -164,6 +164,7 @@ class VisualQAService:
             or not isinstance(observation, str)
             or not observation.strip()
             or not isinstance(confidence, (int, float))
+            or isinstance(confidence, bool)
             or not 0 <= float(confidence) <= 1
         ):
             raise ValueError("Visual model returned a conflicting verdict.")
