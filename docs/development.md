@@ -108,7 +108,9 @@ are documented in [action validation](action-validation.md). It uses predefined 
 no model generation or document text extraction is required.
 
 Bounded native desktop test-session tools and separate PDF/Office capture requirements
-are documented in [isolated preflight](preflight-runner.md).
+are documented in [isolated preflight](preflight-runner.md). Publishing preflight results,
+the owner validation report and the gate on live actions are documented in
+[preflight publication](preflight-publication.md).
 
 Durable PDF metadata scheduling, SQS workers, owner job controls and opt-in staging
 verification are documented in [PDF workers](pdf-workers.md).

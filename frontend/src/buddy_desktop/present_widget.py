@@ -2392,11 +2392,25 @@ class PresentWidget(Page):
             self._session_generation,
             self.session_service,
         )
+        screen = self.screen()
+        runtime = (
+            {
+                "platform": sys.platform,
+                "renderer_version": "desktop-powerpoint-2"
+                if self._powerpoint_binding
+                else "pdfium-5.14.0-144dpi",
+                "display_profile": "wide-2x"
+                if not self._powerpoint_binding and screen and screen.devicePixelRatio() == 2
+                else "wide-1x",
+            }
+            if sys.platform in {"win32", "darwin"}
+            else None
+        )
         submitted = self._submit_session_task(
             "start",
             generation,
             None,
-            lambda: service.start(access, deck_id),
+            lambda: service.start(access, deck_id, runtime=runtime),
         )
         if submitted:
             self._session_attempt = key

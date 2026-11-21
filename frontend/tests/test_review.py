@@ -198,7 +198,7 @@ def test_review_widget_loads_read_only_saved_page_and_clears_on_signout(
     digest = hashlib.sha256(content).hexdigest()
     deck_id, payload = analysis_payload(source_sha256=digest)
     record = parse_analysis(payload, deck_id)
-    monkeypatch.setattr(ReviewService, "analysis", lambda _self, _deck: record)
+    monkeypatch.setattr(ReviewService, "analysis", lambda _self, _deck, _format="pdf": record)
     monkeypatch.setattr(
         ReviewService,
         "source",
@@ -230,24 +230,22 @@ def test_review_widget_loads_read_only_saved_page_and_clears_on_signout(
     submissions = []
     second_started, release_second = Event(), Event()
 
-    def qa(analysis, action, source, **options):
-        submissions.append((analysis, action, source, options["owner"]))
+    def qa(_self, analysis_id, instance_id, **options):
+        submissions.append((analysis_id, instance_id))
         assert options["correct"] is True
-        if action.instance_id == "second-action":
+        if instance_id == "second-action":
             second_started.set()
             if not release_second.wait(5):
                 raise TimeoutError("Second QA action was not released.")
-            return review_widget.ReviewQAResult(
-                "rejected", "wrong_target", tmp_path / "report.json"
-            )
-        return review_widget.ReviewQAResult("validated", None, tmp_path / "report.json")
+            return dict(state="rejected", reasons=["wrong_target"])
+        return dict(state="validated", reasons=[])
 
-    monkeypatch.setattr(review_widget, "run_review_qa", qa)
+    monkeypatch.setattr(review_widget.PreflightService, "run", qa)
     assert review.visual_qa_button.isEnabled()
     review.visual_qa_correct.setChecked(True)
     review.visual_qa_button.click()
     qtbot.waitUntil(lambda: "Visual QA: validated" in review.visual_qa_status.text())
-    assert submissions == [(record, record.slides[0].actions[0], content, "test-owner")]
+    assert submissions == [(record.id, record.slides[0].actions[0].instance_id)]
     assert not review.action_rows[0].usable
     second_action = replace(record.slides[0].actions[0], instance_id="second-action")
     second_slide = replace(record.slides[0], slide_id="second-slide", actions=(second_action,))
@@ -265,8 +263,8 @@ def test_review_widget_loads_read_only_saved_page_and_clears_on_signout(
         release_second.set()
     qtbot.waitUntil(lambda: "1 validated, 1 rejected" in review.visual_qa_status.text())
     assert submissions == [
-        (full_deck, record.slides[0].actions[0], content, "test-owner"),
-        (full_deck, second_action, content, "test-owner"),
+        (full_deck.id, record.slides[0].actions[0].instance_id),
+        (full_deck.id, second_action.instance_id),
     ]
     assert "2 of 2 checked" in review.visual_qa_status.text()
     window.account.session.tokens = None

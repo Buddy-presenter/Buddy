@@ -33,7 +33,7 @@ def sample():
 
 
 @pytest.mark.postgres
-def test_pdf_and_powerpoint_reads_preserve_their_distinct_validation_gates(migrated_database):
+def test_both_formats_require_visual_proof_after_execution_validation(migrated_database):
     from backend.tests.support.powerpoint import manifest, output, source
 
     from buddy_api.analysis.powerpoint import analysis_document
@@ -87,7 +87,7 @@ def test_pdf_and_powerpoint_reads_preserve_their_distinct_validation_gates(migra
                         ),
                     )
                     result = checked.slides[0].actions[0]
-                    assert result.usable == (source_format == "pptx")
+                    assert not result.usable
                     if source_format == "pdf":
                         assert not result.semantic_verified
                     else:

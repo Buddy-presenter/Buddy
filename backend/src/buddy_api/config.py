@@ -11,6 +11,7 @@ from enum import StrEnum
 from buddy_api.agent_provider import AgentSettings
 from buddy_api.embeddings import EmbeddingSettings
 from buddy_api.persistence.settings import DatabaseConfigurationError, DatabaseSettings
+from buddy_api.preflight.config import PreflightSettings
 from buddy_api.processing.config import WorkerSettings
 from buddy_api.speech import SpeechSettings
 from buddy_api.uploads.config import UploadSettings
@@ -59,6 +60,7 @@ class Settings:
     speech: SpeechSettings | None = field(default=None, repr=False)
     embeddings: EmbeddingSettings | None = field(default=None, repr=False)
     agent: AgentSettings | None = field(default=None, repr=False)
+    preflight: PreflightSettings | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.environment, Environment):
@@ -152,6 +154,24 @@ class Settings:
                     "Agent requires a Cohere key, optional positive monthly budget "
                     "and rate from 1 to 500 requests per minute."
                 ) from None
+        preflight = None
+        if values.get("BUDDY_PREFLIGHT_ENABLED", "false") not in {"true", "false"}:
+            raise ConfigurationError("BUDDY_PREFLIGHT_ENABLED must be true or false.")
+        if values.get("BUDDY_PREFLIGHT_ENABLED") == "true":
+            try:
+                preflight = PreflightSettings.model_validate(
+                    dict(
+                        python=values["BUDDY_PREFLIGHT_PYTHON"],
+                        region=values.get("BUDDY_AWS_REGION", "eu-central-1"),
+                        profile=values.get("BUDDY_PREFLIGHT_PROFILE", "wide-1x"),
+                        viewport_width=int(values.get("BUDDY_PREFLIGHT_WIDTH", "1280")),
+                        viewport_height=int(values.get("BUDDY_PREFLIGHT_HEIGHT", "720")),
+                    )
+                )
+            except (ValueError, KeyError):
+                raise ConfigurationError(
+                    "Preflight requires an approved installed Python executable."
+                ) from None
         return cls(
             environment,
             hosts,
@@ -168,4 +188,5 @@ class Settings:
             if values.get("BUDDY_COHERE_API_KEY")
             else None,
             agent,
+            preflight,
         )

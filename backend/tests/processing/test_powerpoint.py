@@ -98,11 +98,13 @@ def test_powerpoint_busy_waits_and_recovers_historical_results(migrated_database
             validator.validated = True
             await worker.maintain()
             await worker.run_message(queue.messages[-1])
-            assert (await row(db, job.id)).status == "analysis_ready"
+            # Execution passed, but live use waits for visual preflight (#53).
+            assert (await row(db, job.id)).status == "analysis_partial"
             assert len(calls) == old_calls + 1 and provider.calls == 1
             async with db.sessions() as session:
                 result = await Analyses(session).read(record.id, owner_id=owner.id)
-                assert result.slides[0].actions[0].usable
+                assert result.slides[0].actions[0].state == "validated"
+                assert not result.slides[0].actions[0].usable
                 assert result.slides[1].actions[0].state == "needs-review"
             generation = (await row(db, job.id)).generation
             await worker.maintain()

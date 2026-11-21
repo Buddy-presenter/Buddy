@@ -316,7 +316,9 @@ async def read_input(
                 "The saved analysis changed; reopen the presentation.",
             )
         try:
-            analysis = await request.app.state.candidate_analyses.read(db, record, principal.id)
+            analysis = await request.app.state.candidate_analyses.read(
+                db, record, principal.id, session.runtime_context
+            )
         except HTTPException as exc:
             if exc.status_code == 409:
                 raise agent_conflict(
@@ -664,7 +666,9 @@ def agent_router() -> APIRouter:
                 record, _ = await current_ready_analysis(db, deck, principal.id)
                 if record.id != values.analysis_id or record.source_format not in {"pdf", "pptx"}:
                     raise HTTPException(409, "This source has no compatible live agent runtime.")
-                analysis = await request.app.state.candidate_analyses.read(db, record, principal.id)
+                analysis = await request.app.state.candidate_analyses.read(
+                    db, record, principal.id, session.runtime_context
+                )
                 active_slide_id = values.active_slide_id or session.active_slide_id or ""
                 focus_view, focus_region = request_focus(
                     persisted_slide_id=session.active_slide_id,

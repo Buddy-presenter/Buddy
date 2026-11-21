@@ -1,5 +1,57 @@
 {
   "$defs": {
+    "ContentAction": {
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "1.1",
+          "title": "Version",
+          "type": "string"
+        },
+        "instance_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "purpose": {
+          "maxLength": 512,
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Purpose",
+          "type": "string"
+        },
+        "deck_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "render_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "slide_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "type": {
+          "enum": [
+            "zoom_region",
+            "highlight_region"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/RegionParameters"
+        }
+      },
+      "required": [
+        "version",
+        "instance_id",
+        "purpose",
+        "deck_id",
+        "render_id",
+        "slide_id",
+        "type",
+        "params"
+      ],
+      "title": "ContentAction",
+      "type": "object"
+    },
     "Digest": {
       "pattern": "^[0-9a-f]{64}$",
       "type": "string"
@@ -40,6 +92,162 @@
       "pattern": "\\S",
       "type": "string"
     },
+    "PowerPointContentActionV2": {
+      "additionalProperties": false,
+      "properties": {
+        "source_format": {
+          "const": "pptx",
+          "default": "pptx",
+          "title": "Source Format",
+          "type": "string"
+        },
+        "version": {
+          "const": "powerpoint-2",
+          "default": "powerpoint-2",
+          "title": "Version",
+          "type": "string"
+        },
+        "instance_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "purpose": {
+          "maxLength": 512,
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Purpose",
+          "type": "string"
+        },
+        "deck_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "render_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "slide_id": {
+          "$ref": "#/$defs/Identifier"
+        },
+        "type": {
+          "enum": [
+            "highlight_region",
+            "draw_rectangle",
+            "draw_oval",
+            "draw_underline",
+            "draw_arrow",
+            "callout",
+            "draw_line",
+            "filled_rectangle",
+            "filled_oval",
+            "text_box",
+            "draw_rounded_rectangle",
+            "draw_diamond",
+            "draw_triangle",
+            "draw_hexagon",
+            "draw_star",
+            "zoom_region"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/PowerPointParameters"
+        }
+      },
+      "required": [
+        "instance_id",
+        "purpose",
+        "deck_id",
+        "render_id",
+        "slide_id",
+        "type",
+        "params"
+      ],
+      "title": "PowerPointContentActionV2",
+      "type": "object"
+    },
+    "PowerPointParameters": {
+      "additionalProperties": false,
+      "properties": {
+        "region": {
+          "$ref": "#/$defs/Region"
+        },
+        "text": {
+          "default": "",
+          "maxLength": 300,
+          "title": "Text",
+          "type": "string"
+        },
+        "source_shape_id": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Shape Id"
+        },
+        "target_text": {
+          "default": "",
+          "maxLength": 300,
+          "title": "Target Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "region"
+      ],
+      "title": "PowerPointParameters",
+      "type": "object"
+    },
+    "Region": {
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "minimum": 0,
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "minimum": 0,
+          "title": "Y",
+          "type": "number"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "number"
+        },
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "title": "Region",
+      "type": "object"
+    },
+    "RegionParameters": {
+      "additionalProperties": false,
+      "properties": {
+        "region": {
+          "$ref": "#/$defs/Region"
+        }
+      },
+      "required": [
+        "region"
+      ],
+      "title": "RegionParameters",
+      "type": "object"
+    },
     "ValidationKind": {
       "enum": [
         "execution",
@@ -59,46 +267,14 @@
   },
   "additionalProperties": false,
   "properties": {
-    "action_sha256": {
-      "$ref": "#/$defs/Digest"
-    },
-    "analysis_id": {
-      "format": "uuid",
-      "title": "Analysis Id",
+    "source_format": {
+      "default": "pdf",
+      "enum": [
+        "pdf",
+        "pptx"
+      ],
+      "title": "Source Format",
       "type": "string"
-    },
-    "analysis_sha256": {
-      "$ref": "#/$defs/Digest"
-    },
-    "display_profile": {
-      "$ref": "#/$defs/Identifier"
-    },
-    "evidence": {
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/EvidenceReference"
-      },
-      "maxItems": 20,
-      "title": "Evidence",
-      "type": "array"
-    },
-    "instance_id": {
-      "$ref": "#/$defs/Identifier"
-    },
-    "reasons": {
-      "default": [],
-      "items": {
-        "maxLength": 512,
-        "minLength": 1,
-        "pattern": "\\S",
-        "type": "string"
-      },
-      "maxItems": 20,
-      "title": "Reasons",
-      "type": "array"
-    },
-    "renderer_version": {
-      "$ref": "#/$defs/Identifier"
     },
     "runtime_version": {
       "anyOf": [
@@ -117,34 +293,109 @@
       "title": "Schema Version",
       "type": "string"
     },
-    "semantic_verified": {
-      "default": false,
-      "title": "Semantic Verified",
-      "type": "boolean"
-    },
-    "source_format": {
-      "default": "pdf",
-      "enum": [
-        "pdf",
-        "pptx"
-      ],
-      "title": "Source Format",
-      "type": "string"
-    },
-    "state": {
-      "$ref": "#/$defs/ValidationState"
-    },
     "validation_id": {
       "format": "uuid",
       "title": "Validation Id",
       "type": "string"
     },
+    "analysis_id": {
+      "format": "uuid",
+      "title": "Analysis Id",
+      "type": "string"
+    },
+    "analysis_sha256": {
+      "$ref": "#/$defs/Digest"
+    },
+    "instance_id": {
+      "$ref": "#/$defs/Identifier"
+    },
+    "action_sha256": {
+      "$ref": "#/$defs/Digest"
+    },
+    "validator_version": {
+      "$ref": "#/$defs/Identifier"
+    },
+    "renderer_version": {
+      "$ref": "#/$defs/Identifier"
+    },
+    "display_profile": {
+      "$ref": "#/$defs/Identifier"
+    },
     "validation_kind": {
       "$ref": "#/$defs/ValidationKind",
       "default": "execution"
     },
-    "validator_version": {
-      "$ref": "#/$defs/Identifier"
+    "semantic_verified": {
+      "default": false,
+      "title": "Semantic Verified",
+      "type": "boolean"
+    },
+    "runtime_platform": {
+      "anyOf": [
+        {
+          "enum": [
+            "linux",
+            "win32",
+            "darwin"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runtime Platform"
+    },
+    "original_action_sha256": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Digest"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "executed_action": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ContentAction"
+        },
+        {
+          "$ref": "#/$defs/PowerPointContentActionV2"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Executed Action"
+    },
+    "state": {
+      "$ref": "#/$defs/ValidationState"
+    },
+    "reasons": {
+      "default": [],
+      "items": {
+        "maxLength": 512,
+        "minLength": 1,
+        "pattern": "\\S",
+        "type": "string"
+      },
+      "maxItems": 20,
+      "title": "Reasons",
+      "type": "array"
+    },
+    "evidence": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EvidenceReference"
+      },
+      "maxItems": 20,
+      "title": "Evidence",
+      "type": "array"
     }
   },
   "required": [
