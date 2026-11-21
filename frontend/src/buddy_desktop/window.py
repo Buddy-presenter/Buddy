@@ -126,6 +126,7 @@ class MainWindow(QMainWindow):
         self.library.present_requested.connect(self._open_saved_pdf)
         self.library.powerpoint_present_requested.connect(self._open_saved_powerpoint)
         self.library.review_requested.connect(self._open_review)
+        self.library.desktop_check_needed.connect(self._open_desktop_check)
         self.review.powerpoint_present_requested.connect(self._present_saved_powerpoint)
         self.review.powerpoint_invalidated.connect(self.present.invalidate_saved_powerpoint)
         self.review.back_requested.connect(lambda: self.navigation.setCurrentRow(1))
@@ -315,6 +316,20 @@ class MainWindow(QMainWindow):
         checks = deck.processing.checks if deck and deck.processing else None
         self.review.checks_available = checks.available if checks else None
         self.navigation.setCurrentRow(2)
+
+    def _open_desktop_check(self, deck: object) -> None:
+        """Open a just-processed PowerPoint in Review, which announces its checks."""
+        if (
+            not self.review.auto_checks
+            or self.navigation.currentRow() == 3  # never interrupt Present
+            or self.review.runner.busy
+            or not self.review.check_overlay.isHidden()
+        ):
+            return
+        deck_id = getattr(deck, "id", None)
+        if not isinstance(deck_id, UUID):
+            return
+        self._open_review(deck_id, deck.title, deck.status, "pptx")  # type: ignore[attr-defined]
 
     def _open_saved_powerpoint(self, deck_id: object, title: str, status: str) -> None:
         if isinstance(deck_id, UUID):

@@ -57,6 +57,9 @@ class SavedSource:
     sha256: str
 
 
+# PowerPoint checks start automatically (after a countdown) where desktop PowerPoint exists.
+AUTO_CHECKS = sys.platform == "win32"
+
 # Rendered PDF pages kept for instant revisits; each is a 144-DPI ARGB image.
 PAGE_CACHE_LIMIT = 8
 
@@ -214,9 +217,9 @@ def _action_status(action: ReviewAction, source_format: str) -> str:
             return "Ready"
         if "powerpoint_worker_busy_use_dedicated_session" in action.reasons:
             return "Waiting for PowerPoint"
-        if action.state == "validated" and not action.semantic_verified:
-            return "Checking"
-        return "Pending checks" if action.state == "candidate" else "Unavailable"
+        if action.state in {"candidate", "validated"} and not action.semantic_verified:
+            return "Needs check on this PC"
+        return "Unavailable"
     if action.semantic_verified:
         return "visually verified"
     if action.state == "validated":
@@ -458,6 +461,12 @@ class ReviewWidget(Page):
         self.check_overlay = CheckOverlay(self)
         # The run's cancel event is replaced per run; always stop the current one.
         self.check_overlay.stop_requested.connect(lambda: self.visual_qa_cancel.set())
+        self.check_overlay.start_requested.connect(self.run_all_visual_qa)
+        self.check_overlay.later_requested.connect(self._decline_auto_check)
+        # PowerPoint checks start on their own after a visible countdown (Windows only,
+        # where desktop PowerPoint exists). "Not now" skips a deck until Buddy restarts.
+        self.auto_checks = AUTO_CHECKS
+        self._auto_declined: set[UUID] = set()
         self.checks_available: bool | None = None
         self.check_poll = QTimer(self)
         self.check_poll.setInterval(5000)
@@ -635,11 +644,10 @@ class ReviewWidget(Page):
             desktop
             and checked < total
             and not running
-            # Processing may still be waiting for PowerPoint; keep refreshing then.
+            # Older analyses may still be waiting for PowerPoint; keep refreshing then.
+            # New PowerPoint candidates simply await this PC's one-pass check.
             and not any(
-                a.state == "candidate"
-                or "powerpoint_worker_busy_use_dedicated_session" in a.reasons
-                for a in actions
+                "powerpoint_worker_busy_use_dedicated_session" in a.reasons for a in actions
             )
         ):
             # Nothing changes until this PC runs the checks, so there is nothing to poll.
@@ -672,6 +680,41 @@ class ReviewWidget(Page):
                 self.check_poll.start()
         else:
             self.check_poll.stop()
+
+    def _pending_desktop_actions(self) -> tuple[ReviewAction, ...]:
+        if self.analysis is None or self.source_format != "pptx":
+            return ()
+        return tuple(
+            action
+            for slide in self.analysis.slides
+            for action in slide.actions
+            if action.raw is not None and not self._check_finished(action)
+        )
+
+    def maybe_auto_check(self) -> None:
+        """Announce, then automatically start, this PC's PowerPoint checks."""
+        pending = self._pending_desktop_actions()
+        if (
+            not self.auto_checks
+            or not pending
+            or not self.active
+            or self.closing
+            or self.runner.busy
+            or self.deck_id is None
+            or self.deck_id in self._auto_declined
+            or self.checks_available is False
+            or not self.check_overlay.isHidden()
+            or not self.token()
+        ):
+            return
+        # Announce at most once per deck per session; later runs are the user's choice.
+        self._auto_declined.add(self.deck_id)
+        self.check_overlay.announce(len(pending), self.window())
+
+    def _decline_auto_check(self) -> None:
+        if self.deck_id is not None:
+            self._auto_declined.add(self.deck_id)
+        self._update_check_progress()
 
     def run_selected_visual_qa(self) -> None:
         """Check again: rerun the selected action's check (after a failed check)."""
@@ -1352,6 +1395,9 @@ class ReviewWidget(Page):
         self._show_recheck(self.action_rows[row] if 0 <= row < len(self.action_rows) else None)
         if self.source_format == "pptx" and self.action_rows:
             self.action_selected()
+        if not self._present_on_load:
+            # Never interrupt "present this deck" with an automatic check.
+            self.maybe_auto_check()
         if self._present_on_load and self.active and not self.runner.busy:
             if self.present_powerpoint.isEnabled():
                 self._present_on_load = False
@@ -1610,12 +1656,13 @@ class ReviewWidget(Page):
             else "Save and close desktop PowerPoint. Buddy will automatically recheck this "
             "action; reopen Review to see the updated result."
             if "powerpoint_worker_busy_use_dedicated_session" in action.reasons
-            else "Validation is pending. Save and close PowerPoint if it is open; "
-            "Buddy resumes checks automatically."
-            if action.state == "candidate"
-            else "Checking this action in the real player. "
-            "It becomes Ready automatically if it passes."
-            if action.state == "validated" and not action.semantic_verified
+            else "This action needs a quick check on this PC. Choose Check on this PC above; "
+            "Buddy runs it once in PowerPoint and the server verifies the screenshots."
+            if self.source_format == "pptx"
+            and action.state in {"candidate", "validated"}
+            and not action.semantic_verified
+            else "Buddy is checking this action automatically. It becomes Ready if it passes."
+            if action.state in {"candidate", "validated"} and not action.semantic_verified
             else "This action is off. Open Details to see why; a failed check can be run "
             "again with Check again."
         )

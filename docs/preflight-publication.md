@@ -1,119 +1,112 @@
-# Preflight publication and live action gating (#53)
+# Action checks and live action gating (#53)
 
-Generated slide actions reach a live presentation only after a trusted preflight
-has executed them in Buddy's real player and an independent visual check has
-confirmed the target. This guide covers the owner-facing report, the gate on
-live sessions, configuration and operation. The isolated runner itself is
-described in [isolated preflight](preflight-runner.md); the vision verdict in
-[visual QA](visual-qa.md); bounded corrections in #51.
+A generated slide action reaches a live presentation only after it has been
+**executed in Buddy's real player and visually verified** by an independent vision
+model (Claude on Amazon Bedrock). Each action is executed **once**; the visual check
+judges the screenshots from that single run. The vision verdict is always made by
+the API server. The desktop never decides an outcome and never holds provider
+credentials.
+
+## Who checks what
+
+| | PDF | PowerPoint |
+| --- | --- | --- |
+| Executes the action | Processing worker, headless PDFium player (one run per action) | The owner's Buddy, real desktop PowerPoint |
+| Takes the screenshots | Same run (saved as execution evidence) | Same run, real fullscreen slideshow |
+| Judges them | API server visual QA (#135) reusing those screenshots | API server, per attempt |
+| Starts | Automatically after processing | Owner clicks **Check on this PC** in Review |
+| Runs on staging (Linux) | Yes | Yes (the server only judges) |
+
+PDF: processing executes each action and stores before/after screenshots. The
+server visual QA (`buddy_api.validation.visual_qa`) then judges **those**
+screenshots; it only executes the action itself if they are unavailable (for
+example after evidence retention). The API's background worker schedules these
+checks automatically for new analysis revisions.
+
+PowerPoint: processing does not open Office. After processing, Review shows
+"N PowerPoint actions need a quick check on this PC". **Check on this PC** runs each
+action once in an isolated desktop PowerPoint session (`buddy_desktop.desktop_capture`,
+`preflight_operator`, `preflight_worker`) and uploads each before/after screenshot
+pair to the API, which calls the vision model and records the verdict. Bounded
+corrections (#51) are tried automatically (up to three attempts). The final report
+is accepted only if every attempt, screenshot hash and outcome matches the verdicts
+the server issued.
+
+While PowerPoint checks run, a full-window notice asks the owner not to use the
+mouse or keyboard (input can move the pointer into the slide or end the show and
+spoil a screenshot) and offers **Stop after this action**.
 
 ## What is usable live
 
-An action is served to a live session (candidates, agent tools and accepted
-session actions) only when all of the following hold:
+An action is served to live sessions (candidates, agent tools and accepted session
+actions) only when its latest validation is `validated` **and** `semantic_verified`,
+bound to the exact analysis, action digest, source and renderer.
 
-- Its latest validation is `validated` **and** `semantic_verified` (visual QA
-  passed). Execution-only validation is never enough, for PDF or PowerPoint.
-- The validation is bound to the exact analysis revision, action digest,
-  source revision/hash and renderer version (`check_validation_evidence`).
-- The validation's runtime matches the session's runtime context: OS platform
-  (`win32`/`darwin`), renderer (`pdfium-5.14.0-144dpi` or `desktop-powerpoint-2`)
-  and display profile (`wide-1x`/`wide-2x`).
+- PDF evidence holds on any presenter display: every PDF is drawn by the same pinned
+  PDFium renderer in source coordinates.
+- PowerPoint evidence must come from the same OS and display scale as the presenter
+  (`wide-1x` at 100% Windows scaling, `wide-2x` at 200%). Present sends its runtime
+  when it starts a session; changing it resets focus to the full slide.
 
-Everything else (candidate, pending, needs-review, rejected, unavailable, stale
-or other-runtime results) is returned with `usable: false`. Present keeps the
-full slide, manual navigation and annotations available; an unavailable focus
-action never blocks presenting. A deck whose analysis is `partial` or
-`awaiting_validation` can still be presented in full-slide/manual mode.
+Anything else (unchecked, rejected, needs-review, stale or other-scale results) is
+`usable: false`. Present always keeps the full slide, manual navigation and
+annotations available. Pending checks never make a deck "Partial results"; that
+label only means a summary or analysis is missing.
 
-The desktop sends its runtime when it starts a session
-(`POST /api/v1/sessions` with `runtime`). Changing runtime on an existing
-session resets its focus to the full slide and clears the last accepted action.
-A client that sends no runtime gets no focus actions.
+## Owner report and progress
 
-## Corrected actions
+- **Library**: PDF shows a progress ring and `Checking · 3/6` while the server works,
+  then `Ready · 6/6 actions`. PowerPoint shows `Needs check · 0/24` until the owner
+  checks on their PC. A server that cannot check a format shows `Ready · actions off`.
+  The API adds `processing.checks` (`total`, `checked`, `ready`, `available`,
+  `active`, `mode`: `server` or `desktop`).
+- **Review**: a progress bar and `x of y checked · z Ready`; PDF refreshes itself
+  while server checks run. Each action shows Ready, Needs check on this PC, Waiting
+  for PowerPoint or Unavailable, with its target, correction state, verified
+  runtime/Office version, reasons and private before/after evidence
+  (**Action details & evidence**). **Check again** appears only for a finished,
+  failed check.
 
-If visual QA rejects an action and bounded correction is enabled, the corrected
-geometry is revalidated. A correction may only change the region; type,
-purpose, slide, deck and render ID must match the original. The stored analysis
-digest is unchanged: the verified `executed_action` in the validation evidence
-supplies the geometry that live sessions execute.
+Reports and evidence are private to the deck owner and deleted with the deck.
 
-## Owner validation report
+## API
 
-Checks start automatically once processing finishes, so there are no manual
-run-all, refresh or correction controls.
-
-- **Library** shows a progress ring and `Checking · 7/21` while checks run,
-  then `Ready · 19/21 actions`. A server without a trusted preflight host shows
-  `Ready · actions off`. Pending checks never make a deck "Partial results";
-  that label is only for missing summaries or analysis.
-- **Review** shows a progress bar with `Checking actions · x of y checked · z Ready`
-  and refreshes itself every 5 s until every action is checked. Each action shows
-  Ready, Checking, Waiting for PowerPoint or Unavailable, plus its intended target,
-  correction state, verified runtime/Office version, failure reasons and the
-  private before/after evidence (**Action details & evidence**).
-- **Check again** appears only for an action whose finished check failed. It
-  queues a new trusted check, with bounded corrections, and shows its phase and
-  attempt (up to 3).
-
-Reports and evidence are private to the deck owner and are deleted with the deck.
-The Library API adds `processing.checks` (`total`, `checked`, `ready`,
-`available`, `active`) for review-ready decks.
-
-API (owner-authenticated, `Cache-Control: no-store`):
+Owner-authenticated, `Cache-Control: no-store`; other owners get 404.
 
 | Endpoint | Behavior |
 | --- | --- |
-| `POST /api/v1/analyses/{analysis_id}/preflights` | Queue a check for one saved `instance_id`. Requires one `Idempotency-Key`. Clients choose profile, viewport, platform and whether to correct; they can never submit a verdict. 409 if the analysis is no longer current; 429 when the owner's queue is full. |
-| `GET /api/v1/preflights/{id}` | Phase, attempt, state, reasons, `corrected` and evidence references. |
-| `GET /api/v1/preflights/{id}/evidence/{artifact}` | The JSON report or a before/after PNG, hash-verified, as an attachment. |
+| `POST /api/v1/analyses/{analysis_id}/preflights` | Queue a check for one saved `instance_id` (one `Idempotency-Key`). PDF: checked by the server. PowerPoint: waits for the owner's desktop. |
+| `GET /api/v1/preflights/{id}` | Phase, attempt, state, reasons, `corrected`, evidence references. |
+| `POST /api/v1/preflights/{id}/claim` | Desktop starts a PowerPoint check; returns the bound snapshot (source hash, slide map, action, profile, viewport). 10-minute lease. |
+| `POST /api/v1/preflights/{id}/judge` | One attempt's before/after PNGs (base64, ≤3.75 MB each); the server returns and records the verdict. Attempts must arrive in order (max 3). A confident-enough (≥0.8) approval is required. |
+| `POST /api/v1/preflights/{id}/result` | Final report and screenshots; rejected with 409 unless they match the recorded verdicts. |
+| `POST /api/v1/preflights/{id}/fail` | Desktop could not capture; known reasons are kept, others become `desktop_check_failed`. |
+| `GET /api/v1/preflights/{id}/evidence/{artifact}` | Report or a before/after PNG, hash-verified. |
 
-Other owners and deleted decks get 404.
+Results are pinned to the analysis revision and action digest, so a new upload,
+analysis or owner correction makes old results stop counting. A check whose
+analysis changes while it runs is published as `stale`. Expired leases fail as
+`preflight_interrupted`.
 
-## Invalidation and scheduling
+## Configuration
 
-Results are pinned to the analysis revision, action digest, source hash,
-renderer and profile. A new source upload, a new analysis/graph revision or an
-owner correction produces a new analysis version, so earlier results stop
-matching and the action is unusable until it is checked again. On a trusted
-host the preflight worker automatically queues checks (up to 8 per pass) for
-actions in the latest ready analysis that have no check yet for this host's
-platform and profile. Completed failures are not retried automatically; the
-owner retries from Review. A check whose analysis changes while it runs is
-published as `stale` and never validates the new revision.
+No extra infrastructure is needed. The API's existing worker region and Bedrock
+permission (`api_bedrock_visual_qa`) judge PowerPoint screenshots; the server visual
+QA needs the configured action validator (`BUDDY_VALIDATOR_PYTHON`) for PDFs.
+`BUDDY_PREFLIGHT_*` settings remain only for an optional trusted desktop host that
+runs PDF checks in the real desktop player instead of the server.
 
-Phase and attempt are persisted, so progress survives restarts. A running check
-whose lease expires (about 8 minutes) is marked `failed` with
-`preflight_interrupted` and its partial evidence is removed.
-
-## Configuration (trusted host only)
-
-Preflight needs an interactive Windows or macOS desktop (PowerPoint requires
-Windows with desktop Office). The Linux staging/production API keeps it
-disabled; requests there complete as `unavailable` with
-`trusted_preflight_runtime_unavailable`, and no action becomes usable.
-
-| Variable | Requirement/default |
-| --- | --- |
-| `BUDDY_PREFLIGHT_ENABLED` | `true` or `false` (default). |
-| `BUDDY_PREFLIGHT_PYTHON` | Required when enabled: absolute path to the Python that has `buddy_desktop` installed. The child gets no network, AWS, database or Buddy credentials. |
-| `BUDDY_PREFLIGHT_PROFILE` | `wide-1x` (default, 100% Windows scaling) or `wide-2x` (200%); must match the host display and the presenters' displays, for PDF and PowerPoint alike. A mismatch makes every check `unavailable: unsupported_display_profile`. |
-| `BUDDY_PREFLIGHT_WIDTH` / `BUDDY_PREFLIGHT_HEIGHT` | Viewport, default `1280`×`720`; 320–4096. |
-| `BUDDY_AWS_REGION` | Bedrock region for the visual judge, default `eu-central-1`. AWS credentials come from the host's normal AWS configuration. |
-
-Apply migration `0024_preflight_publication` before enabling. It only adds
-nullable/defaulted columns, so the previous release keeps working against it.
+Apply migration `0024_preflight_publication` before deploying (additive; the
+previous release keeps working against it).
 
 ## Testing
 
-Automated: `python scripts/test.py api` and `python scripts/test.py desktop`.
-Set `BUDDY_TEST_DATABASE_URL` for the database-backed preflight, gating and
-session tests. They use a scripted judge and never call Bedrock.
+Automated: `python scripts/test.py api` and `python scripts/test.py desktop` (set
+`BUDDY_TEST_DATABASE_URL` for the database-backed tests). They use scripted
+verdicts and never call Bedrock.
 
-Manual end to end on Windows: run the local API with preflight enabled
-(see [development](development.md)), upload a PDF and a PPTX, wait for
-processing, then in Review run visual QA on all actions. Confirm validated
-actions show **Ready** with before/after evidence, rejected ones stay
-unavailable with a reason, and Present offers only Ready actions while manual
-navigation still works.
+Manual, on Windows with desktop PowerPoint: upload a PDF and a PPTX, wait for
+processing, and confirm the PDF turns Ready on its own while the PPTX shows
+"Needs check". Open the PPTX in Review, choose **Check on this PC**, leave the mouse
+and keyboard alone until the notice closes, then confirm verified actions show Ready
+with before/after evidence and Present offers only Ready actions.

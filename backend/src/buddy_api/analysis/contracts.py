@@ -568,7 +568,13 @@ def publication(
         return "partial"
     # Pending visual preflight is progress, not a partial result: the live gate is
     # enforced per action through `usable`, and Library reports check progress.
-    if any(a.state == "candidate" for s in slides for a in s.actions):
+    # PowerPoint candidates are expected after processing: the owner's desktop check
+    # executes and verifies them in one pass (#53). Only PDF execution is pending here.
+    if any(
+        a.state == "candidate" and getattr(a.action, "source_format", "pdf") != "pptx"
+        for s in slides
+        for a in s.actions
+    ):
         return "awaiting_validation"
     return "published"
 

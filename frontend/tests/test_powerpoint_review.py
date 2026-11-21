@@ -1,6 +1,7 @@
 import hashlib
 import json
 import time
+from datetime import UTC, datetime
 from threading import Event
 from types import SimpleNamespace
 from uuid import uuid4
@@ -132,6 +133,99 @@ def test_checks_are_automatic_with_no_manual_run_controls(desktop_window):
         assert review.visual_qa_correct.isHidden()
         assert review.desktop_banner.isHidden()
         assert review.check_overlay.isHidden()
+
+
+@pytest.mark.parametrize("choice", ["countdown", "not_now"])
+def test_powerpoint_checks_start_automatically_after_a_visible_countdown(
+    desktop_window, monkeypatch, qtbot, choice
+):
+    import buddy_desktop.check_overlay as check_overlay
+    import buddy_desktop.review_widget as review_widget
+    from buddy_desktop.preflight_service import PreflightService
+    from buddy_desktop.review_service import ReviewService
+
+    monkeypatch.setattr(review_widget, "AUTO_CHECKS", True)
+    monkeypatch.setattr(check_overlay, "COUNTDOWN_SECONDS", 1)
+    content = b"PK-synthetic-source"
+    deck, payload = powerpoint_payload(content, usable=False)
+    pending = parse_analysis(payload, deck)
+    monkeypatch.setattr(ReviewService, "analysis", lambda *_args: pending)
+    monkeypatch.setattr(
+        ReviewService,
+        "source",
+        lambda *_args: DownloadedPowerPoint(content, str(deck), "revision-1"),
+    )
+    seen = []
+    monkeypatch.setattr(
+        PreflightService,
+        "run_on_desktop",
+        lambda _self, analysis_id, instance_id, *_a, **_k: (
+            seen.append(instance_id) or dict(state="validated", instance_id=instance_id)
+        ),
+    )
+    window = desktop_window()
+    window.account.session = SimpleNamespace(
+        tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
+    )
+    window.account.session_changed.emit()
+    window.navigation.setCurrentRow(2)
+    review = window.review
+    review.set_deck(deck, "Deck.pptx", "processing", "pptx")
+    overlay = review.check_overlay
+    # The user is told first: a countdown with Start now / Not now.
+    qtbot.waitUntil(lambda: not overlay.isHidden())
+    assert overlay.parentWidget() is window
+    assert "don't use the mouse or keyboard" in overlay.message.text()
+    assert not overlay.later.isHidden() and not overlay.start_now.isHidden()
+    assert "Starting in" in overlay.step.text()
+    if choice == "not_now":
+        overlay.later.click()
+        assert overlay.isHidden() and seen == []
+        # Not announced again for this deck in this session.
+        review.maybe_auto_check()
+        assert overlay.isHidden() and not review.desktop_banner.isHidden()
+        return
+    # Without any input, the check starts on its own when the countdown ends.
+    qtbot.waitUntil(lambda: bool(seen), timeout=5000)
+    qtbot.waitUntil(lambda: not review.runner.busy and overlay.isHidden(), timeout=5000)
+    assert seen == [pending.slides[0].actions[0].instance_id]
+
+
+def test_library_opens_review_for_a_powerpoint_processed_this_session(desktop_window, monkeypatch):
+    import buddy_desktop.review_widget as review_widget
+    from buddy_desktop.library_service import CheckProgress, DeckSummary, ProcessingDetail
+
+    monkeypatch.setattr(review_widget, "AUTO_CHECKS", True)
+    window = desktop_window()
+    opened = []
+    monkeypatch.setattr(window, "_open_review", lambda *args: opened.append(args))
+    deck = DeckSummary(
+        uuid4(),
+        "Deck.pptx",
+        datetime.now(UTC),
+        "ready",
+        1,
+        "pptx",
+        False,
+        ProcessingDetail(
+            None,
+            "review_ready",
+            None,
+            100,
+            1,
+            None,
+            False,
+            False,
+            CheckProgress(3, 0, 0, True, True, "desktop"),
+        ),
+    )
+    window.library.desktop_check_needed.emit(deck)
+    assert opened == [(deck.id, "Deck.pptx", "ready", "pptx")]
+    # Never while presenting.
+    opened.clear()
+    window.navigation.setCurrentRow(3)
+    window.library.desktop_check_needed.emit(deck)
+    assert opened == []
 
 
 def test_powerpoint_check_banner_and_do_not_touch_overlay(desktop_window, monkeypatch, qtbot):
@@ -734,3 +828,27 @@ def test_busy_checks_refresh_without_reopening_or_downloading_the_source(
     assert len(reads) == 1 and review.pdf_content == content
     assert "1 of 1 Ready" in review.check_label.text()
     assert not review.check_poll.isActive()
+
+
+def test_countdown_follows_the_real_clock_even_when_ticks_are_late(qtbot, monkeypatch):
+    """A busy window can deliver timer ticks late; the countdown must not stretch."""
+    from PySide6.QtWidgets import QWidget
+
+    import buddy_desktop.check_overlay as check_overlay
+    from buddy_desktop.check_overlay import CheckOverlay
+
+    clock = [100.0]
+    monkeypatch.setattr(check_overlay.time, "monotonic", lambda: clock[0])
+    host = QWidget()
+    qtbot.addWidget(host)
+    overlay = CheckOverlay(host)
+    started = []
+    overlay.start_requested.connect(lambda: started.append(True))
+    overlay.announce(3, host)
+    assert overlay.step.text() == "Starting in 10 seconds…"
+    clock[0] += 4.2  # one late tick after 4.2 real seconds
+    overlay._tick()
+    assert overlay.step.text() == "Starting in 6 seconds…" and not started
+    clock[0] += 5.9
+    overlay._tick()
+    assert started == [True]

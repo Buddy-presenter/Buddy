@@ -52,11 +52,11 @@ During a batch, **V** counts validated actions and **R** counts rejected actions
 Unavailable checks and execution failures have separate counters. Counts update
 after each completed action, including checks from other slides in the deck.
 
-Review sends each check to the API's trusted preflight worker, which runs the
-operator on its own desktop host with its own AWS credentials; the desktop holds
-no provider credentials. The worker needs a Windows or macOS API host with
-preflight enabled (see [preflight publication](preflight-publication.md)).
-Against a Linux API, checks complete as unavailable.
+Checks now run without these buttons: PDFs are judged automatically by the server
+using the screenshots from processing, and PowerPoint actions are run once on the
+owner's PC (**Check on this PC**) while the server judges each screenshot pair. The
+desktop holds no provider credentials. See
+[action checks and live gating](preflight-publication.md).
 Correction and revalidation orchestration is tracked by #51. Publishing reports
 in Review and gating live tools are described in [preflight publication](preflight-publication.md).
 

@@ -196,3 +196,36 @@ def test_judge_fails_closed_on_missing_ambiguous_or_conflicting_verdict(action, 
             before=b"before-image",
             after=b"after-image",
         )
+
+
+def test_processing_screenshots_are_reused_instead_of_executing_twice():
+    from buddy_api.analysis.contracts import EvidenceReference
+    from buddy_api.validation.visual_qa import reusable_execution
+
+    def prior(**changes):
+        values = dict(
+            validation_kind="execution",
+            state="validated",
+            action_sha256="a" * 64,
+            validation_id=uuid4(),
+            validator_version="pdf-executor-1",
+            renderer_version="pdfium-5.14.0-144dpi",
+            display_profile="wide-1x",
+            runtime_version=None,
+            evidence=tuple(
+                EvidenceReference(id=uuid4(), kind=kind, sha256="b" * 64)
+                for kind in ("before_image", "after_image", "report")
+            ),
+        )
+        return SimpleNamespace(**{**values, **changes})
+
+    passed = prior()
+    reused = reusable_execution(passed, "a" * 64)
+    assert reused.id == passed.validation_id and reused.result.state == "validated"
+    assert reused.result.profile == "wide-1x" and reused.evidence == passed.evidence
+    # Anything other than a passed execution of this exact action runs once again.
+    assert reusable_execution(None, "a" * 64) is None
+    assert reusable_execution(passed, "c" * 64) is None
+    assert reusable_execution(prior(state="needs-review"), "a" * 64) is None
+    assert reusable_execution(prior(validation_kind="visual"), "a" * 64) is None
+    assert reusable_execution(prior(evidence=passed.evidence[2:]), "a" * 64) is None

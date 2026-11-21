@@ -641,11 +641,15 @@ class Processor:
                     and POWERPOINT_BUSY_REASON in result.validation.reasons
                 )
 
+            # PowerPoint actions are executed and visually verified in one pass by the
+            # owner's desktop check (#53), so processing does not run them in Office
+            # first (which a Linux worker cannot do anyway). PDFs are executed here once;
+            # the server visual QA then judges these same screenshots.
             required_checks = [
                 action
                 for slide in analysis_result.slides
                 for action in slide.actions
-                if action.action.instance_id not in visual_qa_pending
+                if action.action.instance_id not in visual_qa_pending and _format != "pptx"
             ]
             completed_checks = sum(not needs_validation(action) for action in required_checks)
             has_candidates = completed_checks < len(required_checks)
@@ -656,7 +660,7 @@ class Processor:
             duplicate_candidate_ids = self._duplicate_candidate_ids(analysis_result.slides)
             for slide in analysis_result.slides:
                 for action_result in slide.actions:
-                    if not needs_validation(action_result):
+                    if _format == "pptx" or not needs_validation(action_result):
                         continue
                     if action_result.action.instance_id in visual_qa_pending:
                         # Geometry inside a flattened image is deliberately kept as a

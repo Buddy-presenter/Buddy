@@ -32,89 +32,6 @@ from buddy_api.uploads.storage import SourceStorage
 pytestmark = pytest.mark.postgres
 
 
-def test_powerpoint_busy_waits_and_recovers_historical_results(migrated_database):
-    from buddy_api.validation.powerpoint import POWERPOINT_BUSY_REASON
-
-    async def scenario():
-        content, _ = source()
-        db = Database(migrated_database)
-        try:
-            owner, deck, job = await seed(db, content=content, source_format="pptx")
-            provider = Provider(actions=("draw_rectangle",))
-            worker, queue, _ = processor(db, content, provider=provider)
-            calls = []
-
-            class Validator:
-                busy = True
-                validated = False
-
-                async def reconcile(self):
-                    pass
-
-                async def validate(self, owner_id, deck_id, key, request, **kwargs):
-                    calls.append(request)
-                    return powerpoint_result(
-                        deck, request, busy=self.busy, validated=self.validated
-                    )
-
-            validator = Validator()
-            worker.validation = validator
-            await worker.maintain()
-            await worker.run_message(queue.messages[-1])
-            current = await row(db, job.id)
-            assert current.status == "retry_wait" and current.attempts == 0
-            assert current.error_code == "powerpoint_busy"
-            async with db.sessions() as session, session.begin():
-                current = await session.get(ProcessingJob, job.id)
-                current.not_before = store.now()
-                outbox = await session.get(JobOutbox, job.id)
-                outbox.available_at = store.now()
-            validator.busy = False
-            await worker.maintain()
-            await worker.run_message(queue.messages[-1])
-            assert (await row(db, job.id)).status == "analysis_ready"
-            async with db.sessions() as session, session.begin():
-                analyses = Analyses(session)
-                record = await analyses.latest_for_deck(deck.id, owner_id=owner.id)
-                result = await analyses.read(record.id, owner_id=owner.id)
-                first = result.slides[0].actions[0]
-                await analyses.record_validation(
-                    owner_id=owner.id,
-                    result=ValidationInput(
-                        source_format="pptx",
-                        validation_id=uuid4(),
-                        analysis_id=result.id,
-                        analysis_sha256=result.analysis_sha256,
-                        instance_id=first.action.instance_id,
-                        action_sha256=digest(first.action),
-                        validator_version="powerpoint-executor-2",
-                        renderer_version="desktop-powerpoint-2",
-                        display_profile="windows-powerpoint-2",
-                        state="needs-review",
-                        reasons=(POWERPOINT_BUSY_REASON,),
-                    ),
-                )
-            old_calls = len(calls)
-            validator.validated = True
-            await worker.maintain()
-            await worker.run_message(queue.messages[-1])
-            # Processing is ready; live use still waits for visual preflight (#53).
-            assert (await row(db, job.id)).status == "analysis_ready"
-            assert len(calls) == old_calls + 1 and provider.calls == 1
-            async with db.sessions() as session:
-                result = await Analyses(session).read(record.id, owner_id=owner.id)
-                assert result.slides[0].actions[0].state == "validated"
-                assert not result.slides[0].actions[0].usable
-                assert result.slides[1].actions[0].state == "needs-review"
-            generation = (await row(db, job.id)).generation
-            await worker.maintain()
-            assert (await row(db, job.id)).generation == generation
-        finally:
-            await db.close()
-
-    asyncio.run(scenario())
-
-
 def test_powerpoint_busy_is_not_cached_as_completed_evidence(migrated_database, monkeypatch):
     import sys
     from types import SimpleNamespace
@@ -436,7 +353,9 @@ def test_powerpoint_candidates_survive_runtime_failure_and_reject_pdf_evidence(
             await worker.maintain()
             await worker.run_message(queue.messages[0])
             current = await row(db, job.id)
-            assert current.status == "retry_wait" and current.error_code == "validator_unavailable"
+            # No Office runtime is needed during processing: the owner's desktop check
+            # executes and verifies each PowerPoint action in one pass (#53).
+            assert current.status == "analysis_ready" and current.error_code is None
             async with db.sessions() as session, session.begin():
                 analyses = Analyses(session)
                 record = await analyses.latest_for_deck(deck.id, owner_id=owner.id)
@@ -477,19 +396,8 @@ def test_powerpoint_candidates_survive_runtime_failure_and_reject_pdf_evidence(
         assert client.get(path).status_code in {403, 404}
 
 
-def test_large_powerpoint_validation_resumes_before_deadline_without_regeneration(
-    migrated_database, monkeypatch
-):
-    import sys
-    from types import SimpleNamespace
-
-    import buddy_api.processing.service as service_module
-    from buddy_api.analysis.contracts import PowerPointContentAction
-    from buddy_api.validation.contracts import PowerPointStoredResult
-    from buddy_api.validation.powerpoint import PowerPointProcessResult
-
-    elapsed = [0.0]
-    monkeypatch.setattr(service_module, "time", SimpleNamespace(perf_counter=lambda: elapsed[0]))
+def test_powerpoint_processing_leaves_one_pass_checks_to_the_desktop(migrated_database):
+    """Processing never runs PowerPoint actions in Office; the desktop check does it once."""
 
     async def scenario():
         content, _ = source()
@@ -498,53 +406,32 @@ def test_large_powerpoint_validation_resumes_before_deadline_without_regeneratio
             owner, deck, job = await seed(db, content=content, source_format="pptx")
             provider = Provider(actions=("highlight_region", "draw_underline"))
             worker, queue, _ = processor(db, content, provider=provider)
-            worker.settings = WORKER.model_copy(update={"runtime_seconds": 300})
             calls = []
 
             class Validator:
                 async def reconcile(self):
                     pass
 
-                async def validate(self, owner_id, deck_id, key, request, **kwargs):
-                    calls.append(key)
-                    elapsed[0] += 250
-                    return PowerPointStoredResult(
-                        id=uuid4(),
-                        deck_id=deck_id,
-                        evidence=[],
-                        result=PowerPointProcessResult(
-                            state="needs-review",
-                            reasons=["test_runtime_unavailable"],
-                            runtime_platform=sys.platform,
-                            source_revision=deck.source_revision,
-                            source_sha256=deck.source_sha256,
-                            action_sha256=digest(
-                                PowerPointContentAction.model_validate(request.action)
-                            ),
-                        ),
-                    )
+                async def validate(self, *args, **kwargs):
+                    calls.append(args)
+                    raise AssertionError("PowerPoint must not be executed during processing")
 
             worker.validation = Validator()
-            for index in range(4):
-                if index:
-                    async with db.sessions() as session, session.begin():
-                        current = await session.get(ProcessingJob, job.id)
-                        current.not_before = store.now()
-                        outbox = await session.get(JobOutbox, job.id)
-                        outbox.available_at = store.now()
-                await worker.maintain()
-                await worker.run_message(queue.messages[-1])
-                current = await row(db, job.id)
-                if index < 3:
-                    assert current.status == "retry_wait" and current.attempts == 0
-                else:
-                    assert current.status == "analysis_ready" and current.attempts == 1
-            assert provider.calls == 1
-            assert len(calls) == len(set(calls)) == 4
+            await worker.maintain()
+            await worker.run_message(queue.messages[-1])
+            current = await row(db, job.id)
+            assert current.status == "analysis_ready" and current.attempts == 1
+            assert provider.calls == 1 and calls == []
             async with db.sessions() as session:
                 record = await Analyses(session).latest_for_deck(deck.id, owner_id=owner.id)
                 result = await Analyses(session).read(record.id, owner_id=owner.id)
-                assert all(a.state != "candidate" for s in result.slides for a in s.actions)
+                # Published for Review/Present; every action awaits the desktop check.
+                assert result.publication == "published"
+                assert all(
+                    a.state == "candidate" and not a.usable
+                    for s in result.slides
+                    for a in s.actions
+                )
         finally:
             await db.close()
 

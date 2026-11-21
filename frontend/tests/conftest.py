@@ -8,6 +8,14 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def no_automatic_powerpoint_checks(monkeypatch):
+    """Automatic PowerPoint checks take over the screen; tests opt in explicitly."""
+    import buddy_desktop.review_widget as review_widget
+
+    monkeypatch.setattr(review_widget, "AUTO_CHECKS", False)
+
+
+@pytest.fixture(autouse=True)
 def reclaim_qt_objects_on_gui_thread(request):
     """Finish deferred widget destruction before another test can collect wrappers."""
     if "qapp" not in request.fixturenames:

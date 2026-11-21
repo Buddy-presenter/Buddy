@@ -143,6 +143,8 @@ class LibraryWidget(QWidget):
     activity_changed = Signal(bool)
     present_requested = Signal(object)
     review_requested = Signal(object, str, str, str)
+    # A PowerPoint finished processing in this session and needs this PC's check.
+    desktop_check_needed = Signal(object)
     powerpoint_present_requested = Signal(object, str, str)
     private_invalidated = Signal()
     deck_deleted = Signal(object)
@@ -167,6 +169,7 @@ class LibraryWidget(QWidget):
         self.pending = False
         self.account_busy = False
         self.last_page: LibraryPage | None = None
+        self._watched_processing: set[UUID] = set()
         self.account_key: tuple[int, str | None, str] | None = None
         self.upload_keys: dict[tuple[Path, int, int], UUID] = {}
         self.upload_request: tuple[tuple[Path, int, int], UUID] | None = None
@@ -665,6 +668,28 @@ class LibraryWidget(QWidget):
                 next((i for i, deck in enumerate(result.items) if deck.id == selected_id), 0)
             )
             self.selection_changed()
+            for entry in result.items:
+                processing = entry.processing
+                if processing is not None and processing.state in {
+                    "uploaded",
+                    "queued",
+                    "inspecting_pdf_metadata",
+                    "analyzing",
+                    "validating",
+                }:
+                    self._watched_processing.add(entry.id)
+                elif (
+                    entry.id in self._watched_processing
+                    and entry.source_format == "pptx"
+                    and processing is not None
+                    and processing.state == "review_ready"
+                    and processing.checks is not None
+                    and processing.checks.mode == "desktop"
+                    and processing.checks.active
+                ):
+                    # A PowerPoint processed while Buddy was open: check it on this PC.
+                    self._watched_processing.discard(entry.id)
+                    self.desktop_check_needed.emit(entry)
             checking = any(
                 item.processing is not None
                 and item.processing.checks is not None

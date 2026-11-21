@@ -72,7 +72,11 @@ def seed(client, uploads, source_format="pdf"):
             deck.source_slide_count = len(document.manifest.slides)
             job = await repos.analyses.session.get(ProcessingJob, document.job_id)
             job.source_revision = document.source_revision
-            job.status, job.stage_state, job.progress = "analysis_partial", "succeeded", 100
+            # Match what processing records for this publication.
+            job.status = (
+                "analysis_ready" if record.publication == "published" else "analysis_partial"
+            )
+            job.stage_state, job.progress = "succeeded", 100
             return owner, deck.id, record.id, document, record.content_sha256
 
     return client.portal.call(create)
