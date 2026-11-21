@@ -57,8 +57,8 @@ def summary(record: AnalysisVersion | AnalysisSlide) -> Summary:
 
 
 def action_is_usable(source_format: str, state: str, semantic_verified: bool) -> bool:
-    """Execution success alone never establishes that the intended target was selected."""
-    return state == "validated" and semantic_verified
+    """Require visual QA for PDFs while preserving the existing PowerPoint gate."""
+    return state == "validated" and (source_format == "pptx" or semantic_verified)
 
 
 def check_validation_evidence(
