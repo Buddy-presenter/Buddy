@@ -152,7 +152,11 @@ class PreflightService:
 
         try:
             captured = capture_check(snapshot, source, judge, cancelled, progress)
-        except (OSError, ValueError, KeyError, TypeError):
+        except LibraryAccessExpired:
+            raise
+        except (ServiceError, OSError, ValueError, KeyError, TypeError):
+            # Includes a failed screenshot upload: always close the check on the server
+            # instead of leaving it "running" until its lease expires.
             captured = None
         report_body = captured.report if captured else None
         if (

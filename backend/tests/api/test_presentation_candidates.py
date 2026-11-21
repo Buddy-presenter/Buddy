@@ -363,6 +363,21 @@ def test_action_slots_are_bounded():
     assert len([c for c in result if c.action_id]) == 3 and len(result) <= 8
 
 
+def test_semantic_action_documents_include_the_targeted_slide_text():
+    """#202: production retrieval embeds what the action points at, not just its purpose."""
+    from buddy_api.semantic_candidates import documents
+
+    deck = analysis("intro", "results")
+    deck.slides[1].actions = (
+        saved("growth", "Emphasise the key result", "Revenue grew twelve percent"),
+        saved("hidden", "Unverified", "Secret", verified=False),
+    )
+    texts = {d.action_id: d.text for d in documents(deck) if d.action_id}
+    assert texts == {
+        "growth": "Slide 2. Emphasise the key result Target: Revenue grew twelve percent"
+    }
+
+
 def test_end_of_deck_and_maximum_deck_are_bounded():
     deck = analysis(*(f"topic{i}" for i in range(500)))
     assert {c.slide_id for c in resolve(deck, "slide-499", "next slide")} == {"slide-499"}

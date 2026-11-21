@@ -131,7 +131,8 @@ The versioned, owner-scoped candidate resolver is documented in
 [presentation candidates](presentation-candidates.md).
 
 The opt-in decision loop, constrained tools, provider setup and manual suggestion check
-are documented in [presentation agent](presentation-agent.md).
+are documented in [presentation agent](presentation-agent.md). How speech selects and
+runs verified saved zoom/highlight actions is in [speech-triggered actions](speech-actions.md).
 
 Presenter-owned opt-in execution, measured calibration, undo and the remaining PowerPoint
 dependency are documented in [transition policy](transition-policy.md).

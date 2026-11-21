@@ -41,12 +41,17 @@ def documents(analysis: AnalysisResult | PowerPointAnalysisResult) -> tuple[Docu
             )
         for action in slide.actions:
             if candidate_action_eligible(action):
+                # Include the slide text the action targets, so speech that names the
+                # content ("the revenue chart") retrieves it, not only its purpose (#202).
+                target = getattr(getattr(action.action, "params", None), "target_text", None)
                 result.append(
                     Document(
                         slide.slide_id,
                         action.action.instance_id,
                         action.action.type,
-                        f"Slide {position}. " + action.action.purpose,
+                        f"Slide {position}. "
+                        + action.action.purpose
+                        + (f" Target: {target}" if isinstance(target, str) and target else ""),
                     )
                 )
     if not result or len(result) > 1500 or sum(len(d.text) for d in result) > 2_000_000:
