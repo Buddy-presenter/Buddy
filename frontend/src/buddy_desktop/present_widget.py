@@ -1470,7 +1470,7 @@ class PresentWidget(Page):
             action is None
             or not action.usable
             or action.state != "validated"
-            or (analysis.source_format == "pdf" and not action.semantic_verified)
+            or not action.semantic_verified
         ):
             self.generated_status.setText("This action is no longer eligible.")
             return
@@ -1540,7 +1540,7 @@ class PresentWidget(Page):
                     eligible = (
                         action.usable
                         and action.state == "validated"
-                        and (analysis.source_format == "pptx" or action.semantic_verified)
+                        and action.semantic_verified
                     )
                     label = f"{action.purpose} · {action.action_type}" + (
                         ""

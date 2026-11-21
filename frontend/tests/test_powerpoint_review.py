@@ -71,6 +71,8 @@ def powerpoint_payload(content=b"PK-synthetic-source", *, usable=True, kind="hig
         validation={
             "source_format": "pptx",
             "schema_version": "buddy.validation.v1",
+            "validation_kind": "visual" if usable else "execution",
+            "semantic_verified": usable,
             "validation_id": str(uuid4()),
             "analysis_id": data["id"],
             "analysis_sha256": data["analysis_sha256"],
@@ -138,13 +140,29 @@ def test_powerpoint_review_preserves_independent_visual_verification():
     assert action.validation_kind == "visual"
 
 
+def test_powerpoint_execution_proof_alone_is_not_usable():
+    deck, payload = powerpoint_payload(usable=False, kind="highlight_region")
+    result = payload["data"]["slides"][0]["actions"][0]
+    result.update(state="validated", usable=False)
+    result["validation"].update(
+        state="validated",
+        validation_kind="execution",
+        semantic_verified=False,
+        reasons=[],
+    )
+    action = parse_analysis(payload, deck).slides[0].actions[0]
+    assert action.state == "validated"
+    assert not action.usable and not action.semantic_verified
+    assert action.validation_kind == "execution"
+
+
 @pytest.mark.parametrize("kind", KINDS)
 def test_powerpoint_review_all_actions_map_to_the_typed_real_executor(kind):
     deck, payload = powerpoint_payload(kind=kind)
     analysis = parse_analysis(payload, deck)
     slide, action = analysis.slides[0], analysis.slides[0].actions[0]
     assert analysis.source_format == "pptx" and slide.native_slide_id == 256
-    assert action.usable and action.runtime_version == "16.0.12345"
+    assert action.usable and action.semantic_verified and action.runtime_version == "16.0.12345"
     target = PresentationInfo("test.pptx", "test.pptx", 1, 1, 123, 256, 960, 540)
     command = generated_action(
         action.raw,

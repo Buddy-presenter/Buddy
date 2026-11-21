@@ -243,12 +243,42 @@ def test_review_widget_loads_read_only_saved_page_and_clears_on_signout(
         return review_widget.ReviewQAResult("validated", None, tmp_path / "report.json")
 
     monkeypatch.setattr(review_widget, "run_review_qa", qa)
+    def server_qa(current, action):
+        state = "validated" if action.instance_id == "action-1" else "rejected"
+        verified = state == "validated"
+        changed = replace(
+            action,
+            state=state,
+            usable=verified,
+            semantic_verified=verified,
+            validation_kind="visual",
+        )
+        return replace(
+            current,
+            slides=tuple(
+                replace(
+                    slide,
+                    actions=tuple(
+                        changed if item.instance_id == action.instance_id else item
+                        for item in slide.actions
+                    ),
+                )
+                for slide in current.slides
+            ),
+        )
+
+    monkeypatch.setattr(
+        ReviewService,
+        "visual_qa",
+        lambda _self, current, action: server_qa(current, action),
+    )
     assert review.visual_qa_button.isEnabled()
     review.visual_qa_correct.setChecked(True)
     review.visual_qa_button.click()
-    qtbot.waitUntil(lambda: "Visual QA: validated" in review.visual_qa_status.text())
+    qtbot.waitUntil(lambda: "Visual QA saved: validated" in review.visual_qa_status.text())
     assert submissions == [(record, record.slides[0].actions[0], content, "test-owner")]
-    assert not review.action_rows[0].usable
+    assert review.action_rows[0].usable
+    assert review.action_rows[0].semantic_verified
     second_action = replace(record.slides[0].actions[0], instance_id="second-action")
     second_slide = replace(record.slides[0], slide_id="second-slide", actions=(second_action,))
     full_deck = replace(record, slides=(*record.slides, second_slide))
@@ -264,9 +294,10 @@ def test_review_widget_loads_read_only_saved_page_and_clears_on_signout(
     finally:
         release_second.set()
     qtbot.waitUntil(lambda: "1 validated, 1 rejected" in review.visual_qa_status.text())
+    after_first_check = server_qa(full_deck, record.slides[0].actions[0])
     assert submissions == [
         (full_deck, record.slides[0].actions[0], content, "test-owner"),
-        (full_deck, second_action, content, "test-owner"),
+        (after_first_check, second_action, content, "test-owner"),
     ]
     assert "2 of 2 checked" in review.visual_qa_status.text()
     window.account.session.tokens = None

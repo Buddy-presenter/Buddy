@@ -361,18 +361,16 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                 or result_semantic_verified != semantic_verified
             ):
                 raise ValueError
-            # A PowerPoint action can be execution validated today and may later
-            # receive independent visual proof. Keep those two claims distinct.
-            usable = result["state"] == "validated" and (powerpoint or result_semantic_verified)
+            # Neither format is usable until an independent visual result verifies
+            # that the executed region matches the intended target.
+            usable = result["state"] == "validated" and result_semantic_verified
             legacy_execution = (
                 "semantic_verified" not in result
                 and isinstance(validation, dict)
                 and "semantic_verified" not in validation
                 and "validation_kind" not in validation
             )
-            if result["usable"] != usable and not (
-                legacy_execution and result["state"] == "validated" and result["usable"]
-            ):
+            if result["usable"] != usable and not legacy_execution:
                 raise ValueError
             if (
                 powerpoint
@@ -629,6 +627,69 @@ class ReviewService:
             raise ServiceError("Cannot reach saved Review. Retry the correction.") from None
         except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
             raise ServiceError("The backend returned an invalid correction result.") from None
+
+    def visual_qa(self, analysis: ReviewAnalysis, action: ReviewAction) -> ReviewAnalysis:
+        """Ask the backend to execute, inspect and persist a visual verdict."""
+        if action.raw is None or not action.instance_id:
+            raise ServiceError("Select a saved action to verify.")
+        path = f"/api/v1/analyses/{analysis.id}/actions/{action.instance_id}/visual-qa"
+        request = Request(
+            self.config.api_url + path,
+            data=b"{}",
+            headers={
+                "Authorization": "Bearer " + self.access,
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Idempotency-Key": str(uuid4()),
+            },
+            method="POST",
+        )
+        try:
+            with build_opener(NoRedirects()).open(
+                request, timeout=self.config.request_timeout
+            ) as response:
+                content = response.read(MAX_ANALYSIS_BYTES + 1)
+                if (
+                    len(content) > MAX_ANALYSIS_BYTES
+                    or response.headers.get_content_type() != "application/json"
+                ):
+                    raise ValueError
+            updated = parse_analysis(json.loads(content), analysis.deck_id)
+            if (
+                updated.id != analysis.id
+                or updated.source_revision != analysis.source_revision
+                or updated.source_sha256 != analysis.source_sha256
+            ):
+                raise ValueError
+            if not any(
+                candidate.instance_id == action.instance_id
+                for slide in updated.slides
+                for candidate in slide.actions
+            ):
+                raise ValueError
+            return updated
+        except HTTPError as exc:
+            status = exc.code
+            message = "Visual verification could not be completed. Retry from Review."
+            try:
+                body = json.loads(exc.read(65536))
+                detail = body.get("detail") if isinstance(body, dict) else None
+                if isinstance(detail, str) and detail:
+                    message = detail[:500]
+            except (ValueError, OSError):
+                pass
+            exc.close()
+            if status in {401, 403}:
+                raise LibraryAccessExpired("Sign in again to verify this saved action.") from None
+            if status == 409:
+                raise ServiceError(message) from None
+            if status == 404:
+                raise ServiceError("This saved action is no longer available.") from None
+            raise ServiceError(message) from None
+        except (URLError, OSError, http.client.HTTPException):
+            raise ServiceError("Cannot reach saved Review to verify this action.") from None
+        except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
+            raise ServiceError("The backend returned an invalid visual QA result.") from None
 
     def source(
         self, deck_id: UUID, source_format: str = "pdf"

@@ -57,8 +57,8 @@ def summary(record: AnalysisVersion | AnalysisSlide) -> Summary:
 
 
 def action_is_usable(source_format: str, state: str, semantic_verified: bool) -> bool:
-    """Apply the canonical format-specific gate used by analysis and session reads."""
-    return state == "validated" and (source_format == "pptx" or semantic_verified)
+    """Execution success alone never establishes that the intended target was selected."""
+    return state == "validated" and semantic_verified
 
 
 def check_validation_evidence(
@@ -398,11 +398,7 @@ class Analyses:
                         action=instance,
                         state=state,
                         usable=action_is_usable(value.source_format, state, semantic_verified),
-                        **(
-                            {"semantic_verified": semantic_verified}
-                            if value.source_format == "pdf"
-                            else {}
-                        ),
+                        semantic_verified=semantic_verified,
                         validation=evidence,
                     )
                 )
