@@ -52,12 +52,13 @@ During a batch, **V** counts validated actions and **R** counts rejected actions
 Unavailable checks and execution failures have separate counters. Counts update
 after each completed action, including checks from other slides in the deck.
 
-The source build runs the local operator using the configured AWS profile, or
-`buddy-staging-tools` by default. The development virtual environment must have
-the backend development dependencies and an active AWS login for the operator.
-The packaged app needs a deployed QA service for end-user operation.
+Checks now run without these buttons: PDFs are judged automatically by the server
+using the screenshots from processing, and PowerPoint actions are run once on the
+owner's PC (**Check on this PC**) while the server judges each screenshot pair. The
+desktop holds no provider credentials. See
+[action checks and live gating](preflight-publication.md).
 Correction and revalidation orchestration is tracked by #51. Publishing reports
-in Review and gating Live tools is tracked by #53.
+in Review and gating live tools are described in [preflight publication](preflight-publication.md).
 
 ## Run synthetic PDF and PowerPoint cases on Windows
 

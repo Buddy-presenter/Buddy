@@ -98,12 +98,9 @@ NAVIGATION_TOOLS = {"next_slide", "previous_slide", "go_to_slide"}
 
 
 def saved_action_eligible(source_format: str, action: ReviewAction) -> bool:
-    """Gate PDFs on semantic QA; preserve Office readiness pending its evidence path."""
-    return (
-        action.usable
-        and action.state == "validated"
-        and (source_format == "pptx" or action.semantic_verified)
-    )
+    """Both formats need the independent visual check (PDF on the server, PowerPoint
+    captured on the owner's PC and judged by the server)."""
+    return action.usable and action.state == "validated" and action.semantic_verified
 
 
 def proposal_context(value: dict[str, Any], live: ContextSnapshot) -> ContextSnapshot | None:
@@ -2392,11 +2389,26 @@ class PresentWidget(Page):
             self._session_generation,
             self.session_service,
         )
+        screen = self.screen()
+        runtime = (
+            {
+                "platform": sys.platform,
+                "renderer_version": "desktop-powerpoint-2"
+                if self._powerpoint_binding
+                else "pdfium-5.14.0-144dpi",
+                # PDF and PowerPoint use the same rule as their preflight players.
+                "display_profile": "wide-2x"
+                if screen and screen.devicePixelRatio() == 2
+                else "wide-1x",
+            }
+            if sys.platform in {"win32", "darwin"}
+            else None
+        )
         submitted = self._submit_session_task(
             "start",
             generation,
             None,
-            lambda: service.start(access, deck_id),
+            lambda: service.start(access, deck_id, runtime=runtime),
         )
         if submitted:
             self._session_attempt = key

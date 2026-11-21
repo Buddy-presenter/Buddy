@@ -432,6 +432,13 @@ class ValidationInput(Model):
     display_profile: Identifier
     validation_kind: ValidationKind = "execution"
     semantic_verified: bool = False
+    runtime_platform: Literal["linux", "win32", "darwin"] | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    original_action_sha256: Digest | None = Field(default=None, exclude_if=lambda v: v is None)
+    executed_action: ContentAction | PowerPointContentActionV2 | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
     visual_confidence: Annotated[float, Field(ge=0, le=1)] | None = None
     visual_observation: Annotated[str, Field(min_length=1, max_length=1200)] | None = None
     visual_verifier_version: Identifier | None = None
@@ -445,6 +452,13 @@ class ValidationInput(Model):
 
     @model_validator(mode="after")
     def consistent(self) -> Self:
+        if self.executed_action is not None and (
+            not self.original_action_sha256
+            or not self.semantic_verified
+            or self.state != "validated"
+            or digest(self.executed_action) != self.action_sha256
+        ):
+            raise ValueError("Corrected execution requires independently verified evidence.")
         if self.source_format == "pptx" and self.state == "validated" and not self.runtime_version:
             raise ValueError("PowerPoint validation requires the actual Office runtime version.")
         if self.state == "validated" and (not self.evidence or self.reasons):
@@ -552,7 +566,15 @@ def publication(
 ) -> Publication:
     if summary.status != "available" or any(s.summary.status != "available" for s in slides):
         return "partial"
-    if any(a.state == "candidate" for s in slides for a in s.actions):
+    # Pending visual preflight is progress, not a partial result: the live gate is
+    # enforced per action through `usable`, and Library reports check progress.
+    # PowerPoint candidates are expected after processing: the owner's desktop check
+    # executes and verifies them in one pass (#53). Only PDF execution is pending here.
+    if any(
+        a.state == "candidate" and getattr(a.action, "source_format", "pdf") != "pptx"
+        for s in slides
+        for a in s.actions
+    ):
         return "awaiting_validation"
     return "published"
 

@@ -6,11 +6,13 @@ from collections.abc import Callable
 from math import ceil
 from pathlib import Path
 from threading import Event
+from typing import Any
 from uuid import UUID, uuid4
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QIcon
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QIcon, QPainter
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QFileDialog,
     QHBoxLayout,
@@ -23,6 +25,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -32,6 +36,7 @@ from PySide6.QtWidgets import (
 from buddy_desktop.account_widget import AccountWidget
 from buddy_desktop.config import AppConfig
 from buddy_desktop.library_service import (
+    CheckProgress,
     DeckDeletionResult,
     DeckSummary,
     LibraryAccessExpired,
@@ -46,7 +51,7 @@ from buddy_desktop.presentation_service import (
     UploadRejected,
 )
 from buddy_desktop.tasks import TaskRunner
-from buddy_desktop.views import StatePanel
+from buddy_desktop.views import StatePanel, paint_ring
 from buddy_desktop.visuals import command, icon
 
 STATUS_TEXT = {
@@ -68,8 +73,8 @@ PROCESSING_TEXT = {
     "validating": ("Validating", "Checking suggested actions against the source PDF."),
     "review_ready": (
         "Results available",
-        "Processing is complete. Only actions marked Ready passed execution checks; "
-        "open Review for per-action results.",
+        "Processing is complete. Only actions marked Ready passed the real-player and visual "
+        "checks; open Review for per-action results.",
     ),
     "partial": ("Partial results", "Some results are available; unavailable items show why."),
     "failed": ("Failed", "Processing failed. Contact support if retry is unavailable."),
@@ -77,10 +82,69 @@ PROCESSING_TEXT = {
 }
 
 
+CHECK_PROGRESS_ROLE = Qt.ItemDataRole.UserRole + 41
+RING = 16
+RING_GAP = 8
+
+
+class CheckStatusDelegate(QStyledItemDelegate):
+    """Paints a progress ring before a status while its actions are being checked."""
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: Any) -> None:
+        progress = index.data(CHECK_PROGRESS_ROLE)
+        if not progress:
+            super().paint(painter, option, index)
+            return
+        full = QStyleOptionViewItem(option)
+        self.initStyleOption(full, index)
+        widget = option.widget
+        style = widget.style() if widget else QApplication.style()
+        # Row background/selection across the whole cell, the ring, then the text.
+        style.drawPrimitive(QStyle.PrimitiveElement.PE_PanelItemViewItem, full, painter, widget)
+        ring = QRectF(option.rect.left() + 8, option.rect.center().y() - RING / 2 + 1, RING, RING)
+        paint_ring(painter, ring, *progress)
+        text = QStyleOptionViewItem(option)
+        text.rect = option.rect.adjusted(RING + RING_GAP + 4, 0, 0, 0)
+        super().paint(painter, text, index)
+
+    def sizeHint(self, option: QStyleOptionViewItem, index: Any) -> QSize:
+        size = super().sizeHint(option, index)
+        if index.data(CHECK_PROGRESS_ROLE):
+            size.setWidth(size.width() + RING + RING_GAP + 4)
+        return size
+
+
+def check_status_text(checks: CheckProgress) -> tuple[str, str]:
+    """One wording for automatic action checks, shared by Library and Review."""
+    if not checks.available:
+        return (
+            "Ready · actions off",
+            "This server can't check actions, so they stay off. Manual presenting works.",
+        )
+    if checks.active and checks.mode == "desktop":
+        return (
+            f"Needs check · {checks.checked}/{checks.total}",
+            "These PowerPoint actions need a quick check on this PC. Open Review and "
+            "choose Check on this PC. Manual presenting already works.",
+        )
+    if checks.active:
+        return (
+            f"Checking · {checks.checked}/{checks.total}",
+            f"Checking actions: {checks.checked} of {checks.total} done. You can already "
+            "review and present manually.",
+        )
+    return (
+        f"Ready · {checks.ready}/{checks.total} actions",
+        f"{checks.ready} of {checks.total} actions passed. Review shows why others are off.",
+    )
+
+
 class LibraryWidget(QWidget):
     activity_changed = Signal(bool)
     present_requested = Signal(object)
     review_requested = Signal(object, str, str, str)
+    # A PowerPoint finished processing in this session and needs this PC's check.
+    desktop_check_needed = Signal(object)
     powerpoint_present_requested = Signal(object, str, str)
     private_invalidated = Signal()
     deck_deleted = Signal(object)
@@ -105,6 +169,7 @@ class LibraryWidget(QWidget):
         self.pending = False
         self.account_busy = False
         self.last_page: LibraryPage | None = None
+        self._watched_processing: set[UUID] = set()
         self.account_key: tuple[int, str | None, str] | None = None
         self.upload_keys: dict[tuple[Path, int, int], UUID] = {}
         self.upload_request: tuple[tuple[Path, int, int], UUID] | None = None
@@ -230,6 +295,7 @@ class LibraryWidget(QWidget):
         state_layout.addWidget(self.signin_button, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         self.table = QTableWidget(0, 4)
+        self.table.setItemDelegateForColumn(1, CheckStatusDelegate(self.table))
         self.table.setObjectName("presentationLibrary")
         self.table.setHorizontalHeaderLabels(["Name", "Status", "Added", "Type"])
         self.table.setAccessibleName("Saved presentations")
@@ -583,6 +649,16 @@ class LibraryWidget(QWidget):
                                 }.get(deck.status, "#B9B9C4")
                             )
                         )
+                        checks = deck.processing.checks if deck.processing else None
+                        if (
+                            checks is not None
+                            and checks.active
+                            and deck.processing is not None
+                            and deck.processing.state == "review_ready"
+                        ):
+                            # The status delegate paints a progress ring before this text.
+                            item.setData(CHECK_PROGRESS_ROLE, (checks.checked, checks.total))
+                            item.setForeground(QColor("#FFB477"))
                     self.table.setItem(row, column, item)
             self.table.show()
             self.detail.show()
@@ -592,14 +668,47 @@ class LibraryWidget(QWidget):
                 next((i for i, deck in enumerate(result.items) if deck.id == selected_id), 0)
             )
             self.selection_changed()
-            if any(
+            for entry in result.items:
+                processing = entry.processing
+                if processing is not None and processing.state in {
+                    "uploaded",
+                    "queued",
+                    "inspecting_pdf_metadata",
+                    "analyzing",
+                    "validating",
+                }:
+                    self._watched_processing.add(entry.id)
+                elif (
+                    entry.id in self._watched_processing
+                    and entry.source_format == "pptx"
+                    and processing is not None
+                    and processing.state == "review_ready"
+                    and processing.checks is not None
+                    and processing.checks.mode == "desktop"
+                    and processing.checks.active
+                ):
+                    # A PowerPoint processed while Buddy was open: check it on this PC.
+                    self._watched_processing.discard(entry.id)
+                    self.desktop_check_needed.emit(entry)
+            checking = any(
+                item.processing is not None
+                and item.processing.checks is not None
+                and item.processing.checks.active
+                # Desktop checks only progress while this PC runs them in Review.
+                and item.processing.checks.mode == "server"
+                for item in result.items
+            )
+            if checking or any(
                 item.processing.state
                 in {"queued", "inspecting_pdf_metadata", "analyzing", "validating"}
                 if item.processing is not None
                 else item.status in {"queued", "processing"}
                 for item in result.items
             ):
-                self.poll.start()
+                # Checks finish every few seconds; refresh sooner so the ring moves.
+                self.poll.start(5000 if checking else 15000)
+            else:
+                self.poll.stop()
         self.count.setText(
             f"Page {self.page} of {max(1, ceil(result.total / 20))} · {result.total} decks"
         )
@@ -724,6 +833,9 @@ class LibraryWidget(QWidget):
                     "Results unavailable",
                     "Saved analysis does not match this presentation. Refresh or upload it again.",
                 )
+            checks = processing.checks
+            if checks is not None and processing.state == "review_ready" and checks.total:
+                return check_status_text(checks)
             return PROCESSING_TEXT.get(processing.state, STATUS_TEXT[deck.status])
         return STATUS_TEXT[deck.status]
 

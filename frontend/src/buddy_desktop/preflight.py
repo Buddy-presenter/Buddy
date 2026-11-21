@@ -18,6 +18,7 @@ from uuid import uuid4
 
 import psutil  # type: ignore[import-untyped]
 
+from buddy_desktop.desktop_capture import child_command
 from buddy_desktop.slide_contract import ContractError, validate
 from buddy_desktop.validation_worker import PROFILES
 
@@ -318,7 +319,7 @@ class PreflightRunner:
                 if name in os.environ:
                     environment[name] = os.environ[name]
         process = subprocess.Popen(
-            [sys.executable, "-m", "buddy_desktop.preflight_worker", str(folder)],
+            [*child_command("buddy_desktop.preflight_worker", "--preflight-worker"), str(folder)],
             cwd=folder,
             env=environment,
             stdin=subprocess.PIPE,

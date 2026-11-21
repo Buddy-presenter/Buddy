@@ -210,6 +210,11 @@ def build(
         "pypdfium2",
         "--collect-submodules",
         "keyring.backends",
+        # Desktop action checks launch these modules from the packaged executable.
+        "--collect-submodules",
+        "buddy_desktop",
+        "--collect-all",
+        "jsonschema",
         "--distpath",
         str(bundle),
         "--workpath",
@@ -251,6 +256,13 @@ def build(
             "win32ui",
             "--hidden-import",
             "win32process",
+            # Desktop PowerPoint action checks (isolated Office session and job limits).
+            "--hidden-import",
+            "win32event",
+            "--hidden-import",
+            "win32job",
+            "--hidden-import",
+            "win32security",
         ]
     command += [str(ROOT / "frontend/scripts/release/desktop_entry.py")]
     build_environment = dict(os.environ)

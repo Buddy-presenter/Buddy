@@ -27,11 +27,10 @@ from buddy_api.processing.service import Processor
 PDF = Path(__file__).resolve().parents[3] / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf"
 
 
-@pytest.mark.parametrize(
-    ("source_format", "validated_without_visual"), [("pdf", False), ("pptx", True)]
-)
-def test_visual_readiness_gate_is_pdf_scoped(source_format, validated_without_visual):
-    assert action_is_usable(source_format, "validated", False) is validated_without_visual
+@pytest.mark.parametrize("source_format", ["pdf", "pptx"])
+def test_visual_readiness_gate_applies_to_both_formats(source_format):
+    # #53: PowerPoint now has its own visual check (desktop capture, server judge).
+    assert not action_is_usable(source_format, "validated", False)
     assert action_is_usable(source_format, "validated", True)
     assert not action_is_usable(source_format, "rejected", True)
 

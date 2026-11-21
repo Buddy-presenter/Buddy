@@ -1,6 +1,7 @@
 import hashlib
 import json
 import time
+from datetime import UTC, datetime
 from threading import Event
 from types import SimpleNamespace
 from uuid import uuid4
@@ -72,8 +73,6 @@ def powerpoint_payload(content=b"PK-synthetic-source", *, usable=True, kind="hig
         validation={
             "source_format": "pptx",
             "schema_version": "buddy.validation.v1",
-            "validation_kind": "visual" if usable else "execution",
-            "semantic_verified": usable,
             "validation_id": str(uuid4()),
             "analysis_id": data["id"],
             "analysis_sha256": data["analysis_sha256"],
@@ -85,11 +84,13 @@ def powerpoint_payload(content=b"PK-synthetic-source", *, usable=True, kind="hig
             "reasons": [] if usable else ["powerpoint_runtime_requires_windows_office"],
             "evidence": [{"id": str(uuid4()), "kind": "report", "sha256": "b" * 64}],
             "runtime_version": "16.0.12345",
-            "validator_version": "powerpoint-executor-4"
-            if kind == "zoom_region"
-            else "powerpoint-executor-2",
+            # Unusable fixtures are execution results that still await a visual check.
+            "validator_version": "desktop-preflight-1" if usable else "powerpoint-executor-2",
+            "validation_kind": "visual" if usable else "execution",
+            "semantic_verified": usable,
+            "runtime_platform": "win32",
             "renderer_version": "desktop-powerpoint-2",
-            "display_profile": "windows-powerpoint-2",
+            "display_profile": "wide-1x" if usable else "windows-powerpoint-2",
         },
     )
     return deck, payload
@@ -120,31 +121,171 @@ def test_saved_powerpoint_review_routes_verified_binding_to_present(desktop_wind
     assert window.navigation.currentRow() == 3
 
 
-def test_visual_qa_controls_are_pdf_only_and_return_for_pdf(desktop_window):
+def test_checks_are_automatic_with_no_manual_run_controls(desktop_window):
+    """Both formats check automatically; only a failed check offers Check again."""
     window = desktop_window()
     review = window.review
     deck = uuid4()
+    for source_format in ("pptx", "pdf"):
+        review.set_deck(deck, "Fixture", source_format=source_format)
+        assert review.visual_qa_button.isHidden()  # until a failed check is selected
+        assert review.visual_qa_all_button.isHidden()
+        assert review.visual_qa_correct.isHidden()
+        assert review.desktop_banner.isHidden()
+        assert review.check_overlay.isHidden()
 
-    review.set_deck(deck, "PowerPoint fixture", source_format="pptx")
-    assert review.visual_qa_button.isHidden()
-    assert review.visual_qa_all_button.isHidden()
-    assert review.visual_qa_correct.isHidden()
-    assert review.visual_qa_status.isHidden()
 
-    review.set_deck(deck, "PDF fixture", source_format="pdf")
-    assert not review.visual_qa_button.isHidden()
-    assert not review.visual_qa_all_button.isHidden()
-    assert not review.visual_qa_status.isHidden()
+@pytest.mark.parametrize("choice", ["countdown", "not_now"])
+def test_powerpoint_checks_start_automatically_after_a_visible_countdown(
+    desktop_window, monkeypatch, qtbot, choice
+):
+    import buddy_desktop.check_overlay as check_overlay
+    import buddy_desktop.review_widget as review_widget
+    from buddy_desktop.preflight_service import PreflightService
+    from buddy_desktop.review_service import ReviewService
+
+    monkeypatch.setattr(review_widget, "AUTO_CHECKS", True)
+    monkeypatch.setattr(check_overlay, "COUNTDOWN_SECONDS", 1)
+    content = b"PK-synthetic-source"
+    deck, payload = powerpoint_payload(content, usable=False)
+    pending = parse_analysis(payload, deck)
+    monkeypatch.setattr(ReviewService, "analysis", lambda *_args: pending)
+    monkeypatch.setattr(
+        ReviewService,
+        "source",
+        lambda *_args: DownloadedPowerPoint(content, str(deck), "revision-1"),
+    )
+    seen = []
+    monkeypatch.setattr(
+        PreflightService,
+        "run_on_desktop",
+        lambda _self, analysis_id, instance_id, *_a, **_k: (
+            seen.append(instance_id) or dict(state="validated", instance_id=instance_id)
+        ),
+    )
+    window = desktop_window()
+    window.account.session = SimpleNamespace(
+        tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
+    )
+    window.account.session_changed.emit()
+    window.navigation.setCurrentRow(2)
+    review = window.review
+    review.set_deck(deck, "Deck.pptx", "processing", "pptx")
+    overlay = review.check_overlay
+    # The user is told first: a countdown with Start now / Not now.
+    qtbot.waitUntil(lambda: not overlay.isHidden())
+    assert overlay.parentWidget() is window
+    assert "don't use the mouse or keyboard" in overlay.message.text()
+    assert not overlay.later.isHidden() and not overlay.start_now.isHidden()
+    assert "Starting in" in overlay.step.text()
+    if choice == "not_now":
+        overlay.later.click()
+        assert overlay.isHidden() and seen == []
+        # Not announced again for this deck in this session.
+        review.maybe_auto_check()
+        assert overlay.isHidden() and not review.desktop_banner.isHidden()
+        return
+    # Without any input, the check starts on its own when the countdown ends.
+    qtbot.waitUntil(lambda: bool(seen), timeout=5000)
+    qtbot.waitUntil(lambda: not review.runner.busy and overlay.isHidden(), timeout=5000)
+    assert seen == [pending.slides[0].actions[0].instance_id]
+
+
+def test_library_opens_review_for_a_powerpoint_processed_this_session(desktop_window, monkeypatch):
+    import buddy_desktop.review_widget as review_widget
+    from buddy_desktop.library_service import CheckProgress, DeckSummary, ProcessingDetail
+
+    monkeypatch.setattr(review_widget, "AUTO_CHECKS", True)
+    window = desktop_window()
+    opened = []
+    monkeypatch.setattr(window, "_open_review", lambda *args: opened.append(args))
+    deck = DeckSummary(
+        uuid4(),
+        "Deck.pptx",
+        datetime.now(UTC),
+        "ready",
+        1,
+        "pptx",
+        False,
+        ProcessingDetail(
+            None,
+            "review_ready",
+            None,
+            100,
+            1,
+            None,
+            False,
+            False,
+            CheckProgress(3, 0, 0, True, True, "desktop"),
+        ),
+    )
+    window.library.desktop_check_needed.emit(deck)
+    assert opened == [(deck.id, "Deck.pptx", "ready", "pptx")]
+    # Never while presenting.
+    opened.clear()
+    window.navigation.setCurrentRow(3)
+    window.library.desktop_check_needed.emit(deck)
+    assert opened == []
+
+
+def test_powerpoint_check_banner_and_do_not_touch_overlay(desktop_window, monkeypatch, qtbot):
+    from buddy_desktop.preflight_service import PreflightService
+    from buddy_desktop.review_service import ReviewService
+
+    content = b"PK-synthetic-source"
+    deck, payload = powerpoint_payload(content, usable=False)
+    pending = parse_analysis(payload, deck)
+    monkeypatch.setattr(ReviewService, "analysis", lambda *_args: pending)
+    monkeypatch.setattr(
+        ReviewService,
+        "source",
+        lambda *_args: DownloadedPowerPoint(content, str(deck), "revision-1"),
+    )
+    window = desktop_window()
+    window.account.session = SimpleNamespace(
+        tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
+    )
+    window.account.session_changed.emit()
+    window.navigation.setCurrentRow(2)
+    review = window.review
+    review.set_deck(deck, "Deck.pptx", "processing", "pptx")
+    qtbot.waitUntil(lambda: not review.runner.busy and review.analysis is not None)
+    # A PowerPoint deck with unchecked actions asks the owner to check on this PC.
+    assert not review.desktop_banner.isHidden()
+    assert "don't use the mouse or keyboard" in review.desktop_banner_text.text()
+    assert not review.check_poll.isActive()
+    release, seen = Event(), []
+
+    def run_on_desktop(_self, analysis_id, instance_id, source, **options):
+        seen.append((instance_id, source, options["profile"]))
+        if not release.wait(5):
+            raise TimeoutError("check was not released")
+        return dict(state="validated", instance_id=instance_id)
+
+    monkeypatch.setattr(PreflightService, "run_on_desktop", run_on_desktop)
+    review.desktop_check_button.click()
+    # While checking, a full-window notice asks the user not to touch anything.
+    qtbot.waitUntil(lambda: bool(seen))
+    overlay = review.check_overlay
+    assert not overlay.isHidden() and overlay.parentWidget() is window
+    assert "don't use the mouse or keyboard" in overlay.message.text()
+    assert review.desktop_banner.isHidden() and seen[0][1] == content
+    release.set()
+    qtbot.waitUntil(lambda: not review.runner.busy)
+    assert overlay.isHidden()
+    assert "1 Ready" in review.visual_qa_status.text()
 
 
 def test_legacy_zoom_proof_does_not_authorize_the_new_fitted_view():
     deck, payload = powerpoint_payload(kind="zoom_region")
-    payload["data"]["slides"][0]["actions"][0]["validation"]["validator_version"] = (
-        "powerpoint-executor-2"
-    )
+    validation = payload["data"]["slides"][0]["actions"][0]["validation"]
+    validation["validator_version"] = "powerpoint-executor-2"
+    validation["display_profile"] = "windows-powerpoint-2"
+    del validation["semantic_verified"]
+    del validation["validation_kind"]
     action = parse_analysis(payload, deck).slides[0].actions[0]
     assert not action.usable
-    assert "zoom_requires_fitted_view_revalidation" in action.reasons
+    assert "visual_verification_required" in action.reasons
 
 
 def test_powerpoint_review_preserves_independent_visual_verification():
@@ -158,21 +299,28 @@ def test_powerpoint_review_preserves_independent_visual_verification():
     assert action.validation_kind == "visual"
 
 
-def test_powerpoint_execution_proof_preserves_existing_readiness():
+def test_powerpoint_execution_proof_alone_is_not_live_ready():
+    """#53: PowerPoint now has its own visual check, so execution alone never suffices."""
     deck, payload = powerpoint_payload(usable=False, kind="highlight_region")
     result = payload["data"]["slides"][0]["actions"][0]
-    result.update(state="validated", usable=True)
+    result.update(state="validated", usable=False)
+    inputs = payload["data"]["inputs"]
     result["validation"].update(
         state="validated",
         validation_kind="execution",
         semantic_verified=False,
         reasons=[],
+        validator_version=inputs["validator_version"],
+        display_profile=inputs["display_profile"],
     )
     action = parse_analysis(payload, deck).slides[0].actions[0]
     assert action.state == "validated"
-    assert action.usable and not action.semantic_verified
-    assert action.validation_kind == "execution"
-    assert saved_action_eligible("pptx", action)
+    assert not action.usable and not action.semantic_verified
+    assert not saved_action_eligible("pptx", action)
+    # A server claiming execution-only proof is usable is rejected as inconsistent.
+    result["usable"] = True
+    with pytest.raises(ValueError):
+        parse_analysis(payload, deck)
 
 
 def test_pdf_saved_actions_still_require_semantic_verification():
@@ -605,7 +753,8 @@ def test_action_details_are_opt_in_and_evidence_png_opens(desktop_window, monkey
     png = (Path(__file__).parent / "fixtures/powerpoint/indexed-preview.png").read_bytes()
     requests = []
 
-    def evidence(_self, validation_id, artifact_id, sha256):
+    def evidence(_self, validation_id, artifact_id, sha256, *, visual=False):
+        assert visual
         requests.append((validation_id, artifact_id, sha256))
         return png, "image/png"
 
@@ -671,8 +820,35 @@ def test_busy_checks_refresh_without_reopening_or_downloading_the_source(
     assert "automatically" in review.action_status.text()
     action = replace(waiting.slides[0].actions[0], state="validated", usable=True, reasons=())
     current[0] = replace(waiting, slides=(replace(waiting.slides[0], actions=(action,)),))
-    review.refresh_checks_button.click()
+    # Review refreshes checks on its own while any are pending (no button).
+    assert review.check_poll.isActive()
+    review.check_poll.timeout.emit()
     qtbot.waitUntil(lambda: not review.runner.busy)
     assert review.action_table.item(0, 2).text() == "Ready"
     assert len(reads) == 1 and review.pdf_content == content
-    assert "1 of 1" in review.notice.text()
+    assert "1 of 1 Ready" in review.check_label.text()
+    assert not review.check_poll.isActive()
+
+
+def test_countdown_follows_the_real_clock_even_when_ticks_are_late(qtbot, monkeypatch):
+    """A busy window can deliver timer ticks late; the countdown must not stretch."""
+    from PySide6.QtWidgets import QWidget
+
+    import buddy_desktop.check_overlay as check_overlay
+    from buddy_desktop.check_overlay import CheckOverlay
+
+    clock = [100.0]
+    monkeypatch.setattr(check_overlay.time, "monotonic", lambda: clock[0])
+    host = QWidget()
+    qtbot.addWidget(host)
+    overlay = CheckOverlay(host)
+    started = []
+    overlay.start_requested.connect(lambda: started.append(True))
+    overlay.announce(3, host)
+    assert overlay.step.text() == "Starting in 10 seconds…"
+    clock[0] += 4.2  # one late tick after 4.2 real seconds
+    overlay._tick()
+    assert overlay.step.text() == "Starting in 6 seconds…" and not started
+    clock[0] += 5.9
+    overlay._tick()
+    assert started == [True]

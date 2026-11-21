@@ -42,6 +42,41 @@ class ProcessingDetail:
     error_code: str | None
     can_retry: bool
     can_cancel: bool
+    checks: "CheckProgress | None" = None
+
+
+@dataclass(frozen=True)
+class CheckProgress:
+    """Automatic visual checks of the current analysis's actions (#53)."""
+
+    total: int
+    checked: int
+    ready: int
+    available: bool
+    active: bool
+    # server: checked automatically (PDF); desktop: needs this PC (PowerPoint).
+    mode: str = "server"
+
+
+def parse_checks(raw: object) -> CheckProgress | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError
+    values = tuple(raw[k] for k in ("total", "checked", "ready"))
+    available, active = raw["available"], raw["active"]
+    mode = raw.get("mode", "server")
+    if (
+        any(type(v) is not int or not 0 <= v <= 10000 for v in values)
+        or values[1] > values[0]
+        or values[2] > values[0]
+        or type(available) is not bool
+        or type(active) is not bool
+        or mode not in {"server", "desktop"}
+    ):
+        raise ValueError
+    total, checked, ready = values
+    return CheckProgress(total, checked, ready, available, active, mode)
 
 
 @dataclass(frozen=True)
@@ -185,6 +220,7 @@ class LibraryService:
                         error_code,
                         can_retry,
                         can_cancel,
+                        parse_checks(raw_processing.get("checks")),
                     )
                 items.append(
                     DeckSummary(

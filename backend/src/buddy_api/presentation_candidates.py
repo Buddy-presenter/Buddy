@@ -7,7 +7,7 @@ import time
 import unicodedata
 from collections import OrderedDict
 from datetime import UTC, datetime
-from typing import Annotated, Literal, cast
+from typing import Annotated, Any, Literal, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -31,7 +31,7 @@ from buddy_api.auth import Principal, authenticated
 from buddy_api.embeddings import EmbeddingFailure
 from buddy_api.persistence.errors import PersistenceError
 from buddy_api.persistence.models import ActionValidation, AnalysisVersion, Deck
-from buddy_api.presentation_sessions import current_ready_analysis, owned_session
+from buddy_api.presentation_sessions import current_ready_analysis, owned_session, runtime_matches
 from buddy_api.semantic_candidates import SemanticCandidates
 
 STOP = frozenset(
@@ -153,7 +153,11 @@ class CandidateAnalyses:
         ] = OrderedDict()
 
     async def read(
-        self, db: AsyncSession, record: AnalysisVersion, owner: UUID
+        self,
+        db: AsyncSession,
+        record: AnalysisVersion,
+        owner: UUID,
+        runtime_context: dict[str, Any] | None = None,
     ) -> AnalysisResult | PowerPointAnalysisResult:
         # Both callers use REPEATABLE READ. Validation history is append-only:
         # its count identifies the same eligibility snapshot as the canonical read.
@@ -190,7 +194,24 @@ class CandidateAnalyses:
             self._entries[key] = (now, analysis)
             while len(self._entries) > 8:
                 self._entries.popitem(last=False)
-        return analysis
+        return analysis.model_copy(
+            update={
+                "slides": tuple(
+                    slide.model_copy(
+                        update={
+                            "actions": tuple(
+                                action
+                                if action.validation
+                                and runtime_matches(action.validation, runtime_context)
+                                else action.model_copy(update={"usable": False})
+                                for action in slide.actions
+                            )
+                        }
+                    )
+                    for slide in analysis.slides
+                )
+            }
+        )
 
 
 def tokens(text: str) -> frozenset[str]:
@@ -675,7 +696,9 @@ def candidate_router() -> APIRouter:
                 record, _ = await current_ready_analysis(db, deck, principal.id)
                 if record.id != session.analysis_version_id:
                     raise HTTPException(409, "The analysis changed; reconnect the session.")
-                analysis = await request.app.state.candidate_analyses.read(db, record, principal.id)
+                analysis = await request.app.state.candidate_analyses.read(
+                    db, record, principal.id, session.runtime_context
+                )
                 semantic: SemanticCandidates | None = request.app.state.semantic_candidates
                 active_slide_id = values.active_slide_id or session.active_slide_id or ""
                 if active_slide_id not in {slide.slide_id for slide in analysis.slides}:
@@ -746,7 +769,9 @@ def candidate_router() -> APIRouter:
                 record, _ = await current_ready_analysis(db, deck, principal.id)
                 if record.id != session.analysis_version_id:
                     raise HTTPException(409, "The analysis changed.")
-                analysis = await request.app.state.candidate_analyses.read(db, record, principal.id)
+                analysis = await request.app.state.candidate_analyses.read(
+                    db, record, principal.id, session.runtime_context
+                )
             created = await semantic.prepare(analysis, principal.id)
             return {"ready": True, "created": created, "resolver_version": "cohere-embed5-v4"}
         except EmbeddingFailure:

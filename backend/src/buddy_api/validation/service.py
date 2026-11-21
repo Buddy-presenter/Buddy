@@ -87,6 +87,7 @@ class ValidationService:
                 .where(
                     ActionCheck.id == identifier,
                     ActionCheck.owner_id == owner,
+                    ActionCheck.check_kind == "execution",
                     Deck.deletion_requested_at.is_(None),
                 )
             )
@@ -460,11 +461,12 @@ class ValidationService:
                 await session.scalars(
                     select(ActionCheck.id)
                     .where(
+                        ActionCheck.check_kind == "execution",
                         (ActionCheck.status == "cleanup")
                         | (
                             (ActionCheck.status == "pending")
                             & (ActionCheck.expires_at <= datetime.now(UTC))
-                        )
+                        ),
                     )
                     .limit(16)
                 )

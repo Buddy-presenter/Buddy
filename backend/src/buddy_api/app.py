@@ -34,6 +34,8 @@ from buddy_api.handoff import HandoffLimitMiddleware, handoff_router
 from buddy_api.library import library_router
 from buddy_api.middleware import RequestContextMiddleware
 from buddy_api.persistence.database import Database, DatabaseProbe
+from buddy_api.preflight.api import preflight_router
+from buddy_api.preflight.service import PreflightService
 from buddy_api.presentation_agent import AgentConflict, AgentRuntime, agent_router
 from buddy_api.presentation_candidates import CandidateAnalyses, candidate_router
 from buddy_api.presentation_sessions import session_router
@@ -99,6 +101,23 @@ def create_app(
     validator = (
         ValidationService(uploads, config.validator) if uploads and config.validator else None
     )
+    visual_qa = (
+        VisualQAService(uploads, validator, config.worker.region)
+        if uploads is not None and validator is not None and config.worker is not None
+        else None
+    )
+    # PDF checks run on the server (#135); PowerPoint checks are captured on the
+    # owner's desktop and judged here with the API's own Bedrock access.
+    preflight = (
+        PreflightService(
+            uploads,
+            config.preflight,
+            visual_qa=visual_qa,
+            judge_region=config.worker.region if config.worker else None,
+        )
+        if uploads
+        else None
+    )
     started = False
     queue = Queue(config.worker) if config.worker and uploads else None
     processor = (
@@ -123,12 +142,17 @@ def create_app(
                 await asyncio.sleep(30)
 
         validation_cleanup = asyncio.create_task(reconcile_validation()) if validator else None
+        preflight_worker = asyncio.create_task(preflight.run()) if preflight else None
         dispatch = asyncio.create_task(processor.dispatch()) if processor else None
         event_cleanup = asyncio.create_task(cleanup_events(database)) if database else None
         try:
             yield
         finally:
             started = False
+            if preflight_worker:
+                preflight_worker.cancel()
+                with suppress(asyncio.CancelledError):
+                    await preflight_worker
             if event_cleanup:
                 event_cleanup.cancel()
                 with suppress(asyncio.CancelledError):
@@ -199,11 +223,8 @@ def create_app(
         else None
     )
     app.state.validator = validator
-    app.state.visual_qa = (
-        VisualQAService(uploads, validator, config.worker.region)
-        if uploads is not None and validator is not None and config.worker is not None
-        else None
-    )
+    app.state.preflight = preflight
+    app.state.visual_qa = visual_qa
     app.state.worker_settings = config.worker
     app.include_router(auth_router(config.identity))
     app.include_router(session_event_router())
@@ -218,6 +239,7 @@ def create_app(
     app.include_router(speech_router(config.allowed_hosts))
     app.include_router(upload_router())
     app.include_router(validation_router())
+    app.include_router(preflight_router())
     app.include_router(processing_router())
 
     @app.exception_handler(UploadError)

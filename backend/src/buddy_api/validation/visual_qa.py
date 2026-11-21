@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from types import SimpleNamespace
 from typing import Any
 from uuid import UUID, uuid5
 
@@ -64,6 +65,30 @@ SYSTEM_PROMPT = (
     "reasonable padding. Return one short observation grounded in visible evidence. For a "
     "validated verdict issue must be null; for rejected it must name a concrete issue."
 )
+
+
+def reusable_execution(prior: ValidationInput | None, action_sha256: str) -> Any:
+    """A passed execution check of this exact action, with its screenshot pair."""
+    if (
+        prior is None
+        or prior.validation_kind != "execution"
+        or prior.state != "validated"
+        or prior.action_sha256 != action_sha256
+        or not {"before_image", "after_image"} <= {item.kind for item in prior.evidence}
+    ):
+        return None
+    return SimpleNamespace(
+        id=prior.validation_id,
+        evidence=prior.evidence,
+        result=SimpleNamespace(
+            state="validated",
+            reasons=(),
+            validator_version=prior.validator_version,
+            renderer_version=prior.renderer_version,
+            profile=prior.display_profile,
+            office_version=prior.runtime_version,
+        ),
+    )
 
 
 class VisualQAService:
@@ -216,7 +241,21 @@ class VisualQAService:
                 raise PersistenceConflict("This analysis has no immutable source snapshot.")
 
         retry_id = uuid5(request_id, "buddy.visual-qa-execution.v1")
-        if current.source_format == "pptx":
+        reusable = reusable_execution(found.validation, digest(action))
+        if reusable is not None:
+            try:
+                for item in reusable.evidence:
+                    if item.kind in {"before_image", "after_image"}:
+                        await self.executor.evidence(owner_id, reusable.id, item.id)
+            except Exception:
+                # Expired or unavailable processing evidence: execute once here instead.
+                reusable = None
+        stored: Any
+        if reusable is not None:
+            # Processing already executed this exact action and saved its before/after
+            # screenshots. Judge those instead of running the action a second time.
+            stored = reusable
+        elif current.source_format == "pptx":
             if not isinstance(inputs, PowerPointAnalysisInputV2):
                 raise PersistenceConflict("The PowerPoint source contract is unavailable.")
             ppt_request: PowerPointValidationRequest = powerpoint_validation_request(action, inputs)

@@ -438,6 +438,7 @@ def test_session_rejects_execution_only_pdf_action(ready_session_api):
                         owner_id=owner_id, result=execution
                     )
                     action_ids.append((slide.slide_id, action.action.instance_id))
+            # Processing is complete, but execution proof alone never enables live use (#53).
             assert result.publication == "published"
             assert all(not action.usable for slide in result.slides for action in slide.actions)
             return result.id, action_ids[0]
