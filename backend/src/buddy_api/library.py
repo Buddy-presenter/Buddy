@@ -8,13 +8,23 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.exceptions import HTTPException
 from starlette.responses import Response
 
 from buddy_api.auth import Principal, authenticated
 from buddy_api.contracts import ErrorResponse
-from buddy_api.persistence.models import AnalysisVersion, Deck, DeckExtraction, ProcessingJob
+from buddy_api.persistence.models import (
+    ActionCheck,
+    ActionValidation,
+    AnalysisVersion,
+    Deck,
+    DeckExtraction,
+    ProcessingJob,
+    SlideAction,
+)
 from buddy_api.uploads.contracts import UploadError
 from buddy_api.uploads.router import service
 from buddy_api.uploads.service import blocking
@@ -41,8 +51,20 @@ class ProcessingState(StrEnum):
     CANCELLED = "cancelled"
 
 
+class LibraryChecks(BaseModel):
+    """Visual preflight progress for the current analysis (#53)."""
+
+    total: int = Field(ge=0)
+    checked: int = Field(ge=0)
+    ready: int = Field(ge=0)
+    # False when this server has no trusted preflight host: actions stay unavailable.
+    available: bool
+    active: bool
+
+
 class LibraryProcessing(BaseModel):
     job_id: UUID | None = None
+    checks: LibraryChecks | None = None
     state: ProcessingState
     stage: str | None = None
     progress: int = Field(ge=0, le=100)
@@ -90,6 +112,74 @@ class DeckDeletionData(BaseModel):
 class DeckDeletionResponse(BaseModel):
     data: DeckDeletionData
     request_id: str
+
+
+def preflight_available(request: Request) -> bool:
+    preflight = getattr(request.app.state, "preflight", None)
+    return bool(
+        preflight is not None
+        and preflight.settings is not None
+        and preflight.platform in {"win32", "darwin"}
+    )
+
+
+async def check_progress(
+    session: AsyncSession, request: Request, analysis_ids: list[UUID]
+) -> dict[UUID, LibraryChecks]:
+    """Count saved actions, completed visual preflights and live-usable actions."""
+    if not analysis_ids:
+        return {}
+    totals = dict(
+        (
+            await session.execute(
+                select(SlideAction.analysis_id, func.count())
+                .where(SlideAction.analysis_id.in_(analysis_ids))
+                .group_by(SlideAction.analysis_id)
+            )
+        ).all()
+    )
+    analysis_key = ActionCheck.request_data["analysis_id"].as_string()
+    checked = {
+        UUID(key): count
+        for key, count in (
+            await session.execute(
+                select(
+                    analysis_key,
+                    func.count(func.distinct(ActionCheck.request_data["instance_id"].as_string())),
+                )
+                .where(
+                    ActionCheck.check_kind == "preflight",
+                    ActionCheck.status == "complete",
+                    analysis_key.in_([str(i) for i in analysis_ids]),
+                )
+                .group_by(analysis_key)
+            )
+        ).all()
+    }
+    latest = await session.scalars(
+        select(ActionValidation)
+        .ext(distinct_on(ActionValidation.action_id))
+        .where(ActionValidation.analysis_id.in_(analysis_ids))
+        .order_by(ActionValidation.action_id, ActionValidation.sequence.desc())
+    )
+    ready: dict[UUID, int] = {}
+    for row in latest:
+        document = row.document or {}
+        if row.state == "validated" and document.get("semantic_verified") is True:
+            ready[row.analysis_id] = ready.get(row.analysis_id, 0) + 1
+    available = preflight_available(request)
+    result = {}
+    for identifier in analysis_ids:
+        total = int(totals.get(identifier, 0))
+        done = min(total, int(checked.get(identifier, 0)))
+        result[identifier] = LibraryChecks(
+            total=total,
+            checked=done,
+            ready=min(total, ready.get(identifier, 0)),
+            available=available,
+            active=available and done < total,
+        )
+    return result
 
 
 def library_router() -> APIRouter:
@@ -182,6 +272,7 @@ def library_router() -> APIRouter:
                 analysis_source_revision,
                 analysis_source_sha256,
                 analysis_source_format,
+                AnalysisVersion.id,
             )
             .outerjoin(ProcessingJob, ProcessingJob.id == latest_job)
             .outerjoin(AnalysisVersion, AnalysisVersion.id == current_analysis)
@@ -198,6 +289,7 @@ def library_router() -> APIRouter:
                 records = (await session.execute(query)).all()
                 items = []
                 worker_settings = request.app.state.worker_settings
+                checks = await check_progress(session, request, [r[-1] for r in records if r[-1]])
                 for (
                     deck,
                     job_id,
@@ -212,6 +304,7 @@ def library_router() -> APIRouter:
                     analysis_revision,
                     analysis_sha256,
                     analysis_format,
+                    analysis_id,
                 ) in records:
                     analysis_matches_source = bool(
                         analysis_revision == deck.source_revision
@@ -296,6 +389,10 @@ def library_router() -> APIRouter:
                             and bool(deck.source_version_id),
                             processing=LibraryProcessing(
                                 job_id=job_id,
+                                checks=checks.get(analysis_id)
+                                if processing_state
+                                in {ProcessingState.REVIEW_READY, ProcessingState.PARTIAL}
+                                else None,
                                 state=processing_state,
                                 stage=job_stage,
                                 progress=progress or 0,

@@ -41,14 +41,25 @@ supplies the geometry that live sessions execute.
 
 ## Owner validation report
 
-**Library → Review** shows, for each action: status (Ready, Visual QA pending,
-Pending checks, Unavailable), intended target region, correction state,
-verified runtime/Office version, failure reasons and the private before/after
-viewport evidence (**Action details & evidence**). **Run visual QA** and
-**Run visual QA on all actions** queue trusted preflight requests and show the
-live phase (`queued`, `running`, `complete`, `failed`, `stale`), attempt
-(up to 3) and validated/rejected/unavailable/failed counts. Reports and
-evidence are private to the deck owner and are deleted with the deck.
+Checks start automatically once processing finishes, so there are no manual
+run-all, refresh or correction controls.
+
+- **Library** shows a progress ring and `Checking · 7/21` while checks run,
+  then `Ready · 19/21 actions`. A server without a trusted preflight host shows
+  `Ready · actions off`. Pending checks never make a deck "Partial results";
+  that label is only for missing summaries or analysis.
+- **Review** shows a progress bar with `Checking actions · x of y checked · z Ready`
+  and refreshes itself every 5 s until every action is checked. Each action shows
+  Ready, Checking, Waiting for PowerPoint or Unavailable, plus its intended target,
+  correction state, verified runtime/Office version, failure reasons and the
+  private before/after evidence (**Action details & evidence**).
+- **Check again** appears only for an action whose finished check failed. It
+  queues a new trusted check, with bounded corrections, and shows its phase and
+  attempt (up to 3).
+
+Reports and evidence are private to the deck owner and are deleted with the deck.
+The Library API adds `processing.checks` (`total`, `checked`, `ready`,
+`available`, `active`) for review-ready decks.
 
 API (owner-authenticated, `Cache-Control: no-store`):
 

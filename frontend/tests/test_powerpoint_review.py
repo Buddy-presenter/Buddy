@@ -629,8 +629,11 @@ def test_busy_checks_refresh_without_reopening_or_downloading_the_source(
     assert "automatically" in review.action_status.text()
     action = replace(waiting.slides[0].actions[0], state="validated", usable=True, reasons=())
     current[0] = replace(waiting, slides=(replace(waiting.slides[0], actions=(action,)),))
-    review.refresh_checks_button.click()
+    # Review refreshes checks on its own while any are pending (no button).
+    assert review.check_poll.isActive()
+    review.check_poll.timeout.emit()
     qtbot.waitUntil(lambda: not review.runner.busy)
     assert review.action_table.item(0, 2).text() == "Ready"
     assert len(reads) == 1 and review.pdf_content == content
-    assert "1 of 1" in review.notice.text()
+    assert "1 of 1 Ready" in review.check_label.text()
+    assert not review.check_poll.isActive()

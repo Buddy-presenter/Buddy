@@ -549,12 +549,9 @@ def publication(
 ) -> Publication:
     if summary.status != "available" or any(s.summary.status != "available" for s in slides):
         return "partial"
-    if any(
-        a.state == "candidate"
-        or (a.state == "validated" and not (a.validation and a.validation.semantic_verified))
-        for s in slides
-        for a in s.actions
-    ):
+    # Pending visual preflight is progress, not a partial result: the live gate is
+    # enforced per action through `usable`, and Library reports check progress.
+    if any(a.state == "candidate" for s in slides for a in s.actions):
         return "awaiting_validation"
     return "published"
 

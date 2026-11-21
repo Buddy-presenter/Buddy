@@ -225,6 +225,18 @@ def test_automatic_scheduling_and_manual_session_fallback(upload_app, source_for
             c.id for c in checks if c.request_data["instance_id"] == action.instance_id
         )
         client.portal.call(service.publish, identifier, bundle(document, action))
+        # Library reports check progress; this test API has no trusted host itself.
+        listed = client.get("/api/v1/decks").json()["data"]["items"]
+        progress = next(d for d in listed if d["id"] == str(deck))["processing"]
+        total = sum(len(s.actions) for s in document.slides)
+        assert progress["state"] in {"review_ready", "partial"}
+        assert progress["checks"] == {
+            "total": total,
+            "checked": 1,
+            "ready": 1,
+            "available": False,
+            "active": False,
+        }
         context = dict(
             platform="win32", renderer_version=document.renderer_version, display_profile="wide-1x"
         )

@@ -135,6 +135,72 @@ def signed_in(window):
     return window.library
 
 
+def _checking(checked, total, ready, *, available=True):
+    value = payload("Checked deck", "incomplete")
+    value["data"]["items"][0]["processing"] = {
+        "job_id": str(uuid4()),
+        "state": "review_ready",
+        "stage": None,
+        "progress": 100,
+        "attempts": 1,
+        "error_code": None,
+        "can_retry": False,
+        "can_cancel": False,
+        "checks": {
+            "total": total,
+            "checked": checked,
+            "ready": ready,
+            "available": available,
+            "active": available and checked < total,
+        },
+    }
+    return value
+
+
+def test_library_shows_automatic_check_progress_with_ring(desktop_window, backend, qtbot):
+    from buddy_desktop.library_widget import CHECK_PROGRESS_ROLE, CheckStatusDelegate
+
+    backend.body = json.dumps(_checking(3, 8, 2)).encode()
+    library = signed_in(desktop_window(f"http://127.0.0.1:{backend.server_port}"))
+    qtbot.waitUntil(lambda: not library.runner.busy and library.table.rowCount() == 1)
+    # One item carries the text; the column delegate paints the ring before it.
+    item = library.table.item(0, 1)
+    assert item.text() == "Checking · 3/8"
+    assert item.data(CHECK_PROGRESS_ROLE) == (3, 8)
+    assert isinstance(library.table.itemDelegateForColumn(1), CheckStatusDelegate)
+    library.table.grab()  # paints the ring without errors
+    # Checks finish every few seconds, so Library refreshes sooner than usual.
+    assert library.poll.isActive() and library.poll.interval() == 5000
+
+    backend.body = json.dumps(_checking(8, 8, 6)).encode()
+    library.reload(retain_rows=True)
+    qtbot.waitUntil(lambda: not library.runner.busy)
+    assert library.table.item(0, 1).text() == "Ready · 6/8 actions"
+    assert library.table.item(0, 1).data(CHECK_PROGRESS_ROLE) is None
+    assert not library.poll.isActive()
+
+    backend.body = json.dumps(_checking(0, 8, 0, available=False)).encode()
+    library.reload(retain_rows=True)
+    qtbot.waitUntil(lambda: not library.runner.busy)
+    assert library.table.item(0, 1).text() == "Ready · actions off"
+
+
+@pytest.mark.parametrize(
+    "checks",
+    [
+        {"total": 2, "checked": 3, "ready": 0, "available": True, "active": False},
+        {"total": 2, "checked": 1, "ready": 0, "available": "yes", "active": True},
+        {"total": -1, "checked": 0, "ready": 0, "available": True, "active": False},
+    ],
+)
+def test_invalid_check_progress_is_rejected(backend, checks):
+    value = _checking(1, 2, 0)
+    value["data"]["items"][0]["processing"]["checks"] = checks
+    backend.body = json.dumps(value).encode()
+    with pytest.raises(ServiceError):
+        service(backend).list("test-token", search="", sort="newest", page=1)
+
+
 def test_signed_out_never_lists_decks(desktop_window, backend):
     window = desktop_window(f"http://127.0.0.1:{backend.server_port}")
     window.navigation.setCurrentRow(1)

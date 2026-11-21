@@ -241,36 +241,28 @@ def test_review_widget_loads_read_only_saved_page_and_clears_on_signout(
         return dict(state="validated", reasons=[])
 
     monkeypatch.setattr(review_widget.PreflightService, "run", qa)
-    assert review.visual_qa_button.isEnabled()
-    review.visual_qa_correct.setChecked(True)
+    # Pending actions are checked automatically: progress shows and no manual
+    # run-all, refresh or correction controls are offered.
+    assert "Checking actions · 0 of 1 checked" in review.check_label.text()
+    assert not review.check_progress.isHidden() and review.check_poll.isActive()
+    assert review.visual_qa_button.isHidden()
+    assert review.visual_qa_all_button.isHidden() and review.refresh_checks_button.isHidden()
+    assert review.visual_qa_correct.isHidden()
+    # A finished, failed check offers Check again, which always tries corrections.
+    rejected = replace(record.slides[0].actions[0], state="rejected", reasons=("wrong_target",))
+    review.analysis = replace(record, slides=(replace(record.slides[0], actions=(rejected,)),))
+    review._display_page()
+    assert "All actions checked · 0 of 1 Ready" in review.check_label.text()
+    assert not review.check_poll.isActive()
+    assert not review.visual_qa_button.isHidden() and review.visual_qa_button.isEnabled()
+    assert review.visual_qa_button.text() == "Check again"
     review.visual_qa_button.click()
     qtbot.waitUntil(lambda: "Visual QA: validated" in review.visual_qa_status.text())
     assert submissions == [(record.id, record.slides[0].actions[0].instance_id)]
-    assert not review.action_rows[0].usable
-    second_action = replace(record.slides[0].actions[0], instance_id="second-action")
-    second_slide = replace(record.slides[0], slide_id="second-slide", actions=(second_action,))
-    full_deck = replace(record, slides=(*record.slides, second_slide))
-    review.analysis = full_deck
-    submissions.clear()
-    assert review.visual_qa_all_button.isEnabled()
-    review.visual_qa_all_button.click()
-    try:
-        qtbot.waitUntil(second_started.is_set)
-        qtbot.waitUntil(lambda: "1 of 2 checked" in review.visual_qa_status.text())
-        assert "V 1 · R 0 · Unavailable 0 · Failed 0" in review.visual_qa_status.text()
-        assert review.runner.busy
-    finally:
-        release_second.set()
-    qtbot.waitUntil(lambda: "1 validated, 1 rejected" in review.visual_qa_status.text())
-    assert submissions == [
-        (full_deck.id, record.slides[0].actions[0].instance_id),
-        (full_deck.id, second_action.instance_id),
-    ]
-    assert "2 of 2 checked" in review.visual_qa_status.text()
     window.account.session.tokens = None
     window.account.session_changed.emit()
     assert review.visual_qa_status.text() == ""
-    assert not review.visual_qa_correct.isChecked()
+    assert review.check_progress.isHidden() and not review.check_poll.isActive()
     assert review.pdf_content is None
     assert review.analysis is None
     assert review.action_table.rowCount() == 0

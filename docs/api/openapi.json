@@ -1426,6 +1426,43 @@
         "title": "LegacyHealthResponse",
         "type": "object"
       },
+      "LibraryChecks": {
+        "description": "Visual preflight progress for the current analysis (#53).",
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "checked": {
+            "minimum": 0.0,
+            "title": "Checked",
+            "type": "integer"
+          },
+          "ready": {
+            "minimum": 0.0,
+            "title": "Ready",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "checked",
+          "ready",
+          "available",
+          "active"
+        ],
+        "title": "LibraryChecks",
+        "type": "object"
+      },
       "LibraryData": {
         "properties": {
           "items": {
@@ -1538,6 +1575,16 @@
             "default": false,
             "title": "Can Retry",
             "type": "boolean"
+          },
+          "checks": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LibraryChecks"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "error_code": {
             "anyOf": [

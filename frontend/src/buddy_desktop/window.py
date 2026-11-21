@@ -309,6 +309,11 @@ class MainWindow(QMainWindow):
         if not isinstance(deck_id, UUID):
             return
         self.review.set_deck(deck_id, title, status, source_format)
+        # Share the server's check availability so Review and Library agree.
+        page = self.library.last_page
+        deck = next((d for d in page.items if d.id == deck_id), None) if page else None
+        checks = deck.processing.checks if deck and deck.processing else None
+        self.review.checks_available = checks.available if checks else None
         self.navigation.setCurrentRow(2)
 
     def _open_saved_powerpoint(self, deck_id: object, title: str, status: str) -> None:

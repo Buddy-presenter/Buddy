@@ -1,7 +1,7 @@
 """Reusable, accessible shell views. Domain workflows are separate features."""
 
-from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QResizeEvent
+from PySide6.QtCore import QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QBrush, QColor, QLinearGradient, QPainter, QPen, QResizeEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -16,6 +16,82 @@ from PySide6.QtWidgets import (
 )
 
 from buddy_desktop.visuals import BuddyMark, command, icon
+
+
+def _progress_gradient(rect: QRectF) -> QLinearGradient:
+    # Buddy's coral-to-amber ramp is reserved for meaningful progress.
+    gradient = QLinearGradient(rect.topLeft(), rect.bottomRight())
+    gradient.setColorAt(0.0, QColor("#F65635"))
+    gradient.setColorAt(0.5, QColor("#F5843D"))
+    gradient.setColorAt(1.0, QColor("#F6A142"))
+    return gradient
+
+
+class ProgressRing(QWidget):
+    """A compact donut for per-row progress; the count is always shown as text too."""
+
+    def __init__(self, parent: QWidget | None = None, *, size: int = 18) -> None:
+        super().__init__(parent)
+        self.setFixedSize(size, size)
+        self._done, self._total = 0, 0
+
+    def set_progress(self, done: int, total: int) -> None:
+        self._done, self._total = max(0, done), max(0, total)
+        self.setAccessibleDescription(f"{self._done} of {self._total} checked")
+        self.update()
+
+    def paintEvent(self, _event: object) -> None:
+        painter = QPainter(self)
+        paint_ring(painter, QRectF(self.rect()), self._done, self._total)
+        painter.end()
+
+
+def paint_ring(painter: QPainter, bounds: QRectF, done: int, total: int) -> None:
+    """Draw the progress donut into bounds; shared by widgets and item delegates."""
+    painter.save()
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    width = max(2.0, bounds.width() / 7)
+    rect = bounds.adjusted(width / 2, width / 2, -width / 2, -width / 2)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.setPen(QPen(QColor("#2A2B31"), width))
+    painter.drawEllipse(rect)
+    if total:
+        pen = QPen(QBrush(_progress_gradient(rect)), width)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.drawArc(rect, 90 * 16, round(-360 * 16 * min(1.0, max(0, done) / total)))
+    painter.restore()
+
+
+class ProgressStrip(QWidget):
+    """A slim determinate bar for wide surfaces such as the Review action list."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedHeight(6)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._fraction = 0.0
+
+    def set_progress(self, done: int, total: int) -> None:
+        self._fraction = min(1.0, done / total) if total else 0.0
+        self.setAccessibleDescription(f"{done} of {total} checked")
+        self.update()
+
+    def paintEvent(self, _event: object) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        rect = QRectF(self.rect())
+        radius = rect.height() / 2
+        painter.setBrush(QColor("#2A2B31"))
+        painter.drawRoundedRect(rect, radius, radius)
+        if self._fraction:
+            filled = QRectF(
+                rect.x(), rect.y(), max(rect.height(), rect.width() * self._fraction), rect.height()
+            )
+            painter.setBrush(QBrush(_progress_gradient(rect)))
+            painter.drawRoundedRect(filled, radius, radius)
+        painter.end()
 
 
 class StatusLabel(QLabel):
