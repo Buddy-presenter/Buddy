@@ -122,6 +122,7 @@ class ActionCheck(OwnedRecord):
         UniqueConstraint("id", "owner_id", name="uq_action_checks_owner_identity"),
         CheckConstraint("status IN ('pending','complete','cleanup','failed')", name="status"),
         CheckConstraint("storage_bytes >= 0 AND storage_bytes <= 33554432", name="storage_bytes"),
+        CheckConstraint("check_kind IN ('execution','preflight')", name="check_kind"),
     )
     deck_id: Mapped[UUID] = mapped_column(index=True)
     retry_key: Mapped[UUID] = mapped_column()
@@ -131,6 +132,8 @@ class ActionCheck(OwnedRecord):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     result: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     artifacts: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, server_default="[]")
+    check_kind: Mapped[str] = mapped_column(String(16), server_default="execution")
+    request_data: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
 
 class DeckExtraction(OwnedRecord):
@@ -504,6 +507,7 @@ class PresentationSession(OwnedRecord):
     )
     autonomy_mode: Mapped[str] = mapped_column(String(16), server_default="manual")
     last_accepted_action_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    runtime_context: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
 
 class SessionEvent(Base):

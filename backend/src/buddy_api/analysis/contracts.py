@@ -432,6 +432,13 @@ class ValidationInput(Model):
     display_profile: Identifier
     validation_kind: ValidationKind = "execution"
     semantic_verified: bool = False
+    runtime_platform: Literal["linux", "win32", "darwin"] | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    original_action_sha256: Digest | None = Field(default=None, exclude_if=lambda v: v is None)
+    executed_action: ContentAction | PowerPointContentActionV2 | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
     state: ValidationState
     reasons: Annotated[
         tuple[Annotated[str, Field(min_length=1, max_length=512, pattern=r"\S")], ...],
@@ -441,6 +448,13 @@ class ValidationInput(Model):
 
     @model_validator(mode="after")
     def consistent(self) -> Self:
+        if self.executed_action is not None and (
+            not self.original_action_sha256
+            or not self.semantic_verified
+            or self.state != "validated"
+            or digest(self.executed_action) != self.action_sha256
+        ):
+            raise ValueError("Corrected execution requires independently verified evidence.")
         if self.source_format == "pptx" and self.state == "validated" and not self.runtime_version:
             raise ValueError("PowerPoint validation requires the actual Office runtime version.")
         if self.state == "validated" and (not self.evidence or self.reasons):
@@ -535,7 +549,12 @@ def publication(
 ) -> Publication:
     if summary.status != "available" or any(s.summary.status != "available" for s in slides):
         return "partial"
-    if any(a.state == "candidate" for s in slides for a in s.actions):
+    if any(
+        a.state == "candidate"
+        or (a.state == "validated" and not (a.validation and a.validation.semantic_verified))
+        for s in slides
+        for a in s.actions
+    ):
         return "awaiting_validation"
     return "published"
 

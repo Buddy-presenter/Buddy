@@ -82,11 +82,12 @@ def powerpoint_payload(content=b"PK-synthetic-source", *, usable=True, kind="hig
             "reasons": [] if usable else ["powerpoint_runtime_requires_windows_office"],
             "evidence": [{"id": str(uuid4()), "kind": "report", "sha256": "b" * 64}],
             "runtime_version": "16.0.12345",
-            "validator_version": "powerpoint-executor-4"
-            if kind == "zoom_region"
-            else "powerpoint-executor-2",
+            "validator_version": "desktop-preflight-1",
+            "validation_kind": "visual",
+            "semantic_verified": usable,
+            "runtime_platform": "win32",
             "renderer_version": "desktop-powerpoint-2",
-            "display_profile": "windows-powerpoint-2",
+            "display_profile": "wide-1x",
         },
     )
     return deck, payload
@@ -119,12 +120,14 @@ def test_saved_powerpoint_review_routes_verified_binding_to_present(desktop_wind
 
 def test_legacy_zoom_proof_does_not_authorize_the_new_fitted_view():
     deck, payload = powerpoint_payload(kind="zoom_region")
-    payload["data"]["slides"][0]["actions"][0]["validation"]["validator_version"] = (
-        "powerpoint-executor-2"
-    )
+    validation = payload["data"]["slides"][0]["actions"][0]["validation"]
+    validation["validator_version"] = "powerpoint-executor-2"
+    validation["display_profile"] = "windows-powerpoint-2"
+    del validation["semantic_verified"]
+    del validation["validation_kind"]
     action = parse_analysis(payload, deck).slides[0].actions[0]
     assert not action.usable
-    assert "zoom_requires_fitted_view_revalidation" in action.reasons
+    assert "visual_verification_required" in action.reasons
 
 
 def test_powerpoint_review_preserves_independent_visual_verification():
@@ -559,7 +562,8 @@ def test_action_details_are_opt_in_and_evidence_png_opens(desktop_window, monkey
     png = (Path(__file__).parent / "fixtures/powerpoint/indexed-preview.png").read_bytes()
     requests = []
 
-    def evidence(_self, validation_id, artifact_id, sha256):
+    def evidence(_self, validation_id, artifact_id, sha256, *, visual=False):
+        assert visual
         requests.append((validation_id, artifact_id, sha256))
         return png, "image/png"
 

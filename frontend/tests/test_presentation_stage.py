@@ -366,7 +366,7 @@ def test_new_deck_session_start_waits_for_previous_deck_request(
     updated_states: list[SessionState] = []
 
     class DelayedService:
-        def start(self, _access: str, deck_id: str) -> PresentationSession:
+        def start(self, _access: str, deck_id: str, *, runtime=None) -> PresentationSession:
             started_decks.append(deck_id)
             if deck_id == first_manifest.deck_id:
                 first_started.set()

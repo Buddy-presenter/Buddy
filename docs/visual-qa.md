@@ -52,12 +52,13 @@ During a batch, **V** counts validated actions and **R** counts rejected actions
 Unavailable checks and execution failures have separate counters. Counts update
 after each completed action, including checks from other slides in the deck.
 
-The source build runs the local operator using the configured AWS profile, or
-`buddy-staging-tools` by default. The development virtual environment must have
-the backend development dependencies and an active AWS login for the operator.
-The packaged app needs a deployed QA service for end-user operation.
+Review sends each check to the API's trusted preflight worker, which runs the
+operator on its own desktop host with its own AWS credentials; the desktop holds
+no provider credentials. The worker needs a Windows or macOS API host with
+preflight enabled (see [preflight publication](preflight-publication.md)).
+Against a Linux API, checks complete as unavailable.
 Correction and revalidation orchestration is tracked by #51. Publishing reports
-in Review and gating Live tools is tracked by #53.
+in Review and gating live tools are described in [preflight publication](preflight-publication.md).
 
 ## Run synthetic PDF and PowerPoint cases on Windows
 

@@ -9,9 +9,10 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
-from uuid import UUID, uuid4
+from typing import Any
+from uuid import UUID
 
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QStandardPaths, Qt, QTimer, Signal
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QImage, QImageReader, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -35,7 +36,7 @@ from buddy_desktop.library_service import LibraryAccessExpired
 from buddy_desktop.pdf_document import render
 from buddy_desktop.powerpoint_review import PowerPointReviewSession
 from buddy_desktop.powerpoint_session_binding import PowerPointSessionBinding
-from buddy_desktop.review_qa import ReviewQAResult, review_qa_operator, run_review_qa
+from buddy_desktop.preflight_service import PreflightService
 from buddy_desktop.review_service import (
     ReviewAction,
     ReviewAnalysis,
@@ -97,7 +98,14 @@ class CorrectedAnalysis:
 class ReviewQABatch:
     counts: Counter[str]
     total: int
-    reports: Path
+    reports: Path | None
+    analysis: ReviewAnalysis | None = None
+
+
+@dataclass(frozen=True)
+class SavedPreflightCheck:
+    report: dict[str, Any]
+    analysis: ReviewAnalysis
 
 
 class ActionTable(QTableWidget):
@@ -209,6 +217,8 @@ def _action_status(action: ReviewAction, source_format: str) -> str:
             return "Ready"
         if "powerpoint_worker_busy_use_dedicated_session" in action.reasons:
             return "Waiting for PowerPoint"
+        if action.state == "validated" and not action.semantic_verified:
+            return "Visual QA pending"
         return "Pending checks" if action.state == "candidate" else "Unavailable"
     if action.semantic_verified:
         return "visually verified"
@@ -226,6 +236,7 @@ class ReviewWidget(Page):
     powerpoint_present_requested = Signal(object)
     powerpoint_invalidated = Signal()
     visual_qa_progress = Signal(int, int, int, object)
+    preflight_progress = Signal(int, object)
 
     def __init__(self, config: AppConfig, account: AccountWidget) -> None:
         super().__init__(
@@ -385,23 +396,24 @@ class ReviewWidget(Page):
             "audience screenshots to Amazon Bedrock for a visual verdict."
         )
         self.visual_qa_button.setEnabled(False)
-        self.visual_qa_button.setVisible(review_qa_operator() is not None)
+        self.visual_qa_button.setVisible(True)
         self.visual_qa_button.clicked.connect(self.run_selected_visual_qa)
         self.visual_qa_cancel = Event()
         self.visual_qa_progress.connect(self._show_visual_qa_progress)
+        self.preflight_progress.connect(self._show_preflight_progress)
         action_header.addWidget(self.visual_qa_button)
         self.visual_qa_all_button = QPushButton("Run visual QA on all actions")
         self.visual_qa_all_button.setToolTip(
             "Check every saved action in this deck. Each action is checked separately in Bedrock."
         )
-        self.visual_qa_all_button.setVisible(review_qa_operator() is not None)
+        self.visual_qa_all_button.setVisible(True)
         self.visual_qa_all_button.setEnabled(False)
         self.visual_qa_all_button.clicked.connect(self.run_all_visual_qa)
         action_header.addWidget(self.visual_qa_all_button)
         action_header.addWidget(self.run_powerpoint)
         content_layout.addLayout(action_header)
         self.visual_qa_correct = QCheckBox("Try bounded corrections")
-        self.visual_qa_correct.setVisible(review_qa_operator() is not None)
+        self.visual_qa_correct.setVisible(True)
         self.visual_qa_correct.setToolTip(
             "If an action is rejected, try up to two source-bounded region corrections "
             "and recheck each in the real player. Saves every attempt."
@@ -567,14 +579,11 @@ class ReviewWidget(Page):
             if analysis.source_format == "pptx"
             else (1280, 720)
         )
-        root = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation)
-        if not root:
-            self.visual_qa_status.setText("Buddy could not locate a private report directory.")
-            return
         correct = self.visual_qa_correct.isChecked()
-        reports = Path(root) / "visual-qa"
-        if batch:
-            reports = reports / uuid4().hex
+        access = self.token()
+        assert access is not None
+        qa_service = PreflightService(self.config, access)
+        review_service = ReviewService(self.config, access)
         preview, self._pptx_session = self._pptx_session, None
         generation = self.generation
         self.request_generation = generation
@@ -593,36 +602,59 @@ class ReviewWidget(Page):
         )
         self.activity_changed.emit(True)
 
-        def work() -> ReviewQAResult | ReviewQABatch:
+        def work() -> SavedPreflightCheck | ReviewQABatch:
             if preview is not None:
                 preview.close()
 
-            def check(action: ReviewAction) -> ReviewQAResult:
-                return run_review_qa(
-                    analysis,
-                    action,
-                    content,
-                    owner=owner,
+            counts: Counter[str] = Counter()
+
+            def check(action: ReviewAction) -> dict[str, Any]:
+                return qa_service.run(
+                    analysis.id,
+                    action.instance_id,
                     profile=profile,
                     viewport=viewport,
-                    reports=reports,
                     correct=correct,
+                    cancelled=cancelled,
+                    progress=lambda report: self.preflight_progress.emit(
+                        generation, {**report, "counts": dict(counts), "total": len(actions)}
+                    ),
                 )
 
             if not batch:
-                return check(actions[0])
-            counts: Counter[str] = Counter()
+                report = check(actions[0])
+                return SavedPreflightCheck(
+                    report, review_service.analysis(analysis.deck_id, analysis.source_format)
+                )
             for index, action in enumerate(actions, 1):
                 if cancelled.is_set():
                     break
                 try:
-                    counts[check(action).state] += 1
+                    counts[check(action)["state"]] += 1
+                except LibraryAccessExpired:
+                    raise
                 except ServiceError:
                     counts["failed"] += 1
                 self.visual_qa_progress.emit(generation, index, len(actions), dict(counts))
-            return ReviewQABatch(counts, len(actions), reports)
+            return ReviewQABatch(
+                counts,
+                len(actions),
+                None,
+                review_service.analysis(analysis.deck_id, analysis.source_format),
+            )
 
         self.runner.submit(work)
+
+    def _show_preflight_progress(self, generation: int, report: dict[str, Any]) -> None:
+        if generation != self.generation or self.visual_qa_cancel.is_set():
+            return
+        counts = report.get("counts", {})
+        self.visual_qa_status.setText(
+            f"Visual QA · {report.get('phase', 'queued')} · "
+            f"Attempt {max(1, report.get('attempt', 0))} of 3 · "
+            f"V {counts.get('validated', 0)} · R {counts.get('rejected', 0)} · "
+            f"Unavailable {counts.get('unavailable', 0)} · Failed {counts.get('failed', 0)}"
+        )
 
     def refresh_checks(self) -> None:
         access = self.token()
@@ -979,15 +1011,20 @@ class ReviewWidget(Page):
             )
             self.content.hide()
         elif isinstance(result, ReviewQABatch):
+            if result.analysis is not None:
+                self.analysis = result.analysis
+                self._display_page()
             counts = result.counts
             completed = sum(counts.values())
             self.visual_qa_status.setText(
                 f"Visual QA · {completed} of {result.total} checked. "
                 f"{counts['validated']} validated, {counts['rejected']} rejected, "
                 f"{counts['unavailable']} unavailable, {counts['failed']} failed. "
-                f"Reports: {result.reports}"
+                "Reports and before/after evidence are saved with each action."
             )
-        elif isinstance(result, ReviewQAResult):
+        elif isinstance(result, SavedPreflightCheck):
+            self.analysis = result.analysis
+            self._display_page()
             reasons = {
                 "audience_viewport_occluded": (
                     "Buddy could not capture an unobstructed slideshow. Retry and leave "
@@ -997,13 +1034,17 @@ class ReviewWidget(Page):
                     "Save and quit other PowerPoint windows, then retry."
                 ),
             }
-            reason = reasons.get(result.reason or "", (result.reason or "").replace("_", " "))
-            label = "Check unavailable" if result.state == "unavailable" else result.state
+            failure = next(iter(result.report.get("reasons", [])), "")
+            reason = reasons.get(failure, failure.replace("_", " "))
+            label = (
+                "Check unavailable"
+                if result.report["state"] == "unavailable"
+                else result.report["state"]
+            )
             self.visual_qa_status.setText(
                 f"Visual QA: {label}"
                 + (f" ({reason}). " if reason else ". ")
-                + (f"{result.observation} " if result.observation else "")
-                + f"Report saved to {result.report}"
+                + "Report and before/after evidence saved. Open Action details & evidence."
             )
         elif isinstance(result, UpdatedChecks):
             current = self.analysis
@@ -1106,7 +1147,7 @@ class ReviewWidget(Page):
                 and self._pptx_session is not None
                 and getattr(self._pptx_session, "binding", None) is not None
                 and self.analysis is not None
-                and self.analysis.publication == "published"
+                and self.analysis.publication in {"published", "partial", "awaiting_validation"}
             )
             if operation == "powerpoint_action":
                 self.notice.setText(
@@ -1220,7 +1261,7 @@ class ReviewWidget(Page):
                 self.open_powerpoint.isEnabled()
                 and self._pptx_session is None
                 and self.analysis is not None
-                and self.analysis.publication == "published"
+                and self.analysis.publication in {"published", "partial", "awaiting_validation"}
                 and self.pdf_content
                 and self.token()
             ):
@@ -1276,7 +1317,7 @@ class ReviewWidget(Page):
             or not self.token()
             or not isinstance(binding, PowerPointSessionBinding)
             or self.analysis is None
-            or self.analysis.publication != "published"
+            or self.analysis.publication not in {"published", "partial", "awaiting_validation"}
             or binding.analysis_id != str(self.analysis.id)
             or binding.deck_id != str(self.deck_id)
             or binding.source_revision != self.analysis.source_revision
@@ -1474,6 +1515,8 @@ class ReviewWidget(Page):
             else "Validation is pending. Save and close PowerPoint if it is open; "
             "Buddy resumes checks automatically."
             if action.state == "candidate"
+            else "Execution passed. Run visual QA to check the target and enable this action."
+            if action.state == "validated" and not action.semantic_verified
             else "This action is unavailable. Open Details to see why."
         )
         x, y, width, height = action.region
@@ -1519,14 +1562,26 @@ class ReviewWidget(Page):
             f"Region ({units}): x={x:g}, y={y:g}, width={width:g}, height={height:g}",
             f"Status: {status} · {'usable' if action.usable else 'not usable'}",
             f"Validation kind: {action.validation_kind}",
+            "Correction: geometry adjusted and revalidated"
+            if action.corrected
+            else "Correction: original geometry",
+            f"Verified runtime: {action.runtime_platform or 'not recorded'}"
+            + (f" · Office {action.runtime_version}" if action.runtime_version else ""),
         ]
         if action.reasons:
             lines.append("Validation notes: " + "; ".join(action.reasons))
         lines.append(validation.strip())
         self.action_detail.setPlainText("\n".join(lines))
+        attempts: Counter[str] = Counter()
         for evidence in action.evidence:
+            attempts[evidence.kind] += 1
+            attempt = (
+                f"Attempt {attempts[evidence.kind]} · "
+                if evidence.kind in {"before_image", "after_image"}
+                else ""
+            )
             self.evidence_choice.addItem(
-                f"{evidence.kind.replace('_', ' ')} · {evidence.sha256[:12]}", evidence
+                f"{attempt}{evidence.kind.replace('_', ' ')} · {evidence.sha256[:12]}", evidence
             )
         self.open_evidence.setEnabled(bool(action.evidence and action.validation_id))
 
@@ -1561,7 +1616,12 @@ class ReviewWidget(Page):
 
         def work() -> EvidenceResult | LibraryAccessExpired:
             try:
-                content, mime = service.evidence(validation_id, evidence.id, evidence.sha256)
+                content, mime = service.evidence(
+                    validation_id,
+                    evidence.id,
+                    evidence.sha256,
+                    visual=action.validator_version == "desktop-preflight-1",
+                )
                 return EvidenceResult(evidence.kind, content, mime)
             except LibraryAccessExpired as exc:
                 return exc
@@ -1575,7 +1635,7 @@ class ReviewWidget(Page):
         dialog.resize(760, 560)
         layout = QVBoxLayout(dialog)
         introduction = QLabel(
-            "Actual PowerPoint output before or after this action."
+            "Actual audience viewport before or after this action."
             if result.mime == "image/png"
             else "Execution report: checks performed and the reason for this action's availability."
         )

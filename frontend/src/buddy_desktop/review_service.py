@@ -56,6 +56,8 @@ class ReviewAction:
     raw: dict[str, Any] | None = None
     runtime_version: str | None = None
     action_sha256: str | None = None
+    corrected: bool = False
+    runtime_platform: str | None = None
 
 
 @dataclass(frozen=True)
@@ -155,6 +157,9 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
             if (
                 input_data.get("schema_version") != "buddy.powerpoint.analysis.v2"
                 or input_data.get("catalog_version") != "powerpoint-2"
+                or input_data.get("renderer_version") != "desktop-powerpoint-2"
+                or input_data.get("display_profile") != "windows-powerpoint-2"
+                or input_data.get("validator_version") != "powerpoint-executor-2"
             ):
                 raise ValueError
             office_safe = input_data.get("office_safe") is True
@@ -284,6 +289,14 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                 ):
                     raise ValueError
                 validation_id = UUID(str(validation["validation_id"]))
+                if validation.get("validator_version") == "desktop-preflight-1" and (
+                    validation.get("display_profile") not in {"wide-1x", "wide-2x"}
+                    or (
+                        validation.get("state") == "validated"
+                        and validation.get("runtime_platform") not in {"win32", "darwin"}
+                    )
+                ):
+                    raise ValueError
                 if validation.get("source_format", "pdf") != source_format:
                     raise ValueError
                 runtime_version = _text(validation.get("runtime_version"), optional=True)
@@ -299,9 +312,15 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                             action, sort_keys=True, separators=(",", ":"), allow_nan=False
                         ).encode()
                     ).hexdigest()
-                    or validation.get("display_profile") != profile
+                    or (
+                        validation_kind != "visual" and validation.get("display_profile") != profile
+                    )
                     or (
                         validation.get("validator_version") != validator
+                        and not (
+                            validation_kind == "visual"
+                            and validation.get("validator_version") == "desktop-preflight-1"
+                        )
                         and not (
                             powerpoint
                             and action.get("type") == "zoom_region"
@@ -363,7 +382,7 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                 raise ValueError
             # A PowerPoint action can be execution validated today and may later
             # receive independent visual proof. Keep those two claims distinct.
-            usable = result["state"] == "validated" and (powerpoint or result_semantic_verified)
+            usable = result["state"] == "validated" and result_semantic_verified
             legacy_execution = (
                 "semantic_verified" not in result
                 and isinstance(validation, dict)
@@ -377,6 +396,7 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
             if (
                 powerpoint
                 and result["usable"]
+                and validation_kind != "visual"
                 and (
                     validation is None
                     or not evidence
@@ -388,15 +408,8 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                 )
             ):
                 raise ValueError
-            if (
-                powerpoint
-                and action.get("type") == "zoom_region"
-                and usable
-                and isinstance(validation, dict)
-                and validation.get("validator_version") != "powerpoint-executor-4"
-            ):
-                usable = False
-                reasons = (*reasons, "zoom_requires_fitted_view_revalidation")
+            if result["state"] == "validated" and not semantic_verified:
+                reasons = (*reasons, "visual_verification_required")
             actions.append(
                 ReviewAction(
                     _required_text(action.get("instance_id")),
@@ -410,7 +423,9 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                     result_semantic_verified,
                     tuple(evidence),
                     tuple(r for r in reasons if r is not None),
-                    profile,
+                    validation.get("display_profile", profile)
+                    if isinstance(validation, dict)
+                    else profile,
                     validation.get("validator_version", validator)
                     if isinstance(validation, dict)
                     else validator,
@@ -423,6 +438,8 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                             action, sort_keys=True, separators=(",", ":"), allow_nan=False
                         ).encode()
                     ).hexdigest(),
+                    bool(isinstance(validation, dict) and validation.get("executed_action")),
+                    validation.get("runtime_platform") if isinstance(validation, dict) else None,
                 )
             )
         slides.append(
@@ -654,10 +671,16 @@ class ReviewService:
         return PresentationService(self.config, self.access).download(str(deck_id))
 
     def evidence(
-        self, validation_id: UUID, artifact_id: UUID, expected_sha256: str
+        self,
+        validation_id: UUID,
+        artifact_id: UUID,
+        expected_sha256: str,
+        *,
+        visual: bool = False,
     ) -> tuple[bytes, str]:
+        collection = "preflights" if visual else "action-validations"
         content, headers = self._get(
-            f"/api/v1/action-validations/{validation_id}/evidence/{artifact_id}",
+            f"/api/v1/{collection}/{validation_id}/evidence/{artifact_id}",
             accept="*/*",
             limit=MAX_EVIDENCE_BYTES,
             allowed_types={"image/png", "application/json"},
