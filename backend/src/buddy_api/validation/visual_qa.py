@@ -184,6 +184,10 @@ class VisualQAService:
         visual_id = uuid5(request_id, "buddy.visual-qa.v1")
         async with self.uploads.database.sessions() as session, session.begin():
             analysis = await Analyses(session).get(analysis_id, owner_id=owner_id)
+            if analysis.source_format != "pdf":
+                raise PersistenceConflict(
+                    "Visual verification is currently available for PDF actions only."
+                )
             latest = await Analyses(session).latest_for_deck(analysis.deck_id, owner_id=owner_id)
             if latest.id != analysis_id:
                 raise PersistenceConflict("The analysis changed; reopen Review and retry.")

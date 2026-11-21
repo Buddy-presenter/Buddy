@@ -20,6 +20,7 @@ from buddy_desktop.services import NoRedirects, ServiceError
 
 MAX_ANALYSIS_BYTES = 16 * 1024 * 1024 + 65536
 MAX_EVIDENCE_BYTES = 16 * 1024 * 1024
+VISUAL_QA_REQUEST_TIMEOUT = 180.0
 
 
 @dataclass(frozen=True)
@@ -630,6 +631,8 @@ class ReviewService:
 
     def visual_qa(self, analysis: ReviewAnalysis, action: ReviewAction) -> ReviewAnalysis:
         """Ask the backend to execute, inspect and persist a visual verdict."""
+        if analysis.source_format != "pdf":
+            raise ServiceError("Visual verification is currently available for PDF actions only.")
         if action.raw is None or not action.instance_id:
             raise ServiceError("Select a saved action to verify.")
         path = f"/api/v1/analyses/{analysis.id}/actions/{action.instance_id}/visual-qa"
@@ -646,7 +649,7 @@ class ReviewService:
         )
         try:
             with build_opener(NoRedirects()).open(
-                request, timeout=self.config.request_timeout
+                request, timeout=max(VISUAL_QA_REQUEST_TIMEOUT, self.config.request_timeout)
             ) as response:
                 content = response.read(MAX_ANALYSIS_BYTES + 1)
                 if (

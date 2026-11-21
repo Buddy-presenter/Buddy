@@ -622,3 +622,44 @@ def test_pdf_review_retries_versioned_contract_on_upgrade(monkeypatch):
     deck = uuid4()
     assert service.analysis(deck).source_format == "pdf"
     assert calls == [f"/api/v1/analyses/by-deck/{deck}", f"/api/v2/analyses/pdf/by-deck/{deck}"]
+
+
+def test_visual_qa_accepts_successful_response_after_default_timeout(monkeypatch):
+    import time
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+
+    from buddy_desktop.config import AppConfig
+    from buddy_desktop.review_service import ReviewService
+
+    deck_id, payload = analysis_payload()
+    analysis = parse_analysis(payload, deck_id)
+    action = analysis.slides[0].actions[0]
+    payload_bytes = json.dumps(payload).encode()
+    request_started = Event()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            request_started.set()
+            time.sleep(5.2)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload_bytes)))
+            self.end_headers()
+            self.wfile.write(payload_bytes)
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    service = ReviewService(AppConfig(f"http://127.0.0.1:{server.server_port}"), "token")
+    try:
+        updated = service.visual_qa(analysis, action)
+        assert request_started.is_set()
+        assert updated.id == analysis.id
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)

@@ -387,7 +387,7 @@ class ReviewWidget(Page):
             "audience screenshots to Amazon Bedrock for a visual verdict."
         )
         self.visual_qa_button.setEnabled(False)
-        self.visual_qa_button.setVisible(True)
+        self.visual_qa_button.setVisible(False)
         self.visual_qa_button.clicked.connect(self.run_selected_visual_qa)
         self.visual_qa_cancel = Event()
         self.visual_qa_progress.connect(self._show_visual_qa_progress)
@@ -396,14 +396,14 @@ class ReviewWidget(Page):
         self.visual_qa_all_button.setToolTip(
             "Check every saved action in this deck. Each action is checked separately in Bedrock."
         )
-        self.visual_qa_all_button.setVisible(True)
+        self.visual_qa_all_button.setVisible(False)
         self.visual_qa_all_button.setEnabled(False)
         self.visual_qa_all_button.clicked.connect(self.run_all_visual_qa)
         action_header.addWidget(self.visual_qa_all_button)
         action_header.addWidget(self.run_powerpoint)
         content_layout.addLayout(action_header)
         self.visual_qa_correct = QCheckBox("Try bounded corrections")
-        self.visual_qa_correct.setVisible(review_qa_operator() is not None)
+        self.visual_qa_correct.setVisible(False)
         self.visual_qa_correct.setToolTip(
             "If an action is rejected, try up to two source-bounded region corrections "
             "and recheck each in the real player. Saves every attempt."
@@ -413,6 +413,7 @@ class ReviewWidget(Page):
         self.visual_qa_status.setWordWrap(True)
         self.visual_qa_status.setTextFormat(Qt.TextFormat.PlainText)
         self.visual_qa_status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.visual_qa_status.setVisible(False)
         content_layout.addWidget(self.visual_qa_status)
         self.action_table = ActionTable(0, 4)
         self.action_table.setObjectName("reviewActions")
@@ -548,6 +549,11 @@ class ReviewWidget(Page):
 
     def _run_visual_qa(self, actions: tuple[ReviewAction, ...], *, batch: bool) -> None:
         analysis, content = self.analysis, self.pdf_content
+        if self.source_format != "pdf":
+            self.visual_qa_status.setText(
+                "Visual verification is currently available for PDF actions only."
+            )
+            return
         owner = self.account.account_id
         access = self.token()
         if (
@@ -768,6 +774,11 @@ class ReviewWidget(Page):
         if source_format not in {"pdf", "pptx"}:
             raise ServiceError("Unsupported presentation source format.")
         self.source_format = source_format
+        pdf_visual_qa = source_format == "pdf"
+        self.visual_qa_button.setVisible(pdf_visual_qa)
+        self.visual_qa_all_button.setVisible(pdf_visual_qa)
+        self.visual_qa_correct.setVisible(pdf_visual_qa and review_qa_operator() is not None)
+        self.visual_qa_status.setVisible(pdf_visual_qa)
         self.deck_id, self.deck_title, self.deck_status = deck_id, title, status
         self.clear_private(keep_deck=True)
         self._present_on_load = present
@@ -1256,7 +1267,8 @@ class ReviewWidget(Page):
             return
         self.visual_qa_all_button.setText("Run visual QA on all actions")
         self.visual_qa_all_button.setEnabled(
-            not self.closing
+            self.source_format == "pdf"
+            and not self.closing
             and bool(self.token())
             and self.analysis is not None
             and any(
@@ -1265,7 +1277,8 @@ class ReviewWidget(Page):
         )
         row = self.action_table.currentRow()
         self.visual_qa_button.setEnabled(
-            0 <= row < len(self.action_rows)
+            self.source_format == "pdf"
+            and 0 <= row < len(self.action_rows)
             and self.action_rows[row].raw is not None
             and bool(self.token())
         )
@@ -1512,7 +1525,10 @@ class ReviewWidget(Page):
             return
         action = self.action_rows[row]
         self.visual_qa_button.setEnabled(
-            action.raw is not None and not self.runner.busy and bool(self.token())
+            self.source_format == "pdf"
+            and action.raw is not None
+            and not self.runner.busy
+            and bool(self.token())
         )
         self.details_toggle.setChecked(False)
         self.action_status.setText(

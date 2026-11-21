@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 
 from buddy_api.analysis.store import Analyses
+from buddy_api.persistence.errors import PersistenceConflict
 from buddy_api.validation.visual_qa import VisualQAService
 
 
@@ -112,6 +113,47 @@ def test_lock_current_revision_locks_deck_before_reading_latest():
     import asyncio
 
     asyncio.run(scenario())
+
+
+def test_powerpoint_visual_qa_is_rejected_before_execution_or_persistence(monkeypatch):
+    import asyncio
+
+    analysis = SimpleNamespace(source_format="pptx", deck_id=uuid4())
+
+    class Context:
+        def __init__(self, value):
+            self.value = value
+
+        async def __aenter__(self):
+            return self.value
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class Session:
+        def begin(self):
+            return Context(self)
+
+    session = Session()
+
+    class Database:
+        def sessions(self):
+            return Context(session)
+
+    async def get(_self, _analysis_id, *, owner_id):
+        return analysis
+
+    monkeypatch.setattr(Analyses, "get", get)
+    executor_calls = []
+    executor = SimpleNamespace(validate=lambda *args: executor_calls.append(args))
+    service = VisualQAService(SimpleNamespace(database=Database()), executor, "eu-west-1")
+
+    async def scenario():
+        with pytest.raises(PersistenceConflict, match="PDF actions only"):
+            await service.verify(uuid4(), uuid4(), "ppt-action", uuid4())
+
+    asyncio.run(scenario())
+    assert executor_calls == []
 
 
 @pytest.mark.parametrize(

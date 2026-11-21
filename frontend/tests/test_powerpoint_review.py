@@ -120,6 +120,23 @@ def test_saved_powerpoint_review_routes_verified_binding_to_present(desktop_wind
     assert window.navigation.currentRow() == 3
 
 
+def test_visual_qa_controls_are_pdf_only_and_return_for_pdf(desktop_window):
+    window = desktop_window()
+    review = window.review
+    deck = uuid4()
+
+    review.set_deck(deck, "PowerPoint fixture", source_format="pptx")
+    assert review.visual_qa_button.isHidden()
+    assert review.visual_qa_all_button.isHidden()
+    assert review.visual_qa_correct.isHidden()
+    assert review.visual_qa_status.isHidden()
+
+    review.set_deck(deck, "PDF fixture", source_format="pdf")
+    assert not review.visual_qa_button.isHidden()
+    assert not review.visual_qa_all_button.isHidden()
+    assert not review.visual_qa_status.isHidden()
+
+
 def test_legacy_zoom_proof_does_not_authorize_the_new_fitted_view():
     deck, payload = powerpoint_payload(kind="zoom_region")
     payload["data"]["slides"][0]["actions"][0]["validation"]["validator_version"] = (
