@@ -142,6 +142,7 @@ def test_lock_current_revision_locks_deck_before_reading_latest():
         _response(verdict="validated", issue="wrong_target"),
         _response(verdict="rejected", issue=None),
         _response(confidence=1.1),
+        _response(confidence=True),
     ],
 )
 def test_judge_fails_closed_on_missing_ambiguous_or_conflicting_verdict(action, response):
