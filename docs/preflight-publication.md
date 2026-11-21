@@ -87,7 +87,7 @@ disabled; requests there complete as `unavailable` with
 | --- | --- |
 | `BUDDY_PREFLIGHT_ENABLED` | `true` or `false` (default). |
 | `BUDDY_PREFLIGHT_PYTHON` | Required when enabled: absolute path to the Python that has `buddy_desktop` installed. The child gets no network, AWS, database or Buddy credentials. |
-| `BUDDY_PREFLIGHT_PROFILE` | `wide-1x` (default) or `wide-2x`; must match the presenter's display scale. |
+| `BUDDY_PREFLIGHT_PROFILE` | `wide-1x` (default, 100% Windows scaling) or `wide-2x` (200%); must match the host display and the presenters' displays, for PDF and PowerPoint alike. A mismatch makes every check `unavailable: unsupported_display_profile`. |
 | `BUDDY_PREFLIGHT_WIDTH` / `BUDDY_PREFLIGHT_HEIGHT` | Viewport, default `1280`×`720`; 320–4096. |
 | `BUDDY_AWS_REGION` | Bedrock region for the visual judge, default `eu-central-1`. AWS credentials come from the host's normal AWS configuration. |
 

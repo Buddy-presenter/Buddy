@@ -572,7 +572,8 @@ class ReviewWidget(Page):
             return
         screen = QGuiApplication.primaryScreen() or self.screen()
         scale = screen.devicePixelRatio()
-        profile = "wide-2x" if analysis.source_format == "pdf" and scale == 2 else "wide-1x"
+        # Same display-scale rule for PDF and PowerPoint as Present and the players.
+        profile = "wide-2x" if scale == 2 else "wide-1x"
         size = screen.geometry().size()
         viewport = (
             (round(size.width() * scale), round(size.height() * scale))

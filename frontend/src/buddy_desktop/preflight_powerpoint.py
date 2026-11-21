@@ -139,10 +139,16 @@ class OfficePlayer:
             )
             self.info = self.adapter.launch(folder / "source.pptx")
             self.presentation = self.office.Presentations.Item(1)
-            # Production zoom requires a fullscreen audience window. The host must
-            # explicitly request this dedicated display's physical client viewport.
+            # Production zoom requires a fullscreen audience window on the primary
+            # display. Office always plays at that display's physical size, so the
+            # actual client viewport is recorded rather than a host-chosen size.
+            # The display profile must match the display's real scale (1x or 2x),
+            # the same rule the PDF player and Present use.
             width, height = request["viewport"]
             dpr = PROFILES[request["profile"]][2]
+            screen = app.primaryScreen()
+            if screen is None or abs(screen.devicePixelRatio() - dpr) > 0.001:
+                raise ContractError("unsupported_display_profile")
             self.runtime = dict(
                 renderer_version="desktop-powerpoint-2",
                 runtime_os="Windows",
@@ -159,7 +165,11 @@ class OfficePlayer:
             with driver._physical_pixels():
                 left, top, right, bottom = driver.gui.GetClientRect(self.info.window_id)
             self.runtime["viewport"] = [right - left, bottom - top]
-            if dpr != 1 or self.runtime["viewport"] != [width, height]:
+            geometry = screen.geometry()
+            physical = [round(geometry.width() * dpr), round(geometry.height() * dpr)]
+            # The slideshow must fill the primary display; anything else (windowed,
+            # another monitor, a resolution change) fails closed.
+            if self.runtime["viewport"] != physical:
                 raise ContractError("unsupported_display_profile")
         except Exception as exc:
             self.close()

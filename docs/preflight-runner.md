@@ -62,8 +62,11 @@ pywin32/comtypes, and a dedicated test OS account/display with no running PowerP
 It starts a fresh Office instance, opens only a private source copy read-only, disables
 macros, rejects embedded automation/external relationships, and verifies exact owned
 Office PID and audience window identity. It never connects to an existing slideshow.
-Production zoom requires fullscreen on the primary display; the host must explicitly
-request that display's physical viewport. Mismatch fails closed. Office version/build,
+Production zoom requires fullscreen on the primary display. The slideshow must fill that
+display's physical size, and the requested profile must match its Windows scaling
+(`wide-1x` at 100%, `wide-2x` at 200%, the same rule as PDF and Present); otherwise it
+fails closed with `unsupported_display_profile`. Other scales (for example 125%/150%) are
+not yet supported for either format. Office version/build,
 Windows runtime and actual viewport are recorded. macOS PowerPoint is unsupported.
 Native window hit tests and a source-render comparison reject obstructing dialogs/apps;
 the source export is an occlusion guard only and never replaces desktop evidence. Office

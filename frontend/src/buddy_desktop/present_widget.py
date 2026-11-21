@@ -2399,8 +2399,9 @@ class PresentWidget(Page):
                 "renderer_version": "desktop-powerpoint-2"
                 if self._powerpoint_binding
                 else "pdfium-5.14.0-144dpi",
+                # PDF and PowerPoint use the same rule as their preflight players.
                 "display_profile": "wide-2x"
-                if not self._powerpoint_binding and screen and screen.devicePixelRatio() == 2
+                if screen and screen.devicePixelRatio() == 2
                 else "wide-1x",
             }
             if sys.platform in {"win32", "darwin"}
