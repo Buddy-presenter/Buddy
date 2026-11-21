@@ -68,7 +68,7 @@ from buddy_desktop.presentation_session_service import (
     SessionConflict,
     SessionState,
 )
-from buddy_desktop.review_service import ReviewAnalysis, ReviewService
+from buddy_desktop.review_service import ReviewAction, ReviewAnalysis, ReviewService
 from buddy_desktop.services import ServiceError
 from buddy_desktop.session_events import SessionEvent, SessionEventStream
 from buddy_desktop.slide_contract import ContractError, Region, parse_action
@@ -95,6 +95,15 @@ from buddy_desktop.visuals import BuddyMark, command
 
 logger = logging.getLogger(__name__)
 NAVIGATION_TOOLS = {"next_slide", "previous_slide", "go_to_slide"}
+
+
+def saved_action_eligible(source_format: str, action: ReviewAction) -> bool:
+    """Gate PDFs on semantic QA; preserve Office readiness pending its evidence path."""
+    return (
+        action.usable
+        and action.state == "validated"
+        and (source_format == "pptx" or action.semantic_verified)
+    )
 
 
 def proposal_context(value: dict[str, Any], live: ContextSnapshot) -> ContextSnapshot | None:
@@ -1466,12 +1475,7 @@ class PresentWidget(Page):
         action = (
             next((a for a in slide.actions if a.instance_id == identifier), None) if slide else None
         )
-        if (
-            action is None
-            or not action.usable
-            or action.state != "validated"
-            or not action.semantic_verified
-        ):
+        if action is None or not saved_action_eligible(analysis.source_format, action):
             self.generated_status.setText("This action is no longer eligible.")
             return
         if self._native_present is not None and self._powerpoint_info is not None:
@@ -1537,9 +1541,7 @@ class PresentWidget(Page):
                     (s for s in analysis.slides if s.slide_id == state.active_slide_id), None
                 )
                 for action in slide.actions if slide else ():
-                    eligible = (
-                        action.usable and action.state == "validated" and action.semantic_verified
-                    )
+                    eligible = saved_action_eligible(analysis.source_format, action)
                     label = f"{action.purpose} · {action.action_type}" + (
                         ""
                         if eligible

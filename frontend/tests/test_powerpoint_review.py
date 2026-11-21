@@ -14,6 +14,7 @@ from buddy_desktop.auth import Tokens
 from buddy_desktop.powerpoint_contract import PresentationInfo
 from buddy_desktop.powerpoint_generated import generated_action
 from buddy_desktop.powerpoint_session_binding import PowerPointSessionBinding
+from buddy_desktop.present_widget import saved_action_eligible
 from buddy_desktop.review_service import DownloadedPowerPoint, ReviewService, parse_analysis
 from buddy_desktop.services import ServiceError
 
@@ -140,10 +141,10 @@ def test_powerpoint_review_preserves_independent_visual_verification():
     assert action.validation_kind == "visual"
 
 
-def test_powerpoint_execution_proof_alone_is_not_usable():
+def test_powerpoint_execution_proof_preserves_existing_readiness():
     deck, payload = powerpoint_payload(usable=False, kind="highlight_region")
     result = payload["data"]["slides"][0]["actions"][0]
-    result.update(state="validated", usable=False)
+    result.update(state="validated", usable=True)
     result["validation"].update(
         state="validated",
         validation_kind="execution",
@@ -152,8 +153,18 @@ def test_powerpoint_execution_proof_alone_is_not_usable():
     )
     action = parse_analysis(payload, deck).slides[0].actions[0]
     assert action.state == "validated"
-    assert not action.usable and not action.semantic_verified
+    assert action.usable and not action.semantic_verified
     assert action.validation_kind == "execution"
+    assert saved_action_eligible("pptx", action)
+
+
+def test_pdf_saved_actions_still_require_semantic_verification():
+    deck, payload = analysis_payload()
+    result = payload["data"]["slides"][0]["actions"][0]
+    result.update(state="validated", usable=False, semantic_verified=False)
+    result["validation"] = None
+    action = parse_analysis(payload, deck).slides[0].actions[0]
+    assert not saved_action_eligible("pdf", action)
 
 
 @pytest.mark.parametrize("kind", KINDS)

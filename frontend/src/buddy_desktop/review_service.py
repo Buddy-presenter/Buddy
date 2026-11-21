@@ -361,9 +361,9 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                 or result_semantic_verified != semantic_verified
             ):
                 raise ValueError
-            # Neither format is usable until an independent visual result verifies
-            # that the executed region matches the intended target.
-            usable = result["state"] == "validated" and result_semantic_verified
+            # PDFs require the new independent visual QA result. Preserve the existing
+            # Office execution gate until the separate PowerPoint evidence path lands.
+            usable = result["state"] == "validated" and (powerpoint or result_semantic_verified)
             legacy_execution = (
                 "semantic_verified" not in result
                 and isinstance(validation, dict)
