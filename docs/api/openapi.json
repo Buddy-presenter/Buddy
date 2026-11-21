@@ -2090,11 +2090,6 @@
           "action": {
             "$ref": "#/components/schemas/PowerPointContentActionV2"
           },
-          "semantic_verified": {
-            "default": false,
-            "title": "Semantic Verified",
-            "type": "boolean"
-          },
           "state": {
             "$ref": "#/components/schemas/ValidationState"
           },
