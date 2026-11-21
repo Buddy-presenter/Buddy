@@ -204,7 +204,9 @@ def test_automatic_scheduling_and_manual_session_fallback(upload_app, source_for
             },
         )
         assert rejected.status_code == 422
-        service = PreflightService(uploads, PreflightSettings(python=sys.executable))
+        service = PreflightService(
+            uploads, PreflightSettings(python=sys.executable), platform="win32"
+        )
         client.portal.call(service.schedule)
 
         async def scheduled():
@@ -314,7 +316,9 @@ def test_lost_storage_acknowledgement_is_cleaned_before_terminal_publication(upl
 def test_new_graph_schedules_new_proof_instead_of_reusing_old_result(upload_app):
     with upload_app() as (client, cloud, uploads):
         owner, deck, analysis, document, _ = seed(client, uploads)
-        service = PreflightService(uploads, PreflightSettings(python=sys.executable))
+        service = PreflightService(
+            uploads, PreflightSettings(python=sys.executable), platform="win32"
+        )
         client.portal.call(service.schedule)
 
         async def revise():

@@ -48,8 +48,15 @@ def artifact_key(row: ActionCheck, name: str) -> str:
 
 
 class PreflightService:
-    def __init__(self, uploads: UploadService, settings: PreflightSettings | None):
-        self.uploads, self.settings = uploads, settings
+    def __init__(
+        self,
+        uploads: UploadService,
+        settings: PreflightSettings | None,
+        *,
+        platform: str = sys.platform,
+    ):
+        # The trusted desktop host OS; injectable so Linux CI can model that host.
+        self.uploads, self.settings, self.platform = uploads, settings, platform
 
     @staticmethod
     def public(row: ActionCheck) -> PreflightReport:
@@ -320,7 +327,7 @@ class PreflightService:
                     )
                     if not source_key or not source_version or source_size is None:
                         raise UploadError(409, "source_unavailable", "Saved source is unavailable.")
-                if self.settings is None or context["runtime_platform"] != sys.platform:
+                if self.settings is None or context["runtime_platform"] != self.platform:
                     bundle = PreflightBundle(
                         dict(
                             state="unavailable",
@@ -626,7 +633,7 @@ class PreflightService:
 
     async def schedule(self) -> None:
         """New immutable graphs/actions get fresh runs; completed failures need explicit retry."""
-        if self.settings is None or sys.platform not in {"win32", "darwin"}:
+        if self.settings is None or self.platform not in {"win32", "darwin"}:
             return
         settings = self.settings
         newer = aliased(AnalysisVersion)
@@ -660,7 +667,7 @@ class PreflightService:
                                 == SlideAction.instance_id,
                                 ActionCheck.request_data["profile"].as_string() == settings.profile,
                                 ActionCheck.request_data["runtime_platform"].as_string()
-                                == sys.platform,
+                                == self.platform,
                             )
                             .exists(),
                         )
@@ -673,11 +680,11 @@ class PreflightService:
             await self.request(
                 analysis.owner_id,
                 analysis.id,
-                uuid5(action.id, f"preflight:{sys.platform}:{settings.profile}"),
+                uuid5(action.id, f"preflight:{self.platform}:{settings.profile}"),
                 PreflightRequest(
                     instance_id=action.instance_id,
                     profile=settings.profile,
-                    runtime_platform="win32" if sys.platform == "win32" else "darwin",
+                    runtime_platform="win32" if self.platform == "win32" else "darwin",
                     viewport=(settings.viewport_width, settings.viewport_height),
                 ),
                 automatic=True,
