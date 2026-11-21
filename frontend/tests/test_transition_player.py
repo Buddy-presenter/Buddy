@@ -354,8 +354,32 @@ def test_local_navigation_uses_current_player_position_after_prior_move(player, 
     assert not checks
 
 
-def test_zoom_highlight_retains_server_preflight(player, qtbot):
-    page, proposal, _, _, checks = player
+def saved_analysis(page, **action_changes):
+    """A loaded saved analysis with one verified highlight on the first slide."""
+    from types import SimpleNamespace
+
+    action = SimpleNamespace(
+        instance_id="validated-highlight",
+        action_type="highlight_region",
+        region=(0.1, 0.1, 0.2, 0.2),
+        purpose="Draw attention to the revenue figure",
+        usable=True,
+        state="validated",
+        semantic_verified=True,
+        reasons=(),
+    )
+    for key, value in action_changes.items():
+        setattr(action, key, value)
+    slide = SimpleNamespace(slide_id=page.executor.manifest.slides[0].slide_id, actions=(action,))
+    return SimpleNamespace(
+        id=page._session.analysis_version_id,
+        deck_id=page._session.deck_id,
+        source_format="pdf",
+        slides=(slide,),
+    )
+
+
+def highlight_proposal(page, proposal, *, region=(0.1, 0.1, 0.2, 0.2)):
     proposal.update(
         decision_source="model",
         reason="topic",
@@ -364,13 +388,58 @@ def test_zoom_highlight_retains_server_preflight(player, qtbot):
             "tool": "highlight_region",
             "slide_id": page.executor.manifest.slides[0].slide_id,
             "action_id": "validated-highlight",
-            "region": {"x": 0.1, "y": 0.1, "width": 0.2, "height": 0.2},
+            "region": dict(zip(("x", "y", "width", "height"), region, strict=True)),
         },
     )
+
+
+def test_zoom_highlight_retains_server_preflight(player, qtbot, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO, logger="buddy_desktop.present_widget")
+    page, proposal, _, _, checks = player
+    page._generated_analysis = saved_analysis(page)
+    highlight_proposal(page, proposal)
     page._agent_proposed(proposal)
     qtbot.waitUntil(lambda: not page.policy_runner.busy and bool(page.surface.highlight))
     assert len(checks) == 1
     assert checks[0][1]["tool"] == "highlight_region"
+    # #202: the executed command is the exact saved, verified action, and the
+    # presenter is told which one ran.
+    assert page._accepted_action_id == "validated-highlight"
+    assert page.policy_status.text() == (
+        "Highlighted: Draw attention to the revenue figure. Undo is available."
+    )
+    # Sanitized evidence: action ID and timing, never purpose or transcript text.
+    finished = [m for m in (r.getMessage() for r in caplog.records) if "action_finished" in m]
+    assert finished and "action=validated-highlight" in finished[-1]
+    assert "revenue" not in caplog.text.lower()
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["not_loaded", "not_verified", "not_usable", "region_mismatch", "type_mismatch"],
+)
+def test_speech_never_executes_an_unverified_or_mismatched_saved_action(player, qtbot, case):
+    """#202: action existence alone never executes; the saved action must match."""
+    page, proposal, _, _, checks = player
+    changes = {
+        "not_verified": {"semantic_verified": False},
+        "not_usable": {"usable": False},
+        "type_mismatch": {"action_type": "zoom_region"},
+    }.get(case, {})
+    page._generated_analysis = None if case == "not_loaded" else saved_analysis(page, **changes)
+    if case == "not_loaded":
+        page._generated_autoload = page._session.analysis_version_id  # no reload in test
+    region = (0.3, 0.1, 0.2, 0.2) if case == "region_mismatch" else (0.1, 0.1, 0.2, 0.2)
+    highlight_proposal(page, proposal, region=region)
+    page._agent_proposed(proposal)
+    qtbot.wait(300)
+    assert not page.surface.highlight and checks == []
+    assert page._accepted_action_id is None
+    assert (
+        "still loading" if case == "not_loaded" else "not verified"
+    ) in page.policy_status.text()
 
 
 def test_recoverable_preflight_failure_keeps_automatic_actions_enabled(player):

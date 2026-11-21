@@ -598,7 +598,9 @@ def resolve(
                         (slide.summary.text or "")
                         + " "
                         + " ".join(
-                            a.action.purpose for a in slide.actions if candidate_action_eligible(a)
+                            " ".join(sorted(action_words(a)))
+                            for a in slide.actions
+                            if candidate_action_eligible(a)
                         )
                     )
                 ),
@@ -626,7 +628,9 @@ def resolve(
                 continue
             if action.action.type not in {"zoom_region", "highlight_region"}:
                 continue
-            score = len(query & tokens(action.action.purpose))
+            # Match the spoken words against both the action's purpose and the slide
+            # text it targets ("the revenue chart"), not the purpose alone (#202).
+            score = len(query & action_words(action))
             if score:
                 actions.append(
                     Candidate(
@@ -637,8 +641,21 @@ def resolve(
                         score=score,
                     )
                 )
-    result.extend(sorted(actions, key=lambda c: (-c.score, c.slide_id, c.action_id or ""))[:2])
+    result.extend(
+        sorted(actions, key=lambda c: (-c.score, c.slide_id, c.action_id or ""))[:ACTION_SLOTS]
+    )
     return tuple(result)
+
+
+# Saved region actions offered per decision; the agent still chooses or abstains.
+ACTION_SLOTS = 3
+
+
+def action_words(action: Any) -> frozenset[str]:
+    target = getattr(getattr(action.action, "params", None), "target_text", None)
+    return tokens(action.action.purpose) | (
+        tokens(target) if isinstance(target, str) else frozenset()
+    )
 
 
 def candidate_router() -> APIRouter:

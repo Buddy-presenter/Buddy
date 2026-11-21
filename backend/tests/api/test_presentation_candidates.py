@@ -317,6 +317,52 @@ def test_only_usable_views_are_retrieved_by_purpose():
     )
 
 
+def saved(identifier, purpose, target=None, *, usable=True, verified=True):
+    return SimpleNamespace(
+        usable=usable,
+        state="validated",
+        semantic_verified=verified,
+        action=SimpleNamespace(
+            purpose=purpose,
+            type="highlight_region",
+            instance_id=identifier,
+            params=SimpleNamespace(target_text=target),
+        ),
+    )
+
+
+def test_spoken_target_text_selects_the_saved_action_not_just_its_purpose():
+    """#202: "the twelve percent figure" matches the action that targets that text."""
+    deck = analysis("intro", "results")
+    deck.slides[1].actions = (
+        saved("growth", "Emphasise the key result", "Revenue grew twelve percent"),
+        saved("pilot", "Emphasise the recommendation", "Expand the pilot after review"),
+    )
+    result = resolve(deck, "slide-1", "look at the twelve percent revenue growth")
+    actions = [c for c in result if c.kind == "highlight_region"]
+    assert actions and actions[0].action_id == "growth"
+    assert all(c.action_id != "pilot" for c in actions)
+
+
+def test_unverified_saved_actions_are_never_candidates():
+    deck = analysis("intro", "results")
+    deck.slides[1].actions = (
+        saved("unchecked", "Revenue figure", "Revenue grew", verified=False),
+        saved("off", "Revenue figure", "Revenue grew", usable=False),
+    )
+    result = resolve(deck, "slide-1", "the revenue figure")
+    assert all(c.kind not in {"zoom_region", "highlight_region"} for c in result)
+
+
+def test_action_slots_are_bounded():
+    deck = analysis("intro", "results")
+    deck.slides[1].actions = tuple(
+        saved(f"a{i}", "revenue chart", "revenue chart") for i in range(6)
+    )
+    result = resolve(deck, "slide-1", "revenue chart")
+    assert len([c for c in result if c.action_id]) == 3 and len(result) <= 8
+
+
 def test_end_of_deck_and_maximum_deck_are_bounded():
     deck = analysis(*(f"topic{i}" for i in range(500)))
     assert {c.slide_id for c in resolve(deck, "slide-499", "next slide")} == {"slide-499"}
