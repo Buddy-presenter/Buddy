@@ -432,6 +432,10 @@ class ValidationInput(Model):
     display_profile: Identifier
     validation_kind: ValidationKind = "execution"
     semantic_verified: bool = False
+    visual_confidence: Annotated[float, Field(ge=0, le=1)] | None = None
+    visual_observation: Annotated[str, Field(min_length=1, max_length=1200)] | None = None
+    visual_verifier_version: Identifier | None = None
+    visual_model_id: Identifier | None = None
     state: ValidationState
     reasons: Annotated[
         tuple[Annotated[str, Field(min_length=1, max_length=512, pattern=r"\S")], ...],
@@ -453,6 +457,19 @@ class ValidationInput(Model):
             self.validation_kind == "visual" and self.state == "validated"
         ):
             raise ValueError("Semantic verification requires a validated visual review.")
+        if self.validation_kind != "visual" and (
+            self.visual_confidence is not None
+            or self.visual_observation is not None
+            or self.visual_verifier_version is not None
+            or self.visual_model_id is not None
+        ):
+            raise ValueError("Visual verdict details require a visual validation record.")
+        if (self.visual_confidence is None) != (self.visual_observation is None):
+            raise ValueError("Visual confidence and observation must be saved together.")
+        if (self.visual_verifier_version is None) != (self.visual_model_id is None):
+            raise ValueError("Visual verifier and model identifiers must be saved together.")
+        if self.visual_confidence is not None and self.visual_verifier_version is None:
+            raise ValueError("Visual verdicts need their evaluator version and model identifier.")
         if (
             self.validation_kind == "visual"
             and self.state == "validated"

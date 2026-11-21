@@ -54,6 +54,7 @@ from buddy_api.uploads.service import UploadService
 from buddy_api.uploads.storage import SourceStorage, StorageProbe
 from buddy_api.validation.api import validation_router
 from buddy_api.validation.service import ValidationService
+from buddy_api.validation.visual_qa import VisualQAService
 
 ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     400: {"model": ErrorResponse, "description": "Malformed or disallowed request."},
@@ -198,6 +199,11 @@ def create_app(
         else None
     )
     app.state.validator = validator
+    app.state.visual_qa = (
+        VisualQAService(uploads, validator, config.worker.region)
+        if uploads is not None and validator is not None and config.worker is not None
+        else None
+    )
     app.state.worker_settings = config.worker
     app.include_router(auth_router(config.identity))
     app.include_router(session_event_router())

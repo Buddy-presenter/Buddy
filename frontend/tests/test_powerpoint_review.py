@@ -14,6 +14,7 @@ from buddy_desktop.auth import Tokens
 from buddy_desktop.powerpoint_contract import PresentationInfo
 from buddy_desktop.powerpoint_generated import generated_action
 from buddy_desktop.powerpoint_session_binding import PowerPointSessionBinding
+from buddy_desktop.present_widget import saved_action_eligible
 from buddy_desktop.review_service import DownloadedPowerPoint, ReviewService, parse_analysis
 from buddy_desktop.services import ServiceError
 
@@ -71,6 +72,8 @@ def powerpoint_payload(content=b"PK-synthetic-source", *, usable=True, kind="hig
         validation={
             "source_format": "pptx",
             "schema_version": "buddy.validation.v1",
+            "validation_kind": "visual" if usable else "execution",
+            "semantic_verified": usable,
             "validation_id": str(uuid4()),
             "analysis_id": data["id"],
             "analysis_sha256": data["analysis_sha256"],
@@ -117,6 +120,23 @@ def test_saved_powerpoint_review_routes_verified_binding_to_present(desktop_wind
     assert window.navigation.currentRow() == 3
 
 
+def test_visual_qa_controls_are_pdf_only_and_return_for_pdf(desktop_window):
+    window = desktop_window()
+    review = window.review
+    deck = uuid4()
+
+    review.set_deck(deck, "PowerPoint fixture", source_format="pptx")
+    assert review.visual_qa_button.isHidden()
+    assert review.visual_qa_all_button.isHidden()
+    assert review.visual_qa_correct.isHidden()
+    assert review.visual_qa_status.isHidden()
+
+    review.set_deck(deck, "PDF fixture", source_format="pdf")
+    assert not review.visual_qa_button.isHidden()
+    assert not review.visual_qa_all_button.isHidden()
+    assert not review.visual_qa_status.isHidden()
+
+
 def test_legacy_zoom_proof_does_not_authorize_the_new_fitted_view():
     deck, payload = powerpoint_payload(kind="zoom_region")
     payload["data"]["slides"][0]["actions"][0]["validation"]["validator_version"] = (
@@ -138,13 +158,39 @@ def test_powerpoint_review_preserves_independent_visual_verification():
     assert action.validation_kind == "visual"
 
 
+def test_powerpoint_execution_proof_preserves_existing_readiness():
+    deck, payload = powerpoint_payload(usable=False, kind="highlight_region")
+    result = payload["data"]["slides"][0]["actions"][0]
+    result.update(state="validated", usable=True)
+    result["validation"].update(
+        state="validated",
+        validation_kind="execution",
+        semantic_verified=False,
+        reasons=[],
+    )
+    action = parse_analysis(payload, deck).slides[0].actions[0]
+    assert action.state == "validated"
+    assert action.usable and not action.semantic_verified
+    assert action.validation_kind == "execution"
+    assert saved_action_eligible("pptx", action)
+
+
+def test_pdf_saved_actions_still_require_semantic_verification():
+    deck, payload = analysis_payload()
+    result = payload["data"]["slides"][0]["actions"][0]
+    result.update(state="validated", usable=False, semantic_verified=False)
+    result["validation"] = None
+    action = parse_analysis(payload, deck).slides[0].actions[0]
+    assert not saved_action_eligible("pdf", action)
+
+
 @pytest.mark.parametrize("kind", KINDS)
 def test_powerpoint_review_all_actions_map_to_the_typed_real_executor(kind):
     deck, payload = powerpoint_payload(kind=kind)
     analysis = parse_analysis(payload, deck)
     slide, action = analysis.slides[0], analysis.slides[0].actions[0]
     assert analysis.source_format == "pptx" and slide.native_slide_id == 256
-    assert action.usable and action.runtime_version == "16.0.12345"
+    assert action.usable and action.semantic_verified and action.runtime_version == "16.0.12345"
     target = PresentationInfo("test.pptx", "test.pptx", 1, 1, 123, 256, 960, 540)
     command = generated_action(
         action.raw,

@@ -7,7 +7,12 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import ValidationError
 
-from buddy_api.analysis.contracts import AnalysisInput, PDFAnalysisInputV2, ValidationInput, digest
+from buddy_api.analysis.contracts import (
+    AnalysisInput,
+    PDFAnalysisInputV2,
+    ValidationInput,
+    digest,
+)
 from buddy_api.analysis.provider import (
     ModelAction,
     ModelOutput,
@@ -15,10 +20,20 @@ from buddy_api.analysis.provider import (
     ModelSummary,
 )
 from buddy_api.analysis.rendering import render_manifest
+from buddy_api.analysis.store import action_is_usable
 from buddy_api.extraction.runner import extract_pdf
 from buddy_api.processing.service import Processor
 
 PDF = Path(__file__).resolve().parents[3] / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf"
+
+
+@pytest.mark.parametrize(
+    ("source_format", "validated_without_visual"), [("pdf", False), ("pptx", True)]
+)
+def test_visual_readiness_gate_is_pdf_scoped(source_format, validated_without_visual):
+    assert action_is_usable(source_format, "validated", False) is validated_without_visual
+    assert action_is_usable(source_format, "validated", True)
+    assert not action_is_usable(source_format, "rejected", True)
 
 
 def _validation(**changes):
@@ -46,6 +61,10 @@ def test_execution_validation_cannot_claim_semantic_verification():
     visual = _validation(
         validation_kind="visual",
         semantic_verified=True,
+        visual_confidence=0.98,
+        visual_observation="The requested target is visibly emphasized.",
+        visual_verifier_version="buddy-visual-qa-1",
+        visual_model_id="eu.anthropic.claude-sonnet-4-6",
         evidence=[{"id": uuid4(), "kind": "report", "sha256": "d" * 64}],
     )
     assert visual.semantic_verified

@@ -85,6 +85,7 @@ class EvidenceResult:
 @dataclass(frozen=True)
 class UpdatedChecks:
     analysis: ReviewAnalysis
+    message: str | None = None
 
 
 @dataclass(frozen=True)
@@ -97,7 +98,8 @@ class CorrectedAnalysis:
 class ReviewQABatch:
     counts: Counter[str]
     total: int
-    reports: Path
+    reports: Path | None
+    analysis: ReviewAnalysis | None = None
 
 
 class ActionTable(QTableWidget):
@@ -385,7 +387,7 @@ class ReviewWidget(Page):
             "audience screenshots to Amazon Bedrock for a visual verdict."
         )
         self.visual_qa_button.setEnabled(False)
-        self.visual_qa_button.setVisible(review_qa_operator() is not None)
+        self.visual_qa_button.setVisible(False)
         self.visual_qa_button.clicked.connect(self.run_selected_visual_qa)
         self.visual_qa_cancel = Event()
         self.visual_qa_progress.connect(self._show_visual_qa_progress)
@@ -394,14 +396,14 @@ class ReviewWidget(Page):
         self.visual_qa_all_button.setToolTip(
             "Check every saved action in this deck. Each action is checked separately in Bedrock."
         )
-        self.visual_qa_all_button.setVisible(review_qa_operator() is not None)
+        self.visual_qa_all_button.setVisible(False)
         self.visual_qa_all_button.setEnabled(False)
         self.visual_qa_all_button.clicked.connect(self.run_all_visual_qa)
         action_header.addWidget(self.visual_qa_all_button)
         action_header.addWidget(self.run_powerpoint)
         content_layout.addLayout(action_header)
         self.visual_qa_correct = QCheckBox("Try bounded corrections")
-        self.visual_qa_correct.setVisible(review_qa_operator() is not None)
+        self.visual_qa_correct.setVisible(False)
         self.visual_qa_correct.setToolTip(
             "If an action is rejected, try up to two source-bounded region corrections "
             "and recheck each in the real player. Saves every attempt."
@@ -411,6 +413,7 @@ class ReviewWidget(Page):
         self.visual_qa_status.setWordWrap(True)
         self.visual_qa_status.setTextFormat(Qt.TextFormat.PlainText)
         self.visual_qa_status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.visual_qa_status.setVisible(False)
         content_layout.addWidget(self.visual_qa_status)
         self.action_table = ActionTable(0, 4)
         self.action_table.setObjectName("reviewActions")
@@ -546,12 +549,18 @@ class ReviewWidget(Page):
 
     def _run_visual_qa(self, actions: tuple[ReviewAction, ...], *, batch: bool) -> None:
         analysis, content = self.analysis, self.pdf_content
+        if self.source_format != "pdf":
+            self.visual_qa_status.setText(
+                "Visual verification is currently available for PDF actions only."
+            )
+            return
         owner = self.account.account_id
+        access = self.token()
         if (
             self.runner.busy
             or self.cleanup_runner.busy
             or self.closing
-            or not self.token()
+            or not access
             or not owner
             or analysis is None
             or content is None
@@ -567,14 +576,19 @@ class ReviewWidget(Page):
             if analysis.source_format == "pptx"
             else (1280, 720)
         )
-        root = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation)
-        if not root:
-            self.visual_qa_status.setText("Buddy could not locate a private report directory.")
-            return
-        correct = self.visual_qa_correct.isChecked()
-        reports = Path(root) / "visual-qa"
-        if batch:
-            reports = reports / uuid4().hex
+        local_operator = review_qa_operator() is not None
+        reports: Path | None = None
+        if local_operator:
+            root = QStandardPaths.writableLocation(
+                QStandardPaths.StandardLocation.AppLocalDataLocation
+            )
+            if not root:
+                self.visual_qa_status.setText("Buddy could not locate a private report directory.")
+                return
+            reports = Path(root) / "visual-qa"
+            if batch:
+                reports = reports / uuid4().hex
+        correct = local_operator and self.visual_qa_correct.isChecked()
         preview, self._pptx_session = self._pptx_session, None
         generation = self.generation
         self.request_generation = generation
@@ -593,34 +607,79 @@ class ReviewWidget(Page):
         )
         self.activity_changed.emit(True)
 
-        def work() -> ReviewQAResult | ReviewQABatch:
+        def work() -> UpdatedChecks | ReviewQABatch:
             if preview is not None:
                 preview.close()
 
-            def check(action: ReviewAction) -> ReviewQAResult:
-                return run_review_qa(
-                    analysis,
-                    action,
-                    content,
-                    owner=owner,
-                    profile=profile,
-                    viewport=viewport,
-                    reports=reports,
-                    correct=correct,
+            service = ReviewService(self.config, access)
+
+            def check(current: ReviewAnalysis, action_id: str) -> tuple[ReviewAnalysis, str]:
+                action = next(
+                    (
+                        candidate
+                        for slide in current.slides
+                        for candidate in slide.actions
+                        if candidate.instance_id == action_id
+                    ),
+                    None,
                 )
+                if action is None:
+                    raise ServiceError("The saved action changed during visual verification.")
+                local_result = None
+                if local_operator:
+                    assert reports is not None
+                    local_result = run_review_qa(
+                        current,
+                        action,
+                        content,
+                        owner=owner,
+                        profile=profile,
+                        viewport=viewport,
+                        reports=reports,
+                        correct=correct,
+                    )
+                    if local_result.corrected_region is not None:
+                        current = service.correct_action(
+                            current, action, region=local_result.corrected_region
+                        )
+                updated = service.visual_qa(current, action)
+                verified_action = next(
+                    candidate
+                    for slide in updated.slides
+                    for candidate in slide.actions
+                    if candidate.instance_id == action_id
+                )
+                # The local report is diagnostic. Only the server's independent,
+                # source-bound rerun is persisted as the saved validation result.
+                category = (
+                    "validated"
+                    if verified_action.state == "validated" and verified_action.semantic_verified
+                    else "rejected"
+                    if verified_action.state == "rejected"
+                    else "unavailable"
+                )
+                return updated, category
 
             if not batch:
-                return check(actions[0])
+                updated, category = check(analysis, actions[0].instance_id)
+                return UpdatedChecks(
+                    updated,
+                    "Visual QA saved: "
+                    + category.replace("-", " ")
+                    + ". Review the action status.",
+                )
             counts: Counter[str] = Counter()
+            current = analysis
             for index, action in enumerate(actions, 1):
                 if cancelled.is_set():
                     break
                 try:
-                    counts[check(action).state] += 1
+                    current, category = check(current, action.instance_id)
+                    counts[category] += 1
                 except ServiceError:
                     counts["failed"] += 1
                 self.visual_qa_progress.emit(generation, index, len(actions), dict(counts))
-            return ReviewQABatch(counts, len(actions), reports)
+            return ReviewQABatch(counts, len(actions), reports, current)
 
         self.runner.submit(work)
 
@@ -715,6 +774,11 @@ class ReviewWidget(Page):
         if source_format not in {"pdf", "pptx"}:
             raise ServiceError("Unsupported presentation source format.")
         self.source_format = source_format
+        pdf_visual_qa = source_format == "pdf"
+        self.visual_qa_button.setVisible(pdf_visual_qa)
+        self.visual_qa_all_button.setVisible(pdf_visual_qa)
+        self.visual_qa_correct.setVisible(pdf_visual_qa and review_qa_operator() is not None)
+        self.visual_qa_status.setVisible(pdf_visual_qa)
         self.deck_id, self.deck_title, self.deck_status = deck_id, title, status
         self.clear_private(keep_deck=True)
         self._present_on_load = present
@@ -981,11 +1045,14 @@ class ReviewWidget(Page):
         elif isinstance(result, ReviewQABatch):
             counts = result.counts
             completed = sum(counts.values())
+            if result.analysis is not None:
+                self.analysis = result.analysis
+                self._display_page()
             self.visual_qa_status.setText(
                 f"Visual QA · {completed} of {result.total} checked. "
                 f"{counts['validated']} validated, {counts['rejected']} rejected, "
                 f"{counts['unavailable']} unavailable, {counts['failed']} failed. "
-                f"Reports: {result.reports}"
+                + (f"Reports: {result.reports}" if result.reports else "Results saved to Review.")
             )
         elif isinstance(result, ReviewQAResult):
             reasons = {
@@ -1018,6 +1085,9 @@ class ReviewWidget(Page):
                 return
             self.analysis = result.analysis
             self._display_page()
+            if result.message:
+                self.visual_qa_status.setText(result.message)
+                return
             actions = [a for s in self.analysis.slides for a in s.actions]
             self.notice.setText(
                 f"Checks refreshed: {sum(a.usable for a in actions)} "
@@ -1197,7 +1267,8 @@ class ReviewWidget(Page):
             return
         self.visual_qa_all_button.setText("Run visual QA on all actions")
         self.visual_qa_all_button.setEnabled(
-            not self.closing
+            self.source_format == "pdf"
+            and not self.closing
             and bool(self.token())
             and self.analysis is not None
             and any(
@@ -1206,7 +1277,8 @@ class ReviewWidget(Page):
         )
         row = self.action_table.currentRow()
         self.visual_qa_button.setEnabled(
-            0 <= row < len(self.action_rows)
+            self.source_format == "pdf"
+            and 0 <= row < len(self.action_rows)
             and self.action_rows[row].raw is not None
             and bool(self.token())
         )
@@ -1453,7 +1525,10 @@ class ReviewWidget(Page):
             return
         action = self.action_rows[row]
         self.visual_qa_button.setEnabled(
-            action.raw is not None and not self.runner.busy and bool(self.token())
+            self.source_format == "pdf"
+            and action.raw is not None
+            and not self.runner.busy
+            and bool(self.token())
         )
         self.details_toggle.setChecked(False)
         self.action_status.setText(

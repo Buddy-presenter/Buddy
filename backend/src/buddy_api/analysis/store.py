@@ -57,7 +57,7 @@ def summary(record: AnalysisVersion | AnalysisSlide) -> Summary:
 
 
 def action_is_usable(source_format: str, state: str, semantic_verified: bool) -> bool:
-    """Apply the canonical format-specific gate used by analysis and session reads."""
+    """Require visual QA for PDFs while preserving the existing PowerPoint gate."""
     return state == "validated" and (source_format == "pptx" or semantic_verified)
 
 
@@ -125,6 +125,21 @@ class Analyses:
         if value is None:
             raise RecordNotFound("Owned deck analysis was not found.")
         return value
+
+    async def lock_current_revision(self, deck_id: UUID, *, owner_id: UUID) -> AnalysisVersion:
+        """Lock the deck against publishing a newer revision while a result is committed."""
+        deck = await self.session.scalar(
+            select(Deck)
+            .where(
+                Deck.id == deck_id,
+                Deck.owner_id == owner_id,
+                Deck.deletion_requested_at.is_(None),
+            )
+            .with_for_update()
+        )
+        if deck is None:
+            raise RecordNotFound("Owned deck was not found.")
+        return await self.latest_for_deck(deck_id, owner_id=owner_id)
 
     async def list(self, *, owner_id: UUID, limit: int = 100) -> list[AnalysisVersion]:
         if not 1 <= limit <= 100:
