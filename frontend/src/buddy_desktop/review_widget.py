@@ -5,6 +5,7 @@ import json
 import sys
 import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
@@ -47,12 +48,25 @@ from buddy_desktop.visuals import command
 
 
 @dataclass(frozen=True)
+class SavedSource:
+    content: bytes
+    revision: str
+    sha256: str
+
+
+# Rendered PDF pages kept for instant revisits; each is a 144-DPI ARGB image.
+PAGE_CACHE_LIMIT = 8
+
+
+@dataclass(frozen=True)
 class LoadedReview:
     analysis: ReviewAnalysis | None
     pdf_content: bytes
     sizes: tuple[tuple[float, float], ...]
     first_image: QImage
     notice: str | None
+    # The verified source, kept so reopening the same deck can skip the download.
+    source: SavedSource | None = None
 
 
 @dataclass(frozen=True)
@@ -250,6 +264,11 @@ class ReviewWidget(Page):
         self.account_busy = False
         self.pending_operation = ""
         self.pending_load = False
+        # Account-bound, in-memory only: the last verified source for one deck and
+        # rendered pages of the open PDF. Both are dropped when the account changes.
+        self._source_cache: tuple[tuple[object, ...], SavedSource] | None = None
+        self._loading_source_key: tuple[object, ...] | None = None
+        self._page_cache: dict[int, QImage] = {}
 
         toolbar = QHBoxLayout()
         self.back = QPushButton("Back to library")
@@ -773,6 +792,7 @@ class ReviewWidget(Page):
         self.generation += 1
         self.analysis = None
         self.pdf_content = None
+        self._page_cache.clear()
         self.sizes = ()
         self.page_index = 0
         self.image = QImage()
@@ -800,6 +820,8 @@ class ReviewWidget(Page):
         self.visual_qa_correct.setChecked(False)
         self.pending_load = False
         if not keep_deck:
+            # Identity, backend or sign-out changes must not reuse private sources.
+            self._source_cache = None
             self.deck_id = None
             self.deck_title = ""
 
@@ -820,10 +842,38 @@ class ReviewWidget(Page):
         )
         self.signin.hide()
         service = ReviewService(self.config, access)
+        source_key = (self.account_key, self.config.api_url, deck_id, source_format)
+        self._loading_source_key = source_key
+        cached = (
+            self._source_cache[1]
+            if self._source_cache is not None and self._source_cache[0] == source_key
+            else None
+        )
+
+        def download() -> SavedSource:
+            downloaded = (
+                service.source(deck_id, "pptx")
+                if source_format == "pptx"
+                else service.source(deck_id)
+            )
+            return SavedSource(
+                downloaded.content,
+                downloaded.revision,
+                hashlib.sha256(downloaded.content).hexdigest(),
+            )
 
         def work() -> LoadedReview | LibraryAccessExpired:
             analysis: ReviewAnalysis | None = None
             notice = None
+            # A first PDF open downloads the source while the analysis is read.
+            # PowerPoint sources stay deferred until a saved analysis exists, and a
+            # cached source is reused only if it matches the current analysis.
+            pool = (
+                ThreadPoolExecutor(max_workers=1)
+                if cached is None and source_format == "pdf"
+                else None
+            )
+            early = pool.submit(download) if pool is not None else None
             try:
                 analysis = (
                     service.analysis(deck_id, "pptx")
@@ -831,6 +881,8 @@ class ReviewWidget(Page):
                     else service.analysis(deck_id)
                 )
             except LibraryAccessExpired as exc:
+                if pool is not None:
+                    pool.shutdown(wait=False, cancel_futures=True)
                 return exc
             except ServiceError as exc:
                 notice = str(exc)
@@ -850,14 +902,23 @@ class ReviewWidget(Page):
                 # not download a large source while analysis is still pending.
                 return LoadedReview(None, b"", (), QImage(), notice)
             try:
-                source = (
-                    service.source(deck_id, "pptx")
-                    if source_format == "pptx"
-                    else service.source(deck_id)
-                )
+                if early is not None:
+                    source = early.result()
+                elif (
+                    cached is not None
+                    and analysis is not None
+                    and cached.revision == analysis.source_revision
+                    and cached.sha256 == analysis.source_sha256
+                ):
+                    source = cached
+                else:
+                    source = download()
             except LibraryAccessExpired as exc:
                 return exc
-            content_hash = hashlib.sha256(source.content).hexdigest()
+            finally:
+                if pool is not None:
+                    pool.shutdown(wait=False)
+            content_hash = source.sha256
             if analysis is not None and (
                 analysis.source_revision != source.revision
                 or analysis.source_sha256 != content_hash
@@ -881,6 +942,7 @@ class ReviewWidget(Page):
                         "PowerPoint summaries use extracted text and notes; unreadable visuals "
                         "are identified explicitly. Open the saved source to inspect its slides."
                     ),
+                    source,
                 )
             metadata, first = render(source.content, 0)
             sizes = tuple(tuple(size) for size in metadata["sizes"])
@@ -899,7 +961,7 @@ class ReviewWidget(Page):
                     "PDF page count differs from the saved analysis. The PDF is available to "
                     "browse without action overlays."
                 )
-            return LoadedReview(analysis, source.content, sizes, first, notice)
+            return LoadedReview(analysis, source.content, sizes, first, notice, source)
 
         self.activity_changed.emit(True)
         self.runner.submit(work)
@@ -980,6 +1042,11 @@ class ReviewWidget(Page):
             self.analysis = result.analysis
             self.pdf_content = result.pdf_content
             # This account-bound PDF is cleared when the account or backend changes.
+            if result.source is not None and self._loading_source_key is not None:
+                self._source_cache = (self._loading_source_key, result.source)
+            self._page_cache.clear()
+            if self.source_format == "pdf" and not result.first_image.isNull():
+                self._page_cache[0] = result.first_image
             notices = [result.notice] if result.notice else []
             if result.analysis is not None and result.analysis.action_limit_reached:
                 if self.source_format == "pptx":
@@ -1031,6 +1098,8 @@ class ReviewWidget(Page):
             self._show_evidence(result)
         elif isinstance(result, RenderedPage):
             self.page_index, self.image = result.index, result.image
+            if self.source_format == "pdf" and not result.image.isNull():
+                self._remember_page(result.index, result.image)
             self._display_page()
             self.present_powerpoint.setEnabled(
                 self.source_format == "pptx"
@@ -1278,11 +1347,24 @@ class ReviewWidget(Page):
                     )
                 )
             return
+        cached = self._page_cache.get(index)
+        if cached is not None:
+            # Revisiting a page needs no new isolated renderer process.
+            self._remember_page(index, cached)
+            self.page_index, self.image = index, cached
+            self._display_page()
+            return
         self.request_generation = self.generation
         self.pending_operation = "page"
         content = self.pdf_content
         self.activity_changed.emit(True)
         self.runner.submit(lambda: RenderedPage(index, render(content, index)[1]))
+
+    def _remember_page(self, index: int, image: QImage) -> None:
+        self._page_cache.pop(index, None)
+        self._page_cache[index] = image
+        while len(self._page_cache) > PAGE_CACHE_LIMIT:
+            self._page_cache.pop(next(iter(self._page_cache)))
 
     def _display_page(self) -> None:
         if not self.sizes or not 0 <= self.page_index < len(self.sizes):

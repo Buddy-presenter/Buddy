@@ -436,6 +436,139 @@ def test_review_queues_new_deck_while_stale_load_is_finishing(desktop_window, mo
         release_second.set()
 
 
+def _signed_in_review(desktop_window, account_id="same-account"):
+    window = desktop_window()
+    window.account.session = SimpleNamespace(
+        tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
+    )
+    window.account.account_id = account_id
+    window.account.session_changed.emit()
+    return window
+
+
+def test_review_downloads_source_during_analysis_and_reuses_it_on_reopen(
+    desktop_window, monkeypatch, qtbot
+):
+    content = b"%PDF-1.7 cached review fixture"
+    digest = hashlib.sha256(content).hexdigest()
+    deck_id, payload = analysis_payload(source_sha256=digest)
+    record = parse_analysis(payload, deck_id)
+    source_started = Event()
+    downloads = []
+
+    def analysis(_self, _deck):
+        # The first open must not wait for analysis before fetching the PDF.
+        if not downloads and not source_started.wait(5):
+            raise TimeoutError("Source download did not start alongside the analysis.")
+        return record
+
+    def source(_self, _deck):
+        downloads.append(_deck)
+        source_started.set()
+        return DownloadedPDF(content, str(deck_id), "revision-1")
+
+    monkeypatch.setattr(ReviewService, "analysis", analysis)
+    monkeypatch.setattr(ReviewService, "source", source)
+    image = QImage(100, 100, QImage.Format.Format_ARGB32)
+    image.fill(QColor("white"))
+    monkeypatch.setattr(
+        review_widget, "render", lambda _content, _index: ({"sizes": [[100, 100]]}, image.copy())
+    )
+    window = _signed_in_review(desktop_window)
+    review = window.review
+    review.set_deck(deck_id, "Cached deck")
+    review.activate(True)
+    qtbot.waitUntil(lambda: not review.runner.busy and review.pdf_content is not None)
+    assert review.analysis is record and downloads == [deck_id]
+
+    review.activate(False)
+    review.set_deck(deck_id, "Cached deck")
+    review.activate(True)
+    qtbot.waitUntil(lambda: not review.runner.busy and review.pdf_content is not None)
+    assert review.analysis is record and review.pdf_content == content
+    assert downloads == [deck_id]
+
+    # A changed source revision is downloaded again rather than trusted from memory.
+    changed = replace(record, source_revision="revision-2")
+    monkeypatch.setattr(ReviewService, "analysis", lambda _self, _deck: changed)
+    review.activate(False)
+    review.set_deck(deck_id, "Cached deck")
+    review.activate(True)
+    qtbot.waitUntil(lambda: not review.runner.busy and review.pdf_content is not None)
+    assert downloads == [deck_id, deck_id]
+
+
+def test_review_source_cache_is_dropped_when_the_account_changes(
+    desktop_window, monkeypatch, qtbot
+):
+    content = b"%PDF-1.7 account-bound cache fixture"
+    digest = hashlib.sha256(content).hexdigest()
+    deck_id, payload = analysis_payload(source_sha256=digest)
+    record = parse_analysis(payload, deck_id)
+    downloads = []
+
+    def source(_self, _deck):
+        downloads.append(_deck)
+        return DownloadedPDF(content, str(deck_id), "revision-1")
+
+    monkeypatch.setattr(ReviewService, "analysis", lambda _self, _deck: record)
+    monkeypatch.setattr(ReviewService, "source", source)
+    image = QImage(100, 100, QImage.Format.Format_ARGB32)
+    monkeypatch.setattr(
+        review_widget, "render", lambda _content, _index: ({"sizes": [[100, 100]]}, image.copy())
+    )
+    window = _signed_in_review(desktop_window)
+    review = window.review
+    review.set_deck(deck_id, "Private deck")
+    review.activate(True)
+    qtbot.waitUntil(lambda: not review.runner.busy and review.pdf_content is not None)
+
+    window.account.session = SimpleNamespace(
+        tokens=Tokens("other", "refresh", time.monotonic() + 3600), cancelled=Event()
+    )
+    window.account.account_id = "other-account"
+    window.account.session_changed.emit()
+    assert review._source_cache is None
+    review.set_deck(deck_id, "Private deck")
+    review.activate(True)
+    qtbot.waitUntil(lambda: not review.runner.busy and review.pdf_content is not None)
+    assert downloads == [deck_id, deck_id]
+
+
+def test_review_revisited_pdf_pages_do_not_render_again(desktop_window, monkeypatch, qtbot):
+    content = b"%PDF-1.7 page cache fixture"
+    digest = hashlib.sha256(content).hexdigest()
+    deck_id, payload = analysis_payload(source_sha256=digest)
+    record = parse_analysis(payload, deck_id)
+    monkeypatch.setattr(ReviewService, "analysis", lambda _self, _deck: record)
+    monkeypatch.setattr(
+        ReviewService,
+        "source",
+        lambda _self, _deck: DownloadedPDF(content, str(deck_id), "revision-1"),
+    )
+    renders = []
+
+    def render(_content, index):
+        renders.append(index)
+        image = QImage(100, 100, QImage.Format.Format_ARGB32)
+        image.fill(QColor("white"))
+        return {"sizes": [[100, 100]] * 3}, image
+
+    monkeypatch.setattr(review_widget, "render", render)
+    review = _signed_in_review(desktop_window).review
+    review.set_deck(deck_id, "Paged deck")
+    review.activate(True)
+    qtbot.waitUntil(lambda: not review.runner.busy and review.pdf_content is not None)
+
+    review.show_page(1)
+    qtbot.waitUntil(lambda: not review.runner.busy and review.page_index == 1)
+    review.show_page(0)
+    assert review.page_index == 0 and not review.runner.busy
+    review.show_page(1)
+    assert review.page_index == 1 and not review.runner.busy
+    assert renders == [0, 1]
+
+
 def test_pdf_review_retries_versioned_contract_on_upgrade(monkeypatch):
     from buddy_desktop.config import AppConfig
     from buddy_desktop.review_service import PDFAnalysisUpgradeRequired, ReviewService
