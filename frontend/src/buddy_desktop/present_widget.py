@@ -1184,6 +1184,7 @@ class PresentWidget(Page):
                 None,
             )
             verb = "Zoomed" if target.tool == "zoom_region" else "Highlighted"
+            purpose = purpose.strip().rstrip(".") if purpose else None
             return (
                 f"{verb}: {purpose}. Undo is available."
                 if purpose
