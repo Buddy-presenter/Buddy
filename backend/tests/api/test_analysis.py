@@ -91,7 +91,9 @@ def test_both_formats_require_visual_proof_after_execution_validation(migrated_d
                     if source_format == "pdf":
                         assert not result.semantic_verified
                     else:
-                        assert "semantic_verified" not in result.model_dump()
+                        assert result.validation is not None
+                        assert not result.validation.semantic_verified
+                    if source_format == "pptx":
                         assert "visual_qa_pending_instance_ids" not in checked.inputs.model_dump()
         finally:
             await db.close()

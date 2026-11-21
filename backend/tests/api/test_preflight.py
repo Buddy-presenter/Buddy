@@ -155,7 +155,8 @@ def test_owner_private_publication_correction_and_runtime_gate(upload_app, sourc
                 record = await repos.analyses.get(analysis, owner_id=owner)
                 reader = CandidateAnalyses()
                 missing = await reader.read(repos.analyses.session, record, owner)
-                assert not missing.slides[0].actions[0].usable
+                # Without a runtime only display-independent (PDF) evidence counts.
+                assert missing.slides[0].actions[0].usable is (source_format == "pdf")
                 context = dict(
                     platform="win32",
                     renderer_version=document.renderer_version,
@@ -166,7 +167,9 @@ def test_owner_private_publication_correction_and_runtime_gate(upload_app, sourc
                 mismatched = await reader.read(
                     repos.analyses.session, record, owner, {**context, "display_profile": "wide-2x"}
                 )
-                assert not mismatched.slides[0].actions[0].usable
+                # PDF evidence holds for any display (one pinned renderer, source
+                # coordinates); PowerPoint evidence is bound to the presenter's scale.
+                assert mismatched.slides[0].actions[0].usable is (source_format == "pdf")
 
         client.portal.call(read)
         client.portal.call(service.publish, UUID(queued_earlier), bundle(document, action))
@@ -218,17 +221,25 @@ def test_automatic_scheduling_and_manual_session_fallback(upload_app, source_for
                 )
 
         checks = client.portal.call(scheduled)
-        assert len(checks) == sum(len(s.actions) for s in document.slides)
-        client.portal.call(service.schedule)
-        assert len(client.portal.call(scheduled)) == len(checks)
-        identifier = next(
-            c.id for c in checks if c.request_data["instance_id"] == action.instance_id
-        )
+        total = sum(len(s.actions) for s in document.slides)
+        if source_format == "pdf":
+            assert len(checks) == total
+            assert {c.request_data["capture"] for c in checks} == {"server"}
+            client.portal.call(service.schedule)
+            assert len(client.portal.call(scheduled)) == len(checks)
+            identifier = next(
+                c.id for c in checks if c.request_data["instance_id"] == action.instance_id
+            )
+        else:
+            # PowerPoint is never scheduled on the server: the owner's desktop captures.
+            assert checks == []
+            created = request(client, analysis, action).json()["data"]
+            identifier = UUID(created["id"])
+            assert client.portal.call(scheduled)[0].request_data["capture"] == "desktop"
         client.portal.call(service.publish, identifier, bundle(document, action))
-        # Library reports check progress; this test API has no trusted host itself.
+        # Library reports check progress; this test API has no judge or server checker.
         listed = client.get("/api/v1/decks").json()["data"]["items"]
         progress = next(d for d in listed if d["id"] == str(deck))["processing"]
-        total = sum(len(s.actions) for s in document.slides)
         assert progress["state"] in {"review_ready", "partial"}
         assert progress["checks"] == {
             "total": total,
@@ -236,6 +247,7 @@ def test_automatic_scheduling_and_manual_session_fallback(upload_app, source_for
             "ready": 1,
             "available": False,
             "active": False,
+            "mode": "desktop" if source_format == "pptx" else "server",
         }
         context = dict(
             platform="win32", renderer_version=document.renderer_version, display_profile="wide-1x"
@@ -258,6 +270,164 @@ def test_automatic_scheduling_and_manual_session_fallback(upload_app, source_for
         ).json()["data"]
         assert switched["state"]["last_accepted_action_id"] is None
         assert switched["state_version"] > accepted.json()["data"]["state_version"]
+
+
+BEFORE = b"\x89PNG\r\n\x1a\ndesktop-before"
+AFTER = b"\x89PNG\r\n\x1a\ndesktop-after"
+
+
+def desktop_report(document, action, state):
+    report = bundle(document, action, state=state).report
+    report["history"] = [{"version": 0, "state": state, "observation": "Desktop capture"}]
+    return report
+
+
+def png(data):
+    import base64
+
+    return base64.b64encode(data).decode()
+
+
+@pytest.mark.parametrize("verdict", ["validated", "rejected", "uncertain"])
+def test_desktop_capture_is_judged_and_bound_by_the_server(upload_app, verdict):
+    with upload_app() as (client, cloud, uploads):
+        owner, deck, analysis, document, _ = seed(client, uploads, "pptx")
+        action = document.slides[0].actions[0]
+        calls = []
+
+        def judge_factory():
+            def judge(target, before, after):
+                calls.append((target, before, after))
+                return dict(
+                    verdict="rejected" if verdict == "rejected" else "validated",
+                    confidence=0.5 if verdict == "uncertain" else 0.95,
+                    issue="wrong_target" if verdict == "rejected" else None,
+                    observation="Synthetic verdict",
+                    correction=None,
+                )
+
+            return judge
+
+        client.app.state.preflight = PreflightService(uploads, None, judge_factory=judge_factory)
+        created = request(client, analysis, action).json()["data"]
+        identifier = created["id"]
+        # The desktop cannot judge before claiming, and claims a bound snapshot.
+        early = client.post(
+            f"/api/v1/preflights/{identifier}/judge",
+            json={"sequence": 1, "target": {}, "before": png(BEFORE), "after": png(AFTER)},
+        )
+        assert early.status_code == 409
+        snapshot = client.post(f"/api/v1/preflights/{identifier}/claim").json()["data"]
+        assert snapshot["source_format"] == "pptx"
+        assert snapshot["action"]["instance_id"] == action.instance_id
+        assert snapshot["source_sha256"] == document.source_sha256
+        judged = client.post(
+            f"/api/v1/preflights/{identifier}/judge",
+            json={
+                "sequence": 1,
+                "target": {"purpose": "x"},
+                "before": png(BEFORE),
+                "after": png(AFTER),
+            },
+        )
+        assert judged.status_code == 200, judged.text
+        # An uncertain approval is recorded as a rejection, like the PDF path.
+        decided = "validated" if verdict == "validated" else "rejected"
+        assert judged.json()["data"]["verdict"] == decided
+        assert calls and calls[0][1] == BEFORE
+        # Out-of-order attempts are refused.
+        assert (
+            client.post(
+                f"/api/v1/preflights/{identifier}/judge",
+                json={"sequence": 3, "target": {}, "before": png(BEFORE), "after": png(AFTER)},
+            ).status_code
+            == 409
+        )
+        # The desktop cannot claim a different outcome or swap screenshots.
+        flipped = "rejected" if decided == "validated" else "validated"
+        for report, images in (
+            (
+                desktop_report(document, action, flipped),
+                {"attempt-0-before_image": png(BEFORE), "attempt-0-after_image": png(AFTER)},
+            ),
+            (
+                desktop_report(document, action, decided),
+                {"attempt-0-before_image": png(AFTER), "attempt-0-after_image": png(AFTER)},
+            ),
+        ):
+            response = client.post(
+                f"/api/v1/preflights/{identifier}/result",
+                json={"report": report, "images": images},
+            )
+            assert response.status_code == 409, response.text
+        published = client.post(
+            f"/api/v1/preflights/{identifier}/result",
+            json={
+                "report": desktop_report(document, action, decided),
+                "images": {
+                    "attempt-0-before_image": png(BEFORE),
+                    "attempt-0-after_image": png(AFTER),
+                },
+            },
+        )
+        assert published.status_code == 200, published.text
+        assert published.json()["data"]["state"] == decided
+
+        async def usable():
+            async with uploads.database.transaction() as repos:
+                result = await repos.analyses.read(analysis, owner_id=owner)
+                return result.slides[0].actions[0].usable
+
+        assert client.portal.call(usable) is (decided == "validated")
+        # Another account can neither claim nor read it.
+        client.headers["Authorization"] = "Bearer account-b"
+        assert client.post(f"/api/v1/preflights/{identifier}/claim").status_code == 404
+
+
+def test_desktop_failure_is_recorded_without_enabling_the_action(upload_app):
+    with upload_app() as (client, cloud, uploads):
+        owner, deck, analysis, document, _ = seed(client, uploads, "pptx")
+        action = document.slides[0].actions[0]
+        client.app.state.preflight = PreflightService(
+            uploads, None, judge_factory=lambda: lambda *_: None
+        )
+        identifier = request(client, analysis, action).json()["data"]["id"]
+        client.post(f"/api/v1/preflights/{identifier}/claim")
+        failed = client.post(
+            f"/api/v1/preflights/{identifier}/fail",
+            json={"reason": "audience_viewport_occluded"},
+        )
+        assert failed.status_code == 200, failed.text
+        data = failed.json()["data"]
+        assert data["state"] == "unavailable"
+        assert data["reasons"] == ["audience_viewport_occluded"]
+        # Unknown reasons are normalized rather than stored verbatim.
+        second = request(client, analysis, action).json()["data"]["id"]
+        client.post(f"/api/v1/preflights/{second}/claim")
+        other = client.post(f"/api/v1/preflights/{second}/fail", json={"reason": "made_up"})
+        assert other.json()["data"]["reasons"] == ["desktop_check_failed"]
+
+
+def test_server_pdf_check_hands_off_to_visual_qa_without_holding_its_slot(upload_app):
+    """The PDF server checker takes the execution slot itself (regression)."""
+    with upload_app() as (client, cloud, uploads):
+        owner, deck, analysis, document, _ = seed(client, uploads)
+        action = document.slides[0].actions[0]
+        identifier = UUID(request(client, analysis, action).json()["data"]["id"])
+        calls = []
+
+        class VisualQA:
+            async def verify(self, owner_id, analysis_id, instance_id, request_id):
+                calls.append((instance_id, request_id))
+                assert not uploads.parser_slot.locked()
+                async with uploads.parser_slot, uploads.database.transaction() as repos:
+                    return await repos.analyses.read(analysis_id, owner_id=owner_id)
+
+        service = PreflightService(uploads, None, visual_qa=VisualQA())
+        assert client.portal.call(service.process_one)
+        assert calls == [(action.instance_id, identifier)]
+        saved = client.get(f"/api/v1/preflights/{identifier}").json()["data"]
+        assert saved["phase"] == "complete" and saved["reasons"] != ["preflight_failed"]
 
 
 @pytest.mark.parametrize("reason", ["unsupported", "interrupted", "stale", "quota"])

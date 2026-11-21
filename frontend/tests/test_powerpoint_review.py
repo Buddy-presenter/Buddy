@@ -14,6 +14,7 @@ from buddy_desktop.auth import Tokens
 from buddy_desktop.powerpoint_contract import PresentationInfo
 from buddy_desktop.powerpoint_generated import generated_action
 from buddy_desktop.powerpoint_session_binding import PowerPointSessionBinding
+from buddy_desktop.present_widget import saved_action_eligible
 from buddy_desktop.review_service import DownloadedPowerPoint, ReviewService, parse_analysis
 from buddy_desktop.services import ServiceError
 
@@ -82,12 +83,13 @@ def powerpoint_payload(content=b"PK-synthetic-source", *, usable=True, kind="hig
             "reasons": [] if usable else ["powerpoint_runtime_requires_windows_office"],
             "evidence": [{"id": str(uuid4()), "kind": "report", "sha256": "b" * 64}],
             "runtime_version": "16.0.12345",
-            "validator_version": "desktop-preflight-1",
-            "validation_kind": "visual",
+            # Unusable fixtures are execution results that still await a visual check.
+            "validator_version": "desktop-preflight-1" if usable else "powerpoint-executor-2",
+            "validation_kind": "visual" if usable else "execution",
             "semantic_verified": usable,
             "runtime_platform": "win32",
             "renderer_version": "desktop-powerpoint-2",
-            "display_profile": "wide-1x",
+            "display_profile": "wide-1x" if usable else "windows-powerpoint-2",
         },
     )
     return deck, payload
@@ -118,6 +120,68 @@ def test_saved_powerpoint_review_routes_verified_binding_to_present(desktop_wind
     assert window.navigation.currentRow() == 3
 
 
+def test_checks_are_automatic_with_no_manual_run_controls(desktop_window):
+    """Both formats check automatically; only a failed check offers Check again."""
+    window = desktop_window()
+    review = window.review
+    deck = uuid4()
+    for source_format in ("pptx", "pdf"):
+        review.set_deck(deck, "Fixture", source_format=source_format)
+        assert review.visual_qa_button.isHidden()  # until a failed check is selected
+        assert review.visual_qa_all_button.isHidden()
+        assert review.visual_qa_correct.isHidden()
+        assert review.desktop_banner.isHidden()
+        assert review.check_overlay.isHidden()
+
+
+def test_powerpoint_check_banner_and_do_not_touch_overlay(desktop_window, monkeypatch, qtbot):
+    from buddy_desktop.preflight_service import PreflightService
+    from buddy_desktop.review_service import ReviewService
+
+    content = b"PK-synthetic-source"
+    deck, payload = powerpoint_payload(content, usable=False)
+    pending = parse_analysis(payload, deck)
+    monkeypatch.setattr(ReviewService, "analysis", lambda *_args: pending)
+    monkeypatch.setattr(
+        ReviewService,
+        "source",
+        lambda *_args: DownloadedPowerPoint(content, str(deck), "revision-1"),
+    )
+    window = desktop_window()
+    window.account.session = SimpleNamespace(
+        tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
+    )
+    window.account.session_changed.emit()
+    window.navigation.setCurrentRow(2)
+    review = window.review
+    review.set_deck(deck, "Deck.pptx", "processing", "pptx")
+    qtbot.waitUntil(lambda: not review.runner.busy and review.analysis is not None)
+    # A PowerPoint deck with unchecked actions asks the owner to check on this PC.
+    assert not review.desktop_banner.isHidden()
+    assert "don't use the mouse or keyboard" in review.desktop_banner_text.text()
+    assert not review.check_poll.isActive()
+    release, seen = Event(), []
+
+    def run_on_desktop(_self, analysis_id, instance_id, source, **options):
+        seen.append((instance_id, source, options["profile"]))
+        if not release.wait(5):
+            raise TimeoutError("check was not released")
+        return dict(state="validated", instance_id=instance_id)
+
+    monkeypatch.setattr(PreflightService, "run_on_desktop", run_on_desktop)
+    review.desktop_check_button.click()
+    # While checking, a full-window notice asks the user not to touch anything.
+    qtbot.waitUntil(lambda: bool(seen))
+    overlay = review.check_overlay
+    assert not overlay.isHidden() and overlay.parentWidget() is window
+    assert "don't use the mouse or keyboard" in overlay.message.text()
+    assert review.desktop_banner.isHidden() and seen[0][1] == content
+    release.set()
+    qtbot.waitUntil(lambda: not review.runner.busy)
+    assert overlay.isHidden()
+    assert "1 Ready" in review.visual_qa_status.text()
+
+
 def test_legacy_zoom_proof_does_not_authorize_the_new_fitted_view():
     deck, payload = powerpoint_payload(kind="zoom_region")
     validation = payload["data"]["slides"][0]["actions"][0]["validation"]
@@ -141,13 +205,46 @@ def test_powerpoint_review_preserves_independent_visual_verification():
     assert action.validation_kind == "visual"
 
 
+def test_powerpoint_execution_proof_alone_is_not_live_ready():
+    """#53: PowerPoint now has its own visual check, so execution alone never suffices."""
+    deck, payload = powerpoint_payload(usable=False, kind="highlight_region")
+    result = payload["data"]["slides"][0]["actions"][0]
+    result.update(state="validated", usable=False)
+    inputs = payload["data"]["inputs"]
+    result["validation"].update(
+        state="validated",
+        validation_kind="execution",
+        semantic_verified=False,
+        reasons=[],
+        validator_version=inputs["validator_version"],
+        display_profile=inputs["display_profile"],
+    )
+    action = parse_analysis(payload, deck).slides[0].actions[0]
+    assert action.state == "validated"
+    assert not action.usable and not action.semantic_verified
+    assert not saved_action_eligible("pptx", action)
+    # A server claiming execution-only proof is usable is rejected as inconsistent.
+    result["usable"] = True
+    with pytest.raises(ValueError):
+        parse_analysis(payload, deck)
+
+
+def test_pdf_saved_actions_still_require_semantic_verification():
+    deck, payload = analysis_payload()
+    result = payload["data"]["slides"][0]["actions"][0]
+    result.update(state="validated", usable=False, semantic_verified=False)
+    result["validation"] = None
+    action = parse_analysis(payload, deck).slides[0].actions[0]
+    assert not saved_action_eligible("pdf", action)
+
+
 @pytest.mark.parametrize("kind", KINDS)
 def test_powerpoint_review_all_actions_map_to_the_typed_real_executor(kind):
     deck, payload = powerpoint_payload(kind=kind)
     analysis = parse_analysis(payload, deck)
     slide, action = analysis.slides[0], analysis.slides[0].actions[0]
     assert analysis.source_format == "pptx" and slide.native_slide_id == 256
-    assert action.usable and action.runtime_version == "16.0.12345"
+    assert action.usable and action.semantic_verified and action.runtime_version == "16.0.12345"
     target = PresentationInfo("test.pptx", "test.pptx", 1, 1, 123, 256, 960, 540)
     command = generated_action(
         action.raw,

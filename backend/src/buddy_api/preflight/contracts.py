@@ -40,3 +40,38 @@ class PreflightReport(Model):
 class PreflightResponse(Model):
     data: PreflightReport
     request_id: str
+
+
+# Base64 PNG, at most ~3.75 MB decoded (the model's image input limit).
+Png = Annotated[str, Field(min_length=12, max_length=5_000_000)]
+
+
+class PreflightSnapshotResponse(Model):
+    """What the owner's desktop needs to run one PowerPoint check locally."""
+
+    data: dict[str, Any]
+    request_id: str
+
+
+class PreflightCapture(Model):
+    sequence: int = Field(ge=1, le=3, strict=True)
+    target: dict[str, Any]
+    before: Png
+    after: Png
+
+
+class PreflightVerdictResponse(Model):
+    # None when the judge was unavailable; the attempt then stays unavailable.
+    data: dict[str, Any] | None
+    request_id: str
+
+
+class PreflightResult(Model):
+    report: dict[str, Any]
+    images: dict[Annotated[str, Field(pattern=r"^attempt-[0-2]-(before|after)_image$")], Png] = (
+        Field(max_length=6)
+    )
+
+
+class PreflightFailure(Model):
+    reason: Annotated[str, Field(min_length=1, max_length=64, pattern=r"^[a-z_]+$")]

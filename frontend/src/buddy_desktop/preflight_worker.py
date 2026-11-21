@@ -266,7 +266,9 @@ def run(folder: Path) -> dict[str, Any]:
 def main() -> None:
     if sys.stdin.buffer.read(1) != b"1":
         return
-    folder = Path(sys.argv[1]).resolve()
+    # Source: python -m buddy_desktop.preflight_worker <folder>;
+    # packaged: Buddy --preflight-worker <folder>.
+    folder = Path(sys.argv[-1]).resolve()
     result = run(folder)
     (folder / "result.json").write_text(json.dumps(result, allow_nan=False), encoding="utf-8")
 

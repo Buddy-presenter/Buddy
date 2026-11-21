@@ -273,6 +273,16 @@ async def validate_action(
 
 
 def runtime_matches(evidence: ValidationInput, context: dict[str, Any] | None) -> bool:
+    """Bind verified evidence to the presenter's runtime where it matters.
+
+    PDF: Buddy draws every PDF with the same pinned PDFium renderer in source
+    coordinates, so a server-verified result holds for any presenter display.
+    PowerPoint: Office renders natively per machine, so the check must come from
+    the same OS and display scale (1x/2x) that the presenter uses.
+    """
+    if evidence.source_format == "pdf":
+        # Evidence is already bound to the analysis renderer when it is stored.
+        return True
     return bool(
         context
         and evidence.runtime_platform == context.get("platform")

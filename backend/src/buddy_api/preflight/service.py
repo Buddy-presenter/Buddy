@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 import sys
 import tempfile
 from contextlib import nullcontext
@@ -34,11 +35,36 @@ from buddy_api.persistence.models import (
 )
 from buddy_api.preflight.config import PreflightSettings
 from buddy_api.preflight.contracts import PreflightReport, PreflightRequest
+from buddy_api.preflight.judge import VERDICT_SCHEMA, VisualJudge
 from buddy_api.preflight.runner import PreflightBundle, run_preflight
 from buddy_api.uploads.contracts import UploadError
 from buddy_api.uploads.service import UploadService, blocking
 
+logger = logging.getLogger(__name__)
+
 RESERVATION = 32 * 1024 * 1024
+DESKTOP_JUDGE_MODEL = "eu.anthropic.claude-sonnet-4-6"
+# Same bar as the server's PDF visual QA: weaker verdicts never enable an action.
+MIN_CONFIDENCE = 0.8
+DESKTOP_LEASE = timedelta(minutes=10)
+MAX_PNG = 3_750_000
+DESKTOP_FAILURES = frozenset(
+    {
+        "powerpoint_requires_windows_office",
+        "powerpoint_worker_busy_use_dedicated_session",
+        "powerpoint_startup_failed",
+        "powerpoint_launch_failed",
+        "powerpoint_baseline_failed",
+        "unsupported_display_profile",
+        "desktop_capture_unavailable",
+        "audience_viewport_occluded",
+        "unsafe_office_content",
+        "cancelled",
+        "time_limit",
+        "worker_failed",
+        "source_mismatch",
+    }
+)
 
 
 def artifact_key(row: ActionCheck, name: str) -> str:
@@ -54,9 +80,31 @@ class PreflightService:
         settings: PreflightSettings | None,
         *,
         platform: str = sys.platform,
+        visual_qa: Any = None,
+        judge_region: str | None = None,
+        judge_factory: Any = None,
     ):
         # The trusted desktop host OS; injectable so Linux CI can model that host.
         self.uploads, self.settings, self.platform = uploads, settings, platform
+        # PDF: the server's headless visual QA (#135). PowerPoint: the owner's desktop
+        # captures screenshots and this server judges them (desktop capture).
+        self.visual_qa = visual_qa
+        self.judge_region = settings.region if settings else judge_region
+        self.judge_factory = judge_factory
+
+    def server_capture_available(self) -> bool:
+        return self.visual_qa is not None or (
+            self.settings is not None and self.platform in {"win32", "darwin"}
+        )
+
+    def desktop_capture_available(self) -> bool:
+        return self.judge_factory is not None or self.judge_region is not None
+
+    def _judge(self) -> Any:
+        if self.judge_factory is not None:
+            return self.judge_factory()
+        assert self.judge_region is not None
+        return VisualJudge(self.judge_region, DESKTOP_JUDGE_MODEL)
 
     @staticmethod
     def public(row: ActionCheck) -> PreflightReport:
@@ -170,6 +218,9 @@ class PreflightService:
                 phase="queued",
                 attempt=0,
                 automatic=automatic,
+                # PowerPoint needs the owner's desktop Office to capture; PDF is checked
+                # entirely on the server.
+                capture="desktop" if analysis.source_format == "pptx" else "server",
             )
             assert document.inputs is not None
             original = next(
@@ -222,6 +273,274 @@ class PreflightService:
             await db.flush()
             return self.public(row)
 
+    async def _snapshot(
+        self, owner: UUID, deck_id: UUID, context: dict[str, Any]
+    ) -> tuple[dict[str, Any], tuple[str, str, int]]:
+        """Re-check the request against current saved state; build the player input."""
+        async with self.uploads.transaction() as db:
+            analyses = Analyses(db)
+            record = await analyses.get(UUID(context["analysis_id"]), owner_id=owner)
+            document = await analyses.read(record.id, owner_id=owner)
+            deck = await db.get(Deck, deck_id)
+            if (
+                deck is None
+                or deck.deletion_requested_at is not None
+                or (deck.source_revision, deck.source_sha256, record.content_sha256)
+                != (
+                    context["source_revision"],
+                    context["source_sha256"],
+                    context["analysis_sha256"],
+                )
+            ):
+                raise UploadError(409, "stale_analysis", "The source changed.")
+            action = next(
+                a.action
+                for s in document.slides
+                for a in s.actions
+                if a.action.instance_id == context["instance_id"]
+            )
+            if digest(action) != context["action_sha256"]:
+                raise UploadError(409, "stale_action", "The saved action changed.")
+            assert document.inputs is not None
+            manifest = document.inputs.manifest.model_dump(mode="json")
+            slides = {
+                s["slide_id"]: (
+                    dict(
+                        number=i,
+                        native_id=s["native_slide_id"],
+                        width=s["source"]["width"],
+                        height=s["source"]["height"],
+                    )
+                    if document.source_format == "pptx"
+                    else {}
+                )
+                for i, s in enumerate(manifest["slides"], 1)
+            }
+            snapshot = dict(
+                owner=str(owner),
+                source_format=document.source_format,
+                source_sha256=context["source_sha256"],
+                revision=context["source_revision"],
+                deck_id=str(deck.id),
+                slides=slides,
+                action=action.model_dump(mode="json"),
+                model_id=self.settings.model if self.settings else DESKTOP_JUDGE_MODEL,
+                profile=context["profile"],
+                correct=context["correct"],
+                viewport=context["viewport"],
+            )
+            source_key, source_version, source_size = (
+                deck.source_key,
+                deck.source_version_id,
+                deck.source_size_bytes,
+            )
+            if not source_key or not source_version or source_size is None:
+                raise UploadError(409, "source_unavailable", "Saved source is unavailable.")
+        return snapshot, (source_key, source_version, source_size)
+
+    async def _complete_server(
+        self, identifier: UUID, updated: Any, context: dict[str, Any]
+    ) -> None:
+        """Record the server visual QA outcome on this request (no extra evidence)."""
+        found = next(
+            (
+                a
+                for s in updated.slides
+                for a in s.actions
+                if a.action.instance_id == context["instance_id"]
+            ),
+            None,
+        )
+        validation = found.validation if found is not None else None
+        if found is not None and found.usable:
+            state, reason = "validated", None
+        elif found is not None and found.state == "rejected":
+            state = "rejected"
+            reason = (validation.reasons[0] if validation and validation.reasons else None) or (
+                "visual_check_failed"
+            )
+        else:
+            state = "unavailable"
+            reason = (
+                validation.reasons[0]
+                if validation and validation.reasons
+                else "visual_check_failed"
+            )
+        async with self.uploads.transaction() as db:
+            row = await db.get(ActionCheck, identifier, with_for_update=True)
+            if row is None or row.status != "pending":
+                return
+            row.status, row.storage_bytes, row.artifacts = "complete", 0, []
+            row.request_data = {**(row.request_data or {}), "phase": "complete", "attempt": 1}
+            row.result = dict(state=state, reason=reason, corrected=False)
+
+    async def _requeue(self, identifier: UUID) -> None:
+        async with self.uploads.transaction() as db:
+            row = await db.get(ActionCheck, identifier, with_for_update=True)
+            if row is not None and row.status == "pending":
+                row.request_data = {**(row.request_data or {}), "phase": "queued"}
+                row.storage_bytes = 0
+                row.expires_at = datetime.now(UTC) + timedelta(hours=24)
+
+    async def claim(self, owner: UUID, identifier: UUID) -> dict[str, Any]:
+        """Hand a queued PowerPoint check to the owner's desktop to capture."""
+        async with self.uploads.transaction() as db:
+            row = await db.get(ActionCheck, identifier, with_for_update=True)
+            context = dict((row.request_data or {}) if row else {})
+            if (
+                row is None
+                or row.owner_id != owner
+                or row.check_kind != "preflight"
+                or context.get("capture") != "desktop"
+            ):
+                raise UploadError(404, "not_found", "Preflight check not found.")
+            if row.status != "pending" or context.get("phase") not in {"queued", "running"}:
+                raise UploadError(409, "check_finished", "This check already finished.")
+            if not self.desktop_capture_available():
+                raise UploadError(503, "preflight_unavailable", "Action checks are unavailable.")
+            deck_id = row.deck_id
+        snapshot, _ = await self._snapshot(owner, deck_id, context)
+        async with self.uploads.transaction() as db:
+            row = await db.get(ActionCheck, identifier, with_for_update=True)
+            if row is None or row.status != "pending":
+                raise UploadError(409, "check_finished", "This check already finished.")
+            # A re-claim (for example after a crash) restarts the attempt sequence.
+            row.request_data = {
+                **(row.request_data or {}),
+                "phase": "running",
+                "attempt": 0,
+                "judgements": [],
+            }
+            row.expires_at = datetime.now(UTC) + DESKTOP_LEASE
+        return snapshot
+
+    async def _running_desktop(self, db: AsyncSession, owner: UUID, identifier: UUID) -> Any:
+        row = await db.get(ActionCheck, identifier, with_for_update=True)
+        context = (row.request_data or {}) if row else {}
+        if (
+            row is None
+            or row.owner_id != owner
+            or row.check_kind != "preflight"
+            or context.get("capture") != "desktop"
+        ):
+            raise UploadError(404, "not_found", "Preflight check not found.")
+        if row.status != "pending" or context.get("phase") != "running":
+            raise UploadError(409, "check_not_running", "Start this check first.")
+        return row
+
+    async def judge(
+        self,
+        owner: UUID,
+        identifier: UUID,
+        sequence: int,
+        target: dict[str, Any],
+        before: bytes,
+        after: bytes,
+    ) -> dict[str, Any] | None:
+        """The server, never the desktop, decides each captured attempt."""
+        for image in (before, after):
+            if not image.startswith(b"\x89PNG\r\n\x1a\n") or len(image) > MAX_PNG:
+                raise UploadError(422, "invalid_capture", "Send two PNG screenshots.")
+        if len(json.dumps(target, allow_nan=False)) > 16384:
+            raise UploadError(422, "invalid_capture", "The check target is too large.")
+        async with self.uploads.transaction() as db:
+            row = await self._running_desktop(db, owner, identifier)
+            judgements = list((row.request_data or {}).get("judgements", []))
+            if sequence != len(judgements) + 1 or sequence > 3:
+                raise UploadError(409, "attempt_order", "Attempts must be sent in order.")
+            row.expires_at = datetime.now(UTC) + DESKTOP_LEASE
+        verdict: dict[str, Any] | None = None
+        judge = self._judge()
+        try:
+            raw = await asyncio.wait_for(
+                asyncio.to_thread(judge, target, before, after), timeout=60
+            )
+            from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
+
+            Draft202012Validator(VERDICT_SCHEMA).validate(raw)
+            assert isinstance(raw, dict)
+            verdict = raw
+            if verdict["verdict"] == "validated" and verdict["confidence"] < MIN_CONFIDENCE:
+                # Match the PDF path: an uncertain approval is not an approval.
+                verdict = {**verdict, "verdict": "rejected", "issue": "uncertain"}
+        except Exception:
+            # Provider errors may echo private slide content; never log them.
+            verdict = None
+        finally:
+            close = getattr(judge, "close", None)
+            if close:
+                close()
+        async with self.uploads.transaction() as db:
+            row = await self._running_desktop(db, owner, identifier)
+            judgements = list((row.request_data or {}).get("judgements", []))
+            if sequence != len(judgements) + 1:
+                raise UploadError(409, "attempt_order", "Attempts must be sent in order.")
+            judgements.append(
+                dict(
+                    sequence=sequence,
+                    before=hashlib.sha256(before).hexdigest(),
+                    after=hashlib.sha256(after).hexdigest(),
+                    verdict=verdict,
+                )
+            )
+            row.request_data = {
+                **(row.request_data or {}),
+                "judgements": judgements,
+                "attempt": sequence,
+            }
+        return verdict
+
+    async def complete_desktop(
+        self, owner: UUID, identifier: UUID, report: dict[str, Any], artifacts: dict[str, bytes]
+    ) -> PreflightReport:
+        """Publish a desktop capture only if it matches the verdicts this server issued."""
+        async with self.uploads.transaction() as db:
+            row = await self._running_desktop(db, owner, identifier)
+            judgements = list((row.request_data or {}).get("judgements", []))
+        history = report.get("history")
+        if not isinstance(history, list) or not 1 <= len(history) <= 3:
+            raise UploadError(422, "invalid_report", "The check report is incomplete.")
+        if len(history) != len(judgements):
+            raise UploadError(409, "report_mismatch", "The report does not match this check.")
+        for index, (entry, judged) in enumerate(zip(history, judgements, strict=True)):
+            captured = {
+                role: artifacts.get(f"attempt-{index}-{role}_image") for role in ("before", "after")
+            }
+            verdict = judged["verdict"]
+            expected = "unavailable" if verdict is None else verdict["verdict"]
+            if (
+                not isinstance(entry, dict)
+                or entry.get("version") != index
+                or any(
+                    data is None or hashlib.sha256(data).hexdigest() != judged[role]
+                    for role, data in captured.items()
+                )
+                or entry.get("state") != expected
+            ):
+                raise UploadError(409, "report_mismatch", "The report does not match this check.")
+        final = judgements[-1]["verdict"]
+        decided = "unavailable" if final is None else final["verdict"]
+        if report.get("state") != decided or (decided == "validated") != (
+            report.get("semantic_verified") is True
+        ):
+            raise UploadError(409, "report_mismatch", "The report does not match this check.")
+        allowed = {
+            "report",
+            *(f"attempt-{i}-{role}_image" for i in range(3) for role in ("before", "after")),
+        }
+        if set(artifacts) - allowed or sum(map(len, artifacts.values())) > 32 * 1024 * 1024:
+            raise UploadError(422, "invalid_report", "Unexpected check evidence.")
+        await self.publish(identifier, PreflightBundle(report, artifacts))
+        return self.public(await self.owned(owner, identifier))
+
+    async def fail_desktop(self, owner: UUID, identifier: UUID, reason: str) -> PreflightReport:
+        async with self.uploads.transaction() as db:
+            await self._running_desktop(db, owner, identifier)
+        await self.fail(
+            identifier, reason if reason in DESKTOP_FAILURES else "desktop_check_failed"
+        )
+        return self.public(await self.owned(owner, identifier))
+
     async def progress(self, identifier: UUID, attempt: int) -> None:
         async with self.uploads.transaction() as db:
             row = await db.get(ActionCheck, identifier, with_for_update=True)
@@ -235,7 +554,10 @@ class PreflightService:
     async def process_one(self) -> bool:
         if self.uploads.parser_slot.locked():
             return False
-        async with self.uploads.parser_slot:
+        # The server visual QA (#135) takes the execution slot itself; holding it
+        # here would make every PDF check fail as "capacity full".
+        slot = nullcontext() if self.visual_qa is not None else self.uploads.parser_slot
+        async with slot:
             async with self.uploads.transaction() as db:
                 row = await db.scalar(
                     select(ActionCheck)
@@ -243,6 +565,9 @@ class PreflightService:
                         ActionCheck.check_kind == "preflight",
                         ActionCheck.status == "pending",
                         ActionCheck.request_data["phase"].as_string() == "queued",
+                        # Desktop-capture checks wait for the owner's Buddy to claim them.
+                        func.coalesce(ActionCheck.request_data["capture"].as_string(), "server")
+                        == "server",
                     )
                     .order_by(
                         ActionCheck.request_data["automatic"].as_boolean().asc().nulls_first(),
@@ -268,65 +593,16 @@ class PreflightService:
                 if quota_exceeded:
                     await self.fail(identifier, "storage_quota_exceeded")
                     return True
-                async with self.uploads.transaction() as db:
-                    analyses = Analyses(db)
-                    record = await analyses.get(UUID(context["analysis_id"]), owner_id=owner)
-                    document = await analyses.read(record.id, owner_id=owner)
-                    deck = await db.get(Deck, row.deck_id)
-                    if (
-                        deck is None
-                        or deck.deletion_requested_at is not None
-                        or (deck.source_revision, deck.source_sha256, record.content_sha256)
-                        != (
-                            context["source_revision"],
-                            context["source_sha256"],
-                            context["analysis_sha256"],
-                        )
-                    ):
-                        raise UploadError(409, "stale_analysis", "The source changed.")
-                    action = next(
-                        a.action
-                        for s in document.slides
-                        for a in s.actions
-                        if a.action.instance_id == context["instance_id"]
+                snapshot, (source_key, source_version, source_size) = await self._snapshot(
+                    owner, row.deck_id, context
+                )
+                if self.visual_qa is not None and snapshot["source_format"] == "pdf":
+                    # PDFs are verified by the server's headless visual QA (#135).
+                    updated = await self.visual_qa.verify(
+                        owner, UUID(context["analysis_id"]), context["instance_id"], identifier
                     )
-                    if digest(action) != context["action_sha256"]:
-                        raise UploadError(409, "stale_action", "The saved action changed.")
-                    assert document.inputs is not None
-                    manifest = document.inputs.manifest.model_dump(mode="json")
-                    slides = {
-                        s["slide_id"]: (
-                            dict(
-                                number=i,
-                                native_id=s["native_slide_id"],
-                                width=s["source"]["width"],
-                                height=s["source"]["height"],
-                            )
-                            if document.source_format == "pptx"
-                            else {}
-                        )
-                        for i, s in enumerate(manifest["slides"], 1)
-                    }
-                    snapshot = dict(
-                        owner=str(owner),
-                        source_format=document.source_format,
-                        source_sha256=context["source_sha256"],
-                        revision=context["source_revision"],
-                        deck_id=str(deck.id),
-                        slides=slides,
-                        action=action.model_dump(mode="json"),
-                        model_id=self.settings.model if self.settings else "unconfigured",
-                        profile=context["profile"],
-                        correct=context["correct"],
-                        viewport=context["viewport"],
-                    )
-                    source_key, source_version, source_size = (
-                        deck.source_key,
-                        deck.source_version_id,
-                        deck.source_size_bytes,
-                    )
-                    if not source_key or not source_version or source_size is None:
-                        raise UploadError(409, "source_unavailable", "Saved source is unavailable.")
+                    await self._complete_server(identifier, updated, context)
+                    return True
                 if self.settings is None or context["runtime_platform"] != self.platform:
                     bundle = PreflightBundle(
                         dict(
@@ -368,8 +644,16 @@ class PreflightService:
             except asyncio.CancelledError:
                 await self.fail(identifier, "interrupted")
                 raise
-            except Exception:
-                # Private parser/provider exceptions must never become user-facing logs.
+            except UploadError as exc:
+                # Capacity/stale conditions are transient for the server checker: requeue.
+                if exc.status == 429 and self.visual_qa is not None:
+                    await self._requeue(identifier)
+                    return False
+                await self.fail(identifier, "preflight_failed")
+            except Exception as exc:
+                # Private parser/provider exceptions must never become user-facing logs;
+                # the exception type alone helps operators diagnose failures.
+                logger.warning("Preflight check failed: %s", type(exc).__name__)
                 await self.fail(identifier, "preflight_failed")
             return True
 
@@ -627,15 +911,27 @@ class PreflightService:
                 await self.reconcile()
                 worked = await self.process_one()
                 await self.schedule()
-            except UploadError:
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Keep the worker alive through transient database/provider errors;
+                # never log their contents (they can include private deck data).
                 worked = False
             await asyncio.sleep(0.1 if worked else 2)
 
     async def schedule(self) -> None:
-        """New immutable graphs/actions get fresh runs; completed failures need explicit retry."""
-        if self.settings is None or self.platform not in {"win32", "darwin"}:
+        """New PDF graphs/actions get fresh server checks; failures need explicit retry.
+
+        PowerPoint checks are created by the owner's desktop, which captures them.
+        """
+        if not self.server_capture_available():
             return
-        settings = self.settings
+        profile = self.settings.profile if self.settings else "wide-1x"
+        viewport = (
+            (self.settings.viewport_width, self.settings.viewport_height)
+            if self.settings
+            else (1280, 720)
+        )
         newer = aliased(AnalysisVersion)
         async with self.uploads.transaction() as db:
             rows = list(
@@ -647,6 +943,7 @@ class PreflightService:
                         .join(ProcessingJob, ProcessingJob.id == AnalysisVersion.job_id)
                         .where(
                             Deck.deletion_requested_at.is_(None),
+                            Deck.source_format == "pdf",
                             ProcessingJob.status.in_(
                                 ("succeeded", "analysis_ready", "analysis_partial")
                             ),
@@ -665,9 +962,6 @@ class PreflightService:
                                 == cast(AnalysisVersion.id, String),
                                 ActionCheck.request_data["instance_id"].as_string()
                                 == SlideAction.instance_id,
-                                ActionCheck.request_data["profile"].as_string() == settings.profile,
-                                ActionCheck.request_data["runtime_platform"].as_string()
-                                == self.platform,
                             )
                             .exists(),
                         )
@@ -680,12 +974,12 @@ class PreflightService:
             await self.request(
                 analysis.owner_id,
                 analysis.id,
-                uuid5(action.id, f"preflight:{self.platform}:{settings.profile}"),
+                uuid5(action.id, f"preflight:server:{profile}"),
                 PreflightRequest(
                     instance_id=action.instance_id,
-                    profile=settings.profile,
+                    profile=profile,
                     runtime_platform="win32" if self.platform == "win32" else "darwin",
-                    viewport=(settings.viewport_width, settings.viewport_height),
+                    viewport=viewport,
                 ),
                 automatic=True,
             )

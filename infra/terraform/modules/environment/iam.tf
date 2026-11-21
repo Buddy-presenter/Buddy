@@ -94,6 +94,23 @@ resource "aws_iam_role_policy" "worker_bedrock_analysis" {
     }
   ] })
 }
+resource "aws_iam_role_policy" "api_bedrock_visual_qa" {
+  role = aws_iam_role.task["api"].id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [
+    {
+      Effect = "Allow", Action = ["bedrock:InvokeModel"], Resource = [
+        "arn:aws:bedrock:${var.region}:${var.account_id}:inference-profile/eu.anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:${var.region}::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:eu-north-1::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:eu-west-3::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:eu-south-1::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:eu-south-2::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:eu-west-1::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:${var.region}:${var.account_id}:project/default"
+      ]
+    }
+  ] })
+}
 resource "aws_iam_role" "github" {
   for_each = toset(["deploy", "release"])
   name     = "${local.name}-${each.key}"

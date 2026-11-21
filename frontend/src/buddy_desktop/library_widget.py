@@ -121,6 +121,12 @@ def check_status_text(checks: CheckProgress) -> tuple[str, str]:
             "Ready · actions off",
             "This server can't check actions, so they stay off. Manual presenting works.",
         )
+    if checks.active and checks.mode == "desktop":
+        return (
+            f"Needs check · {checks.checked}/{checks.total}",
+            "These PowerPoint actions need a quick check on this PC. Open Review and "
+            "choose Check on this PC. Manual presenting already works.",
+        )
     if checks.active:
         return (
             f"Checking · {checks.checked}/{checks.total}",
@@ -663,6 +669,8 @@ class LibraryWidget(QWidget):
                 item.processing is not None
                 and item.processing.checks is not None
                 and item.processing.checks.active
+                # Desktop checks only progress while this PC runs them in Review.
+                and item.processing.checks.mode == "server"
                 for item in result.items
             )
             if checking or any(

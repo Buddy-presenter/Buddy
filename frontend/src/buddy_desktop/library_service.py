@@ -54,6 +54,8 @@ class CheckProgress:
     ready: int
     available: bool
     active: bool
+    # server: checked automatically (PDF); desktop: needs this PC (PowerPoint).
+    mode: str = "server"
 
 
 def parse_checks(raw: object) -> CheckProgress | None:
@@ -63,16 +65,18 @@ def parse_checks(raw: object) -> CheckProgress | None:
         raise ValueError
     values = tuple(raw[k] for k in ("total", "checked", "ready"))
     available, active = raw["available"], raw["active"]
+    mode = raw.get("mode", "server")
     if (
         any(type(v) is not int or not 0 <= v <= 10000 for v in values)
         or values[1] > values[0]
         or values[2] > values[0]
         or type(available) is not bool
         or type(active) is not bool
+        or mode not in {"server", "desktop"}
     ):
         raise ValueError
     total, checked, ready = values
-    return CheckProgress(total, checked, ready, available, active)
+    return CheckProgress(total, checked, ready, available, active, mode)
 
 
 @dataclass(frozen=True)

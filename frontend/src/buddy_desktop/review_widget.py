@@ -7,9 +7,9 @@ import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from threading import Event
-from typing import Any
 from uuid import UUID
 
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice, Qt, QTimer, Signal
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDoubleSpinBox,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -31,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from buddy_desktop.account_widget import AccountWidget
+from buddy_desktop.check_overlay import CheckOverlay
 from buddy_desktop.config import AppConfig
 from buddy_desktop.library_service import LibraryAccessExpired
 from buddy_desktop.pdf_document import render
@@ -86,6 +88,7 @@ class EvidenceResult:
 @dataclass(frozen=True)
 class UpdatedChecks:
     analysis: ReviewAnalysis
+    message: str | None = None
 
 
 @dataclass(frozen=True)
@@ -100,12 +103,6 @@ class ReviewQABatch:
     total: int
     reports: Path | None
     analysis: ReviewAnalysis | None = None
-
-
-@dataclass(frozen=True)
-class SavedPreflightCheck:
-    report: dict[str, Any]
-    analysis: ReviewAnalysis
 
 
 class ActionTable(QTableWidget):
@@ -236,7 +233,8 @@ class ReviewWidget(Page):
     powerpoint_present_requested = Signal(object)
     powerpoint_invalidated = Signal()
     visual_qa_progress = Signal(int, int, int, object)
-    preflight_progress = Signal(int, object)
+    # (generation, actions done, total, current attempt) while checking on this PC.
+    check_step = Signal(int, int, int, int)
 
     def __init__(self, config: AppConfig, account: AccountWidget) -> None:
         super().__init__(
@@ -404,7 +402,7 @@ class ReviewWidget(Page):
         self.visual_qa_button.clicked.connect(self.run_selected_visual_qa)
         self.visual_qa_cancel = Event()
         self.visual_qa_progress.connect(self._show_visual_qa_progress)
-        self.preflight_progress.connect(self._show_preflight_progress)
+        self.check_step.connect(self._show_check_step)
         action_header.addWidget(self.visual_qa_button)
         self.visual_qa_all_button = QPushButton("Run visual QA on all actions")
         self.visual_qa_all_button.setToolTip(
@@ -438,6 +436,28 @@ class ReviewWidget(Page):
         check_layout.addWidget(self.check_bar)
         self.check_progress.hide()
         content_layout.addWidget(self.check_progress)
+        # PowerPoint checks need this PC's desktop PowerPoint, so the owner starts them.
+        self.desktop_banner = QFrame()
+        self.desktop_banner.setObjectName("desktopCheckBanner")
+        self.desktop_banner.setStyleSheet(
+            "#desktopCheckBanner { background: #1A1410; border: 1px solid #5A3A22;"
+            " border-radius: 12px; }"
+        )
+        banner_layout = QHBoxLayout(self.desktop_banner)
+        banner_layout.setContentsMargins(16, 12, 16, 12)
+        self.desktop_banner_text = QLabel()
+        self.desktop_banner_text.setWordWrap(True)
+        self.desktop_check_button = QPushButton("Check on this PC")
+        command(self.desktop_check_button, "play", primary=True)
+        self.desktop_check_button.setAccessibleName("Check PowerPoint actions on this PC")
+        self.desktop_check_button.clicked.connect(self.run_all_visual_qa)
+        banner_layout.addWidget(self.desktop_banner_text, 1)
+        banner_layout.addWidget(self.desktop_check_button)
+        self.desktop_banner.hide()
+        content_layout.addWidget(self.desktop_banner)
+        self.check_overlay = CheckOverlay(self)
+        # The run's cancel event is replaced per run; always stop the current one.
+        self.check_overlay.stop_requested.connect(lambda: self.visual_qa_cancel.set())
         self.checks_available: bool | None = None
         self.check_poll = QTimer(self)
         self.check_poll.setInterval(5000)
@@ -446,6 +466,7 @@ class ReviewWidget(Page):
         self.visual_qa_status.setWordWrap(True)
         self.visual_qa_status.setTextFormat(Qt.TextFormat.PlainText)
         self.visual_qa_status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.visual_qa_status.setVisible(False)
         content_layout.addWidget(self.visual_qa_status)
         self.action_table = ActionTable(0, 4)
         self.action_table.setObjectName("reviewActions")
@@ -560,7 +581,10 @@ class ReviewWidget(Page):
             return True
         if "powerpoint_worker_busy_use_dedicated_session" in action.reasons:
             return False
-        return action.semantic_verified or action.state in {"rejected", "needs-review"}
+        # Only a visual check finishes an action; execution results still need one.
+        return action.semantic_verified or (
+            action.validation_kind == "visual" and action.state in {"rejected", "needs-review"}
+        )
 
     def _show_recheck(self, action: ReviewAction | None) -> None:
         # Only finished, failed checks can be retried; pending ones run on their own.
@@ -587,12 +611,48 @@ class ReviewWidget(Page):
         total = len(actions)
         checked = sum(self._check_finished(a) for a in actions)
         ready = sum(a.usable for a in actions)
+        desktop = self.source_format == "pptx"
+        running = self.pending_operation == "visual_qa_all" and self.runner.busy
+        self.desktop_banner.setVisible(
+            desktop and checked < total and self.checks_available is not False and not running
+        )
+        if desktop and checked < total:
+            remaining = total - checked
+            minutes = max(1, round(remaining * 20 / 60))
+            self.desktop_banner_text.setText(
+                f"{remaining} PowerPoint action{'s' if remaining != 1 else ''} need a quick "
+                "check on this PC before they can be used live (about "
+                f"{minutes} min). PowerPoint opens full screen while Buddy takes screenshots, "
+                "so don't use the mouse or keyboard until it finishes."
+            )
         if self.checks_available is False:
             text = (
                 "Action checks are off on this server, so suggested actions stay unavailable. "
                 "You can still present every slide manually."
             )
             pending = False
+        elif (
+            desktop
+            and checked < total
+            and not running
+            # Processing may still be waiting for PowerPoint; keep refreshing then.
+            and not any(
+                a.state == "candidate"
+                or "powerpoint_worker_busy_use_dedicated_session" in a.reasons
+                for a in actions
+            )
+        ):
+            # Nothing changes until this PC runs the checks, so there is nothing to poll.
+            text = (
+                f"{checked} of {total} actions checked · {ready} Ready. "
+                "The rest need a check on this PC."
+            )
+            self.check_label.setText(text)
+            self.check_bar.set_progress(checked, total)
+            self.check_bar.setVisible(True)
+            self.check_progress.show()
+            self.check_poll.stop()
+            return
         elif checked < total:
             text = (
                 f"Checking actions · {checked} of {total} checked · {ready} Ready. "
@@ -614,44 +674,46 @@ class ReviewWidget(Page):
             self.check_poll.stop()
 
     def run_selected_visual_qa(self) -> None:
+        """Check again: rerun the selected action's check (after a failed check)."""
         row = self.action_table.currentRow()
         if 0 <= row < len(self.action_rows):
-            self._run_visual_qa((self.action_rows[row],), batch=False)
+            self._run_checks((self.action_rows[row],))
 
     def run_all_visual_qa(self) -> None:
-        if self.pending_operation == "visual_qa_all" and self.runner.busy:
-            self.visual_qa_cancel.set()
-            self.visual_qa_all_button.setEnabled(False)
-            self.visual_qa_status.setText("Stopping after the current action…")
-            return
+        """Check every PowerPoint action that has no finished check, on this PC."""
         if self.analysis is not None:
-            actions = tuple(
+            pending = tuple(
                 action
                 for slide in self.analysis.slides
                 for action in slide.actions
-                if action.raw is not None
+                if action.raw is not None and not self._check_finished(action)
             )
-            self._run_visual_qa(actions, batch=True)
+            self._run_checks(pending)
 
     def _show_visual_qa_progress(
         self, generation: int, completed: int, total: int, counts: dict[str, int]
     ) -> None:
-        if generation == self.generation and not self.visual_qa_cancel.is_set():
-            self.visual_qa_status.setText(
-                f"Running visual QA · {completed} of {total} checked · "
-                f"V {counts.get('validated', 0)} · R {counts.get('rejected', 0)} · "
-                f"Unavailable {counts.get('unavailable', 0)} · Failed {counts.get('failed', 0)}"
-            )
+        if generation != self.generation:
+            return
+        self.check_overlay.update_progress(completed, total, 0)
+        self.visual_qa_status.setText(
+            f"Checked {completed} of {total} · {counts.get('validated', 0)} Ready · "
+            f"{counts.get('rejected', 0)} turned off · "
+            f"{counts.get('unavailable', 0) + counts.get('failed', 0)} could not be checked"
+        )
 
-    def _run_visual_qa(self, actions: tuple[ReviewAction, ...], *, batch: bool) -> None:
+    def _show_check_step(self, generation: int, done: int, total: int, attempt: int) -> None:
+        if generation == self.generation:
+            self.check_overlay.update_progress(done, total, attempt)
+
+    def _run_checks(self, actions: tuple[ReviewAction, ...]) -> None:
         analysis, content = self.analysis, self.pdf_content
-        owner = self.account.account_id
+        access = self.token()
         if (
             self.runner.busy
             or self.cleanup_runner.busy
             or self.closing
-            or not self.token()
-            or not owner
+            or not access
             or analysis is None
             or content is None
             or not actions
@@ -659,90 +721,71 @@ class ReviewWidget(Page):
             return
         screen = QGuiApplication.primaryScreen() or self.screen()
         scale = screen.devicePixelRatio()
-        # Same display-scale rule for PDF and PowerPoint as Present and the players.
+        # Same display-scale rule as Present and both players.
         profile = "wide-2x" if scale == 2 else "wide-1x"
         size = screen.geometry().size()
+        desktop = analysis.source_format == "pptx"
         viewport = (
-            (round(size.width() * scale), round(size.height() * scale))
-            if analysis.source_format == "pptx"
-            else (1280, 720)
+            (round(size.width() * scale), round(size.height() * scale)) if desktop else (1280, 720)
         )
-        correct = self.visual_qa_correct.isChecked()
-        access = self.token()
-        assert access is not None
         qa_service = PreflightService(self.config, access)
         review_service = ReviewService(self.config, access)
+        # Buddy's own Review preview must not hold PowerPoint during a check.
         preview, self._pptx_session = self._pptx_session, None
         generation = self.generation
         self.request_generation = generation
-        self.pending_operation = "visual_qa_all" if batch else "visual_qa"
+        self.pending_operation = "visual_qa_all"
         cancelled = self.visual_qa_cancel = Event()
         self.visual_qa_button.setEnabled(False)
-        self.visual_qa_all_button.setEnabled(batch)
-        if batch:
-            self.visual_qa_all_button.setText("Stop visual QA")
         self.run_powerpoint.setEnabled(False)
-        self.visual_qa_status.setText(
-            f"Running visual QA · 0 of {len(actions)} checked · "
-            "V 0 · R 0 · Unavailable 0 · Failed 0"
-            if batch
-            else "Running visual QA on the selected action…"
-        )
+        self.desktop_banner.hide()
+        total = len(actions)
+        if desktop:
+            self.check_overlay.start(total, self.window())
+        self.visual_qa_status.setText(f"Checking {total} action{'s' if total != 1 else ''}…")
         self.activity_changed.emit(True)
 
-        def work() -> SavedPreflightCheck | ReviewQABatch:
+        def work() -> ReviewQABatch:
             if preview is not None:
                 preview.close()
-
             counts: Counter[str] = Counter()
-
-            def check(action: ReviewAction) -> dict[str, Any]:
-                return qa_service.run(
-                    analysis.id,
-                    action.instance_id,
-                    profile=profile,
-                    viewport=viewport,
-                    correct=correct,
-                    cancelled=cancelled,
-                    progress=lambda report: self.preflight_progress.emit(
-                        generation, {**report, "counts": dict(counts), "total": len(actions)}
-                    ),
-                )
-
-            if not batch:
-                report = check(actions[0])
-                return SavedPreflightCheck(
-                    report, review_service.analysis(analysis.deck_id, analysis.source_format)
-                )
-            for index, action in enumerate(actions, 1):
+            for index, action in enumerate(actions):
                 if cancelled.is_set():
                     break
                 try:
-                    counts[check(action)["state"]] += 1
+                    if desktop:
+                        report = qa_service.run_on_desktop(
+                            analysis.id,
+                            action.instance_id,
+                            content,
+                            profile=profile,
+                            viewport=viewport,
+                            cancelled=cancelled,
+                            progress=partial(self.check_step.emit, generation, index, total),
+                        )
+                    else:
+                        report = qa_service.run(
+                            analysis.id,
+                            action.instance_id,
+                            profile=profile,
+                            viewport=viewport,
+                            correct=True,
+                            cancelled=cancelled,
+                        )
+                    counts[report["state"]] += 1
                 except LibraryAccessExpired:
                     raise
                 except ServiceError:
                     counts["failed"] += 1
-                self.visual_qa_progress.emit(generation, index, len(actions), dict(counts))
+                self.visual_qa_progress.emit(generation, index + 1, total, dict(counts))
             return ReviewQABatch(
                 counts,
-                len(actions),
+                total,
                 None,
                 review_service.analysis(analysis.deck_id, analysis.source_format),
             )
 
         self.runner.submit(work)
-
-    def _show_preflight_progress(self, generation: int, report: dict[str, Any]) -> None:
-        if generation != self.generation or self.visual_qa_cancel.is_set():
-            return
-        counts = report.get("counts", {})
-        self.visual_qa_status.setText(
-            f"Visual QA · {report.get('phase', 'queued')} · "
-            f"Attempt {max(1, report.get('attempt', 0))} of 3 · "
-            f"V {counts.get('validated', 0)} · R {counts.get('rejected', 0)} · "
-            f"Unavailable {counts.get('unavailable', 0)} · Failed {counts.get('failed', 0)}"
-        )
 
     def refresh_checks(self) -> None:
         access = self.token()
@@ -1104,40 +1147,22 @@ class ReviewWidget(Page):
             )
             self.content.hide()
         elif isinstance(result, ReviewQABatch):
+            self.check_overlay.hide()
             if result.analysis is not None:
                 self.analysis = result.analysis
                 self._display_page()
             counts = result.counts
             completed = sum(counts.values())
+            unchecked = counts["unavailable"] + counts["failed"]
             self.visual_qa_status.setText(
-                f"Visual QA · {completed} of {result.total} checked. "
-                f"{counts['validated']} validated, {counts['rejected']} rejected, "
-                f"{counts['unavailable']} unavailable, {counts['failed']} failed. "
-                "Reports and before/after evidence are saved with each action."
-            )
-        elif isinstance(result, SavedPreflightCheck):
-            self.analysis = result.analysis
-            self._display_page()
-            reasons = {
-                "audience_viewport_occluded": (
-                    "Buddy could not capture an unobstructed slideshow. Retry and leave "
-                    "the mouse and keyboard idle until PowerPoint closes."
-                ),
-                "powerpoint_worker_busy_use_dedicated_session": (
-                    "Save and quit other PowerPoint windows, then retry."
-                ),
-            }
-            failure = next(iter(result.report.get("reasons", [])), "")
-            reason = reasons.get(failure, failure.replace("_", " "))
-            label = (
-                "Check unavailable"
-                if result.report["state"] == "unavailable"
-                else result.report["state"]
-            )
-            self.visual_qa_status.setText(
-                f"Visual QA: {label}"
-                + (f" ({reason}). " if reason else ". ")
-                + "Report and before/after evidence saved. Open Action details & evidence."
+                f"Checked {completed} of {result.total}: {counts['validated']} Ready, "
+                f"{counts['rejected']} turned off"
+                + (
+                    f", {unchecked} could not be checked (open Details to see why)"
+                    if unchecked
+                    else ""
+                )
+                + ". Screenshots are saved with each action."
             )
         elif isinstance(result, UpdatedChecks):
             current = self.analysis
@@ -1276,7 +1301,9 @@ class ReviewWidget(Page):
             self.open_evidence.setEnabled(self.evidence_choice.count() > 0)
             return
         if operation in {"visual_qa", "visual_qa_all"}:
-            self.visual_qa_status.setText("Visual QA unavailable: " + message)
+            self.check_overlay.hide()
+            self.visual_qa_status.setText("Action checks stopped: " + message)
+            self._update_check_progress()
             return
         if operation == "checks":
             self.notice.setText("Could not refresh checks: " + message)

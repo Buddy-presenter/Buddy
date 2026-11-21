@@ -2,12 +2,14 @@
 
 import hashlib
 import json
+import math
 import os
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import cast
 from uuid import uuid4
 
 from buddy_desktop.pdf_document import open_pdf
@@ -22,6 +24,7 @@ class ReviewQAResult:
     reason: str | None
     report: Path
     observation: str | None = None
+    corrected_region: tuple[float, float, float, float] | None = None
 
 
 def review_qa_operator() -> Path | None:
@@ -125,10 +128,24 @@ def run_review_qa(
             observation = (report.get("model_verdict") or {}).get("observation")
             if not isinstance(observation, str):
                 observation = None
+            corrected_region = None
+            corrected_action = report.get("corrected_action")
+            if state == "validated" and isinstance(corrected_action, dict):
+                params = corrected_action.get("params")
+                region = params.get("region") if isinstance(params, dict) else None
+                if isinstance(region, dict) and set(region) == {"x", "y", "width", "height"}:
+                    values = tuple(region[key] for key in ("x", "y", "width", "height"))
+                    if len(values) == 4 and all(
+                        type(value) in (int, float) and math.isfinite(value) for value in values
+                    ):
+                        corrected_region = cast(
+                            tuple[float, float, float, float],
+                            tuple(float(value) for value in values),
+                        )
             if state not in {"validated", "rejected", "unavailable"} or (
                 reason is not None and not isinstance(reason, str)
             ):
                 raise ValueError("Unexpected report")
         except (OSError, subprocess.TimeoutExpired, KeyError, ValueError) as exc:
             raise ServiceError("The local visual QA operator could not finish.") from exc
-    return ReviewQAResult(state, reason, report_path, observation)
+    return ReviewQAResult(state, reason, report_path, observation, corrected_region)

@@ -17,7 +17,6 @@ from starlette.responses import Response
 from buddy_api.auth import Principal, authenticated
 from buddy_api.contracts import ErrorResponse
 from buddy_api.persistence.models import (
-    ActionCheck,
     ActionValidation,
     AnalysisVersion,
     Deck,
@@ -57,8 +56,10 @@ class LibraryChecks(BaseModel):
     total: int = Field(ge=0)
     checked: int = Field(ge=0)
     ready: int = Field(ge=0)
-    # False when this server has no trusted preflight host: actions stay unavailable.
+    # False when this server cannot check this format: actions stay unavailable.
     available: bool
+    # server: checked automatically (PDF). desktop: the owner's Buddy captures (PPTX).
+    mode: Literal["server", "desktop"] = "server"
     active: bool
 
 
@@ -114,19 +115,20 @@ class DeckDeletionResponse(BaseModel):
     request_id: str
 
 
-def preflight_available(request: Request) -> bool:
+def check_modes(request: Request) -> dict[str, bool]:
+    """Which formats this server can check: PDF on the server, PPTX via the desktop."""
     preflight = getattr(request.app.state, "preflight", None)
-    return bool(
-        preflight is not None
-        and preflight.settings is not None
-        and preflight.platform in {"win32", "darwin"}
-    )
+    return {
+        "pdf": bool(preflight is not None and preflight.server_capture_available()),
+        "pptx": bool(preflight is not None and preflight.desktop_capture_available()),
+    }
 
 
 async def check_progress(
-    session: AsyncSession, request: Request, analysis_ids: list[UUID]
+    session: AsyncSession, request: Request, analyses: list[tuple[UUID, str]]
 ) -> dict[UUID, LibraryChecks]:
-    """Count saved actions, completed visual preflights and live-usable actions."""
+    """Count saved actions, finished visual checks and live-usable actions."""
+    analysis_ids = [identifier for identifier, _format in analyses]
     if not analysis_ids:
         return {}
     totals = dict(
@@ -138,46 +140,34 @@ async def check_progress(
             )
         ).all()
     )
-    analysis_key = ActionCheck.request_data["analysis_id"].as_string()
-    checked = {
-        UUID(key): count
-        for key, count in (
-            await session.execute(
-                select(
-                    analysis_key,
-                    func.count(func.distinct(ActionCheck.request_data["instance_id"].as_string())),
-                )
-                .where(
-                    ActionCheck.check_kind == "preflight",
-                    ActionCheck.status == "complete",
-                    analysis_key.in_([str(i) for i in analysis_ids]),
-                )
-                .group_by(analysis_key)
-            )
-        ).all()
-    }
     latest = await session.scalars(
         select(ActionValidation)
         .ext(distinct_on(ActionValidation.action_id))
         .where(ActionValidation.analysis_id.in_(analysis_ids))
         .order_by(ActionValidation.action_id, ActionValidation.sequence.desc())
     )
+    checked: dict[UUID, int] = {}
     ready: dict[UUID, int] = {}
     for row in latest:
         document = row.document or {}
-        if row.state == "validated" and document.get("semantic_verified") is True:
-            ready[row.analysis_id] = ready.get(row.analysis_id, 0) + 1
-    available = preflight_available(request)
+        # Any finished visual check counts, whichever path produced it.
+        if document.get("validation_kind") == "visual":
+            checked[row.analysis_id] = checked.get(row.analysis_id, 0) + 1
+            if row.state == "validated" and document.get("semantic_verified") is True:
+                ready[row.analysis_id] = ready.get(row.analysis_id, 0) + 1
+    modes = check_modes(request)
     result = {}
-    for identifier in analysis_ids:
+    for identifier, source_format in analyses:
         total = int(totals.get(identifier, 0))
-        done = min(total, int(checked.get(identifier, 0)))
+        done = min(total, checked.get(identifier, 0))
+        available = modes.get(source_format, False)
         result[identifier] = LibraryChecks(
             total=total,
             checked=done,
             ready=min(total, ready.get(identifier, 0)),
             available=available,
             active=available and done < total,
+            mode="desktop" if source_format == "pptx" else "server",
         )
     return result
 
@@ -289,7 +279,9 @@ def library_router() -> APIRouter:
                 records = (await session.execute(query)).all()
                 items = []
                 worker_settings = request.app.state.worker_settings
-                checks = await check_progress(session, request, [r[-1] for r in records if r[-1]])
+                checks = await check_progress(
+                    session, request, [(r[-1], r[0].source_format) for r in records if r[-1]]
+                )
                 for (
                     deck,
                     job_id,

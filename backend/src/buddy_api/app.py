@@ -56,6 +56,7 @@ from buddy_api.uploads.service import UploadService
 from buddy_api.uploads.storage import SourceStorage, StorageProbe
 from buddy_api.validation.api import validation_router
 from buddy_api.validation.service import ValidationService
+from buddy_api.validation.visual_qa import VisualQAService
 
 ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     400: {"model": ErrorResponse, "description": "Malformed or disallowed request."},
@@ -100,7 +101,23 @@ def create_app(
     validator = (
         ValidationService(uploads, config.validator) if uploads and config.validator else None
     )
-    preflight = PreflightService(uploads, config.preflight) if uploads else None
+    visual_qa = (
+        VisualQAService(uploads, validator, config.worker.region)
+        if uploads is not None and validator is not None and config.worker is not None
+        else None
+    )
+    # PDF checks run on the server (#135); PowerPoint checks are captured on the
+    # owner's desktop and judged here with the API's own Bedrock access.
+    preflight = (
+        PreflightService(
+            uploads,
+            config.preflight,
+            visual_qa=visual_qa,
+            judge_region=config.worker.region if config.worker else None,
+        )
+        if uploads
+        else None
+    )
     started = False
     queue = Queue(config.worker) if config.worker and uploads else None
     processor = (
@@ -207,6 +224,7 @@ def create_app(
     )
     app.state.validator = validator
     app.state.preflight = preflight
+    app.state.visual_qa = visual_qa
     app.state.worker_settings = config.worker
     app.include_router(auth_router(config.identity))
     app.include_router(session_event_router())
