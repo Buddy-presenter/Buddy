@@ -11,17 +11,23 @@ from botocore.session import Session  # type: ignore[import-untyped]
 from buddy_api.analysis.contracts import (
     AnalysisResult,
     EvidenceReference,
+    PowerPointAnalysisInputV2,
     PowerPointAnalysisResult,
     ValidationInput,
+    ValidationKind,
+    ValidationState,
+    digest,
 )
-from buddy_api.analysis.powerpoint import PowerPointAnalysisInput
 from buddy_api.analysis.powerpoint_v1 import PowerPointAnalysisResult as LegacyPowerPointResult
 from buddy_api.analysis.store import Analyses
 from buddy_api.persistence.errors import PersistenceConflict, RecordNotFound
 from buddy_api.persistence.models import ActionValidation
 from buddy_api.uploads.service import UploadService
 from buddy_api.validation.contracts import ValidationRequest
-from buddy_api.validation.powerpoint import powerpoint_validation_request
+from buddy_api.validation.powerpoint import (
+    PowerPointValidationRequest,
+    powerpoint_validation_request,
+)
 from buddy_api.validation.service import ValidationService
 
 MODEL_ID = "eu.anthropic.claude-sonnet-4-6"
@@ -157,14 +163,14 @@ class VisualQAService:
             or (issue is not None and issue not in REASONS)
             or not isinstance(observation, str)
             or not observation.strip()
-            or type(confidence) not in (int, float)
-            or not 0 <= confidence <= 1
+            or not isinstance(confidence, (int, float))
+            or not 0 <= float(confidence) <= 1
         ):
             raise ValueError("Visual model returned a conflicting verdict.")
         return result
 
     @staticmethod
-    def _decision(verdict: dict[str, Any]) -> tuple[str, bool, list[str]]:
+    def _decision(verdict: dict[str, Any]) -> tuple[ValidationState, bool, list[str]]:
         """Require a strong model verdict before promoting an action to usable."""
         if verdict["confidence"] < MIN_VERIFICATION_CONFIDENCE:
             return "needs-review", False, ["uncertain"]
@@ -206,17 +212,20 @@ class VisualQAService:
 
         retry_id = uuid5(request_id, "buddy.visual-qa-execution.v1")
         if current.source_format == "pptx":
-            if not isinstance(inputs, PowerPointAnalysisInput):
+            if not isinstance(inputs, PowerPointAnalysisInputV2):
                 raise PersistenceConflict("The PowerPoint source contract is unavailable.")
-            request = powerpoint_validation_request(action, inputs)
+            ppt_request: PowerPointValidationRequest = powerpoint_validation_request(action, inputs)
+            stored = await self.executor.validate(owner_id, current.deck_id, retry_id, ppt_request)
         else:
-            request = ValidationRequest(action=action.model_dump(mode="json"), profile="wide-1x")
-        stored = await self.executor.validate(owner_id, current.deck_id, retry_id, request)
+            pdf_request = ValidationRequest(
+                action=action.model_dump(mode="json"), profile="wide-1x"
+            )
+            stored = await self.executor.validate(owner_id, current.deck_id, retry_id, pdf_request)
         execution = stored.result
         evidence: list[EvidenceReference] = []
-        state, kind, semantic_verified, reasons = (
-            "needs-review",
-            "visual",
+        state: ValidationState = "needs-review"
+        kind: ValidationKind = "visual"
+        semantic_verified, reasons = (
             False,
             ["execution_evidence_unavailable"],
         )
@@ -297,7 +306,7 @@ class VisualQAService:
             analysis_id=analysis_id,
             analysis_sha256=current.analysis_sha256,
             instance_id=instance_id,
-            action_sha256=found.action_sha256 or "",
+            action_sha256=digest(action),
             validator_version=execution.validator_version,
             renderer_version=execution.renderer_version,
             display_profile=execution.profile,

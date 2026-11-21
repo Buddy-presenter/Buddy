@@ -9,6 +9,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import cast
 from uuid import uuid4
 
 from buddy_desktop.pdf_document import open_pdf
@@ -134,10 +135,13 @@ def run_review_qa(
                 region = params.get("region") if isinstance(params, dict) else None
                 if isinstance(region, dict) and set(region) == {"x", "y", "width", "height"}:
                     values = tuple(region[key] for key in ("x", "y", "width", "height"))
-                    if all(
+                    if len(values) == 4 and all(
                         type(value) in (int, float) and math.isfinite(value) for value in values
                     ):
-                        corrected_region = tuple(float(value) for value in values)
+                        corrected_region = cast(
+                            tuple[float, float, float, float],
+                            tuple(float(value) for value in values),
+                        )
             if state not in {"validated", "rejected", "unavailable"} or (
                 reason is not None and not isinstance(reason, str)
             ):
