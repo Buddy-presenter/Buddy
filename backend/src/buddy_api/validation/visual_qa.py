@@ -26,6 +26,7 @@ from buddy_api.validation.service import ValidationService
 
 MODEL_ID = "eu.anthropic.claude-sonnet-4-6"
 VERIFIER_VERSION = "buddy-visual-qa-1"
+MIN_VERIFICATION_CONFIDENCE = 0.8
 REASONS = {
     "wrong_target",
     "partial_target",
@@ -107,9 +108,7 @@ class VisualQAService:
                                 + ',"action_type":'
                                 + json.dumps(action.type)
                                 + ',"target_text":'
-                                + json.dumps(
-                                    getattr(action.params, "target_text", None)
-                                )
+                                + json.dumps(getattr(action.params, "target_text", None))
                                 + "}"
                             )
                         },
@@ -164,12 +163,23 @@ class VisualQAService:
             raise ValueError("Visual model returned a conflicting verdict.")
         return result
 
+    @staticmethod
+    def _decision(verdict: dict[str, Any]) -> tuple[str, bool, list[str]]:
+        """Require a strong model verdict before promoting an action to usable."""
+        if verdict["confidence"] < MIN_VERIFICATION_CONFIDENCE:
+            return "needs-review", False, ["uncertain"]
+        state = verdict["verdict"]
+        return state, state == "validated", [] if state == "validated" else [verdict["issue"]]
+
     async def verify(
         self, owner_id: UUID, analysis_id: UUID, instance_id: str, request_id: UUID
     ) -> AnalysisResult | PowerPointAnalysisResult | LegacyPowerPointResult:
         visual_id = uuid5(request_id, "buddy.visual-qa.v1")
         async with self.uploads.database.sessions() as session, session.begin():
             analysis = await Analyses(session).get(analysis_id, owner_id=owner_id)
+            latest = await Analyses(session).latest_for_deck(analysis.deck_id, owner_id=owner_id)
+            if latest.id != analysis_id:
+                raise PersistenceConflict("The analysis changed; reopen Review and retry.")
             prior = await session.get(ActionValidation, visual_id)
             if prior is not None:
                 if prior.owner_id != owner_id or prior.analysis_id != analysis_id:
@@ -178,9 +188,6 @@ class VisualQAService:
                 if prior_result.instance_id != instance_id:
                     raise PersistenceConflict("Visual verification request ID was already used.")
                 return await Analyses(session).read(analysis_id, owner_id=owner_id)
-            latest = await Analyses(session).latest_for_deck(analysis.deck_id, owner_id=owner_id)
-            if latest.id != analysis_id:
-                raise PersistenceConflict("The analysis changed; reopen Review and retry.")
             current = await Analyses(session).read(analysis_id, owner_id=owner_id)
             found = next(
                 (
@@ -203,17 +210,16 @@ class VisualQAService:
                 raise PersistenceConflict("The PowerPoint source contract is unavailable.")
             request = powerpoint_validation_request(action, inputs)
         else:
-            request = ValidationRequest(
-                action=action.model_dump(mode="json"), profile="wide-1x"
-            )
-        stored = await self.executor.validate(
-            owner_id, current.deck_id, retry_id, request
-        )
+            request = ValidationRequest(action=action.model_dump(mode="json"), profile="wide-1x")
+        stored = await self.executor.validate(owner_id, current.deck_id, retry_id, request)
         execution = stored.result
         evidence: list[EvidenceReference] = []
-        state, kind, semantic_verified, reasons = "needs-review", "visual", False, [
-            "execution_evidence_unavailable"
-        ]
+        state, kind, semantic_verified, reasons = (
+            "needs-review",
+            "visual",
+            False,
+            ["execution_evidence_unavailable"],
+        )
         confidence: float | None = None
         observation: str | None = None
         if execution.state == "validated":
@@ -223,9 +229,7 @@ class VisualQAService:
                 before, before_mime = await self.executor.evidence(
                     owner_id, stored.id, before_ref.id
                 )
-                after, after_mime = await self.executor.evidence(
-                    owner_id, stored.id, after_ref.id
-                )
+                after, after_mime = await self.executor.evidence(owner_id, stored.id, after_ref.id)
                 if before_mime != "image/png" or after_mime != "image/png":
                     raise ValueError("Execution evidence is not a PNG pair.")
                 if max(len(before), len(after)) > 3_750_000:
@@ -247,9 +251,7 @@ class VisualQAService:
                     close = getattr(client, "close", None)
                     if close:
                         close()
-                state = verdict["verdict"]
-                semantic_verified = state == "validated"
-                reasons = [] if semantic_verified else [verdict["issue"]]
+                state, semantic_verified, reasons = self._decision(verdict)
                 observation = verdict["observation"][:1200]
                 confidence = verdict["confidence"]
                 evidence = [
@@ -265,18 +267,18 @@ class VisualQAService:
                     ),
                     *(
                         [
-                            EvidenceReference(
-                                id=item.id, kind="report", sha256=item.sha256
-                            )
+                            EvidenceReference(id=item.id, kind="report", sha256=item.sha256)
                             for item in stored.evidence
                             if item.kind == "report"
                         ]
                     ),
                 ]
             except Exception:
-                state, semantic_verified, reasons = "needs-review", False, [
-                    "visual_verification_unavailable"
-                ]
+                state, semantic_verified, reasons = (
+                    "needs-review",
+                    False,
+                    ["visual_verification_unavailable"],
+                )
                 evidence = [
                     EvidenceReference(id=item.id, kind=item.kind, sha256=item.sha256)
                     for item in stored.evidence
@@ -310,6 +312,11 @@ class VisualQAService:
             evidence=tuple(evidence[:20]),
         )
         async with self.uploads.database.sessions() as session, session.begin():
+            latest = await Analyses(session).lock_current_revision(
+                current.deck_id, owner_id=owner_id
+            )
+            if latest.id != analysis_id:
+                raise PersistenceConflict("The analysis changed; reopen Review and retry.")
             updated = await Analyses(session).record_validation(
                 owner_id=owner_id,
                 result=result,

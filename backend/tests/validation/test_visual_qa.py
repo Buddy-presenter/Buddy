@@ -1,7 +1,9 @@
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
+from buddy_api.analysis.store import Analyses
 from buddy_api.validation.visual_qa import VisualQAService
 
 
@@ -66,9 +68,50 @@ def test_judge_uses_structured_verdict_and_sends_both_audience_captures(action):
     content = client.request["messages"][0]["content"]
     assert content[1]["image"]["source"]["bytes"] == b"before-image"
     assert content[2]["image"]["source"]["bytes"] == b"after-image"
-    assert client.request["toolConfig"]["toolChoice"] == {
-        "tool": {"name": "visual_verdict"}
-    }
+    assert client.request["toolConfig"]["toolChoice"] == {"tool": {"name": "visual_verdict"}}
+
+
+@pytest.mark.parametrize(
+    ("confidence", "expected"),
+    [
+        (0.79, ("needs-review", False, ["uncertain"])),
+        (0.8, ("validated", True, [])),
+    ],
+)
+def test_low_confidence_cannot_mark_action_usable(confidence, expected):
+    verdict = _response(confidence=confidence)["output"]["message"]["content"][0]["toolUse"][
+        "input"
+    ]
+    assert VisualQAService._decision(verdict) == expected
+
+
+def test_low_confidence_rejection_requires_review_instead_of_false_certainty():
+    verdict = _response(verdict="rejected", issue="wrong_target", confidence=0.2)["output"][
+        "message"
+    ]["content"][0]["toolUse"]["input"]
+    assert VisualQAService._decision(verdict) == ("needs-review", False, ["uncertain"])
+
+
+def test_lock_current_revision_locks_deck_before_reading_latest():
+    deck, latest = SimpleNamespace(id=uuid4()), SimpleNamespace(id=uuid4())
+
+    class Session:
+        statements = []
+
+        async def scalar(self, statement):
+            self.statements.append(statement)
+            return deck if len(self.statements) == 1 else latest
+
+    async def scenario():
+        session = Session()
+        found = await Analyses(session).lock_current_revision(deck.id, owner_id=uuid4())
+        assert found is latest
+        assert len(session.statements) == 2
+        assert session.statements[0]._for_update_arg is not None
+
+    import asyncio
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(
