@@ -2,6 +2,24 @@
 
 ## First latency experiment: short explicit commands
 
+Follow-up routing checks found two additional avoidable deferrals: the local parser
+rejected the curly apostrophe in "Let’s" before expanding the contraction, and the
+interim model-attempt/unchanged-length limits ran before local resolution. Contractions
+are now expanded before the quotation guard, and those model limits apply only after
+local resolution has had a chance to produce a command. Quoted, conditional, negated,
+unstable and stale input remain subject to their existing guards. These code paths
+can explain missed fast paths, but private transcripts are not logged, so they are
+not asserted to explain every recorded remote navigation request.
+
+The API now sends its bounded phase durations in `Server-Timing` response headers.
+Updated desktops record these as `backend_phase` events, joined to the decision in the
+local viewer. Older servers simply omit them; upgrading only the desktop does not expose
+backend phases. Authentication and ingress happen outside the route's phase timings.
+The desktop request-minus-server duration therefore cannot be labelled pure network time.
+The current urllib transport opens a fresh HTTP connection per decision; connection
+reuse is a separate follow-up experiment. Policy rejection diagnostics (duplicate,
+busy, stale, etc.) are also displayed by the viewer.
+
 The desktop's 12-character minimum for interim model requests previously ran before
 local navigation resolution. This delayed complete stable commands such as "next slide"
 until more words or a final transcript arrived. Local resolution now runs before that

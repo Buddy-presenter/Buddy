@@ -57,6 +57,19 @@ def test_unlinked_and_malformed_records():
     assert snapshot["summary"]["p95_ms"] is None
 
 
+def test_backend_phase_header_logs_join_desktop_decision():
+    text = (
+        "presentation_latency event=proposal_received decision_id=abc tool=next_slide\n"
+        "presentation_latency event=backend_phase decision_id=abc phase=session duration_ms=45\n"
+        "presentation_latency event=backend_phase decision_id=abc phase=selection duration_ms=120\n"
+        "presentation_policy event=proposal_rejected decision_id=abc reason=duplicate\n"
+    )
+    snapshot = viewer.build_snapshot(viewer.parse_text(text, "desktop"), [])
+    assert len(snapshot["groups"]) == 1
+    assert snapshot["groups"][0]["fields"]["phase_timings_ms"] == {"session": 45, "selection": 120}
+    assert snapshot["groups"][0]["events"][-1]["fields"]["reason"] == "duplicate"
+
+
 def test_watch_file_refresh_and_missing_source(tmp_path):
     path = tmp_path / "backend.log"
     store = viewer.LogStore([path])

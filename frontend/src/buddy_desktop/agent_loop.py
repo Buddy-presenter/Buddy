@@ -131,6 +131,7 @@ class AgentLoop(QObject):
             self._not_before = float("-inf")
         partial_key: tuple[int, str | None, str] | None = None
         partial_length = 0
+        model_partial_blocked = False
         correction_since_previous = previous is not None and context.has_correction_since(previous)
         if not segments[-1].final:
             if _incomplete_numbered_navigation(segments[-1].text):
@@ -156,11 +157,9 @@ class AgentLoop(QObject):
                         attempts,
                     )
             prior_length, attempts = self._partial_attempts.get(partial_key, (0, 0))
-            if attempts >= 3 or (
-                attempts and partial_length <= prior_length and not correction_since_previous
-            ):
-                self.status.emit("Waiting for the next stable word…")
-                return
+            model_partial_blocked = attempts >= 3 or (
+                bool(attempts) and partial_length <= prior_length and not correction_since_previous
+            )
         if revision == self._last_revision:
             return
         # Explicit slide commands are cheap to resolve from the locally loaded
@@ -192,7 +191,7 @@ class AgentLoop(QObject):
             return
         # The remote model's minimum text length must not delay complete local
         # commands such as "next slide". Stability and freshness were checked above.
-        if partial_key is not None and partial_length < 12:
+        if partial_key is not None and (partial_length < 12 or model_partial_blocked):
             self.status.emit("Waiting for the next stable word…")
             return
         if time.monotonic() < self._not_before:

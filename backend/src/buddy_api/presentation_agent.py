@@ -942,6 +942,11 @@ def agent_router() -> APIRouter:
         if values.active_slide_id is not None:
             proposal_values["active_slide_id"] = source.current
         proposal = AgentProposal.model_validate(proposal_values)
+        # Bounded diagnostics let the desktop inspect phases without cloud-log access.
+        # This leaves the strict versioned JSON proposal contract unchanged.
+        response.headers["Server-Timing"] = ", ".join(
+            f"{name};dur={duration}" for name, duration in phase_timings_ms.items()
+        )
         # Raw structured event, like existing EMF events: independent of Uvicorn's
         # warning-only logger. Only locally typed finite fields reach this boundary.
         trace = {

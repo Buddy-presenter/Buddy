@@ -1,6 +1,7 @@
 """Authenticated proposal client. Returned suggestions are never executor commands."""
 
 import json
+import logging
 import math
 import re
 import time
@@ -14,6 +15,31 @@ from buddy_desktop.config import AppConfig
 from buddy_desktop.presentation_session_service import PresentationSession
 from buddy_desktop.services import NoRedirects, ServiceError
 from buddy_desktop.transcript_context import ContextSnapshot
+
+logger = logging.getLogger(__name__)
+TIMING_PHASES = {
+    "session",
+    "admission",
+    "quota_reservation",
+    "retrieval",
+    "selection",
+    "navigation",
+    "topic_navigation",
+    "validation",
+}
+
+
+def backend_timings(header: str) -> dict[str, int]:
+    """Ignore unknown/malformed timing metrics and never log arbitrary header text."""
+    timings: dict[str, int] = {}
+    if len(header) > 2048:
+        return timings
+    for item in header.split(","):
+        match = re.fullmatch(r"\s*([a-z_]+);dur=(\d{1,5})\s*", item)
+        if match and match[1] in TIMING_PHASES and int(match[2]) <= 6000:
+            timings[match[1]] = int(match[2])
+    return timings
+
 
 TOOLS = {
     "no_action",
@@ -157,6 +183,7 @@ class AgentService:
         )
         try:
             with build_opener(NoRedirects()).open(request, timeout=6) as reply:
+                timings = backend_timings(reply.headers.get("Server-Timing", ""))
                 raw = reply.read(32769)
                 if len(raw) > 32768:
                     raise ValueError
@@ -286,6 +313,14 @@ class AgentService:
                 or time.monotonic_ns() - context.segments[-1].capture_end_ns > 5_000_000_000
             ):
                 raise ServiceError("Suggestion expired; waiting for fresh speech.")
+            for phase, duration in timings.items():
+                logger.warning(
+                    "presentation_latency event=backend_phase decision_id=%s "
+                    "phase=%s duration_ms=%d",
+                    result["decision_id"],
+                    phase,
+                    duration,
+                )
             return result
         except HTTPError as exc:
             status = exc.code

@@ -24,7 +24,7 @@ function render(){const s=snapshot.summary; $('metrics').innerHTML=[['Decisions'
  $('sources').innerHTML=snapshot.sources.map(s=>`<div class="source"><span class="mono">${escape(s.name)}</span><span>${escape(s.status)}${s.events!==undefined?' · '+s.events+' events':''}</span></div>`).join('')||'<p class="muted">No sources connected.</p>';
  $('updated').textContent='Updated '+new Date(snapshot.updated_at||Date.now()).toLocaleTimeString();
 }
-function renderDetail(g){if(!g){$('detail').innerHTML='<div class="empty"><strong>Your decision timeline</strong>Select an event to inspect its stages and timing.</div>';return}const f=g.fields,phases=f.phase_timings_ms||{},backend=g.events.some(e=>e.event==='presentation_agent_decision');
+function renderDetail(g){if(!g){$('detail').innerHTML='<div class="empty"><strong>Your decision timeline</strong>Select an event to inspect its stages and timing.</div>';return}const f=g.fields,phases=f.phase_timings_ms||{},backend=g.events.some(e=>e.event==='presentation_agent_decision'||e.event==='backend_phase');
  const rows=[...Object.entries(phases).map(([name,n])=>[name.replaceAll('_',' '),n,name==='selection'?'model':''])];
  for(const [key,label] of [['capture_to_submit_ms','Capture → submit'],['submit_to_proposal_ms','Submit → proposal'],['preflight_ms','Preflight'],['executor_ms','Slide execution']])if(Number.isFinite(f[key]))rows.push([label,f[key],'client']);
  const max=Math.max(1,...rows.map(r=>r[1]));

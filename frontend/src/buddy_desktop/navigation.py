@@ -154,6 +154,9 @@ def _number(tokens: list[str]) -> int | None:
 def navigation_intent(text: str) -> tuple[str, int] | None:
     """Return a slide move only for an unambiguous imperative; otherwise defer to server."""
     normalized = unicodedata.normalize("NFKC", text).casefold().strip()
+    # Recognizers commonly emit a curly apostrophe in this contraction. Expand it
+    # before the quotation guard, while leaving quoted commands ineligible.
+    normalized = re.sub(r"\blet['’]s\b", "let us", normalized)
     if any(char in normalized for char in '?？"“”‘’«»'):
         return None
     tokens = _tokens(normalized)

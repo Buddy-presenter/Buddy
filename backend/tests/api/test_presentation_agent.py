@@ -45,6 +45,27 @@ def payload(**changes):
     }
 
 
+def test_agent_response_exposes_phase_header_without_changing_json(api_client, monkeypatch):
+    from types import SimpleNamespace
+
+    from buddy_api.auth import authenticated
+
+    async def input_snapshot(*args, **kwargs):
+        return SimpleNamespace(current="slide-1", analysis=SimpleNamespace(id=uuid4()))
+
+    monkeypatch.setattr("buddy_api.presentation_agent.read_input", input_snapshot)
+    api_client.app.dependency_overrides[authenticated] = lambda: SimpleNamespace(id=uuid4())
+    try:
+        reply = api_client.post(f"/api/v1/sessions/{uuid4()}/agent", json=payload())
+        assert reply.status_code == 200
+        assert reply.headers["server-timing"].startswith("session;dur=")
+        assert "private speech" not in reply.headers["server-timing"]
+        assert "phase_timings_ms" not in reply.json()
+        assert reply.json()["reason"] == "disabled"
+    finally:
+        api_client.app.dependency_overrides.pop(authenticated, None)
+
+
 def test_agent_response_echoes_local_slide_only_for_new_clients():
     common = {
         "protocol": "presentation-agent.v1",

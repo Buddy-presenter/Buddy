@@ -66,7 +66,7 @@ PHASES = {
     "topic_navigation",
     "validation",
 }
-PREFIXES = ("presentation_latency", "presentation_speech", "speech_stream")
+PREFIXES = ("presentation_latency", "presentation_speech", "presentation_policy", "speech_stream")
 MAX_BYTES = 8 * 1024 * 1024
 
 
@@ -168,6 +168,14 @@ def build_snapshot(events: list[dict[str, Any]], sources: list[dict[str, Any]]) 
         group = groups.setdefault(key, {"id": key, "events": [], "fields": {}})
         group["events"].append(event)
         group["fields"].update(fields)
+        if (
+            event["event"] == "backend_phase"
+            and fields.get("phase") in PHASES
+            and type(fields.get("duration_ms")) is int
+        ):
+            group["fields"].setdefault("phase_timings_ms", {})[fields["phase"]] = fields[
+                "duration_ms"
+            ]
     # A rejection/other record sharing an API request ID joins its decision if available.
     requests = {
         g["fields"]["request_id"]: g

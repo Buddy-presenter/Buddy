@@ -16,7 +16,7 @@ import pytest
 from PySide6.QtWidgets import QLabel
 
 from buddy_desktop.agent_loop import AgentLoop
-from buddy_desktop.agent_service import AgentService, conflict_error
+from buddy_desktop.agent_service import AgentService, backend_timings, conflict_error
 from buddy_desktop.config import AppConfig
 from buddy_desktop.presentation_session_service import PresentationSession, SessionState
 from buddy_desktop.services import ServiceError
@@ -92,7 +92,7 @@ def inputs():
         "fallback_action",
     ],
 )
-def test_real_http_validates_proposals_and_context(corrupt, monkeypatch):
+def test_real_http_validates_proposals_and_context(corrupt, monkeypatch, caplog):
     session, context = inputs()
     clock = [context.observed_ns]
     # Server startup/OS trust-store work is not elapsed microphone capture time.
@@ -163,6 +163,7 @@ def test_real_http_validates_proposals_and_context(corrupt, monkeypatch):
                     ),
                 )
             self.send_response(200)
+            self.send_header("Server-Timing", "session;dur=25, selection;dur=20")
             self.end_headers()
             self.wfile.write(json.dumps(answer).encode())
 
@@ -178,6 +179,10 @@ def test_real_http_validates_proposals_and_context(corrupt, monkeypatch):
                 )["target"]["tool"]
                 == "next_slide"
             )
+            assert "event=backend_phase" in caplog.text
+            assert "phase=session duration_ms=25" in caplog.text
+            assert "phase=selection duration_ms=20" in caplog.text
+            assert "private-token" not in caplog.text
         else:
             with pytest.raises(ServiceError):
                 service.propose(
@@ -190,6 +195,20 @@ def test_real_http_validates_proposals_and_context(corrupt, monkeypatch):
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ("retrieval;dur=40,selection;dur=90", {"retrieval": 40, "selection": 90}),
+        ("", {}),
+        ("private_text;dur=20, selection;dur=-1, session;dur=99999", {}),
+        ("session;dur=30;desc=PRIVATE", {}),
+        ("x" * 2049, {}),
+    ],
+)
+def test_backend_timing_header_is_bounded_and_allowlisted(header, expected):
+    assert backend_timings(header) == expected
 
 
 @pytest.mark.parametrize("reason", ["explicit", "topic"])
@@ -467,7 +486,8 @@ def test_local_slide_command_bypasses_slow_contextual_request(qtbot):
 
 
 @pytest.mark.parametrize("phrase", ["Next slide", "Next page", "Show page 2"])
-def test_short_stable_local_command_does_not_wait_for_final_recognition(qtbot, phrase):
+@pytest.mark.parametrize("attempts", [0, 3])
+def test_short_stable_local_command_does_not_wait_for_final_recognition(qtbot, phrase, attempts):
     from buddy_desktop.navigation import navigation_intent
 
     session, context = inputs()
@@ -491,6 +511,10 @@ def test_short_stable_local_command_does_not_wait_for_final_recognition(qtbot, p
 
     loop = AgentLoop(service, local_navigation=resolve)
     loop.set_enabled(True)
+    loop._partial_attempts[(context.epoch, context.stream_id, context.segments[-1].segment_id)] = (
+        len(phrase),
+        attempts,
+    )
     received = []
     loop.proposed.connect(received.append)
     try:
