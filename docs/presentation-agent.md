@@ -99,7 +99,10 @@ and automatic moves together, undo,
 Settings, and Open Buddy. Click the mascot or focus it and press Space, then Tab
 through the controls. Open Buddy or Escape restores the workspace. Closing Mini,
 opening Settings, ending the show, or losing the saved session stops capture.
-Mini remains visible in standby when the slideshow or session disconnects. Its
+For PDFs, Escape in either the audience window or Mini, Open Buddy, and closing
+Mini also close the audience window and return the slide to Present. Capture and
+live suggestions stop; enter Mini again to resume presenting.
+Mini remains visible in standby when an Office slideshow or session disconnects. Its
 voice controls become available again when a verified show is connected.
 On Windows, sleep returns Buddy to the main workspace and stops capture and
 automatic moves. Use **Enter Buddy Mini** to restart the overlay after waking.
