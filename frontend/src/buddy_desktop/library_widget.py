@@ -686,7 +686,7 @@ class LibraryWidget(QWidget):
                     entry.id in self._watched_processing
                     and entry.source_format == "pptx"
                     and processing is not None
-                    and processing.state == "review_ready"
+                    and processing.state in {"review_ready", "partial"}
                     and processing.checks is not None
                     and processing.checks.mode == "desktop"
                     and processing.checks.active

@@ -12,7 +12,7 @@ from PySide6.QtGui import QColor, QImage
 
 import buddy_desktop.review_widget as widgets
 from buddy_desktop.auth import Tokens
-from buddy_desktop.powerpoint_contract import PresentationInfo
+from buddy_desktop.powerpoint_contract import PowerPointError, PresentationInfo
 from buddy_desktop.powerpoint_generated import generated_action
 from buddy_desktop.powerpoint_session_binding import PowerPointSessionBinding
 from buddy_desktop.present_widget import saved_action_eligible
@@ -356,6 +356,24 @@ def test_powerpoint_review_all_actions_map_to_the_typed_real_executor(kind):
         assert command.points == ((10, 20), (40, 60)) and command.region is None
     else:
         assert command.region.width == 30
+
+
+def test_saved_slide_size_tolerates_powerpoint_rounding():
+    deck, payload = powerpoint_payload(kind="highlight_region")
+    analysis = parse_analysis(payload, deck)
+    slide, action = analysis.slides[0], analysis.slides[0].actions[0]
+    # A 13.333-inch slide is stored as 959.976 pt; PowerPoint reports it as 960.
+    target = PresentationInfo("test.pptx", "test.pptx", 1, 1, 123, 256, 960, 540)
+    arguments = dict(
+        deck_id=str(deck),
+        render_id=analysis.render_id,
+        slide_id=slide.slide_id,
+        native_slide_id=256,
+    )
+    generated_action(action.raw, target, width=959.9759842519685, height=540, **arguments)
+    # A genuinely different slide size is still refused.
+    with pytest.raises(PowerPointError, match="does not match"):
+        generated_action(action.raw, target, width=959.5, height=540, **arguments)
 
 
 @pytest.mark.parametrize(

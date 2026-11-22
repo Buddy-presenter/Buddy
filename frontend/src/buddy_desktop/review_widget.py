@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 import sys
 import time
 from collections import Counter
@@ -48,6 +49,9 @@ from buddy_desktop.services import ServiceError
 from buddy_desktop.tasks import TaskRunner
 from buddy_desktop.views import Page, ProgressStrip, StatePanel, group
 from buddy_desktop.visuals import command
+from buddy_identity.config import SessionExpired
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -788,6 +792,26 @@ class ReviewWidget(Page):
         self.visual_qa_status.setText(f"Checking {total} action{'s' if total != 1 else ''}…")
         self.activity_changed.emit(True)
 
+        session = self.account.session
+
+        def fresh_access() -> str:
+            # A full PowerPoint run outlives one access token. Renew it before it
+            # expires instead of failing the remaining checks as signed out.
+            nonlocal qa_service, review_service
+            tokens = session.tokens if session is not None else None
+            if (
+                session is not None
+                and tokens is not None
+                and time.monotonic() >= tokens.expires - 120
+            ):
+                try:
+                    access = session.resume()
+                except SessionExpired:
+                    raise LibraryAccessExpired("Sign in again to check actions.") from None
+                qa_service = PreflightService(self.config, access)
+                review_service = ReviewService(self.config, access)
+            return qa_service.access
+
         def work() -> ReviewQABatch:
             if preview is not None:
                 preview.close()
@@ -796,6 +820,7 @@ class ReviewWidget(Page):
                 if cancelled.is_set():
                     break
                 try:
+                    fresh_access()
                     if desktop:
                         report = qa_service.run_on_desktop(
                             analysis.id,
@@ -818,9 +843,12 @@ class ReviewWidget(Page):
                     counts[report["state"]] += 1
                 except LibraryAccessExpired:
                     raise
-                except ServiceError:
+                except ServiceError as exc:
+                    # Fixed, content-free messages; they say which step failed.
+                    logger.warning("desktop_check event=service_error message=%s", exc)
                     counts["failed"] += 1
                 self.visual_qa_progress.emit(generation, index + 1, total, dict(counts))
+            fresh_access()
             return ReviewQABatch(
                 counts,
                 total,

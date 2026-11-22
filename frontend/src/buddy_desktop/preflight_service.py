@@ -3,6 +3,7 @@
 import base64
 import http.client
 import json
+import logging
 import sys
 import time
 from collections.abc import Callable
@@ -15,6 +16,8 @@ from uuid import UUID, uuid4
 from buddy_desktop.config import AppConfig
 from buddy_desktop.library_service import LibraryAccessExpired
 from buddy_desktop.services import NoRedirects, ServiceError
+
+logger = logging.getLogger(__name__)
 
 
 class PreflightService:
@@ -96,6 +99,8 @@ class PreflightService:
         except HTTPError as exc:
             code = exc.code
             exc.close()
+            step = path.rsplit("/", 1)[-1]
+            logger.warning("desktop_check event=http_error step=%s status=%d", step, code)
             if code in {401, 403}:
                 raise LibraryAccessExpired("Sign in again to check actions.") from None
             if code == 409:
@@ -103,9 +108,15 @@ class PreflightService:
             if code == 503:
                 raise ServiceError("Action checks are unavailable on this server.") from None
             raise ServiceError("The action check could not be saved. Retry it.") from None
-        except (URLError, OSError, http.client.HTTPException):
+        except (URLError, OSError, http.client.HTTPException) as exc:
+            logger.warning(
+                "desktop_check event=network_error step=%s error=%s",
+                path.rsplit("/", 1)[-1],
+                type(exc).__name__,
+            )
             raise ServiceError("Cannot reach Buddy to check actions. Retry.") from None
         except (ValueError, TypeError, KeyError):
+            logger.warning("desktop_check event=invalid_response step=%s", path.rsplit("/", 1)[-1])
             raise ServiceError("The backend returned an invalid check response.") from None
 
     def run_on_desktop(
@@ -140,7 +151,7 @@ class PreflightService:
             raise ServiceError("The backend returned an invalid check response.")
 
         def judge(sequence: int, target: dict[str, Any], before: bytes, after: bytes) -> object:
-            return self._post(
+            verdict = self._post(
                 f"preflights/{identifier}/judge",
                 dict(
                     sequence=sequence,
@@ -149,14 +160,18 @@ class PreflightService:
                     after=base64.b64encode(after).decode(),
                 ),
             )
+            if verdict is None:
+                logger.warning("desktop_check event=judge_unavailable attempt=%d", sequence)
+            return verdict
 
         try:
             captured = capture_check(snapshot, source, judge, cancelled, progress)
         except LibraryAccessExpired:
             raise
-        except (ServiceError, OSError, ValueError, KeyError, TypeError):
+        except (ServiceError, OSError, ValueError, KeyError, TypeError) as exc:
             # Includes a failed screenshot upload: always close the check on the server
             # instead of leaving it "running" until its lease expires.
+            logger.warning("desktop_check event=capture_error error=%s", type(exc).__name__)
             captured = None
         report_body = captured.report if captured else None
         if (
@@ -169,6 +184,7 @@ class PreflightService:
                 or (report_body or {}).get("reason")
                 or "worker_failed"
             )
+            logger.warning("desktop_check event=failed reason=%s", str(reason)[:64])
             result = self._post(f"preflights/{identifier}/fail", dict(reason=str(reason)[:64]))
         else:
             result = self._post(
@@ -183,6 +199,7 @@ class PreflightService:
             )
         if not isinstance(result, dict) or result.get("instance_id") != instance_id:
             raise ServiceError("The saved check belongs to another action.")
+        logger.info("desktop_check event=finished state=%s", result.get("state"))
         return result
 
     def run(
