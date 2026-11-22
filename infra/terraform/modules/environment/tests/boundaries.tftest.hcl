@@ -169,6 +169,49 @@ run "staging_worker_is_provisioned_paused_for_release_promotion" {
     error_message = "Terraform must create the worker as a paused service so the verified release driver controls its first start."
   }
 }
+run "staging_idle_services_sleep_and_wake_on_request" {
+  command = plan
+  variables {
+    api_image          = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    worker_image       = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    start_services     = true
+    idle_scale_to_zero = true
+  }
+  assert {
+    condition = (
+      length(aws_appautoscaling_target.idle) == 2 &&
+      alltrue([for target in aws_appautoscaling_target.idle : target.min_capacity == 0 && target.max_capacity == 1])
+    )
+    error_message = "Idle staging services must be able to scale between zero and one task."
+  }
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.sleep[0].evaluation_periods == 6 &&
+      aws_cloudwatch_metric_alarm.sleep[0].treat_missing_data == "breaching" &&
+      aws_cloudwatch_metric_alarm.wake[0].evaluation_periods == 1
+    )
+    error_message = "Staging must sleep only after 30 quiet minutes and wake on the next request."
+  }
+}
+run "idle_scaling_is_off_by_default" {
+  command = plan
+  variables {
+    api_image = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+  assert {
+    condition     = length(aws_appautoscaling_target.idle) == 0 && length(aws_cloudwatch_metric_alarm.sleep) == 0
+    error_message = "Idle scaling must only exist where it is explicitly enabled."
+  }
+}
+run "production_rejects_idle_scaling" {
+  command = plan
+  variables {
+    environment        = "production"
+    api_domain         = "api.example.com"
+    idle_scale_to_zero = true
+  }
+  expect_failures = [var.idle_scale_to_zero]
+}
 run "reject_unknown_text_targeting" {
   command = plan
   variables { worker_text_targeting = "guess_coordinates" }
