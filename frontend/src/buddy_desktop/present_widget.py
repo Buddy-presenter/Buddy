@@ -200,6 +200,7 @@ class PresentWidget(Page):
     session_event_received = Signal(object)
     transition_observed = Signal(object)
     mini_requested = Signal()
+    fullscreen_exited = Signal()
 
     def __init__(self, config: AppConfig, settings: QSettings) -> None:
         super().__init__("Present", "")
@@ -3551,6 +3552,7 @@ class PresentWidget(Page):
             self.agent_enabled.setChecked(False)
         if not self._closing:
             self.fullscreen_button.setFocus()
+        self.fullscreen_exited.emit()
 
     def _fullscreen_go(self) -> None:
         manifest = self.executor.manifest

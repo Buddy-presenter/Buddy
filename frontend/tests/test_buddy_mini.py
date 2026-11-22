@@ -13,7 +13,68 @@ from shiboken6 import isValid
 import buddy_desktop.buddy_mini as mini_module
 
 
-def test_mini_preserves_pdf_fullscreen_and_stops_on_overlay_close(
+@pytest.mark.parametrize("exit_from", ["fullscreen", "f11", "surface", "mini", "close"])
+@pytest.mark.parametrize("capturing", [False, True])
+def test_mini_exit_restores_interactive_presenter(
+    desktop_window, qtbot, monkeypatch, exit_from, capturing
+):
+    window = desktop_window()
+    window.navigation.setCurrentRow(3)
+    page = window.present
+    pdf = Path(__file__).resolve().parents[2] / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf"
+    page.load_pdf(pdf)
+    qtbot.waitUntil(lambda: not page.executor.busy and not page._pdf_warming, timeout=10000)
+    monkeypatch.setattr(page, "mini_session_id", lambda: "saved-session")
+    for _ in range(3):
+        window._toggle_mini()
+        mini, full = window._mini, page.fullscreen
+        assert mini is not None and full is not None
+        # Exercise the real stop/status path without opening a physical device.
+        page.microphone._enabled = capturing
+        if exit_from == "close":
+            mini.close()
+        else:
+            target = mini if exit_from == "mini" else full
+            target.activateWindow()
+            target.setFocus()
+            qtbot.waitUntil(target.isActiveWindow)
+            receiver = page.surface if exit_from == "surface" else target
+            key = Qt.Key.Key_F11 if exit_from == "f11" else Qt.Key.Key_Escape
+            qtbot.keyClick(receiver, key)
+        qtbot.waitUntil(lambda: window.isVisible() and window._mini is None)
+        assert page.fullscreen is None
+        assert not page.mini_active and not window._mini_poll.isActive()
+        assert not page.microphone.enabled
+        assert page.body.indexOf(page.surface) >= 0 and page.surface.isVisible()
+        # Exercise the returned UI, not just window visibility.
+        before = page.executor.current_index
+        page.send("next_slide")
+        qtbot.waitUntil(lambda: not page.executor.busy)
+        assert page.executor.current_index == before + 1
+        page.send("previous_slide")
+        qtbot.waitUntil(lambda: not page.executor.busy)
+        assert page.executor.current_index == before
+
+
+def test_closing_workspace_with_mini_does_not_restore_it(desktop_window, qtbot, monkeypatch):
+    window = desktop_window()
+    window.navigation.setCurrentRow(3)
+    page = window.present
+    pdf = Path(__file__).resolve().parents[2] / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf"
+    page.load_pdf(pdf)
+    qtbot.waitUntil(lambda: not page.executor.busy and not page._pdf_warming, timeout=10000)
+    monkeypatch.setattr(page, "mini_session_id", lambda: "saved-session")
+    window._toggle_mini()
+    full = page.fullscreen
+    assert full is not None
+    window.close()
+    qtbot.waitUntil(lambda: not window.isVisible() and window._mini is None)
+    qtbot.waitUntil(lambda: not isValid(full))
+    assert page.fullscreen is None and not window._mini_poll.isActive()
+    assert not window.isVisible()
+
+
+def test_mini_preserves_pdf_fullscreen_and_restores_on_audience_close(
     desktop_window, qtbot, monkeypatch
 ):
     window = desktop_window()
@@ -36,9 +97,6 @@ def test_mini_preserves_pdf_fullscreen_and_stops_on_overlay_close(
     window._mini_completed({"target": {"tool": "next_slide"}})
     assert mini._reaction > 0
     page.fullscreen.close()
-    window._sync_mini()
-    assert mini.isVisible() and "Disconnected" in mini.mascot.accessibleName()
-    mini.close()
     assert window.isVisible() and window._mini is None
     assert not page.mini_active and not page.agent_enabled.isChecked()
 

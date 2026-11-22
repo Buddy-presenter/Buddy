@@ -119,6 +119,7 @@ class MainWindow(QMainWindow):
         self._mini_auto_attempts = 0
         self._mini_auto_deck: str | None = None
         self.present.mini_requested.connect(self._toggle_mini)
+        self.present.fullscreen_exited.connect(self._mini_fullscreen_exited)
         self.present.transition_observed.connect(self._mini_completed)
         app = QGuiApplication.instance()
         if isinstance(app, QGuiApplication):
@@ -887,16 +888,25 @@ class MainWindow(QMainWindow):
         self.activateWindow()
         self.navigation.setCurrentRow(4)
 
+    def _mini_fullscreen_exited(self) -> None:
+        if self._mini is not None:
+            self._leave_mini(stop=True, restore=not self._closing)
+
     def _leave_mini(self, *, stop: bool = False, restore: bool = True) -> None:
         mini, self._mini = self._mini, None
         if mini is None:
             return
-        stop = stop or mini.chiming
+        fullscreen = self.present.fullscreen
+        stop = stop or mini.chiming or fullscreen is not None
         self._mini_chime_paused = False
         self._mini_poll.stop()
         self.present.mini_active = False
         self._mini_session = None
         self._mini_screen = None
+        # Clear Mini ownership first: closing the audience window emits back into
+        # _mini_fullscreen_exited. Both Escape targets must restore the surface.
+        if fullscreen is not None:
+            fullscreen.close()
         if stop:
             self.present.microphone.stop()
             self.present.agent_enabled.setChecked(False)

@@ -3,7 +3,7 @@
 from collections.abc import Callable
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QScreen
+from PySide6.QtGui import QAction, QCloseEvent, QKeyEvent, QKeySequence, QScreen
 from PySide6.QtWidgets import QMainWindow, QVBoxLayout, QWidget
 
 from buddy_desktop.slide_surface import SlideSurface
@@ -43,11 +43,6 @@ class FullscreenPresentation(QMainWindow):
             action.setShortcut(QKeySequence(shortcut))
             action.triggered.connect(lambda checked=False, kind=command: send(kind))
             self.addAction(action)
-        for shortcut in ("Esc", "F11"):
-            action = QAction(self)
-            action.setShortcut(QKeySequence(shortcut))
-            action.triggered.connect(self.close)
-            self.addAction(action)
         for shortcut, callback in (("Z", zoom), ("H", highlight), ("G", go_to)):
             action = QAction(self)
             action.setShortcut(QKeySequence(shortcut))
@@ -69,6 +64,17 @@ class FullscreenPresentation(QMainWindow):
         self.setGeometry(screen.geometry())
         if self.isVisible():
             self.showFullScreen()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        # Handle exit on the audience window itself, just as Mini does. Window
+        # shortcut activation can lag focus changes between native tool windows.
+        if event.key() in (Qt.Key.Key_Escape, Qt.Key.Key_F11) and (
+            event.modifiers() == Qt.KeyboardModifier.NoModifier
+        ):
+            self.close()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         surface = self.takeCentralWidget()
