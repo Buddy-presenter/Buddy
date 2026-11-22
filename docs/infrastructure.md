@@ -248,7 +248,9 @@ isolated restore drill and retained snapshot are recorded in the
 
 With `idle_scale_to_zero = true` (staging only; production rejects it), the API and worker
 stop after `idle_minutes` (default 30) with no load-balancer requests and no queued or
-in-flight upload jobs, and start again on the next request or queued upload job. Two
+in-flight upload jobs, and start again on the next request or queued upload job. While
+no task runs, the load balancer answers requests itself with 503; CloudWatch counts
+those as `HTTPCode_ELB_503_Count`, not `RequestCount`, so both alarms count both. Two
 CloudWatch alarms drive ECS step scaling between zero and one task; there is no extra
 compute or Lambda. While staging is waking (about 1–2 minutes), the load balancer answers
 503 and the desktop app reports that the server is unreachable; retry shortly after.
