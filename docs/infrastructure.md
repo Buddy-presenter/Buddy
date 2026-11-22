@@ -261,8 +261,12 @@ in-flight upload jobs, and start again on the next request or queued upload job.
 no task runs, the load balancer answers requests itself with 503; CloudWatch counts
 those as `HTTPCode_ELB_503_Count`, not `RequestCount`, so both alarms count both. Two
 CloudWatch alarms drive ECS step scaling between zero and one task; there is no extra
-compute or Lambda. While staging is waking (about 1–2 minutes), the load balancer answers
-503 and the desktop app reports that the server is unreachable; retry shortly after.
+compute or Lambda. While staging is waking (measured 1 min 18 s to 3 min 33 s from the
+first request, mostly CloudWatch's 2–3 minute metric delay), the load balancer answers
+503 and the desktop app reports that the server is unreachable; retry after about 4 minutes.
+Releases and rollbacks suspend this scaling for the services while they run and restore
+each target's previous suspension state afterwards (`backend/scripts/release/deploy.py`),
+because a scale change mid-release would look like drift and roll the release back.
 Requests from anything reaching the load balancer, including scanners, also wake it.
 The database, load balancer, WAF and data are unaffected. Apply only these resources
 with a targeted plan when the operator variables are not current:
