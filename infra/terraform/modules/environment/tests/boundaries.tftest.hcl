@@ -192,6 +192,13 @@ run "staging_idle_services_sleep_and_wake_on_request" {
     )
     error_message = "Staging must sleep only after 30 quiet minutes and wake on the next request."
   }
+  assert {
+    condition = alltrue([
+      for alarm in [aws_cloudwatch_metric_alarm.wake[0], aws_cloudwatch_metric_alarm.sleep[0]] :
+      contains([for query in alarm.metric_query : query.id], "unserved")
+    ])
+    error_message = "Requests the load balancer answers with 503 while no task runs must wake staging and keep it awake."
+  }
 }
 run "staging_load_balancer_access_logs" {
   command = plan
