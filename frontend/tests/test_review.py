@@ -264,6 +264,18 @@ def test_review_widget_loads_read_only_saved_page_and_clears_on_signout(
     review.visual_qa_button.click()
     qtbot.waitUntil(lambda: "Checked 1 of 1: 1 Ready" in review.visual_qa_status.text())
     assert submissions == [(record.id, record.slides[0].actions[0].instance_id)]
+    # Once anything is checked, Check all again reruns every action, Ready ones too.
+    validated = replace(rejected, state="validated", usable=True, semantic_verified=True)
+    review.analysis = replace(record, slides=(replace(record.slides[0], actions=(validated,)),))
+    review._display_page()
+    qtbot.waitUntil(review.visual_qa_all_button.isEnabled)
+    assert not review.visual_qa_all_button.isHidden()
+    assert review.visual_qa_all_button.text() == "Check all again"
+    submissions.clear()
+    review.visual_qa_all_button.click()
+    assert review.visual_qa_all_button.isHidden()  # hidden while the run is in progress
+    qtbot.waitUntil(lambda: "Checked 1 of 1: 1 Ready" in review.visual_qa_status.text())
+    assert submissions == [(record.id, validated.instance_id)]
     window.account.session.tokens = None
     window.account.session_changed.emit()
     assert review.visual_qa_status.text() == ""

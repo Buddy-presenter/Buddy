@@ -411,13 +411,17 @@ class ReviewWidget(Page):
         self.visual_qa_progress.connect(self._show_visual_qa_progress)
         self.check_step.connect(self._show_check_step)
         action_header.addWidget(self.visual_qa_button)
-        self.visual_qa_all_button = QPushButton("Run visual QA on all actions")
+        self.visual_qa_all_button = QPushButton("Check all again")
+        command(self.visual_qa_all_button, "refresh-cw")
+        self.visual_qa_all_button.setAccessibleName("Check every action again")
         self.visual_qa_all_button.setToolTip(
-            "Check every saved action in this deck. Each action is checked separately in Bedrock."
+            "Run every action's check again, including actions that are already Ready. "
+            "For PowerPoint, close other PowerPoint windows first and don't use the mouse "
+            "or keyboard until it finishes."
         )
         self.visual_qa_all_button.setVisible(False)
         self.visual_qa_all_button.setEnabled(False)
-        self.visual_qa_all_button.clicked.connect(self.run_all_visual_qa)
+        self.visual_qa_all_button.clicked.connect(self.recheck_all_visual_qa)
         action_header.addWidget(self.visual_qa_all_button)
         action_header.addWidget(self.run_powerpoint)
         content_layout.addLayout(action_header)
@@ -620,12 +624,19 @@ class ReviewWidget(Page):
         if not actions:
             self.check_progress.hide()
             self.check_poll.stop()
+            self.visual_qa_all_button.hide()
             return
         total = len(actions)
         checked = sum(self._check_finished(a) for a in actions)
         ready = sum(a.usable for a in actions)
         desktop = self.source_format == "pptx"
         running = self.pending_operation == "visual_qa_all" and self.runner.busy
+        # Once anything has been checked, the owner can always rerun every check.
+        recheck = checked > 0 and self.checks_available is not False and not running
+        self.visual_qa_all_button.setVisible(recheck)
+        self.visual_qa_all_button.setEnabled(
+            recheck and not self.runner.busy and bool(self.token())
+        )
         self.desktop_banner.setVisible(
             desktop and checked < total and self.checks_available is not False and not running
         )
@@ -737,6 +748,18 @@ class ReviewWidget(Page):
             )
             self._run_checks(pending)
 
+    def recheck_all_visual_qa(self) -> None:
+        """Check all again: rerun every action's check, including finished ones."""
+        if self.analysis is not None:
+            self._run_checks(
+                tuple(
+                    action
+                    for slide in self.analysis.slides
+                    for action in slide.actions
+                    if action.raw is not None
+                )
+            )
+
     def _show_visual_qa_progress(
         self, generation: int, completed: int, total: int, counts: dict[str, int]
     ) -> None:
@@ -784,6 +807,7 @@ class ReviewWidget(Page):
         self.pending_operation = "visual_qa_all"
         cancelled = self.visual_qa_cancel = Event()
         self.visual_qa_button.setEnabled(False)
+        self.visual_qa_all_button.hide()
         self.run_powerpoint.setEnabled(False)
         self.desktop_banner.hide()
         total = len(actions)
@@ -1053,6 +1077,7 @@ class ReviewWidget(Page):
         self.visual_qa_button.setEnabled(False)
         self.visual_qa_cancel.set()
         self.visual_qa_all_button.setEnabled(False)
+        self.visual_qa_all_button.hide()
         self.visual_qa_status.clear()
         self.visual_qa_button.setVisible(False)
         self.check_poll.stop()
