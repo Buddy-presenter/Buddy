@@ -28,8 +28,7 @@ python3.12 -m venv .venv
 
 The installed GUI command is `buddy`. Normal application startup loads the public
 HTTPS staging defaults bundled with the preview; environment variables override them.
-Staging's API and worker are off when idle; turn them on first with
-[Staging on/off](staging-power.md). For local API development, explicitly set `BUDDY_API_URL=http://127.0.0.1:8000`.
+For local API development, explicitly set `BUDDY_API_URL=http://127.0.0.1:8000`.
 Browser sign-in with the bundled HTTPS callback uses the encrypted server handoff,
 without an OS app link or localhost listener. Explicit native callback configurations
 still use the installed Windows/macOS handler. Windows source-only account testing can use
