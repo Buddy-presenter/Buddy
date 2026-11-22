@@ -234,6 +234,43 @@ def test_options_derive_navigation_and_only_usable_authoritative_regions():
     assert "zoom_region" not in {t.tool for t in options(source, candidates)[0]}
 
 
+def test_region_options_show_the_slide_text_they_target():
+    from buddy_api.agent_provider import SYSTEM
+    from buddy_api.analysis.contracts import Region
+
+    def option(target_text):
+        action = SimpleNamespace(
+            usable=True,
+            state="validated",
+            semantic_verified=True,
+            action=SimpleNamespace(
+                instance_id="revenue",
+                type="highlight_region",
+                purpose="Highlight the total revenue figure",
+                params=SimpleNamespace(
+                    region=Region(x=1, y=2, width=30, height=40), target_text=target_text
+                ),
+            ),
+        )
+        slide = SimpleNamespace(
+            slide_id="1", summary=SimpleNamespace(text="Revenue"), actions=(action,)
+        )
+        candidate = Candidate(
+            kind="highlight_region", slide_id="1", action_id="revenue", reason="purpose", score=1
+        )
+        source = AgentInput(SimpleNamespace(slides=(slide,)), "1", "slide", "hash")
+        return options(source, (candidate,))[1][-1]["content"]
+
+    # Speech that states the figure ("$48 million") must visibly match the option.
+    assert option("$48 million") == "Highlight the total revenue figure Shows: $48 million"
+    # Zooms and PDF actions without target text keep their purpose alone.
+    assert option("") == "Highlight the total revenue figure"
+    assert option(None) == "Highlight the total revenue figure"
+    # The selector is told that speech about one element selects its region action.
+    assert "zoom_region or highlight_region option" in SYSTEM
+    assert "not mere continued explanation" in SYSTEM
+
+
 def test_natural_navigation_options_do_not_depend_on_semantic_shortlist():
     from backend.tests.api.test_presentation_candidates import analysis
 

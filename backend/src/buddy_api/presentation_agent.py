@@ -414,7 +414,12 @@ def options(
                 action_id=action.action.instance_id,
                 region=action.action.params.region,
             )
-            content = action.action.purpose[:512]
+            # Show the selector the slide text the action targets, so speech that
+            # names that content ("$48 million") visibly matches this option.
+            shown = getattr(action.action.params, "target_text", None)
+            content = action.action.purpose[:512] + (
+                f" Shows: {shown[:256]}" if isinstance(shown, str) and shown.strip() else ""
+            )
         if target in targets:
             continue
         descriptions.append(
