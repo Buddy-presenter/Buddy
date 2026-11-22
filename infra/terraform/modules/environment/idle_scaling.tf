@@ -25,12 +25,19 @@ locals {
     var.worker_image == null ? "" : "worker",
   ])) : toset([])
   idle_periods = var.idle_minutes / 5
-  # ALB counts every request it receives, including the ones it answers with 503
-  # while no task is running, so the first request after a quiet period wakes staging.
+  # With no task registered the ALB answers requests itself with 503, and those are
+  # counted as HTTPCode_ELB_503_Count, not RequestCount. Count both so the first
+  # request after a quiet period wakes staging.
   requests_metric = {
     id          = "requests"
     namespace   = "AWS/ApplicationELB"
     metric_name = "RequestCount"
+    dimensions  = { LoadBalancer = aws_lb.api.arn_suffix }
+  }
+  unserved_metric = {
+    id          = "unserved"
+    namespace   = "AWS/ApplicationELB"
+    metric_name = "HTTPCode_ELB_503_Count"
     dimensions  = { LoadBalancer = aws_lb.api.arn_suffix }
   }
 }
@@ -93,7 +100,7 @@ resource "aws_cloudwatch_metric_alarm" "wake" {
   alarm_actions       = [for service in local.idle_services : aws_appautoscaling_policy.wake[service].arn]
   metric_query {
     id          = "activity"
-    expression  = "FILL(requests, 0) + FILL(queued, 0)"
+    expression  = "FILL(requests, 0) + FILL(unserved, 0) + FILL(queued, 0)"
     label       = "Requests and queued upload jobs"
     return_data = true
   }
@@ -103,6 +110,16 @@ resource "aws_cloudwatch_metric_alarm" "wake" {
       namespace   = local.requests_metric.namespace
       metric_name = local.requests_metric.metric_name
       dimensions  = local.requests_metric.dimensions
+      period      = 60
+      stat        = "Sum"
+    }
+  }
+  metric_query {
+    id = local.unserved_metric.id
+    metric {
+      namespace   = local.unserved_metric.namespace
+      metric_name = local.unserved_metric.metric_name
+      dimensions  = local.unserved_metric.dimensions
       period      = 60
       stat        = "Sum"
     }
@@ -132,7 +149,7 @@ resource "aws_cloudwatch_metric_alarm" "sleep" {
   alarm_actions       = [for service in local.idle_services : aws_appautoscaling_policy.sleep[service].arn]
   metric_query {
     id          = "activity"
-    expression  = "FILL(requests, 0) + FILL(queued, 0) + FILL(inflight, 0)"
+    expression  = "FILL(requests, 0) + FILL(unserved, 0) + FILL(queued, 0) + FILL(inflight, 0)"
     label       = "Requests and upload jobs"
     return_data = true
   }
@@ -142,6 +159,16 @@ resource "aws_cloudwatch_metric_alarm" "sleep" {
       namespace   = local.requests_metric.namespace
       metric_name = local.requests_metric.metric_name
       dimensions  = local.requests_metric.dimensions
+      period      = 300
+      stat        = "Sum"
+    }
+  }
+  metric_query {
+    id = local.unserved_metric.id
+    metric {
+      namespace   = local.unserved_metric.namespace
+      metric_name = local.unserved_metric.metric_name
+      dimensions  = local.unserved_metric.dimensions
       period      = 300
       stat        = "Sum"
     }
