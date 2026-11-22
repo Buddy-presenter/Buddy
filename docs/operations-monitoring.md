@@ -14,6 +14,13 @@ service log groups. `Buddy/Operational` contains:
 | InputTokens / OutputTokens | Bedrock response via worker | Provider-reported token use for successful calls. Input usage includes document processing. |
 | Queue age/backlog/DLQ | Native SQS metrics | Oldest visible message, visible queue depth, and dead-letter queue depth. |
 
+The API also writes one `{"event":"api_request"}` line per HTTP request to its log group
+within seconds: request ID, method, matched route template (`unmatched` otherwise),
+status, duration and the client's first product token (for example `Python-urllib/3.14`).
+It never records the URL, query string, identifiers, headers, tokens or client addresses.
+Requests answered while staging is scaled to zero never reach the API; see the
+load-balancer access logs in [infrastructure](infrastructure.md) for those.
+
 Dimensions are restricted to environment, service, stage and outcome, with aggregate
 dimension sets for service/outcome and service. Request, job, deck, source-revision and
 analysis UUIDs, plus the analysis version number, are log properties only, never metric

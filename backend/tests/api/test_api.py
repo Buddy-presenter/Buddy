@@ -118,6 +118,53 @@ def test_invalid_host_is_rejected_with_common_error_contract(host):
     assert response.json()["request_id"] == response.headers["x-request-id"]
 
 
+def request_lines(output):
+    import json
+
+    return [
+        json.loads(line)
+        for line in output.splitlines()
+        if line.startswith('{"event":"api_request"')
+    ]
+
+
+def test_every_request_is_logged_without_private_values(capsys):
+    with TestClient(app()) as client:
+        ok = client.get(
+            "/api/v1/version?api_version=private-secret",
+            headers={
+                "User-Agent": "Python-urllib/3.14 (private details)",
+                "Authorization": "Bearer t0ken",
+            },
+        )
+        missing = client.get("/private-user-path-123")
+        bad_host = client.get("/api/v1/health", headers={"Host": "evil.example"})
+    output = capsys.readouterr().out
+    lines = request_lines(output)
+    assert [line["status"] for line in lines] == [ok.status_code, 404, 400]
+    assert [line["request_id"] for line in lines] == [
+        response.headers["x-request-id"] for response in (ok, missing, bad_host)
+    ]
+    first = lines[0]
+    assert set(first) == {
+        "event",
+        "request_id",
+        "method",
+        "route",
+        "status",
+        "duration_ms",
+        "client",
+    }
+    assert (first["method"], first["route"], first["client"]) == (
+        "GET",
+        "/api/v1/version",
+        "Python-urllib/3.14",
+    )
+    assert lines[1]["route"] == lines[2]["route"] == "unmatched"
+    for private in ("private-secret", "private details", "t0ken", "private-user-path-123", "evil"):
+        assert private not in output
+
+
 def test_validation_errors_do_not_echo_submitted_values():
     with TestClient(app()) as client:
         response = client.get("/api/v1/version", params={"api_version": "private-secret"})
