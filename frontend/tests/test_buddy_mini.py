@@ -13,7 +13,7 @@ from shiboken6 import isValid
 import buddy_desktop.buddy_mini as mini_module
 
 
-@pytest.mark.parametrize("exit_from", ["fullscreen", "mini", "close"])
+@pytest.mark.parametrize("exit_from", ["fullscreen", "f11", "surface", "mini", "close"])
 @pytest.mark.parametrize("capturing", [False, True])
 def test_mini_exit_restores_interactive_presenter(
     desktop_window, qtbot, monkeypatch, exit_from, capturing
@@ -34,11 +34,13 @@ def test_mini_exit_restores_interactive_presenter(
         if exit_from == "close":
             mini.close()
         else:
-            target = full if exit_from == "fullscreen" else mini
+            target = mini if exit_from == "mini" else full
             target.activateWindow()
             target.setFocus()
             qtbot.waitUntil(target.isActiveWindow)
-            qtbot.keyClick(target, Qt.Key.Key_Escape)
+            receiver = page.surface if exit_from == "surface" else target
+            key = Qt.Key.Key_F11 if exit_from == "f11" else Qt.Key.Key_Escape
+            qtbot.keyClick(receiver, key)
         qtbot.waitUntil(lambda: window.isVisible() and window._mini is None)
         assert page.fullscreen is None
         assert not page.mini_active and not window._mini_poll.isActive()
