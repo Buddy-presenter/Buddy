@@ -1446,6 +1446,8 @@ class ReviewWidget(Page):
             return
         row = self.action_table.currentRow()
         self._show_recheck(self.action_rows[row] if 0 <= row < len(self.action_rows) else None)
+        # Loading or a run finished: Check all again may now be usable.
+        self._update_check_progress()
         if self.source_format == "pptx" and self.action_rows:
             self.action_selected()
         if not self._present_on_load:

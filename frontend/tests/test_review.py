@@ -285,6 +285,47 @@ def test_review_widget_loads_read_only_saved_page_and_clears_on_signout(
     assert review.action_table.rowCount() == 0
 
 
+def test_check_all_again_is_clickable_after_opening_a_checked_deck(
+    desktop_window, monkeypatch, qtbot
+):
+    content = b"%PDF-1.7 checked review fixture"
+    digest = hashlib.sha256(content).hexdigest()
+    deck_id, payload = analysis_payload(source_sha256=digest)
+    record = parse_analysis(payload, deck_id)
+    checked = replace(
+        record.slides[0].actions[0],
+        state="validated",
+        usable=True,
+        semantic_verified=True,
+        validation_kind="visual",
+    )
+    record = replace(record, slides=(replace(record.slides[0], actions=(checked,)),))
+    monkeypatch.setattr(ReviewService, "analysis", lambda _self, _deck, _format="pdf": record)
+    monkeypatch.setattr(
+        ReviewService,
+        "source",
+        lambda _self, _deck: DownloadedPDF(content, str(deck_id), "revision-1"),
+    )
+    image = QImage(100, 100, QImage.Format.Format_ARGB32)
+    image.fill(QColor("white"))
+    monkeypatch.setattr(
+        review_widget, "render", lambda _content, _index: ({"sizes": [[100, 100]]}, image.copy())
+    )
+    window = desktop_window()
+    window.account.session = SimpleNamespace(
+        tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
+    )
+    window.account.session_changed.emit()
+    review = window.review
+    review.set_deck(deck_id, "Checked fixture")
+    review.activate(True)
+    qtbot.waitUntil(lambda: not review.content.isHidden())
+    # The button first appears while Review is still loading; once idle it must be usable.
+    qtbot.waitUntil(lambda: not review.runner.busy)
+    assert not review.visual_qa_all_button.isHidden()
+    assert review.visual_qa_all_button.isEnabled()
+
+
 def test_near_expiry_account_check_keeps_review_visible(desktop_window, monkeypatch, qtbot):
     content = b"%PDF-1.7 account refresh review fixture"
     digest = hashlib.sha256(content).hexdigest()
