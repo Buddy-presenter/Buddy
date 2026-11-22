@@ -244,6 +244,19 @@ automated-backup retention instead of seven days; production remains 35 days. Th
 isolated restore drill and retained snapshot are recorded in the
 [deployment evidence](staging-deployment-evidence.md).
 
+### Idle scale-to-zero
+
+With `idle_scale_to_zero = true` (staging only; production rejects it), the API and worker
+stop after `idle_minutes` (default 30) with no load-balancer requests and no queued or
+in-flight upload jobs, and start again on the next request or queued upload job. Two
+CloudWatch alarms drive ECS step scaling between zero and one task; there is no extra
+compute or Lambda. While staging is waking (about 1–2 minutes), the load balancer answers
+503 and the desktop app reports that the server is unreachable; retry shortly after.
+Requests from anything reaching the load balancer, including scanners, also wake it.
+The database, load balancer, WAF and data are unaffected. Apply only these resources
+with a targeted plan when the operator variables are not current:
+`terraform plan -target=module.environment.aws_appautoscaling_target.idle -target=module.environment.aws_appautoscaling_policy.wake -target=module.environment.aws_appautoscaling_policy.sleep -target=module.environment.aws_cloudwatch_metric_alarm.wake -target=module.environment.aws_cloudwatch_metric_alarm.sleep -out=idle.tfplan`.
+
 ## GitHub immutable OIDC subjects and staging recovery (#98)
 
 The repository uses GitHub's immutable subject format. Read the public configuration
