@@ -135,6 +135,9 @@ resource "aws_iam_role_policy" "deploy" {
   role = aws_iam_role.github["deploy"].id
   policy = jsonencode({ Version = "2012-10-17", Statement = [
     { Effect = "Allow", Action = ["ecs:UpdateService", "ecs:DescribeServices"], Resource = "arn:aws:ecs:${var.region}:${var.account_id}:service/${local.name}/*" },
+    # Releases suspend and restore idle scale-to-zero around promotion (idle_scaling.tf).
+    # Registering an ECS scalable target also requires the ECS permissions above.
+    { Effect = "Allow", Action = ["application-autoscaling:DescribeScalableTargets", "application-autoscaling:RegisterScalableTarget"], Resource = "*" },
     { Effect = "Allow", Action = ["ecs:RunTask"], Resource = "arn:aws:ecs:${var.region}:${var.account_id}:task-definition/${local.name}-migration:*", Condition = { ArnEquals = { "ecs:cluster" = aws_ecs_cluster.main.arn } } },
     { Effect = "Allow", Action = ["ecs:DescribeTasks"], Resource = "arn:aws:ecs:${var.region}:${var.account_id}:task/${local.name}/*" },
     { Effect = "Allow", Action = ["ecs:DescribeTaskDefinition"], Resource = "*" },

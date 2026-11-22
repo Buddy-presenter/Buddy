@@ -8,8 +8,8 @@ import re
 import subprocess
 import sys
 import time
-from collections.abc import Callable
-from contextlib import suppress
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -184,9 +184,11 @@ class Deployment:
         sts: Any,
         readiness: Callable[[str], None] = healthy,
         compatibility_report: dict[str, Any] | None = None,
+        autoscaling: Any = None,
     ):
         self.config, self.ecs, self.s3, self.readiness = config, ecs, s3, readiness
         self.compatibility_report = compatibility_report
+        self.autoscaling = autoscaling
         if sts.get_caller_identity()["Account"] != config["account_id"]:
             raise DeploymentError("AWS identity does not match deployment account.")
 
@@ -589,7 +591,63 @@ class Deployment:
                 ContentType="application/json",
             )
 
+    @contextmanager
+    def paused_scaling(self) -> Iterator[None]:
+        """Hold idle scale-to-zero still while a release reads, promotes and verifies services.
+
+        Staging's idle alarms set the API/worker desired count to 0 or 1. A change during a
+        release looks like drift and triggers a rollback, so suspend dynamic and scheduled
+        scaling for registered services and restore each target's previous state after.
+        """
+        if self.autoscaling is None:
+            yield
+            return
+        resources = [f"service/{self.config['cluster']}/{service}" for service in ("api", "worker")]
+        targets = self.autoscaling.describe_scalable_targets(
+            ServiceNamespace="ecs",
+            ResourceIds=resources,
+            ScalableDimension="ecs:service:DesiredCount",
+        ).get("ScalableTargets", [])
+        suspend = {
+            "DynamicScalingInSuspended": True,
+            "DynamicScalingOutSuspended": True,
+            "ScheduledScalingSuspended": True,
+        }
+        paused: list[tuple[str, dict[str, bool]]] = []
+        try:
+            for target in targets:
+                original = {key: bool(target.get("SuspendedState", {}).get(key)) for key in suspend}
+                if original == suspend:
+                    continue
+                self.autoscaling.register_scalable_target(
+                    ServiceNamespace="ecs",
+                    ResourceId=target["ResourceId"],
+                    ScalableDimension="ecs:service:DesiredCount",
+                    SuspendedState=suspend,
+                )
+                paused.append((target["ResourceId"], original))
+            yield
+        finally:
+            for resource, original in paused:
+                self.autoscaling.register_scalable_target(
+                    ServiceNamespace="ecs",
+                    ResourceId=resource,
+                    ScalableDimension="ecs:service:DesiredCount",
+                    SuspendedState=original,
+                )
+
     def deploy(
+        self,
+        revision: str,
+        api_image: str,
+        worker_image: str | None = None,
+        *,
+        reader_only: bool = False,
+    ) -> dict[str, Any]:
+        with self.paused_scaling():
+            return self._deploy(revision, api_image, worker_image, reader_only=reader_only)
+
+    def _deploy(
         self,
         revision: str,
         api_image: str,
@@ -732,6 +790,10 @@ class Deployment:
         return audit
 
     def rollback(self, revision: str, previous_revision: str) -> dict[str, Any]:
+        with self.paused_scaling():
+            return self._rollback(revision, previous_revision)
+
+    def _rollback(self, revision: str, previous_revision: str) -> dict[str, Any]:
         validate(self.config, revision)
         if not re.fullmatch(r"[a-f0-9]{40}", previous_revision):
             raise DeploymentError("A full deployment revision is required.")
@@ -871,6 +933,7 @@ def main() -> int:
             boto3.client("s3", region_name=config["region"]),
             boto3.client("sts", region_name=config["region"]),
             compatibility_report=proof,
+            autoscaling=boto3.client("application-autoscaling", region_name=config["region"]),
         )
         if args.rollback_revision:
             if args.reader_only:
