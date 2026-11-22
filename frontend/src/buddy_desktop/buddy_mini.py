@@ -32,10 +32,26 @@ from PySide6.QtWidgets import QMenu, QPushButton, QWidget
 
 from buddy_desktop.visuals import icon
 
+CAPTION_SILENCE_SECONDS = 3.0
+
+
+def mini_caption(state: str, latest: tuple[str, float] | None, now: float) -> str | None:
+    """Caption for Mini: recent speech while listening, "" for silence, None when not listening."""
+    if state != "Listening":
+        return None
+    if latest is None or not 0 <= now - latest[1] <= CAPTION_SILENCE_SECONDS:
+        return ""
+    return latest[0]
+
 
 class BuddyMini(QWidget):
     _mascot_radius = 54
     _control_radius = 82
+    # One-line live caption under the mascot: kept close to the mascot's width.
+    _caption_gap = 6
+    _caption_height = 24
+    _caption_max_width = 136
+    _caption_lift = _caption_gap + _caption_height
 
     restore_requested = Signal()
     settings_requested = Signal()
@@ -55,7 +71,9 @@ class BuddyMini(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setMouseTracking(True)
-        self.setFixedSize(206, 174)
+        self.setFixedSize(206, 174 + self._caption_lift)
+        self._top = False
+        self._caption: str | None = None
         self._asset = QPixmap()
         self._asset.loadFromData(files("buddy_desktop").joinpath("assets/buddy.png").read_bytes())
         tint = QPainter(self._asset)
@@ -145,8 +163,11 @@ class BuddyMini(QWidget):
         button.setToolTip(label)
 
     def set_top_corner(self, top: bool) -> None:
+        self._top = top
         margin = self._mascot_radius + 7
-        self._center.setY(margin if top else self.height() - margin)
+        # In a bottom corner Buddy lifts only while a caption needs the room below it.
+        lift = self._caption_lift if self._caption is not None and not top else 0
+        self._center.setY(margin if top else self.height() - margin - lift)
         self.mascot.move(self._center - QPoint(self._mascot_radius, self._mascot_radius))
         for index, button in enumerate(self.buttons):
             angle = math.radians(208 + index * 31)
@@ -201,6 +222,43 @@ class BuddyMini(QWidget):
             mini.setAccessibleName(full.text())
             mini.setToolTip(full.text())
         self.update()
+
+    def set_caption(self, text: str | None) -> None:
+        """Show one line of live speech, "" for listening silence, or None to hide it."""
+        caption = None if text is None else " ".join(text.split())
+        if caption == self._caption:
+            return
+        moved = (caption is None) != (self._caption is None)
+        self._caption = caption
+        self.mascot.setAccessibleDescription(caption or "")
+        if moved:
+            self.set_top_corner(self._top)
+        self.update()
+
+    def caption_rect(self) -> QRect | None:
+        if self._caption is None or self._open:
+            return None
+        metrics = self.fontMetrics()
+        text = self.caption_text()
+        width = min(self._caption_max_width, max(44, metrics.horizontalAdvance(text) + 20))
+        top = self._center.y() + self._mascot_radius + self._caption_gap
+        return QRect(self._center.x() - width // 2, top, width, self._caption_height)
+
+    def caption_text(self) -> str:
+        """The newest words that fit on one line; older words drop off the left."""
+        if not self._caption:
+            return "• • •"
+        metrics = self.fontMetrics()
+        words = self._caption.split()
+        while len(words) > 1 and (
+            metrics.horizontalAdvance(" ".join(words)) > self._caption_max_width - 20
+        ):
+            words.pop(0)
+        text = " ".join(words)
+        # A single very long word keeps its end rather than overflowing the pill.
+        while len(text) > 1 and metrics.horizontalAdvance(text) > self._caption_max_width - 20:
+            text = text[1:]
+        return text
 
     @property
     def chiming(self) -> bool:
@@ -289,6 +347,13 @@ class BuddyMini(QWidget):
             for eye_x in (-13, 13):
                 painter.drawEllipse(QPoint(eye_x, -3), 2, 2)
         painter.restore()
+        caption = self.caption_rect()
+        if caption is not None:
+            painter.setPen(QPen(QColor("#e56c27"), 1))
+            painter.setBrush(QColor("#f5843d"))
+            painter.drawRoundedRect(QRectF(caption).adjusted(0.5, 0.5, -0.5, -0.5), 8, 8)
+            painter.setPen(QColor("#000000"))
+            painter.drawText(caption, Qt.AlignmentFlag.AlignCenter, self.caption_text())
         if self._reaction:
             painter.setPen(Qt.PenStyle.NoPen)
             if self._result and not self._open:

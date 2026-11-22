@@ -2,6 +2,7 @@
 
 import importlib
 import sys
+import time
 from dataclasses import replace
 from uuid import UUID
 
@@ -23,7 +24,7 @@ from PySide6.QtWidgets import (
 
 from buddy_desktop.account_widget import AccountWidget
 from buddy_desktop.auth import AccountProfile
-from buddy_desktop.buddy_mini import BuddyMini
+from buddy_desktop.buddy_mini import BuddyMini, mini_caption
 from buddy_desktop.config import AppConfig, ConfigurationError, validate_api_url
 from buddy_desktop.library_widget import LibraryWidget
 from buddy_desktop.present_widget import PresentWidget
@@ -812,6 +813,7 @@ class MainWindow(QMainWindow):
         mini.sync(
             state, page.microphone_button, page.policy_undo_button, connected=bool(session_id)
         )
+        mini.set_caption(mini_caption(state, page.live_caption, time.monotonic()))
         mini.sync_automation(
             bool(session_id and page.agent_enabled.isEnabled()),
             bool(session_id and page.agent_enabled.isChecked() and page.policy_enabled.isChecked()),
