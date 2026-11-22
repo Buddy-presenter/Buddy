@@ -244,6 +244,15 @@ automated-backup retention instead of seven days; production remains 35 days. Th
 isolated restore drill and retained snapshot are recorded in the
 [deployment evidence](staging-deployment-evidence.md).
 
+### Load-balancer access logs
+
+With `enable_lb_access_logs = true` (staging), the load balancer writes one line per
+request, including requests it answers with 503 while staging is asleep, to the private
+`<name>-<account>-lb-logs` bucket under `api/`. Logs arrive in 5-minute files, use
+SSE-S3 (the only encryption load-balancer logs support) and expire after 7 days.
+Use them to time a wake exactly: the first 503 line is the first request, and the ECS
+event "registered 1 targets" is when requests are served again.
+
 ### Idle scale-to-zero
 
 With `idle_scale_to_zero = true` (staging only; production rejects it), the API and worker
