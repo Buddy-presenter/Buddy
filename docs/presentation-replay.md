@@ -13,8 +13,8 @@ Install the backend development project as in [development](development.md), the
 from the repository root:
 
 ```sh
-python -m buddy_api.replay tests/fixtures/replay/development-v2.json --gates tests/fixtures/replay/development-v2-gates.json --output replay-artifacts/development-v2
-python -m buddy_api.replay tests/fixtures/replay/holdout-v2.json --gates tests/fixtures/replay/holdout-v2-gates.json --output replay-artifacts/holdout-v2
+python -m buddy_api.replay tests/fixtures/replay/development-v3.json --gates tests/fixtures/replay/development-v3-gates.json --output replay-artifacts/development-v3
+python -m buddy_api.replay tests/fixtures/replay/holdout-v3.json --gates tests/fixtures/replay/holdout-v3-gates.json --output replay-artifacts/holdout-v3
 python -m pytest backend/tests/evaluation/test_replay.py
 python scripts/check_replay_freeze.py
 ```
@@ -33,7 +33,7 @@ a second smoke partition with minor wording differences, not an independent huma
 recording benchmark. A passing result is not a natural-language accuracy, latency,
 PowerPoint, semantic retrieval, or autonomous-transition release claim.
 
-The `*-v2` development and holdout files are the current frozen split. They retain the
+The `*-v3` development and holdout files are the current frozen split (`*-v3` rebinds the\n`*-v2` replies to the prompt that tells the selector when to choose a zoom or highlight). They retain the
 authored scenarios and expected outcomes while binding each recorded provider reply to
 the updated production prompt. Previous versions stay unchanged for historical
 reproduction; when the prompt changes again, add another reviewed version instead of

@@ -30,15 +30,15 @@ FIXTURES = Path(__file__).resolve().parents[3] / "tests/fixtures/replay"
 
 @pytest.fixture
 def sample():
-    corpus, digest = load_corpus(FIXTURES / "development-v2.json")
-    gates = Gates.model_validate_json((FIXTURES / "development-v2-gates.json").read_bytes())
+    corpus, digest = load_corpus(FIXTURES / "development-v3.json")
+    gates = Gates.model_validate_json((FIXTURES / "development-v3-gates.json").read_bytes())
     trace = asyncio.run(replay(corpus, digest))
     return corpus, digest, gates, trace
 
 
 @pytest.mark.parametrize("split", ["development", "holdout"])
 def test_frozen_contract_gate(split):
-    versioned = f"{split}-v2"
+    versioned = f"{split}-v3"
     corpus, digest = load_corpus(FIXTURES / f"{versioned}.json")
     gates = Gates.model_validate_json((FIXTURES / f"{versioned}-gates.json").read_bytes())
     first = asyncio.run(replay(corpus, digest))
@@ -235,9 +235,9 @@ def test_prompt_drift_is_not_hidden_by_recorded_answers(sample):
 def test_cli_writes_reproducible_private_artifacts_and_refuses_overwrite(tmp_path, capsys):
     output = tmp_path / "report"
     args = [
-        str(FIXTURES / "holdout-v2.json"),
+        str(FIXTURES / "holdout-v3.json"),
         "--gates",
-        str(FIXTURES / "holdout-v2-gates.json"),
+        str(FIXTURES / "holdout-v3-gates.json"),
         "--output",
         str(output),
     ]
@@ -246,7 +246,7 @@ def test_cli_writes_reproducible_private_artifacts_and_refuses_overwrite(tmp_pat
     trace = Trace.model_validate_json((output / "trace.json").read_bytes())
     assert (
         trace.corpus_sha256
-        == hashlib.sha256((FIXTURES / "holdout-v2.json").read_bytes()).hexdigest()
+        == hashlib.sha256((FIXTURES / "holdout-v3.json").read_bytes()).hexdigest()
     )
     assert report["passed"]
     assert "coffee" not in capsys.readouterr().out
