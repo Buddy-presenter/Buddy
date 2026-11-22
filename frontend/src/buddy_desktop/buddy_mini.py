@@ -236,12 +236,14 @@ class BuddyMini(QWidget):
         self.update()
 
     def caption_rect(self) -> QRect | None:
-        if self._caption is None or self._open:
+        if self._caption is None:
             return None
         metrics = self.fontMetrics()
         text = self.caption_text()
         width = min(self._caption_max_width, max(44, metrics.horizontalAdvance(text) + 20))
-        top = self._center.y() + self._mascot_radius + self._caption_gap
+        # Controls fan out below Buddy in a top corner; keep the caption clear of them.
+        below = self._control_radius + 16 if self._open and self._top else self._mascot_radius
+        top = self._center.y() + below + self._caption_gap
         return QRect(self._center.x() - width // 2, top, width, self._caption_height)
 
     def caption_text(self) -> str:
@@ -354,12 +356,3 @@ class BuddyMini(QWidget):
             painter.drawRoundedRect(QRectF(caption).adjusted(0.5, 0.5, -0.5, -0.5), 8, 8)
             painter.setPen(QColor("#000000"))
             painter.drawText(caption, Qt.AlignmentFlag.AlignCenter, self.caption_text())
-        if self._reaction:
-            painter.setPen(Qt.PenStyle.NoPen)
-            if self._result and not self._open:
-                badge_y = y - radius - 28 if y > self.height() / 2 else y + radius + 4
-                badge = QRect(x - 55, badge_y, 110, 24)
-                painter.setBrush(QColor("#171717"))
-                painter.drawRoundedRect(badge, 12, 12)
-                painter.setPen(QColor("#fff4e9"))
-                painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, self._result)

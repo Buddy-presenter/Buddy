@@ -250,9 +250,15 @@ def test_mini_caption_is_one_short_line_and_lifts_buddy_only_while_shown(qtbot):
     rect = mini.caption_rect()
     assert rect is not None and rect.width() <= mini._caption_max_width
     assert rect.height() == mini._caption_height and rect.top() > mini.mascot.geometry().bottom()
-    # Hover controls take the space instead of the caption.
+    # The caption stays visible while the hover controls are open.
     mini._set_controls(True)
-    assert mini.caption_rect() is None
+    assert mini.caption_rect() == rect
+    # In a top corner the controls fan out below Buddy, so the caption moves under them.
+    mini.set_top_corner(True)
+    below = mini.caption_rect()
+    assert below is not None and below.bottom() < mini.height()
+    assert all(below.top() > button.geometry().bottom() for button in mini.buttons)
+    mini.set_top_corner(False)
     mini._set_controls(False)
     mini.set_caption(None)
     assert mini.caption_rect() is None and mini.mascot.y() == resting
