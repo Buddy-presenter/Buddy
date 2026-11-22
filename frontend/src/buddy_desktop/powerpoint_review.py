@@ -7,7 +7,12 @@ from pathlib import Path
 from threading import Event, RLock
 
 from buddy_desktop.powerpoint import PowerPointAutomation, canonical_path
-from buddy_desktop.powerpoint_contract import PowerPointAction, PowerPointError, PowerPointFrame
+from buddy_desktop.powerpoint_contract import (
+    PowerPointAction,
+    PowerPointError,
+    PowerPointFrame,
+    same_slide_size,
+)
 from buddy_desktop.powerpoint_generated import generated_action
 from buddy_desktop.powerpoint_session_binding import PowerPointSessionBinding
 from buddy_desktop.review_service import ReviewAction, ReviewAnalysis, ReviewSlide
@@ -80,10 +85,8 @@ class PowerPointReviewSession:
                 info = self.automation.execute(
                     PowerPointAction("go_to_slide", info, slide_number=index + 1)
                 ).info
-            if (
-                info.slide_id != slide.native_slide_id
-                or abs(info.slide_width - slide.width) > 0.01
-                or abs(info.slide_height - slide.height) > 0.01
+            if info.slide_id != slide.native_slide_id or not same_slide_size(
+                info.slide_width, info.slide_height, slide.width, slide.height
             ):
                 raise PowerPointError("The live PowerPoint geometry differs from this analysis.")
             if self.binding is not None and self.binding.slide_id(info) != slide.slide_id:

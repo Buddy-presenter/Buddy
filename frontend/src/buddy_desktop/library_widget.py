@@ -76,7 +76,11 @@ PROCESSING_TEXT = {
         "Processing is complete. Only actions marked Ready passed the real-player and visual "
         "checks; open Review for per-action results.",
     ),
-    "partial": ("Partial results", "Some results are available; unavailable items show why."),
+    "partial": (
+        "Some results missing",
+        "Buddy couldn't finish part of the analysis, such as a slide summary. Open Review "
+        "to see which parts are missing. You can still present, and Ready actions work.",
+    ),
     "failed": ("Failed", "Processing failed. Contact support if retry is unavailable."),
     "cancelled": ("Cancelled", "Processing was cancelled. You can retry if allowed."),
 }
@@ -654,7 +658,7 @@ class LibraryWidget(QWidget):
                             checks is not None
                             and checks.active
                             and deck.processing is not None
-                            and deck.processing.state == "review_ready"
+                            and deck.processing.state in {"review_ready", "partial"}
                         ):
                             # The status delegate paints a progress ring before this text.
                             item.setData(CHECK_PROGRESS_ROLE, (checks.checked, checks.total))
@@ -682,7 +686,7 @@ class LibraryWidget(QWidget):
                     entry.id in self._watched_processing
                     and entry.source_format == "pptx"
                     and processing is not None
-                    and processing.state == "review_ready"
+                    and processing.state in {"review_ready", "partial"}
                     and processing.checks is not None
                     and processing.checks.mode == "desktop"
                     and processing.checks.active
@@ -834,7 +838,16 @@ class LibraryWidget(QWidget):
                     "Saved analysis does not match this presentation. Refresh or upload it again.",
                 )
             checks = processing.checks
-            if checks is not None and processing.state == "review_ready" and checks.total:
+            # A PDF stays "partial" on the server until its action checks finish;
+            # that is progress, so show the checking wording, not "partial".
+            if (
+                checks is not None
+                and checks.total
+                and (
+                    processing.state == "review_ready"
+                    or (processing.state == "partial" and checks.active)
+                )
+            ):
                 return check_status_text(checks)
             return PROCESSING_TEXT.get(processing.state, STATUS_TEXT[deck.status])
         return STATUS_TEXT[deck.status]

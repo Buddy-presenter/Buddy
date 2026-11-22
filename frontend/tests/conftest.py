@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Event, Thread
 
 import pytest
+from shiboken6 import isValid
 
 
 @pytest.fixture(autouse=True)
@@ -77,8 +78,12 @@ def desktop_window(qtbot, tmp_path, monkeypatch):
             ),
             timeout=5000,
         )
-        qtbot.waitUntil(lambda window=window: not window.isVisible(), timeout=5000)
-        window.settings.sync()
+        # A window whose close completed may already be deleted; that also counts.
+        qtbot.waitUntil(
+            lambda window=window: not isValid(window) or not window.isVisible(), timeout=5000
+        )
+        if isValid(window):
+            window.settings.sync()
 
 
 @pytest.fixture

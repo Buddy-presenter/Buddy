@@ -168,8 +168,10 @@ GUI thread. The caller must recheck the live session/version/epoch against the r
 before using it; a frozen snapshot or returned candidate cannot authorize an action.
 The current local slide is sent with the request so automatic moves do not depend on
 round-trip persistence of the session's recovery position.
-This service is the callable boundary for #20; Present does not yet run an autonomous
-agent or make a provider call for each partial transcript.
+This service is the callable boundary for #20. Present's agent loop (#20/#21) uses it
+for live suggestions; see [speech-triggered actions](speech-actions.md) for how speech
+selects and runs verified saved actions (#202). Action candidates match the spoken
+words against both the action's purpose and the slide text it targets.
 
 The service refuses partial latest segments, but completed input is immediately eligible.
 Freshness checks run before and after network access. Supply `current_context` to detect

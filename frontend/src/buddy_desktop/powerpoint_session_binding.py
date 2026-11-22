@@ -3,7 +3,7 @@
 import hashlib
 from dataclasses import dataclass
 
-from buddy_desktop.powerpoint_contract import PowerPointError, PresentationInfo
+from buddy_desktop.powerpoint_contract import PowerPointError, PresentationInfo, same_slide_size
 from buddy_desktop.review_service import ReviewAnalysis, ReviewSlide
 
 
@@ -58,10 +58,8 @@ class PowerPointSessionBinding:
         ):
             raise PowerPointError("The PowerPoint slideshow no longer matches the saved session.")
         slide = self.slides[info.slide_index - 1]
-        if (
-            info.slide_id != slide.native_slide_id
-            or abs(info.slide_width - slide.width) > 0.01
-            or abs(info.slide_height - slide.height) > 0.01
+        if info.slide_id != slide.native_slide_id or not same_slide_size(
+            info.slide_width, info.slide_height, slide.width, slide.height
         ):
             raise PowerPointError("The live PowerPoint slide differs from the saved analysis.")
         return slide.slide_id

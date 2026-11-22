@@ -9,6 +9,17 @@ from urllib.parse import urlsplit, urlunsplit
 from buddy_desktop.services import ServiceError
 from buddy_desktop.slide_contract import Region
 
+# PowerPoint reports slide size rounded (for example 959.976 pt stored in the file
+# reads back as 960 pt). Treat sizes within 0.1 pt (about 0.001 inch) as the same.
+SLIDE_SIZE_TOLERANCE = 0.1
+
+
+def same_slide_size(width: float, height: float, other_width: float, other_height: float) -> bool:
+    return (
+        abs(width - other_width) <= SLIDE_SIZE_TOLERANCE
+        and abs(height - other_height) <= SLIDE_SIZE_TOLERANCE
+    )
+
 
 class PowerPointError(ServiceError):
     """A recoverable automation failure without raw provider details."""

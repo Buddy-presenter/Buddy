@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 import sys
 import time
 from collections import Counter
@@ -48,6 +49,9 @@ from buddy_desktop.services import ServiceError
 from buddy_desktop.tasks import TaskRunner
 from buddy_desktop.views import Page, ProgressStrip, StatePanel, group
 from buddy_desktop.visuals import command
+from buddy_identity.config import SessionExpired
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -245,6 +249,7 @@ class ReviewWidget(Page):
         )
         self.config, self.account = config, account
         self.notice: QLabel
+        self._refresh_after_run = False
         self.runner = TaskRunner(self)
         self.runner.succeeded.connect(self.completed)
         self.runner.failed.connect(self.failed)
@@ -407,13 +412,17 @@ class ReviewWidget(Page):
         self.visual_qa_progress.connect(self._show_visual_qa_progress)
         self.check_step.connect(self._show_check_step)
         action_header.addWidget(self.visual_qa_button)
-        self.visual_qa_all_button = QPushButton("Run visual QA on all actions")
+        self.visual_qa_all_button = QPushButton("Check all again")
+        command(self.visual_qa_all_button, "refresh-cw")
+        self.visual_qa_all_button.setAccessibleName("Check every action again")
         self.visual_qa_all_button.setToolTip(
-            "Check every saved action in this deck. Each action is checked separately in Bedrock."
+            "Run every action's check again, including actions that are already Ready. "
+            "For PowerPoint, close other PowerPoint windows first and don't use the mouse "
+            "or keyboard until it finishes."
         )
         self.visual_qa_all_button.setVisible(False)
         self.visual_qa_all_button.setEnabled(False)
-        self.visual_qa_all_button.clicked.connect(self.run_all_visual_qa)
+        self.visual_qa_all_button.clicked.connect(self.recheck_all_visual_qa)
         action_header.addWidget(self.visual_qa_all_button)
         action_header.addWidget(self.run_powerpoint)
         content_layout.addLayout(action_header)
@@ -460,7 +469,7 @@ class ReviewWidget(Page):
         content_layout.addWidget(self.desktop_banner)
         self.check_overlay = CheckOverlay(self)
         # The run's cancel event is replaced per run; always stop the current one.
-        self.check_overlay.stop_requested.connect(lambda: self.visual_qa_cancel.set())
+        self.check_overlay.stop_requested.connect(self._stop_checks)
         self.check_overlay.start_requested.connect(self.run_all_visual_qa)
         self.check_overlay.later_requested.connect(self._decline_auto_check)
         # PowerPoint checks start on their own after a visible countdown (Windows only,
@@ -616,12 +625,19 @@ class ReviewWidget(Page):
         if not actions:
             self.check_progress.hide()
             self.check_poll.stop()
+            self.visual_qa_all_button.hide()
             return
         total = len(actions)
         checked = sum(self._check_finished(a) for a in actions)
         ready = sum(a.usable for a in actions)
         desktop = self.source_format == "pptx"
         running = self.pending_operation == "visual_qa_all" and self.runner.busy
+        # Once anything has been checked, the owner can always rerun every check.
+        recheck = checked > 0 and self.checks_available is not False and not running
+        self.visual_qa_all_button.setVisible(recheck)
+        self.visual_qa_all_button.setEnabled(
+            recheck and not self.runner.busy and bool(self.token())
+        )
         self.desktop_banner.setVisible(
             desktop and checked < total and self.checks_available is not False and not running
         )
@@ -711,6 +727,10 @@ class ReviewWidget(Page):
         self._auto_declined.add(self.deck_id)
         self.check_overlay.announce(len(pending), self.window())
 
+    def _stop_checks(self) -> None:
+        logger.warning("desktop_check event=stop_pressed")
+        self.visual_qa_cancel.set()
+
     def _decline_auto_check(self) -> None:
         if self.deck_id is not None:
             self._auto_declined.add(self.deck_id)
@@ -732,6 +752,18 @@ class ReviewWidget(Page):
                 if action.raw is not None and not self._check_finished(action)
             )
             self._run_checks(pending)
+
+    def recheck_all_visual_qa(self) -> None:
+        """Check all again: rerun every action's check, including finished ones."""
+        if self.analysis is not None:
+            self._run_checks(
+                tuple(
+                    action
+                    for slide in self.analysis.slides
+                    for action in slide.actions
+                    if action.raw is not None
+                )
+            )
 
     def _show_visual_qa_progress(
         self, generation: int, completed: int, total: int, counts: dict[str, int]
@@ -780,6 +812,7 @@ class ReviewWidget(Page):
         self.pending_operation = "visual_qa_all"
         cancelled = self.visual_qa_cancel = Event()
         self.visual_qa_button.setEnabled(False)
+        self.visual_qa_all_button.hide()
         self.run_powerpoint.setEnabled(False)
         self.desktop_banner.hide()
         total = len(actions)
@@ -788,14 +821,34 @@ class ReviewWidget(Page):
         self.visual_qa_status.setText(f"Checking {total} action{'s' if total != 1 else ''}…")
         self.activity_changed.emit(True)
 
+        session = self.account.session
+
+        def fresh_access() -> str:
+            # Access tokens last minutes and a full PowerPoint run lasts longer. Always
+            # use the session's current token (refreshing it when close to expiry),
+            # never a copy taken when the run started.
+            nonlocal qa_service, review_service
+            if session is None:
+                return qa_service.access
+            try:
+                access = session.fresh_access(margin=90)
+            except SessionExpired:
+                raise LibraryAccessExpired("Sign in again to check actions.") from None
+            if access != qa_service.access:
+                qa_service = PreflightService(self.config, access)
+                review_service = ReviewService(self.config, access)
+            return access
+
         def work() -> ReviewQABatch:
             if preview is not None:
                 preview.close()
             counts: Counter[str] = Counter()
             for index, action in enumerate(actions):
                 if cancelled.is_set():
+                    logger.warning("desktop_check event=run_cancelled at=%d of=%d", index, total)
                     break
                 try:
+                    fresh_access()
                     if desktop:
                         report = qa_service.run_on_desktop(
                             analysis.id,
@@ -818,9 +871,12 @@ class ReviewWidget(Page):
                     counts[report["state"]] += 1
                 except LibraryAccessExpired:
                     raise
-                except ServiceError:
+                except ServiceError as exc:
+                    # Fixed, content-free messages; they say which step failed.
+                    logger.warning("desktop_check event=service_error message=%s", exc)
                     counts["failed"] += 1
                 self.visual_qa_progress.emit(generation, index + 1, total, dict(counts))
+            fresh_access()
             return ReviewQABatch(
                 counts,
                 total,
@@ -989,6 +1045,13 @@ class ReviewWidget(Page):
                 self.load()
 
     def clear_private(self, *, keep_deck: bool = False) -> None:
+        if self.pending_operation == "visual_qa_all" and self.runner.busy:
+            import traceback
+
+            caller = " < ".join(
+                frame.name for frame in reversed(traceback.extract_stack(limit=6)[:-1])
+            )
+            logger.warning("desktop_check event=run_cancelled_by_clear caller=%s", caller)
         self._present_on_load = False
         self.powerpoint_invalidated.emit()
         self._close_evidence()
@@ -1025,6 +1088,7 @@ class ReviewWidget(Page):
         self.visual_qa_button.setEnabled(False)
         self.visual_qa_cancel.set()
         self.visual_qa_all_button.setEnabled(False)
+        self.visual_qa_all_button.hide()
         self.visual_qa_status.clear()
         self.visual_qa_button.setVisible(False)
         self.check_poll.stop()
@@ -1179,7 +1243,27 @@ class ReviewWidget(Page):
 
     def completed(self, identifier: int, result: object) -> None:
         if self.closing or self.request_generation != self.generation or not self.active:
+            if isinstance(result, ReviewQABatch):
+                logger.warning(
+                    "desktop_check event=run_result_dropped closing=%s stale=%s active=%s",
+                    self.closing,
+                    self.request_generation != self.generation,
+                    self.active,
+                )
             return
+        if isinstance(result, ReviewQABatch):
+            ready = (
+                sum(a.usable for s in result.analysis.slides for a in s.actions)
+                if result.analysis is not None
+                else -1
+            )
+            logger.info(
+                "desktop_check event=run_finished checked=%d total=%d validated=%d ready_after=%d",
+                sum(result.counts.values()),
+                result.total,
+                result.counts["validated"],
+                ready,
+            )
         if identifier < 1:
             return
         operation, self.pending_operation = self.pending_operation, ""
@@ -1344,6 +1428,9 @@ class ReviewWidget(Page):
             self.open_evidence.setEnabled(self.evidence_choice.count() > 0)
             return
         if operation in {"visual_qa", "visual_qa_all"}:
+            logger.warning("desktop_check event=run_failed message=%s", message[:120])
+            # Checks that finished before the failure are saved: show them.
+            self._refresh_after_run = True
             self.check_overlay.hide()
             self.visual_qa_status.setText("Action checks stopped: " + message)
             self._update_check_progress()
@@ -1382,6 +1469,11 @@ class ReviewWidget(Page):
         )
         self.save_correction.setEnabled(can_correct)
         self.disable_action.setEnabled(can_correct)
+        if self._refresh_after_run and not self.runner.busy:
+            self._refresh_after_run = False
+            if self.analysis is not None and self.token():
+                self.refresh_checks()
+                return
         if (
             self.pending_load
             and self.active
@@ -1393,6 +1485,8 @@ class ReviewWidget(Page):
             return
         row = self.action_table.currentRow()
         self._show_recheck(self.action_rows[row] if 0 <= row < len(self.action_rows) else None)
+        # Loading or a run finished: Check all again may now be usable.
+        self._update_check_progress()
         if self.source_format == "pptx" and self.action_rows:
             self.action_selected()
         if not self._present_on_load:

@@ -994,10 +994,69 @@ class PresentWidget(Page):
         elif self.policy_enabled.isEnabled():
             self.policy_enabled.setChecked(True)
 
+    def _saved_rejection_status(self, exc: Exception, value: object) -> str:
+        reason = str(exc)
+        action_id = None
+        if isinstance(value, dict) and isinstance(value.get("target"), dict):
+            raw = value["target"].get("action_id")
+            action_id = raw if isinstance(raw, str) else None
+        if reason in {"saved_action_unavailable", "saved_action_unverified"}:
+            # Sanitized: the saved action ID only; no transcript or slide text.
+            logger.warning(
+                "presentation_policy event=saved_action_rejected reason=%s action=%s",
+                reason,
+                action_id or "-",
+            )
+            if reason == "saved_action_unavailable":
+                if self._generated_analysis is None:
+                    self._load_generated(None)
+                return (
+                    "Buddy heard a reference to a saved action, but the saved actions are "
+                    "still loading. Keep talking; it will act on the next mention."
+                )
+            return "Buddy matched an action that is not verified for live use, so it did nothing."
+        return "Suggestion cannot execute in the current view."
+
+    def saved_policy_action(self, target: PolicyTarget) -> ReviewAction:
+        """The exact saved, verified action a speech zoom/highlight refers to (#202).
+
+        The agent only names candidates; the desktop executes nothing unless the
+        action is in this session's saved analysis, still eligible (executed and
+        visually verified), on the current slide, of the same type and region.
+        """
+        analysis, session = self._generated_analysis, self._session
+        if (
+            analysis is None
+            or session is None
+            or str(analysis.id) != session.analysis_version_id
+            or target.action_id is None
+            or target.region is None
+        ):
+            raise ValueError("saved_action_unavailable")
+        slide = next((s for s in analysis.slides if s.slide_id == target.slide_id), None)
+        action = (
+            next((a for a in slide.actions if a.instance_id == target.action_id), None)
+            if slide
+            else None
+        )
+        if (
+            action is None
+            or not saved_action_eligible(analysis.source_format, action)
+            or action.action_type != target.tool
+            or any(abs(a - b) > 1e-6 for a, b in zip(action.region, target.region, strict=True))
+        ):
+            raise ValueError("saved_action_unverified")
+        return action
+
     def _policy_command(self, target: PolicyTarget) -> dict[str, object]:
         manifest, slide = self.executor.manifest, self.surface.slide
         if manifest is None or slide is None:
             raise ValueError
+        saved = (
+            self.saved_policy_action(target)
+            if target.tool in {"zoom_region", "highlight_region"}
+            else None
+        )
         index = manifest.index(target.slide_id)
         if target.tool in {"next_slide", "previous_slide"}:
             if index - self.executor.current_index != (1 if target.tool == "next_slide" else -1):
@@ -1007,12 +1066,15 @@ class PresentWidget(Page):
         params: dict[str, object] = {}
         if target.tool == "go_to_slide":
             params["target_slide_id"] = target.slide_id
+        elif saved is not None:
+            params["region"] = dict(zip(("x", "y", "width", "height"), saved.region, strict=True))
         elif target.region is not None:
             params["region"] = dict(zip(("x", "y", "width", "height"), target.region, strict=True))
         command_value: dict[str, object] = {
             "version": "1.1",
             "instance_id": "policy:check",
-            "purpose": "Accepted live transition.",
+            # Region actions execute the saved action's own verified geometry.
+            "purpose": saved.purpose if saved is not None else "Accepted live transition.",
             "deck_id": manifest.deck_id,
             "render_id": manifest.render_id,
             "slide_id": slide.slide_id,
@@ -1108,6 +1170,28 @@ class PresentWidget(Page):
             max(0, (execution_ns - timing["preflight_started_ns"]) // 1_000_000),
         )
 
+    def _policy_done_status(self, target: PolicyTarget) -> str:
+        """Name the saved action speech ran (its purpose is owner-authored deck data)."""
+        if target.tool in {"zoom_region", "highlight_region"} and target.action_id:
+            analysis = self._generated_analysis
+            purpose = next(
+                (
+                    a.purpose
+                    for s in (analysis.slides if analysis else ())
+                    for a in s.actions
+                    if a.instance_id == target.action_id
+                ),
+                None,
+            )
+            verb = "Zoomed" if target.tool == "zoom_region" else "Highlighted"
+            purpose = purpose.strip().rstrip(".") if purpose else None
+            return (
+                f"{verb}: {purpose}. Undo is available."
+                if purpose
+                else f"{verb}. Undo is available."
+            )
+        return "Automatic move completed. Undo is available."
+
     def _log_policy_completion(
         self,
         prediction: Prediction,
@@ -1125,11 +1209,13 @@ class PresentWidget(Page):
             return
         logger.info(
             "presentation_latency event=action_finished decision_id=%s "
-            "source_format=%s tool=%s outcome=%s capture_to_action_ms=%d proposal_to_action_ms=%d "
-            "preflight_ms=%d executor_ms=%d",
+            "source_format=%s tool=%s action=%s outcome=%s capture_to_action_ms=%d "
+            "proposal_to_action_ms=%d preflight_ms=%d executor_ms=%d",
             prediction.decision_id,
             source_format,
             prediction.target.tool,
+            # The saved action ID only (no transcript, slide text or purpose).
+            prediction.target.action_id or "-",
             outcome,
             max(0, (completed_ns - capture_end_ns) // 1_000_000),
             max(0, (completed_ns - timing["proposal_received_ns"]) // 1_000_000),
@@ -1379,6 +1465,7 @@ class PresentWidget(Page):
                     "settings_sha256": self.policy.settings_sha256,
                 }
             )
+            self.policy_status.setText(self._policy_done_status(prediction.target))
         if prediction is None or prediction.target.tool not in NAVIGATION_TOOLS:
             self._queue_session_state()
         self.generated_status.setText(
@@ -1430,8 +1517,12 @@ class PresentWidget(Page):
         session_id, version, slide_id, identifier = pending
         if (
             session.id != session_id
-            or session.state_version != version
-            or state.active_slide_id != slide_id
+            # Slide moves only matter when applying one chosen action; the saved
+            # action list itself covers every slide of this analysis.
+            or (
+                identifier is not None
+                and (session.state_version != version or state.active_slide_id != slide_id)
+            )
             or str(analysis.id) != session.analysis_version_id
             or str(analysis.deck_id) != session.deck_id
         ):
@@ -1564,6 +1655,19 @@ class PresentWidget(Page):
             and not self.generated_runner.busy
             and isinstance(self.generated_actions.currentData(), str)
         )
+        # Speech can only run saved actions Buddy has loaded and verified locally,
+        # so load this session's saved actions once, automatically (#202).
+        if (
+            available
+            and session is not None
+            and not self.generated_runner.busy
+            and self._generated_request is None
+            and (analysis is None or str(analysis.id) != session.analysis_version_id)
+            and getattr(self, "_generated_autoload", None) != session.analysis_version_id
+        ):
+            self._generated_autoload = session.analysis_version_id
+            # Bound to this widget so it never fires after the window closes.
+            QTimer.singleShot(0, self, lambda: self._load_generated(None))
 
     def _consider_policy(self, value: dict[str, Any]) -> None:
         proposal_received_ns = time.monotonic_ns()
@@ -1647,9 +1751,9 @@ class PresentWidget(Page):
                 now_ns=time.monotonic_ns(),
                 today=date.today(),
             )
-        except (ValueError, TypeError, KeyError, IndexError, ContractError):
+        except (ValueError, TypeError, KeyError, IndexError, ContractError) as exc:
             self.policy.clear_pending()
-            self.policy_status.setText("Suggestion cannot execute in the current view.")
+            self.policy_status.setText(self._saved_rejection_status(exc, value))
             return
         if reason != "accepted":
             self._log_policy_rejection(prediction, context, reason)
@@ -1765,7 +1869,15 @@ class PresentWidget(Page):
         self._policy_execution = prediction
         self._policy_stage(prediction, "execution_started_ns", time.monotonic_ns())
         self._log_policy_preflight(prediction, "pdf")
-        command_value = self._policy_command(prediction.target)
+        try:
+            command_value = self._policy_command(prediction.target)
+        except (ValueError, TypeError, KeyError, IndexError, ContractError) as exc:
+            # The saved analysis changed after the server check: never execute.
+            self._policy_execution = None
+            self._policy_latency.pop(prediction.decision_id, None)
+            self.policy.completed(prediction.decision_id, success=False, now_ns=time.monotonic_ns())
+            self.policy_status.setText(self._saved_rejection_status(exc, None))
+            return
         command_value["instance_id"] = "policy:" + prediction.decision_id
 
         def still_current() -> bool:
@@ -3155,10 +3267,11 @@ class PresentWidget(Page):
             self.generated_status.setText(message)
             return
         if action == "status":
-            # If the show cannot be verified, stop listening until an explicit restart.
+            # Office briefly rejects calls while busy (for example while drawing an
+            # action). Block actions until a check succeeds, but keep listening:
+            # the verification timer stops capture if no check succeeds for 5 s.
             self._powerpoint_verified = False
-            self._powerpoint_verification.stop()
-            self.microphone.stop()
+            logger.info("presentation_microphone event=status_check_failed capture=kept")
             # A transient COM failure does not mean the show disconnected. Keep the
             # last known connected line in place so retries cannot make it blink.
             if self._powerpoint_info is None:
@@ -3229,6 +3342,8 @@ class PresentWidget(Page):
     def _powerpoint_verification_expired(self) -> None:
         if self._powerpoint_info is not None:
             self._powerpoint_verified = False
+            if self.microphone.enabled:
+                logger.warning("presentation_microphone event=stopped reason=powerpoint_unverified")
             self.microphone.stop()
             self.microphone_status.setText(
                 "Microphone stopped. PowerPoint connection could not be verified."
@@ -3566,7 +3681,7 @@ class PresentWidget(Page):
                         "settings_sha256": self.policy.settings_sha256,
                     }
                 )
-                self.policy_status.setText("Automatic move completed. Undo is available.")
+                self.policy_status.setText(self._policy_done_status(prediction.target))
             else:
                 self.policy_status.setText(
                     "Buddy found the action but did not complete it. "

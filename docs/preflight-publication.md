@@ -50,8 +50,9 @@ bound to the exact analysis, action digest, source and renderer.
 
 Anything else (unchecked, rejected, needs-review, stale or other-scale results) is
 `usable: false`. Present always keeps the full slide, manual navigation and
-annotations available. Pending checks never make a deck "Partial results"; that
-label only means a summary or analysis is missing.
+annotations available. While a PDF's checks run, the server reports the deck as
+`partial`; Library shows that as `Checking · n/total` with a progress ring. Only a
+missing summary or analysis shows **Some results missing**.
 
 ## Owner report and progress
 
