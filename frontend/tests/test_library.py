@@ -636,6 +636,35 @@ def test_busy_powerpoint_status_distinguishes_waiting_from_completed_checks():
     assert label == "Results available" and "Only actions marked Ready" in guidance
 
 
+def test_pdf_with_pending_checks_reads_as_checking_not_partial():
+    from dataclasses import replace
+
+    from buddy_desktop.library_service import CheckProgress
+    from buddy_desktop.library_widget import LibraryWidget
+
+    deck = DeckSummary(
+        uuid4(),
+        "Slides",
+        datetime.now(UTC),
+        "ready",
+        3,
+        source_format="pdf",
+        processing=replace(
+            ProcessingDetail(uuid4(), "partial", "validation", 100, 1, None, False, True),
+            checks=CheckProgress(12, 5, 4, True, True, "server"),
+        ),
+    )
+    label, guidance = LibraryWidget.deck_status_text(deck)
+    assert label == "Checking · 5/12" and "5 of 12" in guidance
+    # Checks finished but part of the analysis is missing: say so plainly.
+    finished = replace(
+        deck,
+        processing=replace(deck.processing, checks=CheckProgress(12, 12, 9, True, False, "server")),
+    )
+    label, guidance = LibraryWidget.deck_status_text(finished)
+    assert label == "Some results missing" and "Review" in guidance
+
+
 def test_poll_keeps_rows_selectable_and_preserves_latest_selection(
     desktop_window, monkeypatch, qtbot
 ):
