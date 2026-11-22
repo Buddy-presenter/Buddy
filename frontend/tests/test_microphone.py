@@ -244,7 +244,33 @@ def test_hiding_presenter_stops_microphone(desktop_window, monkeypatch):
     assert not page.microphone.enabled
 
 
-@pytest.mark.parametrize("end", ["disconnect", "lost", "changed", "status_failure", "timeout"])
+def test_powerpoint_microphone_survives_a_transient_status_failure(desktop_window, monkeypatch):
+    monkeypatch.setattr(present_widget, "MicrophoneController", FakeMicrophone)
+    window = desktop_window()
+    window.navigation.setCurrentRow(3)
+    page = window.present
+    info = PresentationInfo("C:/slides/demo.pptx", "demo.pptx", 1, 2, 42, 256, 960, 540)
+    page._attach_powerpoint_info(info)
+    page._refresh()
+    page.microphone_button.click()
+    assert page.microphone.enabled
+    page._powerpoint_pending[123] = ("status", info.path)
+    page._powerpoint_failed(123, "PowerPoint busy")
+    # Office was briefly busy: capture continues, actions wait for verification.
+    assert page.microphone.enabled
+    assert not page._powerpoint_verified
+    assert page._powerpoint_verification.isActive()
+    page._attach_powerpoint_info(info)
+    assert page.microphone.enabled and page._powerpoint_verified
+    # A failure that persists past the verification window still stops capture.
+    page._powerpoint_pending[124] = ("status", info.path)
+    page._powerpoint_failed(124, "PowerPoint unavailable")
+    page._powerpoint_verification_expired()
+    assert not page.microphone.enabled
+    assert "could not be verified" in page.microphone_status.text()
+
+
+@pytest.mark.parametrize("end", ["disconnect", "lost", "changed", "timeout"])
 def test_powerpoint_microphone_stops_when_connection_is_lost(desktop_window, monkeypatch, end):
     monkeypatch.setattr(present_widget, "MicrophoneController", FakeMicrophone)
     window = desktop_window()
@@ -267,15 +293,12 @@ def test_powerpoint_microphone_stops_when_connection_is_lost(desktop_window, mon
             PresentationInfo("C:/slides/other.pptx", "other.pptx", 1, 2, 43, 257, 960, 540)
         )
         page._refresh()
-    elif end == "status_failure":
-        page._powerpoint_pending[123] = ("status", info.path)
-        page._powerpoint_failed(123, "PowerPoint unavailable")
     else:
         page._powerpoint_verification_expired()
     assert not page.microphone.enabled
-    if end in {"disconnect", "lost", "status_failure", "timeout"}:
+    if end in {"disconnect", "lost", "timeout"}:
         assert not page.microphone_button.isEnabled()
-    if end in {"status_failure", "timeout"}:
+    if end == "timeout":
         page._attach_powerpoint_info(info)
         page._refresh()
         assert page.microphone_button.isEnabled()

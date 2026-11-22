@@ -3267,10 +3267,11 @@ class PresentWidget(Page):
             self.generated_status.setText(message)
             return
         if action == "status":
-            # If the show cannot be verified, stop listening until an explicit restart.
+            # Office briefly rejects calls while busy (for example while drawing an
+            # action). Block actions until a check succeeds, but keep listening:
+            # the verification timer stops capture if no check succeeds for 5 s.
             self._powerpoint_verified = False
-            self._powerpoint_verification.stop()
-            self.microphone.stop()
+            logger.info("presentation_microphone event=status_check_failed capture=kept")
             # A transient COM failure does not mean the show disconnected. Keep the
             # last known connected line in place so retries cannot make it blink.
             if self._powerpoint_info is None:
@@ -3341,6 +3342,8 @@ class PresentWidget(Page):
     def _powerpoint_verification_expired(self) -> None:
         if self._powerpoint_info is not None:
             self._powerpoint_verified = False
+            if self.microphone.enabled:
+                logger.warning("presentation_microphone event=stopped reason=powerpoint_unverified")
             self.microphone.stop()
             self.microphone_status.setText(
                 "Microphone stopped. PowerPoint connection could not be verified."
