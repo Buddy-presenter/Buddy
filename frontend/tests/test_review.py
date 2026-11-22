@@ -19,6 +19,16 @@ from buddy_desktop.review_service import ReviewService, parse_analysis
 from buddy_desktop.services import ServiceError
 
 
+class FakeSession:
+    """Stand-in signed-in session: same token fields and fresh_access as AccountSession."""
+
+    def __init__(self, tokens, cancelled):
+        self.tokens, self.cancelled = tokens, cancelled
+
+    def fresh_access(self, margin=60):
+        return self.tokens.access
+
+
 def analysis_payload(deck_id=None, source_sha256="b" * 64):
     deck_id = deck_id or uuid4()
     analysis_id = uuid4()
@@ -212,7 +222,7 @@ def test_review_widget_loads_read_only_saved_page_and_clears_on_signout(
         lambda _content, _index: ({"sizes": [[100, 100]]}, image.copy()),
     )
     window = desktop_window()
-    window.account.session = SimpleNamespace(
+    window.account.session = FakeSession(
         tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
     )
     window.account.session_changed.emit()
@@ -228,10 +238,12 @@ def test_review_widget_loads_read_only_saved_page_and_clears_on_signout(
     assert not any("execute" in child.text().lower() for child in review.findChildren(QPushButton))
     window.account.account_id = "test-owner"
     submissions = []
+    tokens_used = []
     second_started, release_second = Event(), Event()
 
     def qa(_self, analysis_id, instance_id, **options):
         submissions.append((analysis_id, instance_id))
+        tokens_used.append(_self.access)
         assert options["correct"] is True
         if instance_id == "second-action":
             second_started.set()
@@ -272,9 +284,13 @@ def test_review_widget_loads_read_only_saved_page_and_clears_on_signout(
     assert not review.visual_qa_all_button.isHidden()
     assert review.visual_qa_all_button.text() == "Check all again"
     submissions.clear()
+    tokens_used.clear()
+    # Access tokens rotate during long runs: each check uses the session's current one.
+    window.account.session.fresh_access = lambda margin=60: "rotated-access-token"
     review.visual_qa_all_button.click()
     assert review.visual_qa_all_button.isHidden()  # hidden while the run is in progress
     qtbot.waitUntil(lambda: "Checked 1 of 1: 1 Ready" in review.visual_qa_status.text())
+    assert tokens_used == ["rotated-access-token"]
     assert submissions == [(record.id, validated.instance_id)]
     window.account.session.tokens = None
     window.account.session_changed.emit()
@@ -312,7 +328,7 @@ def test_check_all_again_is_clickable_after_opening_a_checked_deck(
         review_widget, "render", lambda _content, _index: ({"sizes": [[100, 100]]}, image.copy())
     )
     window = desktop_window()
-    window.account.session = SimpleNamespace(
+    window.account.session = FakeSession(
         tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
     )
     window.account.session_changed.emit()
@@ -345,7 +361,7 @@ def test_near_expiry_account_check_keeps_review_visible(desktop_window, monkeypa
         lambda _content, _index: ({"sizes": [[100, 100]]}, image.copy()),
     )
     window = desktop_window()
-    window.account.session = SimpleNamespace(
+    window.account.session = FakeSession(
         tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
     )
     window.account.account_id = "same-account"
@@ -402,7 +418,7 @@ def test_review_exactly_40_actions_reports_capacity_without_claiming_truncation(
         lambda _content, _index: ({"sizes": [[100, 100]]}, image.copy()),
     )
     window = desktop_window()
-    window.account.session = SimpleNamespace(
+    window.account.session = FakeSession(
         tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
     )
     window.account.session_changed.emit()
@@ -454,7 +470,7 @@ def test_review_queues_new_deck_while_stale_load_is_finishing(desktop_window, mo
         lambda _content, _index: ({"sizes": [[100, 100]]}, image.copy()),
     )
     window = desktop_window()
-    window.account.session = SimpleNamespace(
+    window.account.session = FakeSession(
         tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
     )
     window.account.session_changed.emit()
@@ -486,7 +502,7 @@ def test_review_queues_new_deck_while_stale_load_is_finishing(desktop_window, mo
 
 def _signed_in_review(desktop_window, account_id="same-account"):
     window = desktop_window()
-    window.account.session = SimpleNamespace(
+    window.account.session = FakeSession(
         tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
     )
     window.account.account_id = account_id
@@ -571,7 +587,7 @@ def test_review_source_cache_is_dropped_when_the_account_changes(
     review.activate(True)
     qtbot.waitUntil(lambda: not review.runner.busy and review.pdf_content is not None)
 
-    window.account.session = SimpleNamespace(
+    window.account.session = FakeSession(
         tokens=Tokens("other", "refresh", time.monotonic() + 3600), cancelled=Event()
     )
     window.account.account_id = "other-account"

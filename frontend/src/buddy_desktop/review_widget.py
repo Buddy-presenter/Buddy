@@ -249,6 +249,7 @@ class ReviewWidget(Page):
         )
         self.config, self.account = config, account
         self.notice: QLabel
+        self._refresh_after_run = False
         self.runner = TaskRunner(self)
         self.runner.succeeded.connect(self.completed)
         self.runner.failed.connect(self.failed)
@@ -468,7 +469,7 @@ class ReviewWidget(Page):
         content_layout.addWidget(self.desktop_banner)
         self.check_overlay = CheckOverlay(self)
         # The run's cancel event is replaced per run; always stop the current one.
-        self.check_overlay.stop_requested.connect(lambda: self.visual_qa_cancel.set())
+        self.check_overlay.stop_requested.connect(self._stop_checks)
         self.check_overlay.start_requested.connect(self.run_all_visual_qa)
         self.check_overlay.later_requested.connect(self._decline_auto_check)
         # PowerPoint checks start on their own after a visible countdown (Windows only,
@@ -726,6 +727,10 @@ class ReviewWidget(Page):
         self._auto_declined.add(self.deck_id)
         self.check_overlay.announce(len(pending), self.window())
 
+    def _stop_checks(self) -> None:
+        logger.warning("desktop_check event=stop_pressed")
+        self.visual_qa_cancel.set()
+
     def _decline_auto_check(self) -> None:
         if self.deck_id is not None:
             self._auto_declined.add(self.deck_id)
@@ -819,22 +824,20 @@ class ReviewWidget(Page):
         session = self.account.session
 
         def fresh_access() -> str:
-            # A full PowerPoint run outlives one access token. Renew it before it
-            # expires instead of failing the remaining checks as signed out.
+            # Access tokens last minutes and a full PowerPoint run lasts longer. Always
+            # use the session's current token (refreshing it when close to expiry),
+            # never a copy taken when the run started.
             nonlocal qa_service, review_service
-            tokens = session.tokens if session is not None else None
-            if (
-                session is not None
-                and tokens is not None
-                and time.monotonic() >= tokens.expires - 120
-            ):
-                try:
-                    access = session.resume()
-                except SessionExpired:
-                    raise LibraryAccessExpired("Sign in again to check actions.") from None
+            if session is None:
+                return qa_service.access
+            try:
+                access = session.fresh_access(margin=90)
+            except SessionExpired:
+                raise LibraryAccessExpired("Sign in again to check actions.") from None
+            if access != qa_service.access:
                 qa_service = PreflightService(self.config, access)
                 review_service = ReviewService(self.config, access)
-            return qa_service.access
+            return access
 
         def work() -> ReviewQABatch:
             if preview is not None:
@@ -842,6 +845,7 @@ class ReviewWidget(Page):
             counts: Counter[str] = Counter()
             for index, action in enumerate(actions):
                 if cancelled.is_set():
+                    logger.warning("desktop_check event=run_cancelled at=%d of=%d", index, total)
                     break
                 try:
                     fresh_access()
@@ -1041,6 +1045,13 @@ class ReviewWidget(Page):
                 self.load()
 
     def clear_private(self, *, keep_deck: bool = False) -> None:
+        if self.pending_operation == "visual_qa_all" and self.runner.busy:
+            import traceback
+
+            caller = " < ".join(
+                frame.name for frame in reversed(traceback.extract_stack(limit=6)[:-1])
+            )
+            logger.warning("desktop_check event=run_cancelled_by_clear caller=%s", caller)
         self._present_on_load = False
         self.powerpoint_invalidated.emit()
         self._close_evidence()
@@ -1232,7 +1243,27 @@ class ReviewWidget(Page):
 
     def completed(self, identifier: int, result: object) -> None:
         if self.closing or self.request_generation != self.generation or not self.active:
+            if isinstance(result, ReviewQABatch):
+                logger.warning(
+                    "desktop_check event=run_result_dropped closing=%s stale=%s active=%s",
+                    self.closing,
+                    self.request_generation != self.generation,
+                    self.active,
+                )
             return
+        if isinstance(result, ReviewQABatch):
+            ready = (
+                sum(a.usable for s in result.analysis.slides for a in s.actions)
+                if result.analysis is not None
+                else -1
+            )
+            logger.info(
+                "desktop_check event=run_finished checked=%d total=%d validated=%d ready_after=%d",
+                sum(result.counts.values()),
+                result.total,
+                result.counts["validated"],
+                ready,
+            )
         if identifier < 1:
             return
         operation, self.pending_operation = self.pending_operation, ""
@@ -1397,6 +1428,9 @@ class ReviewWidget(Page):
             self.open_evidence.setEnabled(self.evidence_choice.count() > 0)
             return
         if operation in {"visual_qa", "visual_qa_all"}:
+            logger.warning("desktop_check event=run_failed message=%s", message[:120])
+            # Checks that finished before the failure are saved: show them.
+            self._refresh_after_run = True
             self.check_overlay.hide()
             self.visual_qa_status.setText("Action checks stopped: " + message)
             self._update_check_progress()
@@ -1435,6 +1469,11 @@ class ReviewWidget(Page):
         )
         self.save_correction.setEnabled(can_correct)
         self.disable_action.setEnabled(can_correct)
+        if self._refresh_after_run and not self.runner.busy:
+            self._refresh_after_run = False
+            if self.analysis is not None and self.token():
+                self.refresh_checks()
+                return
         if (
             self.pending_load
             and self.active

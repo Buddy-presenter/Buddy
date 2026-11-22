@@ -19,6 +19,17 @@ from buddy_desktop.present_widget import saved_action_eligible
 from buddy_desktop.review_service import DownloadedPowerPoint, ReviewService, parse_analysis
 from buddy_desktop.services import ServiceError
 
+
+class FakeSession:
+    """Stand-in signed-in session: same token fields and fresh_access as AccountSession."""
+
+    def __init__(self, tokens, cancelled):
+        self.tokens, self.cancelled = tokens, cancelled
+
+    def fresh_access(self, margin=60):
+        return self.tokens.access
+
+
 KINDS = (
     "highlight_region",
     "draw_rectangle",
@@ -104,7 +115,7 @@ def test_saved_powerpoint_review_routes_verified_binding_to_present(desktop_wind
     binding = PowerPointSessionBinding.create(analysis, content, info)
     window = desktop_window()
     window.account.account_id = str(uuid4())
-    window.account.session = SimpleNamespace(
+    window.account.session = FakeSession(
         tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
     )
     review = window.review
@@ -164,7 +175,7 @@ def test_powerpoint_checks_start_automatically_after_a_visible_countdown(
         ),
     )
     window = desktop_window()
-    window.account.session = SimpleNamespace(
+    window.account.session = FakeSession(
         tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
     )
     window.account.session_changed.emit()
@@ -242,7 +253,7 @@ def test_powerpoint_check_banner_and_do_not_touch_overlay(desktop_window, monkey
         lambda *_args: DownloadedPowerPoint(content, str(deck), "revision-1"),
     )
     window = desktop_window()
-    window.account.session = SimpleNamespace(
+    window.account.session = FakeSession(
         tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
     )
     window.account.session_changed.emit()
@@ -475,7 +486,7 @@ def test_pptx_review_is_explicit_and_clears_private_session(
     monkeypatch.setattr(widgets, "PowerPointReviewSession", Session)
     monkeypatch.setattr(widgets, "sys", SimpleNamespace(platform="win32"))
     window = desktop_window()
-    window.account.session = SimpleNamespace(
+    window.account.session = FakeSession(
         tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
     )
     window.account.session_changed.emit()
@@ -516,7 +527,7 @@ def test_powerpoint_runtime_failure_remains_inspectable(desktop_window, monkeypa
         lambda *_args: DownloadedPowerPoint(content, str(deck), "revision-1"),
     )
     window = desktop_window()
-    window.account.session = SimpleNamespace(
+    window.account.session = FakeSession(
         tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
     )
     window.account.session_changed.emit()
@@ -575,7 +586,7 @@ def test_powerpoint_review_visual_layout(
     )
     window = desktop_window()
     window.resize(width, height)
-    window.account.session = SimpleNamespace(
+    window.account.session = FakeSession(
         tokens=Tokens("synthetic-token", "synthetic-refresh", time.monotonic() + 3600),
         cancelled=Event(),
     )
@@ -695,7 +706,7 @@ def test_pending_powerpoint_review_does_not_download_the_source(desktop_window, 
     monkeypatch.setattr(ReviewService, "analysis", pending)
     monkeypatch.setattr(ReviewService, "source", unexpected_download)
     window = desktop_window()
-    window.account.session = SimpleNamespace(
+    window.account.session = FakeSession(
         tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
     )
     window.account.session_changed.emit()
@@ -751,7 +762,7 @@ def test_action_details_are_opt_in_and_evidence_png_opens(desktop_window, monkey
         lambda *_args: DownloadedPowerPoint(content, str(deck), "revision-1"),
     )
     window = desktop_window()
-    window.account.session = SimpleNamespace(
+    window.account.session = FakeSession(
         tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
     )
     window.account.session_changed.emit()
@@ -826,7 +837,7 @@ def test_busy_checks_refresh_without_reopening_or_downloading_the_source(
 
     monkeypatch.setattr(ReviewService, "source", source_read)
     window = desktop_window()
-    window.account.session = SimpleNamespace(
+    window.account.session = FakeSession(
         tokens=Tokens("token", "refresh", time.monotonic() + 3600), cancelled=Event()
     )
     window.account.session_changed.emit()
