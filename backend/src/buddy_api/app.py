@@ -12,6 +12,7 @@ from starlette.responses import JSONResponse
 
 from buddy_api import __version__
 from buddy_api.agent_provider import CohereDecisionProvider
+from buddy_api.agent_tracing import AgentTracer
 from buddy_api.analysis.api import analysis_router
 from buddy_api.auth import Authentication, auth_router
 from buddy_api.authorization import private_router
@@ -110,6 +111,7 @@ def create_app(
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         nonlocal started
         started = True
+        _app.state.agent_tracer = AgentTracer.from_environment()
         reconciler = asyncio.create_task(uploads.run_reconciliation()) if uploads else None
 
         async def reconcile_validation() -> None:
@@ -156,6 +158,7 @@ def create_app(
                 await _app.state.presentation_agent.provider.aclose()
             if database is not None:
                 await database.close()
+            await asyncio.to_thread(_app.state.agent_tracer.shutdown)
 
     app = FastAPI(
         title="Buddy API",

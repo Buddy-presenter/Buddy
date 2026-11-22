@@ -11,6 +11,7 @@ requires-python = ">=3.12,<3.15"
 dependencies = ["buddy-identity==0.1.0"]
 
 [project.optional-dependencies]
+tracing = ["langfuse==5.2.0"]
 api = [
   "fastapi==0.143.0", "uvicorn==0.54.0", "pydantic==2.14.1", "starlette==1.8.0",
   "SQLAlchemy[asyncio]==2.1.4", "asyncpg==0.32.0", "alembic==1.20.0",

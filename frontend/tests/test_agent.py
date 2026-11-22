@@ -466,6 +466,93 @@ def test_local_slide_command_bypasses_slow_contextual_request(qtbot):
         loop.wait_for_shutdown()
 
 
+@pytest.mark.parametrize("phrase", ["Next slide", "Next page", "Show page 2"])
+def test_short_stable_local_command_does_not_wait_for_final_recognition(qtbot, phrase):
+    from buddy_desktop.navigation import navigation_intent
+
+    session, context = inputs()
+    context = replace(
+        context,
+        segments=(
+            replace(
+                context.segments[-1],
+                text=phrase,
+                final=False,
+                stable_text=phrase,
+            ),
+        ),
+    )
+    service = Service()
+
+    def resolve(active_session, snapshot):
+        if navigation_intent(snapshot.decision_segments[-1].text) is None:
+            return None
+        return {"decision_id": str(uuid4()), "target": {"tool": "next_slide"}}
+
+    loop = AgentLoop(service, local_navigation=resolve)
+    loop.set_enabled(True)
+    received = []
+    loop.proposed.connect(received.append)
+    try:
+        loop.update("token", session, context)
+        assert len(received) == 1
+        assert received[0]["target"]["tool"] == "next_slide"
+        loop.update("token", session, context)
+        assert len(received) == 1  # An identical stable revision is not proposed twice.
+        assert not service.prepares
+        assert not service.calls
+    finally:
+        service.release.set()
+        loop.wait_for_shutdown()
+
+
+@pytest.mark.parametrize(
+    ("phrase", "stable", "fresh"),
+    [
+        ("Next slide", "", True),
+        ("Next slide", "Next slide", False),
+        ("Not next", "Not next", True),
+        ("Go to slide", "Go to slide", True),
+        ("Our sales", "Our sales", True),
+    ],
+)
+def test_short_interim_fast_path_preserves_guards(qtbot, phrase, stable, fresh):
+    from buddy_desktop.navigation import navigation_intent
+
+    session, context = inputs()
+    context = replace(
+        context,
+        fresh=fresh,
+        segments=(
+            replace(
+                context.segments[-1],
+                text=phrase,
+                final=False,
+                stable_text=stable,
+            ),
+        ),
+    )
+    service = Service()
+
+    def resolve(active_session, snapshot):
+        if navigation_intent(snapshot.decision_segments[-1].text) is None:
+            return None
+        return {"decision_id": str(uuid4()), "target": {"tool": "next_slide"}}
+
+    loop = AgentLoop(service, local_navigation=resolve)
+    loop.set_enabled(True)
+    received = []
+    loop.proposed.connect(received.append)
+    try:
+        loop.update("token", session, context)
+        assert not any(isinstance(item, dict) for item in received)
+        assert not service.prepares
+        assert not service.calls
+    finally:
+        service.release.set()
+        loop.wait_for_shutdown()
+
+
 def test_local_navigation_bypasses_prepare_and_retry_cooldown(qtbot):
     from buddy_desktop.navigation import navigation_intent
 

@@ -156,10 +156,8 @@ class AgentLoop(QObject):
                         attempts,
                     )
             prior_length, attempts = self._partial_attempts.get(partial_key, (0, 0))
-            if (
-                partial_length < 12
-                or attempts >= 3
-                or (attempts and partial_length <= prior_length and not correction_since_previous)
+            if attempts >= 3 or (
+                attempts and partial_length <= prior_length and not correction_since_previous
             ):
                 self.status.emit("Waiting for the next stable word…")
                 return
@@ -191,6 +189,11 @@ class AgentLoop(QObject):
             )
             self.proposed.emit(local)
             self.status.emit("Suggestion ready • slide controls remain manual")
+            return
+        # The remote model's minimum text length must not delay complete local
+        # commands such as "next slide". Stability and freshness were checked above.
+        if partial_key is not None and partial_length < 12:
+            self.status.emit("Waiting for the next stable word…")
             return
         if time.monotonic() < self._not_before:
             return

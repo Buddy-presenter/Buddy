@@ -26,6 +26,7 @@ from buddy_api.agent_provider import (
     FailureReason,
     Selection,
 )
+from buddy_api.agent_tracing import current_trace, trace_decision
 from buddy_api.analysis.contracts import AnalysisResult, Model, PowerPointAnalysisResult, Region
 from buddy_api.auth import Principal, authenticated
 from buddy_api.embeddings import EmbeddingFailure
@@ -729,6 +730,7 @@ def agent_router() -> APIRouter:
             }
         },
     )
+    @trace_decision
     async def propose(
         identifier: UUID,
         request: Request,
@@ -768,11 +770,15 @@ def agent_router() -> APIRouter:
 
         def finish_phase() -> None:
             nonlocal phase_started
+            if active_trace := current_trace.get():
+                active_trace.finish_phase()
             phase_timings_ms[phase] = max(0, round((time.monotonic() - phase_started) * 1000))
             phase_started = time.monotonic()
 
         def begin_phase(name: str) -> None:
             nonlocal phase, phase_started
+            if active_trace := current_trace.get():
+                active_trace.begin_phase(name)
             phase = name
             phase_started = time.monotonic()
 
@@ -913,7 +919,9 @@ def agent_router() -> APIRouter:
                 runtime.active.discard(principal.id)
         proposal_values: dict[str, object] = {
             "protocol": "presentation-agent.v1",
-            "decision_id": uuid4(),
+            "decision_id": active_trace.decision_id
+            if (active_trace := current_trace.get())
+            else uuid4(),
             "session_id": identifier,
             "analysis_id": source.analysis.id,
             "state_version": values.expected_state_version,
