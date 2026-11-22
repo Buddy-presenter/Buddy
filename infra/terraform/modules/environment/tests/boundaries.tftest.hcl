@@ -193,6 +193,21 @@ run "staging_idle_services_sleep_and_wake_on_request" {
     error_message = "Staging must sleep only after 30 quiet minutes and wake on the next request."
   }
 }
+run "staging_load_balancer_access_logs" {
+  command = plan
+  variables {
+    enable_lb_access_logs = true
+  }
+  assert {
+    condition = (
+      length(aws_s3_bucket.lb_logs) == 1 &&
+      one(aws_lb.api.access_logs).enabled &&
+      one(aws_lb.api.access_logs).prefix == "api" &&
+      one(one(aws_s3_bucket_lifecycle_configuration.lb_logs[0].rule).expiration).days == 7
+    )
+    error_message = "Staging must record load-balancer access logs to a private bucket that expires them after 7 days."
+  }
+}
 run "idle_scaling_is_off_by_default" {
   command = plan
   variables {

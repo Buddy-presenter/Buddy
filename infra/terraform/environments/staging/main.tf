@@ -97,6 +97,7 @@ module "environment" {
   worker_start_services       = var.worker_start_services
   enable_terraform_monitoring = false
   idle_scale_to_zero          = true
+  enable_lb_access_logs       = true
   alert_email_recipients      = var.alert_email_recipients
   github_oidc_provider_arn    = var.github_oidc_provider_arn
   github_oidc_subject_prefix  = var.github_oidc_subject_prefix
