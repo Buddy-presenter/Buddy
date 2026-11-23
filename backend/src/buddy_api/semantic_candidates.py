@@ -31,7 +31,11 @@ class Document:
 
 
 def documents(analysis: AnalysisResult | PowerPointAnalysisResult) -> tuple[Document, ...]:
-    from buddy_api.presentation_candidates import candidate_action_eligible, candidate_slides
+    from buddy_api.presentation_candidates import (
+        candidate_action_eligible,
+        candidate_slides,
+        shown_text,
+    )
 
     result = []
     for position, slide in enumerate(candidate_slides(analysis), 1):
@@ -43,7 +47,7 @@ def documents(analysis: AnalysisResult | PowerPointAnalysisResult) -> tuple[Docu
             if candidate_action_eligible(action):
                 # Include the slide text the action targets, so speech that names the
                 # content ("the revenue chart") retrieves it, not only its purpose (#202).
-                target = getattr(getattr(action.action, "params", None), "target_text", None)
+                target = shown_text(analysis, action)
                 result.append(
                     Document(
                         slide.slide_id,
@@ -51,7 +55,7 @@ def documents(analysis: AnalysisResult | PowerPointAnalysisResult) -> tuple[Docu
                         action.action.type,
                         f"Slide {position}. "
                         + action.action.purpose
-                        + (f" Target: {target}" if isinstance(target, str) and target else ""),
+                        + (f" Target: {target}" if target else ""),
                     )
                 )
     if not result or len(result) > 1500 or sum(len(d.text) for d in result) > 2_000_000:

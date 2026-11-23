@@ -918,3 +918,96 @@ def test_actual_provider_rate_limit_blocks_new_speech_across_instances(agent_api
         await runtime.reserve(database)
 
     client.portal.call(check)
+
+
+def test_pdf_and_powerpoint_zoom_options_show_their_slide_text():
+    """PDF actions keep quoted text in the grounding record; PowerPoint zooms frame a shape."""
+    import asyncio
+    from uuid import uuid4
+
+    from buddy_api.analysis.contracts import (
+        PowerPointActionResult,
+        PowerPointAnalysisResult,
+        PowerPointContentActionV2,
+        PowerPointParameters,
+        PowerPointSlideResultV2,
+        Region,
+    )
+    from buddy_api.presentation_candidates import with_powerpoint_shape_text
+    from buddy_api.semantic_candidates import documents
+
+    region = Region(x=1, y=2, width=30, height=40)
+    pdf_action = SimpleNamespace(
+        usable=True,
+        state="validated",
+        semantic_verified=True,
+        action=SimpleNamespace(
+            instance_id="hires",
+            type="zoom_region",
+            purpose="Show the hiring breakdown",
+            params=SimpleNamespace(region=region),
+        ),
+    )
+    pdf = SimpleNamespace(
+        slides=(
+            SimpleNamespace(
+                slide_id="1",
+                summary=SimpleNamespace(text="Team", status="available"),
+                actions=(pdf_action,),
+            ),
+        ),
+        inputs=SimpleNamespace(
+            grounding=(
+                SimpleNamespace(
+                    instance_id="hires",
+                    trace=SimpleNamespace(target_text="London 5 Beirut 4 Total 14"),
+                ),
+            )
+        ),
+    )
+    candidate = Candidate(
+        kind="zoom_region", slide_id="1", action_id="hires", reason="purpose", score=1
+    )
+    source = AgentInput(pdf, "1", "slide", "hash")
+    assert options(source, (candidate,))[1][-1]["content"] == (
+        "Show the hiring breakdown Shows: London 5 Beirut 4 Total 14"
+    )
+    assert documents(pdf)[-1].text.endswith("Target: London 5 Beirut 4 Total 14")
+
+    zoom = PowerPointActionResult.model_construct(
+        action=PowerPointContentActionV2.model_construct(
+            instance_id="chart",
+            purpose="Show the revenue chart",
+            slide_id="s1",
+            type="zoom_region",
+            params=PowerPointParameters(region=region, source_shape_id=7),
+        ),
+        state="validated",
+        usable=True,
+        validation=SimpleNamespace(semantic_verified=True),
+    )
+    pptx = PowerPointAnalysisResult.model_construct(
+        slides=(
+            PowerPointSlideResultV2.model_construct(
+                slide_id="s1", summary=SimpleNamespace(text="Q4"), actions=(zoom,)
+            ),
+        )
+    )
+
+    class Database:
+        async def scalar(self, _statement):
+            return {
+                "slides": [{"id": "s1", "objects": [{"source_id": 7, "text": "Revenue\n$48M  Q4"}]}]
+            }
+
+    record = SimpleNamespace(extraction_id=uuid4())
+    described = asyncio.run(with_powerpoint_shape_text(Database(), record, uuid4(), pptx))
+    assert described.slides[0].actions[0].action.params.text == "Revenue $48M Q4"
+    assert pptx.slides[0].actions[0].action.params.text == ""  # The saved analysis is untouched.
+    candidate = Candidate(
+        kind="zoom_region", slide_id="s1", action_id="chart", reason="purpose", score=1
+    )
+    source = AgentInput(described, "s1", "slide", "hash")
+    assert options(source, (candidate,))[1][-1]["content"] == (
+        "Show the revenue chart Shows: Revenue $48M Q4"
+    )

@@ -40,6 +40,7 @@ from buddy_api.presentation_candidates import (
     confident_topic_destination,
     navigation_intent,
     resolve,
+    shown_text,
     topic_navigation_intent,
 )
 from buddy_api.presentation_sessions import FocusRegion, current_ready_analysis, owned_session
@@ -416,10 +417,8 @@ def options(
             )
             # Show the selector the slide text the action targets, so speech that
             # names that content ("$48 million") visibly matches this option.
-            shown = getattr(action.action.params, "target_text", None)
-            content = action.action.purpose[:512] + (
-                f" Shows: {shown[:256]}" if isinstance(shown, str) and shown.strip() else ""
-            )
+            shown = shown_text(source.analysis, action)
+            content = action.action.purpose[:512] + (f" Shows: {shown[:256]}" if shown else "")
         if target in targets:
             continue
         descriptions.append(
