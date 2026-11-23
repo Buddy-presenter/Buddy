@@ -225,7 +225,7 @@ def test_position_returned_to_acknowledged_state_is_saved_after_inflight_update(
         manifest.slides[0], QImage(str(manifest.root / "wide.png")), manifest.slides[0].full
     )
     widget._account_id = "owner"
-    widget._session_access = "test-access"
+    widget._session_access = lambda: "test-access"
     widget._session_deck_id = manifest.deck_id
     widget._session_attempt = ("owner", manifest.deck_id)
     widget._session = _session(manifest.deck_id, first_state)
@@ -290,7 +290,7 @@ def test_position_matching_inflight_update_remains_retryable_after_failure(
         manifest.slides[0], QImage(str(manifest.root / "wide.png")), manifest.slides[0].full
     )
     widget._account_id = "owner"
-    widget._session_access = "test-access"
+    widget._session_access = lambda: "test-access"
     widget._session_deck_id = manifest.deck_id
     widget._session_attempt = ("owner", manifest.deck_id)
     widget._session = _session(manifest.deck_id, first_state)
@@ -390,7 +390,7 @@ def test_new_deck_session_start_waits_for_previous_deck_request(
 
     widget.session_service = cast(PresentationSessionService, DelayedService())
     widget._account_id = "owner"
-    widget._session_access = "test-access"
+    widget._session_access = lambda: "test-access"
     widget.executor.manifest = first_manifest
     widget.executor.current_index = 0
     widget.surface.commit(

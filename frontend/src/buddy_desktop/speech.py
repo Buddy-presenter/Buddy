@@ -12,6 +12,8 @@ from PySide6.QtNetwork import QNetworkRequest
 from PySide6.QtWebSockets import QWebSocket
 
 from buddy_desktop.config import AppConfig
+from buddy_desktop.library_service import AccessProvider, LibraryAccessExpired, access_provider
+from buddy_desktop.services import ServiceError
 
 ERRORS = {
     "audio_backlog": "The speech connection fell behind; queued audio was discarded.",
@@ -48,7 +50,7 @@ class SpeechController(QObject):
         self._ready = False
         self._generation = 0
         self._attempts = 0
-        self._access = ""
+        self._access: AccessProvider | None = None
         self._url = ""
         self._session = ""
         self._sample_rate = 0
@@ -66,7 +68,12 @@ class SpeechController(QObject):
         self._retry.timeout.connect(self._connect)
 
     def start(
-        self, config: AppConfig, access: str, session: str, sample_rate: int, language: str
+        self,
+        config: AppConfig,
+        access: AccessProvider | str,
+        session: str,
+        sample_rate: int,
+        language: str,
     ) -> None:
         self.stop()
         UUID(session)
@@ -75,14 +82,23 @@ class SpeechController(QObject):
             if config.api_url.startswith("https:")
             else "ws" + config.api_url[4:]
         ) + f"/api/v1/sessions/{session}/speech"
-        self._access, self._session = access, session
+        self._access, self._session = access_provider(access), session
         self._sample_rate, self._language = sample_rate, language
         self._active = True
         self._attempts = 0
         self._connect()
 
     def _connect(self) -> None:
-        if not self._active:
+        if not self._active or self._access is None:
+            return
+        try:
+            # Reconnects can happen long after start; use a current token every time.
+            token = self._access()
+        except LibraryAccessExpired:
+            self._fail(ERRORS["session_401"], False)
+            return
+        except ServiceError:
+            self._fail("Speech sign-in refresh failed.", True)
             return
         self._generation += 1
         generation = self._generation
@@ -112,9 +128,7 @@ class SpeechController(QObject):
             lambda _error: current(lambda: self._fail("Speech connection failed.", True))
         )
         request = QNetworkRequest(QUrl(self._url))
-        request.setRawHeader(
-            QByteArray(b"Authorization"), QByteArray(("Bearer " + self._access).encode())
-        )
+        request.setRawHeader(QByteArray(b"Authorization"), QByteArray(("Bearer " + token).encode()))
         self.status_changed.emit("Connecting speech recognition…")
         self._deadline.start(20000)
         socket.open(request)
@@ -238,11 +252,11 @@ class SpeechController(QObject):
             self._retry.start(1000 * 2 ** (self._attempts - 1))
         else:
             self._active = False
-            self._access = ""
+            self._access = None
             self.status_changed.emit(message + " Stop and restart the microphone to retry.")
 
     def stop(self) -> None:
         self._active = False
         self._retry.stop()
         self._detach()
-        self._access = ""
+        self._access = None

@@ -2,6 +2,7 @@
 
 import http.client
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from urllib.error import HTTPError, URLError
@@ -18,6 +19,17 @@ SORTS = {"newest", "oldest", "title_asc", "title_desc"}
 
 class LibraryAccessExpired(ServiceError):
     """Clear private results and ask the account controls to reauthenticate."""
+
+
+type AccessProvider = Callable[[], str]
+"""Returns a current access token, refreshing it near expiry. May raise ServiceError."""
+
+
+def access_provider(access: AccessProvider | str) -> AccessProvider:
+    """Accept a provider, or a fixed token for callers whose work is short-lived."""
+    if isinstance(access, str):
+        return lambda: access
+    return access
 
 
 @dataclass(frozen=True)

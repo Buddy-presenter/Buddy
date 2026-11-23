@@ -48,7 +48,11 @@ from buddy_desktop.agent_loop import AgentLoop
 from buddy_desktop.agent_service import AgentService
 from buddy_desktop.config import AppConfig
 from buddy_desktop.fullscreen import FullscreenPresentation
-from buddy_desktop.library_service import LibraryAccessExpired
+from buddy_desktop.library_service import (
+    AccessProvider,
+    LibraryAccessExpired,
+    access_provider,
+)
 from buddy_desktop.microphone import MicrophoneController
 from buddy_desktop.navigation import navigation_intent
 from buddy_desktop.powerpoint import PowerPointAutomation, PresentationInfo
@@ -212,7 +216,7 @@ class PresentWidget(Page):
         self._instance = 0
         self._committed_key: tuple[str, str, str] | None = None
         self._account_id: str | None = None
-        self._session_access: str | None = None
+        self._session_access: AccessProvider | None = None
         self._session: PresentationSession | None = None
         self._session_deck_id: str | None = None
         self._session_attempt: tuple[str, str] | None = None
@@ -711,7 +715,9 @@ class PresentWidget(Page):
         self.config = config
         self.session_service = PresentationSessionService(config)
 
-    def set_account_identity(self, account_id: str | None, access: str | None) -> None:
+    def set_account_identity(
+        self, account_id: str | None, access: AccessProvider | str | None
+    ) -> None:
         if account_id != self._account_id:
             self.invalidate_saved_powerpoint()
         if account_id != self._account_id or not access:
@@ -727,7 +733,7 @@ class PresentWidget(Page):
             self._session_ended = False
             self._session_deck_id = None
         self._account_id = account_id
-        self._session_access = access if account_id and access else None
+        self._session_access = access_provider(access) if account_id and access else None
         if account_id and access:
             self._ensure_session()
         else:
@@ -1332,7 +1338,7 @@ class PresentWidget(Page):
                 access = self._session_access
                 self.policy_runner.submit(
                     lambda: self.agent.service.check_transition(
-                        access, decision_session, value["target"]
+                        access(), decision_session, value["target"]
                     )
                 )
 
@@ -1495,9 +1501,12 @@ class PresentWidget(Page):
             identifier,
         )
         source_format = "pptx" if self._powerpoint_binding else "pdf"
-        service = ReviewService(self.config, access)
+        config = self.config
         self.generated_status.setText("Checking the current saved analysis…")
-        self.generated_runner.submit(lambda: service.analysis(UUID(session.deck_id), source_format))
+        # Resolve the token in the worker: a copy taken earlier may have expired.
+        self.generated_runner.submit(
+            lambda: ReviewService(config, access()).analysis(UUID(session.deck_id), source_format)
+        )
         self._refresh_generated()
 
     def _generated_failed(self, _request: int, message: str) -> None:
@@ -1783,7 +1792,7 @@ class PresentWidget(Page):
         else:
             self.policy_runner.submit(
                 lambda: self.agent.service.check_transition(
-                    access, decision_session, value["target"]
+                    access(), decision_session, value["target"]
                 )
             )
             self.policy_status.setText("Checking the current action before moving…")
@@ -2038,7 +2047,7 @@ class PresentWidget(Page):
                 return
             decision_session = replace(session, state=local_state)
             self.policy_runner.submit(
-                lambda: self.agent.service.check_transition(access, decision_session, target)
+                lambda: self.agent.service.check_transition(access(), decision_session, target)
             )
             logger.warning(
                 "presentation_policy event=deferred_action_rechecked decision_id=%s",
@@ -2166,7 +2175,7 @@ class PresentWidget(Page):
             return
         decision_session = replace(session, state=local_state)
         self.policy_runner.submit(
-            lambda: self.agent.service.check_transition(access, decision_session, target)
+            lambda: self.agent.service.check_transition(access(), decision_session, target)
         )
         logger.warning(
             "presentation_policy event=deferred_action_rechecked decision_id=%s",
@@ -2374,7 +2383,7 @@ class PresentWidget(Page):
             "microphone_verify",
             self._session_generation,
             None,
-            lambda: self.session_service.read(access, session.id),
+            lambda: self.session_service.read(access(), session.id),
         )
 
     @Slot()
@@ -2526,7 +2535,7 @@ class PresentWidget(Page):
             "start",
             generation,
             None,
-            lambda: service.start(access, deck_id, runtime=runtime),
+            lambda: service.start(access(), deck_id, runtime=runtime),
         )
         if submitted:
             self._session_attempt = key
@@ -2647,7 +2656,7 @@ class PresentWidget(Page):
             "update",
             generation,
             state,
-            lambda: service.update(access, session, state),
+            lambda: service.update(access(), session, state),
         )
 
     def _retry_session(self) -> None:
@@ -2668,7 +2677,7 @@ class PresentWidget(Page):
             "read",
             self._session_generation,
             None,
-            lambda: self.session_service.read(access, session.id),
+            lambda: self.session_service.read(access(), session.id),
         )
 
     def _session_button_clicked(self) -> None:
@@ -2692,7 +2701,7 @@ class PresentWidget(Page):
             "end",
             self._session_generation,
             None,
-            lambda: self.session_service.end(access, session),
+            lambda: self.session_service.end(access(), session),
         )
 
     @Slot(int, object)
