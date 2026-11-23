@@ -35,7 +35,7 @@ def player(desktop_window, qtbot, monkeypatch):
         datetime.now(UTC),
     )
     page._session = session
-    page._session_access = "owner"
+    page._session_access = lambda: "owner"
     page._agent_session_id = session.id
     page._context_connected = True
     page.microphone._enabled = True  # Only the external microphone device boundary is substituted.
