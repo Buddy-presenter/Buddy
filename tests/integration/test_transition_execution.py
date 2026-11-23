@@ -83,7 +83,7 @@ def test_real_policy_player_completion_is_local_and_undo_is_versioned(
         )
         page.surface.commit(slides[0], page.surface._image, slides[0].full)
         monkeypatch.setattr(page.session_events, "bind", lambda *args: None)
-        page._session, page._session_access = session, "owner"
+        page._session, page._session_access = session, lambda: "owner"
         page._agent_session_id = session.id
         page._context_connected = True
         page.microphone._enabled = True
