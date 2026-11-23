@@ -609,3 +609,39 @@ def test_native_undo_waits_for_preview_without_losing_saved_state(
             lambda: not page.session_runner.busy and persisted[-1].active_slide_id == "slide-1"
         )
     assert not page._pending_native_undo and page._policy_undo is None
+
+
+def test_dropped_proposals_always_log_and_show_a_reason(player, qtbot, caplog):
+    # #187: a valid suggestion that cannot run must never vanish without a reason.
+    page, proposal, _, _, _ = player
+    manifest = page.executor.manifest
+    zoom = {
+        **proposal,
+        "decision_id": str(uuid4()),
+        "decision_source": "agent",
+        "reason": "topic",
+        "target": {
+            "tool": "zoom_region",
+            "slide_id": manifest.slides[1].slide_id,
+            "action_id": "chart",
+            "region": {"x": 0.1, "y": 0.1, "width": 0.3, "height": 0.3},
+        },
+    }
+    with caplog.at_level("WARNING"):
+        page._consider_policy(zoom)
+    assert f"decision_id={zoom['decision_id']} reason=action_not_on_current_slide" in caplog.text
+    assert page.policy_status.text() == "That action is on another slide; go to that slide first."
+
+    caplog.clear()
+    page.policy_enabled.setChecked(False)
+    assert not page.policy.enabled
+    with caplog.at_level("WARNING"):
+        page._consider_policy(zoom)
+    assert "reason=automation_off" in caplog.text
+    assert "automatic actions are off" in page.policy_status.text()
+
+    caplog.clear()
+    stay = {**zoom, "target": {**zoom["target"], "tool": "no_action", "region": None}}
+    with caplog.at_level("WARNING"):
+        page._consider_policy(stay)
+    assert "proposal_dropped" not in caplog.text  # Nothing was going to run.

@@ -114,8 +114,8 @@ jobs:
       - name: Frozen replay corpus and deterministic agent gates
         run: |
           python scripts/check_replay_freeze.py
-          python -m buddy_api.replay tests/fixtures/replay/development-v3.json --gates tests/fixtures/replay/development-v3-gates.json --output replay-artifacts/development-v3
-          python -m buddy_api.replay tests/fixtures/replay/holdout-v3.json --gates tests/fixtures/replay/holdout-v3-gates.json --output replay-artifacts/holdout-v3
+          python -m buddy_api.replay tests/fixtures/replay/development-v4.json --gates tests/fixtures/replay/development-v4-gates.json --output replay-artifacts/development-v4
+          python -m buddy_api.replay tests/fixtures/replay/holdout-v4.json --gates tests/fixtures/replay/holdout-v4-gates.json --output replay-artifacts/holdout-v4
       - name: Install Qt runtime libraries for desktop integration tests
         shell: bash
         run: |

@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import re
 import sys
 import time
 from collections.abc import Callable
@@ -1060,18 +1061,19 @@ class PresentWidget(Page):
     def _policy_command(self, target: PolicyTarget) -> dict[str, object]:
         manifest, slide = self.executor.manifest, self.surface.slide
         if manifest is None or slide is None:
-            raise ValueError
+            raise ValueError("presentation_not_ready")
+        index = manifest.index(target.slide_id)
+        if target.tool in {"next_slide", "previous_slide"}:
+            if index - self.executor.current_index != (1 if target.tool == "next_slide" else -1):
+                raise ValueError("slide_not_adjacent")
+        elif target.tool != "go_to_slide" and target.slide_id != slide.slide_id:
+            # Checked before the saved-action lookup so the reason names the real cause.
+            raise ValueError("action_not_on_current_slide")
         saved = (
             self.saved_policy_action(target)
             if target.tool in {"zoom_region", "highlight_region"}
             else None
         )
-        index = manifest.index(target.slide_id)
-        if target.tool in {"next_slide", "previous_slide"}:
-            if index - self.executor.current_index != (1 if target.tool == "next_slide" else -1):
-                raise ValueError
-        elif target.tool != "go_to_slide" and target.slide_id != slide.slide_id:
-            raise ValueError
         params: dict[str, object] = {}
         if target.tool == "go_to_slide":
             params["target_slide_id"] = target.slide_id
@@ -1244,11 +1246,15 @@ class PresentWidget(Page):
     def _consider_native_policy(self, value: dict[str, Any]) -> None:
         proposal_received_ns = time.monotonic_ns()
         native, session, info = self._native_present, self._session, self._powerpoint_info
-        if not self.policy.enabled or native is None or session is None or info is None:
+        if not self.policy.enabled:
+            self._drop_proposal(value, "automation_off")
+            return
+        if native is None or session is None or info is None:
+            self._drop_proposal(value, "presentation_not_ready")
             return
         context = proposal_context(value, self.transcript_context.snapshot())
         if context is None:
-            self.policy_status.setText("Speech changed before the action could run; repeat it.")
+            self._drop_proposal(value, "stale_capture")
             return
         target_value = value.get("target")
         navigation = isinstance(target_value, dict) and target_value.get("tool") in NAVIGATION_TOOLS
@@ -1276,7 +1282,7 @@ class PresentWidget(Page):
             return
         state = self._current_local_state()
         if state is None:
-            self.policy.clear_pending()
+            self._drop_proposal(value, "presentation_not_ready")
             return
         decision_session = replace(session, state=state)
         try:
@@ -1318,9 +1324,12 @@ class PresentWidget(Page):
                 now_ns=time.monotonic_ns(),
                 today=date.today(),
             )
-        except (ValueError, KeyError, TypeError, IndexError, PowerPointError):
-            self.policy.clear_pending()
-            self.policy_status.setText("Suggestion is unavailable for the current Office source.")
+        except (ValueError, KeyError, TypeError, IndexError, PowerPointError) as exc:
+            self._drop_proposal(
+                value,
+                self._command_failure(exc),
+                "Suggestion is unavailable for the current Office source.",
+            )
             return
         if reason != "accepted":
             self._log_policy_rejection(prediction, context, reason)
@@ -1681,6 +1690,30 @@ class PresentWidget(Page):
             # Bound to this widget so it never fires after the window closes.
             QTimer.singleShot(0, self, lambda: self._load_generated(None))
 
+    def _drop_proposal(self, value: object, reason: str, message: str | None = None) -> None:
+        """Every proposal that cannot run leaves a reason in the log and on screen (#187)."""
+        decision = value.get("decision_id") if isinstance(value, dict) else None
+        target = value.get("target") if isinstance(value, dict) else None
+        if (
+            isinstance(target, dict)
+            and target.get("tool") == "no_action"
+            and reason in {"automation_off", "presentation_not_ready"}
+        ):
+            return  # Nothing was going to run, so nothing was lost.
+        logger.warning(
+            "presentation_policy event=proposal_dropped decision_id=%s reason=%s",
+            decision if isinstance(decision, str) else "-",
+            reason,
+        )
+        self.policy.clear_pending()
+        self.policy_status.setText(message or self._policy_rejection_message(reason))
+
+    @staticmethod
+    def _command_failure(exc: Exception) -> str:
+        """A content-free reason: only the fixed snake_case codes raised by this module."""
+        reason = str(exc)
+        return reason if re.fullmatch(r"[a-z_]{1,48}", reason) else type(exc).__name__
+
     def _consider_policy(self, value: dict[str, Any]) -> None:
         proposal_received_ns = time.monotonic_ns()
         self._deferred_agent_proposal = None
@@ -1688,14 +1721,19 @@ class PresentWidget(Page):
             self._consider_native_policy(value)
             return
         session, manifest = self._session, self.executor.manifest
-        if not self.policy.enabled or session is None or manifest is None:
+        if not self.policy.enabled:
+            self._drop_proposal(value, "automation_off")
+            return
+        if session is None or manifest is None:
+            self._drop_proposal(value, "presentation_not_ready")
             return
         context = proposal_context(value, self.transcript_context.snapshot())
         state = self._current_local_state()
         if context is None:
-            self.policy_status.setText("Speech changed before the action could run; repeat it.")
+            self._drop_proposal(value, "stale_capture")
             return
         if state is None or self._powerpoint_info is not None:
+            self._drop_proposal(value, "presentation_not_ready")
             return
         decision_session = replace(session, state=state)
         target_value = value.get("target")
@@ -1764,8 +1802,13 @@ class PresentWidget(Page):
                 today=date.today(),
             )
         except (ValueError, TypeError, KeyError, IndexError, ContractError) as exc:
-            self.policy.clear_pending()
-            self.policy_status.setText(self._saved_rejection_status(exc, value))
+            reason = self._command_failure(exc)
+            if reason in {"saved_action_unavailable", "saved_action_unverified"}:
+                # Already logged as saved_action_rejected with its action ID.
+                self.policy.clear_pending()
+                self.policy_status.setText(self._saved_rejection_status(exc, value))
+            else:
+                self._drop_proposal(value, reason)
             return
         if reason != "accepted":
             self._log_policy_rejection(prediction, context, reason)
@@ -1820,6 +1863,19 @@ class PresentWidget(Page):
             ),
             "ineligible": (
                 "Suggestion found, but that action is unavailable for the current slide."
+            ),
+            "automation_off": (
+                "Suggestion found, but automatic actions are off. Turn them on to act on it."
+            ),
+            "presentation_not_ready": (
+                "Suggestion found, but the presentation is still loading; repeat it."
+            ),
+            "stale_capture": "Speech changed before the action could run; repeat it.",
+            "action_not_on_current_slide": (
+                "That action is on another slide; go to that slide first."
+            ),
+            "slide_not_adjacent": (
+                "The slide changed before the move could run; repeat the instruction."
             ),
         }
         return labels.get(reason, "Suggestion found, but it was not run; continue manually.")
