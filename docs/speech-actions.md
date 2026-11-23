@@ -13,7 +13,9 @@ never triggers anything.
    setting change, slide move or reconnect is discarded.
 2. **Candidates:** the server offers the decision model only the current slide, nearby
    or named slides, "no change", and up to **three** saved region actions that are
-   live-usable (validated **and** visually verified). Production retrieval uses Cohere
+   live-usable (validated **and** visually verified). Region actions are offered only for
+   the slide on screen, since the desktop never zooms another slide; speech about another
+   slide's content selects that slide first (#187). Production retrieval uses Cohere
    embeddings over each action's purpose **and the slide text it targets**; without
    embeddings the word-based resolver does the same ([candidates](presentation-candidates.md)).
    Unverified actions are never offered.
@@ -24,6 +26,10 @@ never triggers anything.
    applies freshness, duplicate, current-focus, cooldown and evidence rules, then asks
    the server to re-check the exact target (`transition-check`): active autonomous
    session, current analysis, and a still-eligible saved action with the same region.
+   Any proposal the desktop cannot run (automatic actions off, presentation still loading,
+   speech changed, action on another slide, saved action unavailable) is logged as
+   `presentation_policy event=proposal_dropped decision_id=… reason=…` and explained in
+   Present's status line; a valid suggestion is never discarded silently (#187).
 5. **Desktop verification and execution:**
    - **PDF:** Present loads the session's saved actions automatically and runs a speech
      action only if it matches a loaded, eligible saved action by ID, type and region.

@@ -397,6 +397,11 @@ def options(
                     slide_id=slide.slide_id,
                 )
         else:
+            if slide.slide_id != source.current:
+                # The desktop zooms or highlights only the slide on screen, so an action on
+                # another slide could never run (#187). That slide stays reachable through
+                # its navigation option; its actions are offered once it is shown.
+                continue
             action = next(
                 (
                     a

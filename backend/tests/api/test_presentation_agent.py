@@ -1011,3 +1011,33 @@ def test_pdf_and_powerpoint_zoom_options_show_their_slide_text():
     assert options(source, (candidate,))[1][-1]["content"] == (
         "Show the revenue chart Shows: Revenue $48M Q4"
     )
+
+
+def test_region_actions_are_offered_only_for_the_slide_on_screen():
+    # #187: the desktop never zooms another slide, so such an option could only be dropped.
+    from buddy_api.analysis.contracts import Region
+
+    def slide(slide_id):
+        action = SimpleNamespace(
+            usable=True,
+            state="validated",
+            semantic_verified=True,
+            action=SimpleNamespace(
+                instance_id=f"chart-{slide_id}",
+                type="zoom_region",
+                purpose="Show the revenue chart",
+                params=SimpleNamespace(region=Region(x=1, y=2, width=30, height=40)),
+            ),
+        )
+        return SimpleNamespace(
+            slide_id=slide_id, summary=SimpleNamespace(text="Revenue"), actions=(action,)
+        )
+
+    analysis = SimpleNamespace(slides=(slide("1"), slide("2")))
+    candidates = tuple(
+        Candidate(kind="zoom_region", slide_id=s, action_id=f"chart-{s}", reason="purpose", score=1)
+        for s in ("1", "2")
+    )
+    targets, _ = options(AgentInput(analysis, "1", "slide", "hash"), candidates)
+    assert [t.action_id for t in targets if t.tool == "zoom_region"] == ["chart-1"]
+    assert any(t.tool == "next_slide" and t.slide_id == "2" for t in targets)
