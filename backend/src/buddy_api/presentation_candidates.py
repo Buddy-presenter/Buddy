@@ -30,7 +30,7 @@ from buddy_api.analysis.store import Analyses
 from buddy_api.auth import Principal, authenticated
 from buddy_api.embeddings import EmbeddingFailure
 from buddy_api.persistence.errors import PersistenceError
-from buddy_api.persistence.models import ActionValidation, AnalysisVersion, Deck
+from buddy_api.persistence.models import ActionValidation, AnalysisVersion, Deck, DeckExtraction
 from buddy_api.presentation_sessions import current_ready_analysis, owned_session, runtime_matches
 from buddy_api.semantic_candidates import SemanticCandidates
 
@@ -75,6 +75,73 @@ def candidate_slides(
     analysis: AnalysisResult | PowerPointAnalysisResult,
 ) -> tuple[SlideResult | PowerPointSlideResult, ...]:
     return cast(tuple[SlideResult | PowerPointSlideResult, ...], analysis.slides)
+
+
+def shown_text(
+    analysis: AnalysisResult | PowerPointAnalysisResult,
+    action: ActionResult | PowerPointActionResult,
+) -> str | None:
+    """The slide text a region action shows, so speech naming it matches the action.
+
+    PowerPoint highlights quote their target; PowerPoint zooms frame a whole shape whose
+    text `CandidateAnalyses` restores from the saved extraction. PDF actions keep their
+    quoted text in the analysis grounding record, not in the action parameters.
+    """
+    params = getattr(action.action, "params", None)
+    for value in (getattr(params, "target_text", None), getattr(params, "text", None)):
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    for item in getattr(getattr(analysis, "inputs", None), "grounding", ()) or ():
+        if item.instance_id == action.action.instance_id and item.trace.target_text:
+            return str(item.trace.target_text).strip()
+    return None
+
+
+async def with_powerpoint_shape_text(
+    db: AsyncSession, record: AnalysisVersion, owner: UUID, analysis: PowerPointAnalysisResult
+) -> PowerPointAnalysisResult:
+    """Copy each zoomed shape's text from the saved extraction into this server-side read.
+
+    PowerPoint zooms select a complete shape and so carry no quoted target. The copy is
+    used only to describe candidates to retrieval and the agent; it is never persisted.
+    """
+    if record.extraction_id is None or not any(
+        a.action.type == "zoom_region" for slide in analysis.slides for a in slide.actions
+    ):
+        return analysis
+    document = await db.scalar(
+        select(DeckExtraction.document).where(
+            DeckExtraction.id == record.extraction_id, DeckExtraction.owner_id == owner
+        )
+    )
+    if not isinstance(document, dict):
+        return analysis
+    texts: dict[tuple[str, int], str] = {}
+    for extracted in document.get("slides") or ():
+        for obj in extracted.get("objects") or ():
+            text, source = obj.get("text"), obj.get("source_id")
+            if isinstance(text, str) and text.strip() and type(source) is int:
+                texts[(str(extracted.get("id")), source)] = " ".join(text.split())[:300]
+
+    def described(slide_id: str, item: PowerPointActionResult) -> PowerPointActionResult:
+        params = item.action.params
+        shape = params.source_shape_id
+        text = texts.get((slide_id, shape)) if shape is not None else None
+        if item.action.type != "zoom_region" or params.text.strip() or not text:
+            return item
+        action = item.action.model_copy(update={"params": params.model_copy(update={"text": text})})
+        return item.model_copy(update={"action": action})
+
+    return analysis.model_copy(
+        update={
+            "slides": tuple(
+                slide.model_copy(
+                    update={"actions": tuple(described(slide.slide_id, a) for a in slide.actions)}
+                )
+                for slide in analysis.slides
+            )
+        }
+    )
 
 
 def candidate_action_eligible(action: ActionResult | PowerPointActionResult) -> bool:
@@ -188,6 +255,8 @@ class CandidateAnalyses:
         analysis = await Analyses(db).read(record.id, owner_id=owner)
         if not isinstance(analysis, (AnalysisResult, PowerPointAnalysisResult)):
             raise HTTPException(409, "Saved presentation analysis is required.")
+        if isinstance(analysis, PowerPointAnalysisResult):
+            analysis = await with_powerpoint_shape_text(db, record, owner, analysis)
         # A cached read can propose slides only. Any positively usable region always
         # takes the canonical path, including its current evidence and hash checks.
         if record.content_sha256 and not any(a.usable for s in analysis.slides for a in s.actions):
@@ -598,7 +667,7 @@ def resolve(
                         (slide.summary.text or "")
                         + " "
                         + " ".join(
-                            " ".join(sorted(action_words(a)))
+                            " ".join(sorted(action_words(a, analysis)))
                             for a in slide.actions
                             if candidate_action_eligible(a)
                         )
@@ -630,7 +699,7 @@ def resolve(
                 continue
             # Match the spoken words against both the action's purpose and the slide
             # text it targets ("the revenue chart"), not the purpose alone (#202).
-            score = len(query & action_words(action))
+            score = len(query & action_words(action, analysis))
             if score:
                 actions.append(
                     Candidate(
@@ -651,11 +720,11 @@ def resolve(
 ACTION_SLOTS = 3
 
 
-def action_words(action: Any) -> frozenset[str]:
-    target = getattr(getattr(action.action, "params", None), "target_text", None)
-    return tokens(action.action.purpose) | (
-        tokens(target) if isinstance(target, str) else frozenset()
-    )
+def action_words(
+    action: Any, analysis: AnalysisResult | PowerPointAnalysisResult | None = None
+) -> frozenset[str]:
+    target = shown_text(analysis, action) if analysis is not None else None
+    return tokens(action.action.purpose) | (tokens(target) if target else frozenset())
 
 
 def candidate_router() -> APIRouter:

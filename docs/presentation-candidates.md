@@ -171,7 +171,11 @@ round-trip persistence of the session's recovery position.
 This service is the callable boundary for #20. Present's agent loop (#20/#21) uses it
 for live suggestions; see [speech-triggered actions](speech-actions.md) for how speech
 selects and runs verified saved actions (#202). Action candidates match the spoken
-words against both the action's purpose and the slide text it targets.
+words against both the action's purpose and the slide text it targets. That text comes
+from the action itself for PowerPoint highlights, from the analysis grounding record for
+PDF actions, and from the saved extraction's shape text for PowerPoint zooms, which frame
+a whole shape. The same text appears to the agent as "Shows: …" on each option. Visually
+grounded PDF regions (charts, images) have no quoted text and keep their purpose alone.
 
 The service refuses partial latest segments, but completed input is immediately eligible.
 Freshness checks run before and after network access. Supply `current_context` to detect
