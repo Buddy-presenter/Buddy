@@ -221,7 +221,7 @@ def test_ending_a_session_stops_microphone_before_the_server_request(desktop_win
     page = window.present
     monkeypatch.setattr(page, "_microphone_session_available", lambda: True)
     page._session = SimpleNamespace(status="active")
-    page._session_access = "test-access"
+    page._session_access = lambda: "test-access"
     page._microphone_toggle()
     observed = []
     monkeypatch.setattr(
@@ -367,7 +367,7 @@ def test_present_controls_capture_and_stop_real_microphone(desktop_window, qtbot
     # Session/network boundaries are substituted; native input and widgets are real.
     page._session = SimpleNamespace(status="active", id=str(uuid4()))
     monkeypatch.setattr(page.speech, "start", lambda *_args: None)
-    page._session_access = "test-access"
+    page._session_access = lambda: "test-access"
     page._refresh()
     index = page.microphone_device.findText(
         os.environ["BUDDY_TEST_MICROPHONE"], Qt.MatchFlag.MatchContains
@@ -479,7 +479,7 @@ def test_pdf_verification_expired_session_stops_capture_and_clears_access(
     page = window.present
     monkeypatch.setattr(page, "_microphone_session_available", lambda: True)
     page._session = SimpleNamespace(status="active")
-    page._session_access = "expired"
+    page._session_access = lambda: "expired"
     page._microphone_toggle()
     page._microphone_pdf_request_generation = page._microphone_pdf_generation
     page._session_request = ("microphone_verify", page._session_generation, None)

@@ -23,19 +23,21 @@ from PySide6.QtWidgets import (
 )
 
 from buddy_desktop.account_widget import AccountWidget
-from buddy_desktop.auth import AccountProfile
+from buddy_desktop.auth import AccountProfile, AccountSession
 from buddy_desktop.buddy_mini import BuddyMini, mini_caption
 from buddy_desktop.config import AppConfig, ConfigurationError, validate_api_url
+from buddy_desktop.library_service import AccessProvider, LibraryAccessExpired
 from buddy_desktop.library_widget import LibraryWidget
 from buddy_desktop.present_widget import PresentWidget
 from buddy_desktop.presentation_service import DownloadedPDF
 from buddy_desktop.profile_page import ProfilePage
 from buddy_desktop.review_widget import ReviewWidget
-from buddy_desktop.services import Health, HealthService
+from buddy_desktop.services import Health, HealthService, ServiceError
 from buddy_desktop.slide_executor import Completion
 from buddy_desktop.tasks import TaskRunner
 from buddy_desktop.views import HomePage, SettingsPage, divider
 from buddy_desktop.visuals import BuddyMark, app_icon, command, icon
+from buddy_identity.config import IdentityError, SessionExpired
 
 
 class MainWindow(QMainWindow):
@@ -55,6 +57,7 @@ class MainWindow(QMainWindow):
         self._account_busy = False
         self._library_busy = False
         self._verified_profile: AccountProfile | None = None
+        self._present_access: tuple[AccountSession, AccessProvider] | None = None
         self.runner = TaskRunner(self)
         self.runner.succeeded.connect(self._health_succeeded)
         self.runner.failed.connect(self._health_failed)
@@ -432,12 +435,38 @@ class MainWindow(QMainWindow):
             self.account_popover.width(), self.account_popover.sizeHint().height()
         )
 
+    def _access_provider(self, session: AccountSession) -> AccessProvider:
+        """One provider per sign-in that always returns a current access token.
+
+        Access tokens can last only minutes while a presentation lasts much longer, so
+        live presentation work must never keep a copy. The margin covers the longest
+        single use of one token: a session event stream that the server re-checks for
+        150 seconds.
+        """
+        cached = self._present_access
+        if cached is not None and cached[0] is session:
+            return cached[1]
+
+        def access() -> str:
+            try:
+                return session.fresh_access(margin=180)
+            except SessionExpired:
+                raise LibraryAccessExpired("Buddy sign-in expired. Please sign in again.") from None
+            except IdentityError as exc:
+                raise ServiceError(str(exc)) from None
+
+        self._present_access = (session, access)
+        return access
+
     def _account_identity(self) -> None:
         signed_in = bool(self.account.account_id)
-        tokens = self.account.session.tokens if self.account.session is not None else None
+        session = self.account.session
+        tokens = session.tokens if session is not None else None
         self.present.set_account_identity(
             self.account.account_id if signed_in else None,
-            tokens.access if signed_in and tokens is not None else None,
+            self._access_provider(session)
+            if signed_in and session is not None and tokens is not None
+            else None,
         )
         self.profile_action.setVisible(signed_in)
         self.account_divider.setVisible(signed_in)

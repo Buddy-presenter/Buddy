@@ -11,6 +11,7 @@ from dataclasses import replace
 from PySide6.QtCore import QObject, Signal
 
 from buddy_desktop.agent_service import AgentService
+from buddy_desktop.library_service import AccessProvider, access_provider
 from buddy_desktop.presentation_session_service import PresentationSession
 from buddy_desktop.tasks import TaskRunner
 from buddy_desktop.transcript_context import ContextSnapshot
@@ -77,7 +78,7 @@ class AgentLoop(QObject):
         self._prepare_failed_for: str | None = None
         self._partial_attempts: dict[tuple[int, str | None, str], tuple[int, int]] = {}
         self._pending_update = False
-        self._latest_access: str | None = None
+        self._latest_access: AccessProvider | None = None
         self._latest_session: PresentationSession | None = None
         self._submitted_at_ns: int | None = None
         self._submitted_capture_end_ns: int | None = None
@@ -99,8 +100,12 @@ class AgentLoop(QObject):
             self.status.emit("Listening for a clear phrase…" if enabled else "Suggestions off")
 
     def update(
-        self, access: str | None, session: PresentationSession | None, context: ContextSnapshot
+        self,
+        access: AccessProvider | str | None,
+        session: PresentationSession | None,
+        context: ContextSnapshot,
     ) -> None:
+        access = access_provider(access) if access else None
         # Publish immutable snapshots on the GUI thread. Worker reads only this reference.
         previous, self._current = self._current, context
         self._latest_access, self._latest_session = access, session
@@ -204,7 +209,7 @@ class AgentLoop(QObject):
                 self._preparing_for = session.id
                 self._request_generation = self._generation
                 self.status.emit("Preparing presentation suggestions…")
-                self.runner.submit(lambda: self.service.prepare(access, session))
+                self.runner.submit(lambda: self.service.prepare(access(), session))
             return
         if self.runner.busy:
             if self._extends_submitted_decision(context):
@@ -241,7 +246,7 @@ class AgentLoop(QObject):
             return self._current if self._current is not None else replace(context, fresh=False)
 
         self.runner.submit(
-            lambda: self.service.propose(access, session, context, current_context=current)
+            lambda: self.service.propose(access(), session, context, current_context=current)
         )
 
     def _extends_submitted_decision(self, context: ContextSnapshot) -> bool:
