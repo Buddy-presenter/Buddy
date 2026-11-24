@@ -29,7 +29,13 @@ never triggers anything.
    desktop verifies the exact saved action itself (#237). Explicit commands such as "zoom
    into the table" or "highlight the total" are resolved on the device, like "next slide",
    when their words single out one saved, verified action of that type on the slide on
-   screen; anything less clear goes to the server's contextual decision.
+   screen; anything less clear goes to the server's contextual decision. Words match the
+   action's purpose and the slide text it shows (the PDF grounding quote or PowerPoint
+   target/shape text), with spoken units folded ("48 million" matches "$48M") (#239).
+   "Remove the highlight", "zoom out" and "show the whole slide" reset the view the same
+   way. A recognised command that cannot be resolved locally logs
+   `presentation_policy event=local_command_unresolved tool=… reason=…` (for example
+   `no_matching_words`, `ambiguous`, `no_verified_action_of_type`) without speech text.
    Any proposal the desktop cannot run (automatic actions off, presentation still loading,
    speech changed, action on another slide, saved action unavailable) is logged as
    `presentation_policy event=proposal_dropped decision_id=… reason=…` and explained in

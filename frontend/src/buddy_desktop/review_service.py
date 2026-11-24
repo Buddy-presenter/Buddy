@@ -59,6 +59,9 @@ class ReviewAction:
     action_sha256: str | None = None
     corrected: bool = False
     runtime_platform: str | None = None
+    # Slide text the action shows: PDF grounding quote or PowerPoint target/shape text.
+    # Used only to match spoken commands on the device (#239); never logged.
+    shown_text: str | None = None
 
 
 @dataclass(frozen=True)
@@ -150,8 +153,17 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
     summary = ReviewSummary("unavailable", None, "This analysis predates the review format.")
     source_revision = source_sha256 = None
     widths: dict[str, tuple[float, float]] = {}
+    shown_texts: dict[str, str] = {}
     if inputs is not None:
         input_data = _dict(inputs)
+        grounding = input_data.get("grounding")
+        # Optional metadata: a malformed entry is skipped, never fatal to the review.
+        for entry in grounding[:1000] if isinstance(grounding, list) else ():
+            trace = entry.get("trace") if isinstance(entry, dict) else None
+            text = trace.get("target_text") if isinstance(trace, dict) else None
+            grounded_id = entry.get("instance_id") if isinstance(entry, dict) else None
+            if isinstance(grounded_id, str) and isinstance(text, str) and text.strip():
+                shown_texts[grounded_id] = " ".join(text.split())[:300]
         if input_data.get("source_format", "pdf") != source_format:
             raise ValueError
         if powerpoint:
@@ -439,6 +451,15 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                     ).hexdigest(),
                     bool(isinstance(validation, dict) and validation.get("executed_action")),
                     validation.get("runtime_platform") if isinstance(validation, dict) else None,
+                    shown_texts.get(str(action.get("instance_id")))
+                    or next(
+                        (
+                            " ".join(value.split())[:300]
+                            for key in ("target_text", "text")
+                            if isinstance(value := params.get(key), str) and value.strip()
+                        ),
+                        None,
+                    ),
                 )
             )
         slides.append(
