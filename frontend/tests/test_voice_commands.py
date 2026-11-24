@@ -20,6 +20,32 @@ def test_parses_explicit_general_and_image_search_commands():
     )
 
 
+def test_search_self_corrections_replace_the_query_without_losing_search_mode():
+    assert parse_voice_command("Search for images of dogs, I mean cute cats") == WebSearch(
+        "cute cats", images=True
+    )
+    assert parse_voice_command(
+        "Search for quarterly results—actually, revenue growth"
+    ) == WebSearch("revenue growth")
+    assert parse_voice_command("Search for what actually causes inflation") == WebSearch(
+        "what actually causes inflation"
+    )
+    assert parse_voice_command("Search for images of day rather than night") == WebSearch(
+        "day rather than night", images=True
+    )
+    assert parse_voice_command("Search for what I mean by opportunity cost") == WebSearch(
+        "what I mean by opportunity cost"
+    )
+    assert parse_voice_command('Search for the phrase "I mean"') == WebSearch('the phrase "I mean"')
+    assert parse_voice_command(
+        "Search for images of dogs, I mean cats, actually kittens"
+    ) == WebSearch("kittens", images=True)
+    assert parse_voice_command("Search for images of dogs, I mean") is None
+    assert parse_voice_command("Search for images of") is None
+    assert parse_voice_command("Search for the") is None
+    assert parse_voice_command("Search for something") is None
+
+
 def test_parses_clear_return_phrases_only():
     for phrase in (
         "Return to the presentation",
@@ -27,10 +53,18 @@ def test_parses_clear_return_phrases_only():
         "Let's go back to the presentation",
         "let us go back to presentation please",
         "Buddy, return to presentation",
+        "go back to the PDF",
+        "return to my PDF",
+        "switch back to my slides",
+        "take me back to the deck",
+        "go back to Buddy",
+        "let's return to the presentation",
+        "back to the PDF",
     ):
         assert parse_voice_command(phrase) == ReturnToPresentation()
     assert parse_voice_command("We previously saw in marketing strategies") is None
     assert parse_voice_command("Let's talk about going back to the presentation") is None
+    assert parse_voice_command("go back to slide") is None
 
 
 def test_search_command_transcripts_are_suppressed_until_final_and_routed_once():
@@ -75,6 +109,135 @@ def test_return_router_does_not_swallow_slide_navigation_commands():
         {"text": "Return to the previous slide", "segment_id": "prev", "final": True}
     )
     assert not previous.suppress_agent and previous.command is None
+
+    unfinished = router.handle(
+        {"text": "go back to slide", "segment_id": "unfinished-slide-nav", "final": True}
+    )
+    assert not unfinished.suppress_agent and unfinished.command is None
+
+
+def test_router_accepts_a_quick_correction_as_a_replacement_search():
+    router = VoiceCommandRouter()
+    initial = router.handle(
+        {
+            "text": "Search for images of dogs",
+            "segment_id": "initial-search",
+            "final": True,
+        }
+    )
+    corrected = router.handle(
+        {"text": "I mean cute cats", "segment_id": "correction", "final": True}
+    )
+    assert initial.command == WebSearch("dogs", images=True)
+    assert corrected.suppress_agent
+    assert corrected.command == WebSearch("cute cats", images=True)
+
+
+def test_router_keeps_a_correction_segment_suppressed_until_its_final(monkeypatch):
+    from buddy_desktop import voice_commands
+
+    now = [10.0]
+    monkeypatch.setattr(voice_commands, "monotonic", lambda: now[0])
+    router = VoiceCommandRouter()
+    router.handle(
+        {
+            "text": "Search for images of dogs",
+            "segment_id": "initial-search",
+            "final": True,
+        }
+    )
+    now[0] += 0.4
+    partial = router.handle({"text": "I mean cute", "segment_id": "correction", "final": False})
+    now[0] += 0.8
+    final = router.handle({"text": "I mean cute cats", "segment_id": "correction", "final": True})
+    assert partial.suppress_agent and partial.correction_pending
+    assert final.suppress_agent
+    assert final.command == WebSearch("cute cats", images=True)
+
+
+def test_incomplete_image_search_waits_for_query_words_across_segments(monkeypatch):
+    from buddy_desktop import voice_commands
+
+    now = [10.0]
+    monkeypatch.setattr(voice_commands, "monotonic", lambda: now[0])
+    router = VoiceCommandRouter()
+    pending = router.handle(
+        {"text": "Search for images of", "segment_id": "incomplete", "final": True}
+    )
+    now[0] += 1.0
+    partial = router.handle({"text": "cute cats", "segment_id": "query", "final": False})
+    completed = router.handle({"text": "cute cats", "segment_id": "query", "final": True})
+
+    assert pending.search_pending and pending.command is None and pending.suppress_agent
+    assert partial.search_pending and partial.suppress_agent
+    assert completed.command == WebSearch("cute cats", images=True)
+
+
+def test_incomplete_search_does_not_capture_slide_navigation(monkeypatch):
+    from buddy_desktop import voice_commands
+
+    now = [10.0]
+    monkeypatch.setattr(voice_commands, "monotonic", lambda: now[0])
+    router = VoiceCommandRouter()
+    pending = router.handle(
+        {"text": "Search for images of", "segment_id": "incomplete", "final": True}
+    )
+    assert pending.search_pending
+
+    for text in ("Let's go back to the first slide", "I want to go back to slide one"):
+        now[0] += 0.2
+        result = router.handle({"text": text, "segment_id": text, "final": True})
+        assert not result.suppress_agent
+        assert not result.search_pending
+        assert result.command is None
+
+
+def test_incomplete_image_search_ignores_standalone_correction_marker(monkeypatch):
+    from buddy_desktop import voice_commands
+
+    now = [10.0]
+    monkeypatch.setattr(voice_commands, "monotonic", lambda: now[0])
+    router = VoiceCommandRouter()
+    router.handle({"text": "Search for images of", "segment_id": "search", "final": True})
+    now[0] += 0.2
+    correction = router.handle({"text": "I mean", "segment_id": "correction", "final": True})
+    assert correction.search_pending and correction.suppress_agent
+    assert correction.command is None
+    now[0] += 0.2
+    completed = router.handle({"text": "cute cats", "segment_id": "query", "final": True})
+    assert completed.command == WebSearch("cute cats", images=True)
+
+
+def test_incomplete_self_correction_waits_for_query_words_across_final_segments(monkeypatch):
+    from buddy_desktop import voice_commands
+
+    now = [10.0]
+    monkeypatch.setattr(voice_commands, "monotonic", lambda: now[0])
+    router = VoiceCommandRouter()
+    router.handle(
+        {
+            "text": "Search for images of dogs",
+            "segment_id": "initial-search",
+            "final": True,
+        }
+    )
+    now[0] += 0.2
+    incomplete = router.handle({"text": "I mean", "segment_id": "correction-marker", "final": True})
+    now[0] += 0.8
+    completed = router.handle(
+        {"text": "cute cats", "segment_id": "correction-query", "final": True}
+    )
+
+    assert incomplete.correction_pending and incomplete.correction_waiting_for_query
+    assert incomplete.command is None
+    assert completed.command == WebSearch("cute cats", images=True)
+
+
+def test_correction_phrase_is_ordinary_speech_without_a_recent_search():
+    router = VoiceCommandRouter()
+    result = router.handle({"text": "I mean cute cats", "segment_id": "ordinary", "final": True})
+    assert not result.suppress_agent
+    assert result.command is None
 
 
 def test_partial_router_does_not_swallow_normal_sentences_with_similar_openings():

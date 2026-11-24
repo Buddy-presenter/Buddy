@@ -547,6 +547,11 @@ class PresentWidget(Page):
         self._voice_command_status_timer = QTimer(self)
         self._voice_command_status_timer.setSingleShot(True)
         self._voice_command_status_timer.timeout.connect(self._clear_voice_command_status)
+        self._pending_voice_search: WebSearch | None = None
+        self._voice_search_dispatch_timer = QTimer(self)
+        self._voice_search_dispatch_timer.setSingleShot(True)
+        self._voice_search_dispatch_timer.setInterval(500)
+        self._voice_search_dispatch_timer.timeout.connect(self._dispatch_voice_search)
         # Latest recognized words for the Buddy Mini caption (text, monotonic time).
         self.live_caption: tuple[str, float] | None = None
         self.speech_text = QPlainTextEdit()
@@ -2403,14 +2408,25 @@ class PresentWidget(Page):
     @Slot(object)
     def _speech_transcript(self, event: dict[str, object]) -> None:
         command = self.voice_commands.handle(event)
+        if command.search_pending:
+            self._voice_search_dispatch_timer.stop()
+            self._pending_voice_search = None
+        if command.correction_pending and self._pending_voice_search is not None:
+            # Let the correction finish before opening Chrome, but keep the wait
+            # bounded to the short search correction window.
+            delay = 1800 if command.correction_waiting_for_query else 500
+            self._voice_search_dispatch_timer.start(delay)
         if command.suppress_agent:
             # Explicit external commands stay local. Also invalidate older model
             # work so it cannot run while Chrome is foregrounded or on return.
             self.agent.cancel_pending_decision()
             self.policy.clear_pending()
             if isinstance(command.command, WebSearch):
-                self.web_search_requested.emit(command.command.query, command.command.images)
+                self._pending_voice_search = command.command
+                self._voice_search_dispatch_timer.start(500)
             elif isinstance(command.command, ReturnToPresentation):
+                self._voice_search_dispatch_timer.stop()
+                self._pending_voice_search = None
                 self.return_to_presentation_requested.emit()
         elif (
             self._session is not None
@@ -2453,6 +2469,12 @@ class PresentWidget(Page):
         self.voice_command_status.setVisible(bool(message))
         if message and timeout_ms > 0:
             self._voice_command_status_timer.start(timeout_ms)
+
+    @Slot()
+    def _dispatch_voice_search(self) -> None:
+        search, self._pending_voice_search = self._pending_voice_search, None
+        if search is not None:
+            self.web_search_requested.emit(search.query, search.images)
 
     def _clear_voice_command_status(self) -> None:
         self.voice_command_status.clear()

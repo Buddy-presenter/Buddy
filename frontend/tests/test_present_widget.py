@@ -105,11 +105,12 @@ def test_transcript_update_runs_agent_immediately_without_waiting_for_timer(pres
 
 
 def test_voice_search_stays_local_and_suppresses_partial_and_final_agent_input(
-    present, signal_recorder, monkeypatch
+    present, signal_recorder, monkeypatch, qtbot
 ):
     from PySide6.QtTest import QSignalSpy
 
     _window, page = present
+    page._agent_tick.stop()
     search_spy = QSignalSpy(page.web_search_requested)
     agent_updates = []
     monkeypatch.setattr(page, "_update_agent", lambda: agent_updates.append(True))
@@ -126,10 +127,185 @@ def test_voice_search_stays_local_and_suppresses_partial_and_final_agent_input(
     page._speech_transcript(
         {**base, "text": "Open Chrome and search for images of cute cats.", "final": True}
     )
+    assert search_spy.count() == 0
+    qtbot.waitUntil(lambda: search_spy.count() == 1, timeout=1000)
     assert search_spy.count() == 1
     assert search_spy.at(0) == ["cute cats", True]
     assert agent_updates == []
     assert "Open Chrome and search" in page.speech_text.toPlainText()
+
+
+def test_quick_search_correction_updates_pending_query_before_chrome_opens(
+    present, signal_recorder, qtbot
+):
+    from PySide6.QtTest import QSignalSpy
+
+    _window, page = present
+    search_spy = QSignalSpy(page.web_search_requested)
+    page._speech_transcript(
+        {
+            "text": "Search for images of dogs",
+            "final": True,
+            "segment_id": "first-search",
+            "sequence": 1,
+            "start_seconds": 0.0,
+            "end_seconds": 0.7,
+            "latency_ms": 20,
+        }
+    )
+    page._speech_transcript(
+        {
+            "text": "I mean cute",
+            "final": False,
+            "segment_id": "search-correction",
+            "sequence": 2,
+            "start_seconds": 0.71,
+            "end_seconds": 1.0,
+            "latency_ms": 20,
+        }
+    )
+    qtbot.wait(300)
+    assert search_spy.count() == 0
+    page._speech_transcript(
+        {
+            "text": "I mean cute cats",
+            "final": True,
+            "segment_id": "search-correction",
+            "sequence": 3,
+            "start_seconds": 0.71,
+            "end_seconds": 1.2,
+            "latency_ms": 20,
+        }
+    )
+
+    assert search_spy.count() == 0
+    qtbot.waitUntil(lambda: search_spy.count() == 1, timeout=1000)
+    assert search_spy.at(0) == ["cute cats", True]
+
+
+def test_incomplete_image_search_waits_for_a_concrete_query(present, signal_recorder, qtbot):
+    from PySide6.QtTest import QSignalSpy
+
+    _window, page = present
+    search_spy = QSignalSpy(page.web_search_requested)
+    page._speech_transcript(
+        {
+            "text": "Search for images of",
+            "final": True,
+            "segment_id": "incomplete-search",
+            "sequence": 1,
+            "start_seconds": 0.0,
+            "end_seconds": 0.7,
+            "latency_ms": 20,
+        }
+    )
+    qtbot.wait(650)
+    assert search_spy.count() == 0
+
+    page._speech_transcript(
+        {
+            "text": "cute cats",
+            "final": False,
+            "segment_id": "search-subject",
+            "sequence": 2,
+            "start_seconds": 0.71,
+            "end_seconds": 1.0,
+            "latency_ms": 20,
+        }
+    )
+    page._speech_transcript(
+        {
+            "text": "cute cats",
+            "final": True,
+            "segment_id": "search-subject",
+            "sequence": 3,
+            "start_seconds": 0.71,
+            "end_seconds": 1.2,
+            "latency_ms": 20,
+        }
+    )
+    qtbot.waitUntil(lambda: search_spy.count() == 1, timeout=1000)
+    assert search_spy.at(0) == ["cute cats", True]
+
+
+def test_incomplete_correction_keeps_the_original_search_queued_until_query_arrives(
+    present, signal_recorder, qtbot
+):
+    from PySide6.QtTest import QSignalSpy
+
+    _window, page = present
+    search_spy = QSignalSpy(page.web_search_requested)
+    page._speech_transcript(
+        {
+            "text": "Search for images of dogs",
+            "final": True,
+            "segment_id": "initial-search",
+            "sequence": 1,
+            "start_seconds": 0.0,
+            "end_seconds": 0.7,
+            "latency_ms": 20,
+        }
+    )
+    page._speech_transcript(
+        {
+            "text": "I mean",
+            "final": True,
+            "segment_id": "correction-marker",
+            "sequence": 2,
+            "start_seconds": 0.71,
+            "end_seconds": 0.9,
+            "latency_ms": 20,
+        }
+    )
+    qtbot.wait(700)
+    assert search_spy.count() == 0
+    page._speech_transcript(
+        {
+            "text": "cute cats",
+            "final": True,
+            "segment_id": "correction-query",
+            "sequence": 3,
+            "start_seconds": 0.91,
+            "end_seconds": 1.2,
+            "latency_ms": 20,
+        }
+    )
+    qtbot.waitUntil(lambda: search_spy.count() == 1, timeout=1000)
+    assert search_spy.at(0) == ["cute cats", True]
+
+
+def test_return_command_cancels_a_search_still_waiting_for_correction_window(
+    present, signal_recorder
+):
+    from PySide6.QtTest import QSignalSpy
+
+    _window, page = present
+    search_spy = QSignalSpy(page.web_search_requested)
+    return_spy = QSignalSpy(page.return_to_presentation_requested)
+    page._speech_transcript(
+        {
+            "text": "Search for images of dogs",
+            "final": True,
+            "segment_id": "search-before-return",
+            "sequence": 1,
+            "start_seconds": 0.0,
+            "end_seconds": 0.7,
+            "latency_ms": 20,
+        }
+    )
+    page._speech_transcript(
+        {
+            "text": "Go back to the PDF",
+            "final": True,
+            "segment_id": "return-before-search-open",
+            "sequence": 2,
+            "start_seconds": 0.71,
+            "end_seconds": 1.2,
+            "latency_ms": 20,
+        }
+    )
+    assert search_spy.count() == 0
+    assert return_spy.count() == 1
 
 
 def test_voice_return_command_is_local_and_does_not_require_live_suggestions(
