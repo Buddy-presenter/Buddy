@@ -316,12 +316,19 @@ class TransitionPolicy:
         if now_ns < self._hold_until:
             return reject("cooldown")
         if (
-            prediction.source not in {"model", "navigation"}
+            prediction.source not in {"model", "navigation", "local_command"}
             or prediction.reason not in {"explicit", "topic", "correction"}
             or not evidence_sequences.intersection(segment.sequence for segment in segments)
         ):
             return reject("weak_evidence")
-        if prediction.source == "navigation":
+        if prediction.source == "local_command":
+            # An explicit spoken zoom/highlight matched on this device to one saved action.
+            if prediction.reason != "explicit" or target.tool not in {
+                "zoom_region",
+                "highlight_region",
+            }:
+                return reject("weak_evidence")
+        elif prediction.source == "navigation":
             if prediction.reason not in {"explicit", "topic"} or target.tool not in {
                 "next_slide",
                 "previous_slide",

@@ -210,3 +210,111 @@ def navigation_intent(text: str) -> tuple[str, int] | None:
             if value is not None and _safe_continuation(number_words[end:]):
                 return ("absolute", value)
     return None
+
+
+_REGION_COMMANDS = (
+    (
+        "zoom_region",
+        r"^(?:please )?(?:let us |can you |could you |now )?"
+        r"(?:zoom (?:in )?(?:into|in on|on|onto|to)|zoom in|focus on|enlarge|magnify)\b ?",
+    ),
+    (
+        "highlight_region",
+        r"^(?:please )?(?:let us |can you |could you |now )?(?:highlight|emphasize|emphasise)\b ?",
+    ),
+)
+_HEDGES = frozenset(
+    [
+        "if",
+        "unless",
+        "until",
+        "only",
+        "provided",
+        "assuming",
+        "depending",
+        "not",
+        "no",
+        "never",
+        "cannot",
+        "without",
+        "actually",
+        "instead",
+        "rather",
+        "sorry",
+        "wait",
+        "cancel",
+        "forget",
+        "scratch",
+        "but",
+        "or",
+        "later",
+    ]
+)
+_FILLER = frozenset(
+    [
+        "the",
+        "a",
+        "an",
+        "this",
+        "that",
+        "these",
+        "those",
+        "in",
+        "on",
+        "of",
+        "to",
+        "into",
+        "onto",
+        "at",
+        "please",
+        "here",
+        "there",
+        "it",
+        "its",
+        "one",
+        "slide",
+        "page",
+        "region",
+        "area",
+        "part",
+        "section",
+        "bit",
+        "thing",
+        "now",
+        "for",
+        "me",
+        "us",
+    ]
+)
+
+
+def region_intent(text: str) -> tuple[str, frozenset[str]] | None:
+    """An explicit zoom/highlight command and the words naming its object, or None.
+
+    Like navigation, only clear imperatives qualify; questions, negations and hedged
+    phrases defer to the server's contextual decision.
+    """
+    normalized = unicodedata.normalize("NFKC", text).casefold().strip()
+    if any(char in normalized for char in '?？"“”«»'):
+        return None
+    phrase = " ".join(_tokens(normalized))
+    for tool, pattern in _REGION_COMMANDS:
+        match = re.match(pattern, phrase)
+        if not match:
+            continue
+        rest = phrase[match.end() :].split()
+        if _HEDGES.intersection(rest) or any(
+            rest[i : i + 2] == ["do", "not"] for i in range(len(rest) - 1)
+        ):
+            return None
+        return tool, frozenset(word_stem(w) for w in rest if w not in _FILLER)
+    return None
+
+
+def word_stem(word: str) -> str:
+    """A tiny plural fold so "numbers" names "number"; no language model involved."""
+    return word[:-1] if len(word) > 3 and word.endswith("s") and not word.endswith("ss") else word
+
+
+def action_words(*texts: str) -> frozenset[str]:
+    return frozenset(word_stem(w) for text in texts for w in _tokens(text) if w not in _FILLER)

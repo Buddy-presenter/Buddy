@@ -843,3 +843,74 @@ def test_new_command_does_not_inherit_previous_input_pacing(qtbot, monkeypatch):
         assert service.calls[-1].segments[-1].text == "Let's go to the next slide."
     finally:
         loop.wait_for_shutdown()
+
+
+def test_live_decisions_reuse_one_connection_and_recover_when_it_closes():
+    # #237: a new TLS connection per suggestion added about 0.15 s each time.
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.error import HTTPError
+
+    from buddy_desktop.agent_service import KeptConnection
+
+    connections = []
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def setup(self):
+            super().setup()
+            connections.append(self.client_address)
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            status = 409 if self.path.endswith("/conflict") else 200
+            body = b'{"ok":true}'
+            self.send_response(status)
+            self.send_header("Content-Length", str(len(body)))
+            if self.path.endswith("/close"):
+                self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        kept = KeptConnection(f"http://127.0.0.1:{server.server_port}")
+        for _ in range(3):
+            assert kept.post("/a", b"{}", {}, timeout=3, limit=100) == b'{"ok":true}'
+        assert len(connections) == 1
+        kept.post("/close", b"{}", {}, timeout=3, limit=100)
+        kept.post("/a", b"{}", {}, timeout=3, limit=100)
+        assert len(connections) == 2
+        with pytest.raises(HTTPError) as error:
+            kept.post("/conflict", b"{}", {}, timeout=3, limit=100)
+        assert error.value.code == 409 and error.value.read() == b'{"ok":true}'
+        with pytest.raises(ValueError):
+            kept.post("/a", b"{}", {}, timeout=3, limit=5)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_region_command_parser_accepts_only_clear_imperatives():
+    from buddy_desktop.navigation import region_intent
+
+    assert region_intent("Zoom into the hiring numbers.") == (
+        "zoom_region",
+        frozenset({"hiring", "number"}),
+    )
+    assert region_intent("highlight the total") == ("highlight_region", frozenset({"total"}))
+    assert region_intent("zoom in") == ("zoom_region", frozenset())
+    for text in (
+        "Don't zoom into the table",
+        "zoom into the table later",
+        "we zoomed into the table",
+        "Can you zoom into the table?",
+        "highlight the total, actually no",
+    ):
+        assert region_intent(text) is None, text
