@@ -914,3 +914,24 @@ def test_region_command_parser_accepts_only_clear_imperatives():
         "highlight the total, actually no",
     ):
         assert region_intent(text) is None, text
+
+
+def test_reset_command_parser_accepts_only_clear_imperatives():
+    from buddy_desktop.navigation import reset_intent
+
+    for text in (
+        "Remove the highlight",
+        "zoom out",
+        "Show the whole slide",
+        "go back to the full slide",
+        "clear the highlight please",
+    ):
+        assert reset_intent(text), text
+    for text in (
+        "don't remove the highlight",
+        "should we zoom out?",
+        "we removed the highlight",
+        "next slide",
+        "highlight the total",
+    ):
+        assert not reset_intent(text), text

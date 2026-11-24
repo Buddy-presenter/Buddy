@@ -55,7 +55,12 @@ from buddy_desktop.library_service import (
     access_provider,
 )
 from buddy_desktop.microphone import MicrophoneController
-from buddy_desktop.navigation import action_words, navigation_intent, region_intent
+from buddy_desktop.navigation import (
+    action_words,
+    navigation_intent,
+    region_intent,
+    reset_intent,
+)
 from buddy_desktop.powerpoint import PowerPointAutomation, PresentationInfo
 from buddy_desktop.powerpoint_contract import (
     PowerPointAction,
@@ -977,60 +982,90 @@ class PresentWidget(Page):
     def _local_region_proposal(
         self, session: PresentationSession, context: ContextSnapshot, slide_id: str
     ) -> dict[str, object] | None:
-        """Resolve an explicit "zoom into the table" / "highlight the total" on this device (#237).
+        """Resolve explicit zoom/highlight/reset commands on this device (#237, #239).
 
-        Only a clear imperative whose words single out one saved, verified action of that
-        type on the slide on screen qualifies. Anything ambiguous returns None, so the
-        server's contextual decision still handles it. Nothing here can invent a region.
+        "Zoom into the table", "highlight 48 million" and "remove the highlight" run like
+        "next slide" when the words single out one saved, verified action of that type on
+        the slide on screen (matched against its purpose and the slide text it shows).
+        Anything unclear returns None so the server's contextual decision handles it, and
+        a recognised command that could not be resolved logs a content-free reason.
+        Nothing here can invent a region.
         """
         segments = context.decision_segments
-        intent = region_intent(segments[-1].text)
-        analysis = self._generated_analysis
-        if intent is None or analysis is None or str(analysis.id) != session.analysis_version_id:
+        text = segments[-1].text
+        if reset_intent(text):
+            return self._local_command(session, context, slide_id, "reset_view", None, None)
+        intent = region_intent(text)
+        if intent is None:
             return None
         tool, named = intent
-        slide = next((s for s in analysis.slides if s.slide_id == slide_id), None)
-        if slide is None:
+
+        def unresolved(reason: str, candidates: int = 0) -> None:
+            logger.info(
+                "presentation_policy event=local_command_unresolved tool=%s reason=%s "
+                "candidates=%d",
+                tool,
+                reason,
+                candidates,
+            )
+
+        analysis = self._generated_analysis
+        if analysis is None or str(analysis.id) != session.analysis_version_id:
+            unresolved("saved_actions_not_loaded")
             return None
+        slide = next((s for s in analysis.slides if s.slide_id == slide_id), None)
         actions = [
             a
-            for a in slide.actions
+            for a in (slide.actions if slide is not None else ())
             if a.action_type == tool and saved_action_eligible(analysis.source_format, a)
         ]
+        if not actions:
+            unresolved("no_verified_action_of_type")
+            return None
         if not named:
-            chosen = actions[0] if len(actions) == 1 else None
+            if len(actions) != 1:
+                unresolved("ambiguous", len(actions))
+                return None
+            chosen = actions[0]
         else:
             scored = sorted(
                 (
                     (
-                        len(
-                            named
-                            & action_words(
-                                a.purpose,
-                                *(
-                                    str(value)
-                                    for key in ("target_text", "text")
-                                    if isinstance(
-                                        value := (
-                                            (getattr(a, "raw", None) or {}).get("params") or {}
-                                        ).get(key),
-                                        str,
-                                    )
-                                ),
-                            )
-                        ),
-                        a,
+                        len(named & action_words(a.purpose, getattr(a, "shown_text", None) or "")),
+                        index,
                     )
-                    for a in actions
+                    for index, a in enumerate(actions)
                 ),
-                key=lambda row: -row[0],
+                reverse=True,
             )
-            best = scored[0] if scored else None
-            runner_up = scored[1][0] if len(scored) > 1 else 0
-            chosen = best[1] if best is not None and best[0] > runner_up else None
-        if chosen is None:
-            return None
+            best, runner_up = scored[0][0], scored[1][0] if len(scored) > 1 else 0
+            if best == 0:
+                unresolved("no_matching_words", len(actions))
+                return None
+            if best == runner_up:
+                unresolved("ambiguous", len(actions))
+                return None
+            chosen = actions[scored[0][1]]
         x, y, width, height = chosen.region
+        return self._local_command(
+            session,
+            context,
+            slide_id,
+            tool,
+            chosen.instance_id,
+            {"x": x, "y": y, "width": width, "height": height},
+        )
+
+    def _local_command(
+        self,
+        session: PresentationSession,
+        context: ContextSnapshot,
+        slide_id: str,
+        tool: str,
+        action_id: str | None,
+        region: dict[str, float] | None,
+    ) -> dict[str, object]:
+        segments = context.decision_segments
         return {
             "decision_id": str(uuid4()),
             "session_id": session.id,
@@ -1047,8 +1082,8 @@ class PresentWidget(Page):
             "target": {
                 "tool": tool,
                 "slide_id": slide_id,
-                "action_id": chosen.instance_id,
-                "region": {"x": x, "y": y, "width": width, "height": height},
+                "action_id": action_id,
+                "region": region,
             },
             "_client_context": context,
             "_client_segment_ids": [segment.segment_id for segment in segments],

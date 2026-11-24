@@ -651,8 +651,8 @@ def test_dropped_proposals_always_log_and_show_a_reason(player, qtbot, caplog):
     assert "proposal_dropped" not in caplog.text  # Nothing was going to run.
 
 
-def spoken(current, text):
-    segment = ContextSegment("cmd", 2, text, True, 0, 1, time.monotonic_ns())
+def spoken(current, text, sequence=2):
+    segment = ContextSegment(f"cmd-{sequence}", sequence, text, True, 0, 1, time.monotonic_ns())
     return replace(current[0], segments=(segment,))
 
 
@@ -695,3 +695,53 @@ def test_unverified_saved_action_is_never_resolved_locally(player):
     page._generated_analysis = saved_analysis(page, semantic_verified=False)
     current[0] = spoken(current, "Highlight the revenue figure.")
     assert page._local_navigation_proposal(page._session, current[0]) is None
+
+
+def test_spoken_figure_matches_pdf_slide_text_locally(player, qtbot):
+    # #239: the purpose alone never says "$48M"; the grounded slide text does.
+    page, _, current, _, checks = player
+    page._generated_analysis = saved_analysis(page, shown_text="Total revenue $48M")
+    current[0] = spoken(current, "Highlight 48 million.")
+    local = page._local_navigation_proposal(page._session, current[0])
+    assert local is not None and local["decision_source"] == "local_command"
+    page._agent_proposed(local)
+    qtbot.waitUntil(lambda: bool(page.surface.highlight))
+    assert checks == []
+
+
+def test_remove_highlight_resets_the_view_locally(player, qtbot):
+    page, _, current, _, checks = player
+    page._generated_analysis = saved_analysis(page)
+    current[0] = spoken(current, "Highlight the revenue figure.")
+    page._agent_proposed(page._local_navigation_proposal(page._session, current[0]))
+    qtbot.waitUntil(lambda: bool(page.surface.highlight) and not page.executor.busy)
+    qtbot.waitUntil(lambda: not page.session_runner.busy and page._session_pending_state is None)
+    # Live speech after the sync carries the session's current state version.
+    current[0] = replace(
+        spoken(current, "Remove the highlight.", sequence=3),
+        state_version=page._session.state_version,
+    )
+    local = page._local_navigation_proposal(page._session, current[0])
+    assert local is not None and local["target"]["tool"] == "reset_view"
+    page.policy._hold_until = 0  # Skip the post-action cooldown the test does not wait for.
+    page._agent_proposed(local)
+    # The highlight's session sync defers the reset; the fixture stops the retry timer.
+    qtbot.waitUntil(lambda: not page.session_runner.busy and page._session_pending_state is None)
+    page._retry_deferred_policy()
+    qtbot.waitUntil(lambda: not page.surface.highlight)
+    assert checks == []
+
+
+def test_unresolved_commands_log_a_content_free_reason(player, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO, logger="buddy_desktop.present_widget")
+    page, _, current, _, _ = player
+    page._generated_analysis = saved_analysis(page)
+    current[0] = spoken(current, "Highlight the conclusion.")
+    assert page._local_navigation_proposal(page._session, current[0]) is None
+    assert "local_command_unresolved tool=highlight_region reason=no_matching_words" in caplog.text
+    assert "conclusion" not in caplog.text
+    current[0] = spoken(current, "Zoom into the chart.")
+    assert page._local_navigation_proposal(page._session, current[0]) is None
+    assert "reason=no_verified_action_of_type" in caplog.text

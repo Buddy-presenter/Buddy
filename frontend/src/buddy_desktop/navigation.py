@@ -253,6 +253,9 @@ _HEDGES = frozenset(
 _FILLER = frozenset(
     [
         "the",
+        "percent",
+        "per",
+        "cent",
         "a",
         "an",
         "this",
@@ -312,9 +315,52 @@ def region_intent(text: str) -> tuple[str, frozenset[str]] | None:
 
 
 def word_stem(word: str) -> str:
-    """A tiny plural fold so "numbers" names "number"; no language model involved."""
+    """A tiny plural/unit fold so "numbers" names "number" and "million" names "M"."""
+    if word in _UNITS:
+        return _UNITS[word]
     return word[:-1] if len(word) > 3 and word.endswith("s") and not word.endswith("ss") else word
 
 
 def action_words(*texts: str) -> frozenset[str]:
     return frozenset(word_stem(w) for text in texts for w in _tokens(text) if w not in _FILLER)
+
+
+_RESET_COMMANDS = (
+    r"^(?:please )?(?:let us |can you |could you |now )?"
+    r"(?:remove|clear|hide|undo|turn off|get rid of) (?:the |that |this )?"
+    r"(?:highlight|highlighting|zoom|focus)\b",
+    r"^(?:please )?(?:let us |can you |could you |now )?(?:unhighlight|zoom out|unzoom)\b",
+    r"^(?:please )?(?:let us |can you |could you |now )?(?:go )?back to the "
+    r"(?:full|whole|entire) (?:slide|page|view)\b",
+    r"^(?:please )?(?:let us |can you |could you |now )?show (?:me |us )?the "
+    r"(?:full|whole|entire) (?:slide|page)\b",
+    r"^(?:please )?(?:let us |can you |could you |now )?reset (?:the )?(?:view|zoom|slide)\b",
+)
+# Spoken units and their usual on-slide abbreviations ("48 million" vs "$48M").
+_UNITS = {
+    "million": "m",
+    "millions": "m",
+    "mn": "m",
+    "billion": "b",
+    "billions": "b",
+    "bn": "b",
+    "thousand": "k",
+    "thousands": "k",
+}
+
+
+def reset_intent(text: str) -> bool:
+    """A clear request to show the whole slide again ("remove the highlight", "zoom out")."""
+    normalized = unicodedata.normalize("NFKC", text).casefold().strip()
+    if any(char in normalized for char in '?？"“”«»'):
+        return False
+    phrase = " ".join(_tokens(normalized))
+    for pattern in _RESET_COMMANDS:
+        match = re.match(pattern, phrase)
+        if match:
+            rest = phrase[match.end() :].split()
+            return not (
+                _HEDGES.intersection(rest)
+                or any(rest[i : i + 2] == ["do", "not"] for i in range(len(rest) - 1))
+            )
+    return False

@@ -326,6 +326,7 @@ class TransitionPolicy:
             if prediction.reason != "explicit" or target.tool not in {
                 "zoom_region",
                 "highlight_region",
+                "reset_view",
             }:
                 return reject("weak_evidence")
         elif prediction.source == "navigation":
