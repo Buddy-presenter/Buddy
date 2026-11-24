@@ -731,26 +731,28 @@ class MainWindow(QMainWindow):
         allow_current_process_foreground()
         result = launch_chrome_search(query, images=images)
         if result.opened:
-            message = (
-                "Opening Google Images in Chrome…"
-                if images
-                else "Opening Google Search in Chrome…"
-            )
-            self.present.show_voice_command_status(message)
+            return
         else:
-            self.present.show_voice_command_status(result.message, 10000)
+            self._show_voice_command_feedback(result.message, 10000)
 
     @Slot()
     def _return_to_presentation_by_voice(self) -> None:
         fullscreen = self.present.fullscreen
         target = fullscreen if fullscreen is not None and fullscreen.isVisible() else self
         if activate_qt_window(target):
-            self.present.show_voice_command_status("Returned to the presentation.", 4000)
+            self._show_voice_command_feedback("Returned to the presentation.", 4000)
         else:
-            self.present.show_voice_command_status(
+            self._show_voice_command_feedback(
                 "Windows did not focus Buddy. Say “return to the presentation” again.",
                 10000,
             )
+
+    def _show_voice_command_feedback(self, message: str, timeout_ms: int) -> None:
+        fullscreen = self.present.fullscreen
+        if fullscreen is not None and fullscreen.isVisible():
+            fullscreen.show_voice_feedback(message, timeout_ms)
+        else:
+            self.present.show_voice_command_status(message, timeout_ms)
 
     def _maybe_auto_mini(self) -> None:
         self._mini_auto_attempts += 1

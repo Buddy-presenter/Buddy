@@ -27,6 +27,7 @@ QLabel#muted, QLabel#pageDescription { color: #A4A4AF; }
 QLabel#caption { color: #A4A4AF; font-size: 12px; }
 QLabel#connectionStatus { color: #A4A4AF; font-size: 12px; }
 QLabel#badge { color: #8ED5B6; font-size: 12px; }
+QLabel#voiceCommandFeedback { color: #F3F0E9; background: #1E1E1E; border: 1px solid #FF9F61; border-radius: 8px; padding: 8px 12px; }
 
 /* Surfaces */
 QWidget#statePanel { background: transparent; }
