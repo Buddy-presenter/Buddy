@@ -253,7 +253,14 @@ def test_region_options_show_the_slide_text_they_target():
             ),
         )
         slide = SimpleNamespace(
-            slide_id="1", summary=SimpleNamespace(text="Revenue"), actions=(action,)
+            slide_id="1",
+            summary=SimpleNamespace(
+                text=(
+                    "Market analysis: a current market-share pie chart and "
+                    "projected sales bar chart."
+                )
+            ),
+            actions=(action,),
         )
         candidate = Candidate(
             kind="highlight_region", slide_id="1", action_id="revenue", reason="purpose", score=1
@@ -262,13 +269,26 @@ def test_region_options_show_the_slide_text_they_target():
         return options(source, (candidate,))[1][-1]["content"]
 
     # Speech that states the figure ("$48 million") must visibly match the option.
-    assert option("$48 million") == "Highlight the total revenue figure Shows: $48 million"
-    # Zooms and PDF actions without target text keep their purpose alone.
-    assert option("") == "Highlight the total revenue figure"
-    assert option(None) == "Highlight the total revenue figure"
+    assert option("$48 million") == (
+        "Slide context: Market analysis: a current market-share pie chart "
+        "and projected sales bar chart.\n"
+        "Action purpose: Highlight the total revenue figure\nShows: $48 million"
+    )
+    # Region options always include context, even without exact source text.
+    assert option("") == (
+        "Slide context: Market analysis: a current market-share pie chart "
+        "and projected sales bar chart.\n"
+        "Action purpose: Highlight the total revenue figure"
+    )
+    assert option(None) == (
+        "Slide context: Market analysis: a current market-share pie chart "
+        "and projected sales bar chart.\n"
+        "Action purpose: Highlight the total revenue figure"
+    )
     # The selector is told that speech about one element selects its region action.
     assert "zoom_region or highlight_region option" in SYSTEM
     assert "not mere continued explanation" in SYSTEM
+    assert "compare its saved action purpose and target text with the slide" in SYSTEM
 
 
 def test_natural_navigation_options_do_not_depend_on_semantic_shortlist():
@@ -970,7 +990,8 @@ def test_pdf_and_powerpoint_zoom_options_show_their_slide_text():
     )
     source = AgentInput(pdf, "1", "slide", "hash")
     assert options(source, (candidate,))[1][-1]["content"] == (
-        "Show the hiring breakdown Shows: London 5 Beirut 4 Total 14"
+        "Slide context: Team\nAction purpose: Show the hiring breakdown\n"
+        "Shows: London 5 Beirut 4 Total 14"
     )
     assert documents(pdf)[-1].text.endswith("Target: London 5 Beirut 4 Total 14")
 
@@ -1009,7 +1030,7 @@ def test_pdf_and_powerpoint_zoom_options_show_their_slide_text():
     )
     source = AgentInput(described, "s1", "slide", "hash")
     assert options(source, (candidate,))[1][-1]["content"] == (
-        "Show the revenue chart Shows: Revenue $48M Q4"
+        "Slide context: Q4\nAction purpose: Show the revenue chart\nShows: Revenue $48M Q4"
     )
 
 

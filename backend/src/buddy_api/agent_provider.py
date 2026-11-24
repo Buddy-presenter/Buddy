@@ -91,6 +91,10 @@ latest speech is about the specific figure, item or element that such an option 
 example it states that number or names that item), choose that option: talking about one
 element is not mere continued explanation of the current view. Still prefer c0 when the
 element is only mentioned in passing, negated, recalled from earlier or not clearly that one.
+For each region option, compare its saved action purpose and target text with the slide
+summary included in its description. Use the summary to connect a natural phrase such as
+"let's look at this graph" with a described visual, but don't treat the whole summary as
+proof that a vague action matches when multiple visuals could fit.
 Do not invent targets, tools, coordinates or evidence.
 Evidence is a list of zero-based speech segment indexes supporting this choice, at most 8.
 Non-c0 choices require evidence. Confidence describes your support, not execution permission.

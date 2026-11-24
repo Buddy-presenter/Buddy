@@ -367,14 +367,21 @@ def test_semantic_action_documents_include_the_targeted_slide_text():
     """#202: production retrieval embeds what the action points at, not just its purpose."""
     from buddy_api.semantic_candidates import documents
 
-    deck = analysis("intro", "results")
+    deck = analysis(
+        "intro",
+        "Market analysis: a current market-share pie chart and projected sales bar chart.",
+    )
     deck.slides[1].actions = (
         saved("growth", "Emphasise the key result", "Revenue grew twelve percent"),
         saved("hidden", "Unverified", "Secret", verified=False),
     )
     texts = {d.action_id: d.text for d in documents(deck) if d.action_id}
     assert texts == {
-        "growth": "Slide 2. Emphasise the key result Target: Revenue grew twelve percent"
+        "growth": (
+            "Slide 2. Slide context: Market analysis: a current market-share pie chart "
+            "and projected sales bar chart.\nAction type: highlight_region\n"
+            "Emphasise the key result Target: Revenue grew twelve percent"
+        )
     }
 
 
