@@ -736,21 +736,18 @@ class MainWindow(QMainWindow):
                 if images
                 else "Opening Google Search in Chrome…"
             )
-            self.statusBar().showMessage(
-                message,
-                5000,
-            )
+            self.present.show_voice_command_status(message)
         else:
-            self.statusBar().showMessage(result.message, 10000)
+            self.present.show_voice_command_status(result.message, 10000)
 
     @Slot()
     def _return_to_presentation_by_voice(self) -> None:
         fullscreen = self.present.fullscreen
         target = fullscreen if fullscreen is not None and fullscreen.isVisible() else self
         if activate_qt_window(target):
-            self.statusBar().showMessage("Returned to the presentation.", 4000)
+            self.present.show_voice_command_status("Returned to the presentation.", 4000)
         else:
-            self.statusBar().showMessage(
+            self.present.show_voice_command_status(
                 "Windows did not focus Buddy. Say “return to the presentation” again.",
                 10000,
             )

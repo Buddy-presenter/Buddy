@@ -538,6 +538,15 @@ class PresentWidget(Page):
         self.speech_status.setWordWrap(True)
         self.speech_status.setAccessibleName("Speech recognition status and privacy")
         microphone_layout.addWidget(self.speech_status)
+        self.voice_command_status = QLabel()
+        self.voice_command_status.setWordWrap(True)
+        self.voice_command_status.setObjectName("muted")
+        self.voice_command_status.setAccessibleName("Voice command status")
+        self.voice_command_status.hide()
+        microphone_layout.addWidget(self.voice_command_status)
+        self._voice_command_status_timer = QTimer(self)
+        self._voice_command_status_timer.setSingleShot(True)
+        self._voice_command_status_timer.timeout.connect(self._clear_voice_command_status)
         # Latest recognized words for the Buddy Mini caption (text, monotonic time).
         self.live_caption: tuple[str, float] | None = None
         self.speech_text = QPlainTextEdit()
@@ -2437,6 +2446,17 @@ class PresentWidget(Page):
         ):
             self._native_guard.clear()
             self._native_policy_context = None
+
+    def show_voice_command_status(self, message: str, timeout_ms: int = 5000) -> None:
+        self._voice_command_status_timer.stop()
+        self.voice_command_status.setText(message)
+        self.voice_command_status.setVisible(bool(message))
+        if message and timeout_ms > 0:
+            self._voice_command_status_timer.start(timeout_ms)
+
+    def _clear_voice_command_status(self) -> None:
+        self.voice_command_status.clear()
+        self.voice_command_status.hide()
 
     @Slot()
     def _verify_microphone_pdf_session(self) -> None:

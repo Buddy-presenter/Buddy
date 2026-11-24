@@ -157,6 +157,18 @@ def test_voice_return_command_is_local_and_does_not_require_live_suggestions(
     assert agent_updates == []
 
 
+def test_voice_command_feedback_is_visible_in_the_present_page(present):
+    _window, page = present
+
+    page.show_voice_command_status("Opening Google Search in Chrome…", timeout_ms=0)
+
+    assert page.voice_command_status.isVisible()
+    assert page.voice_command_status.text() == "Opening Google Search in Chrome…"
+
+    page.show_voice_command_status("", timeout_ms=0)
+    assert not page.voice_command_status.isVisible()
+
+
 def test_corrected_speech_revokes_dispatched_native_action(present):
     _window, page = present
     page.transcript_context.bind("session", 1, str(page.speech_language.currentData()))
