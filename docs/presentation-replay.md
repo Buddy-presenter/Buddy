@@ -13,8 +13,8 @@ Install the backend development project as in [development](development.md), the
 from the repository root:
 
 ```sh
-python -m buddy_api.replay tests/fixtures/replay/development-v4.json --gates tests/fixtures/replay/development-v4-gates.json --output replay-artifacts/development-v4
-python -m buddy_api.replay tests/fixtures/replay/holdout-v4.json --gates tests/fixtures/replay/holdout-v4-gates.json --output replay-artifacts/holdout-v4
+python -m buddy_api.replay tests/fixtures/replay/development-v5.json --gates tests/fixtures/replay/development-v5-gates.json --output replay-artifacts/development-v5
+python -m buddy_api.replay tests/fixtures/replay/holdout-v5.json --gates tests/fixtures/replay/holdout-v5-gates.json --output replay-artifacts/holdout-v5
 python -m pytest backend/tests/evaluation/test_replay.py
 python scripts/check_replay_freeze.py
 ```
@@ -33,14 +33,16 @@ a second smoke partition with minor wording differences, not an independent huma
 recording benchmark. A passing result is not a natural-language accuracy, latency,
 PowerPoint, semantic retrieval, or autonomous-transition release claim.
 
-The `*-v4` development and holdout files are the current frozen split. `*-v3` rebound the
+The `*-v5` development and holdout files are the current frozen split. `*-v3` rebound the
 `*-v2` replies to the prompt that tells the selector when to choose a zoom or highlight;
 `*-v4` rebinds them to requests that offer zoom/highlight options only for the slide on
-screen (#187). Every recorded choice still selects the same target. They retain the
-authored scenarios and expected outcomes while binding each recorded provider reply to
-the updated production prompt. Previous versions stay unchanged for historical
-reproduction; when the prompt changes again, add another reviewed version instead of
-editing either version in place.
+screen (#187). `*-v5` rebinds the same authored synthetic replies to the slide-context-rich
+action descriptions added in PR #235. The scenarios, expected targets, model reply bodies,
+latency, token counts, and thresholds are unchanged; only the versioned fixture identity,
+provider request digests, and corpus-bound gate digests change. These fixtures remain
+synthetic contract checks and provide no new evidence of natural-language model accuracy.
+Previous versions stay unchanged for historical reproduction; when the prompt changes
+again, add another reviewed version instead of editing an established version in place.
 
 Offline replay reads no microphone, credentials, database, or remote service. The HTTP transport
 boundary supplies frozen raw responses; reference targets are used only by the scorer,
