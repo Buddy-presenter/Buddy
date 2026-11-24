@@ -55,7 +55,7 @@ from buddy_desktop.library_service import (
     access_provider,
 )
 from buddy_desktop.microphone import MicrophoneController
-from buddy_desktop.navigation import navigation_intent
+from buddy_desktop.navigation import action_words, navigation_intent, region_intent
 from buddy_desktop.powerpoint import PowerPointAutomation, PresentationInfo
 from buddy_desktop.powerpoint_contract import (
     PowerPointAction,
@@ -100,6 +100,11 @@ from buddy_desktop.visuals import BuddyMark, command
 
 logger = logging.getLogger(__name__)
 NAVIGATION_TOOLS = {"next_slide", "previous_slide", "go_to_slide"}
+# Targets the desktop verifies itself before executing: slide moves against the loaded
+# deck and region actions against this session's saved, verified actions. The /agent
+# request that proposed them re-read the session and analysis moments earlier, so a
+# second read-only /transition-check only added 0.6-0.9 s (#237).
+LOCALLY_VERIFIED_TOOLS = NAVIGATION_TOOLS | {"zoom_region", "highlight_region", "reset_view"}
 
 
 def saved_action_eligible(source_format: str, action: ReviewAction) -> bool:
@@ -923,7 +928,7 @@ class PresentWidget(Page):
             return None
         intent = navigation_intent(segments[-1].text)
         if intent is None:
-            return None
+            return self._local_region_proposal(session, context, local_state.active_slide_id)
         slide_ids = (
             tuple(slide.slide_id for slide in self._powerpoint_binding.slides)
             if self._powerpoint_binding is not None
@@ -964,6 +969,86 @@ class PresentWidget(Page):
                 "slide_id": slide_ids[destination],
                 "action_id": None,
                 "region": None,
+            },
+            "_client_context": context,
+            "_client_segment_ids": [segment.segment_id for segment in segments],
+        }
+
+    def _local_region_proposal(
+        self, session: PresentationSession, context: ContextSnapshot, slide_id: str
+    ) -> dict[str, object] | None:
+        """Resolve an explicit "zoom into the table" / "highlight the total" on this device (#237).
+
+        Only a clear imperative whose words single out one saved, verified action of that
+        type on the slide on screen qualifies. Anything ambiguous returns None, so the
+        server's contextual decision still handles it. Nothing here can invent a region.
+        """
+        segments = context.decision_segments
+        intent = region_intent(segments[-1].text)
+        analysis = self._generated_analysis
+        if intent is None or analysis is None or str(analysis.id) != session.analysis_version_id:
+            return None
+        tool, named = intent
+        slide = next((s for s in analysis.slides if s.slide_id == slide_id), None)
+        if slide is None:
+            return None
+        actions = [
+            a
+            for a in slide.actions
+            if a.action_type == tool and saved_action_eligible(analysis.source_format, a)
+        ]
+        if not named:
+            chosen = actions[0] if len(actions) == 1 else None
+        else:
+            scored = sorted(
+                (
+                    (
+                        len(
+                            named
+                            & action_words(
+                                a.purpose,
+                                *(
+                                    str(value)
+                                    for key in ("target_text", "text")
+                                    if isinstance(
+                                        value := (
+                                            (getattr(a, "raw", None) or {}).get("params") or {}
+                                        ).get(key),
+                                        str,
+                                    )
+                                ),
+                            )
+                        ),
+                        a,
+                    )
+                    for a in actions
+                ),
+                key=lambda row: -row[0],
+            )
+            best = scored[0] if scored else None
+            runner_up = scored[1][0] if len(scored) > 1 else 0
+            chosen = best[1] if best is not None and best[0] > runner_up else None
+        if chosen is None:
+            return None
+        x, y, width, height = chosen.region
+        return {
+            "decision_id": str(uuid4()),
+            "session_id": session.id,
+            "analysis_id": session.analysis_version_id,
+            "state_version": context.state_version,
+            "active_slide_id": slide_id,
+            "context_epoch": context.epoch,
+            "stream_id": context.stream_id,
+            "sequence": max(segment.sequence for segment in segments),
+            "confidence": 1.0,
+            "decision_source": "local_command",
+            "reason": "explicit",
+            "evidence": [len(segments) - 1],
+            "target": {
+                "tool": tool,
+                "slide_id": slide_id,
+                "action_id": chosen.instance_id,
+                "region": {"x": x, "y": y, "width": width, "height": height},
             },
             "_client_context": context,
             "_client_segment_ids": [segment.segment_id for segment in segments],
@@ -1163,12 +1248,15 @@ class PresentWidget(Page):
         timing = self._policy_latency.get(prediction.decision_id)
         if timing is None:
             return
-        if prediction.target.tool in NAVIGATION_TOOLS:
+        if prediction.target.tool in LOCALLY_VERIFIED_TOOLS:
             logger.info(
                 "presentation_latency event=preflight_skipped decision_id=%s "
-                "source_format=%s reason=validated_navigation",
+                "source_format=%s reason=%s",
                 prediction.decision_id,
                 source_format,
+                "validated_navigation"
+                if prediction.target.tool in NAVIGATION_TOOLS
+                else "locally_verified",
             )
             return
         execution_ns = timing.get("execution_started_ns", time.monotonic_ns())
@@ -1341,7 +1429,7 @@ class PresentWidget(Page):
         if reason == "accepted" and self._session_access:
             self._policy_check = (prediction, context, native.binding.source_sha256)
             self._start_policy_latency(prediction, context, proposal_received_ns)
-            if navigation:
+            if prediction.target.tool in LOCALLY_VERIFIED_TOOLS:
                 self._native_policy_checked(prediction, context, native.binding.source_sha256)
             else:
                 access = self._session_access
@@ -1828,7 +1916,7 @@ class PresentWidget(Page):
         self._start_policy_latency(prediction, context, proposal_received_ns)
         if prediction.target.tool in {"next_slide", "previous_slide", "go_to_slide"}:
             self.executor.prefetch_slide(prediction.target.slide_id)
-        if navigation:
+        if prediction.target.tool in LOCALLY_VERIFIED_TOOLS:
             # /agent has just re-read the session analysis and validated this
             # target. Keep the current local source, speech and slide guards.
             self._policy_checked(0, None)
@@ -2102,13 +2190,16 @@ class PresentWidget(Page):
                 self.policy.completed(prediction.decision_id, success=False, now_ns=now)
                 return
             decision_session = replace(session, state=local_state)
-            self.policy_runner.submit(
-                lambda: self.agent.service.check_transition(access(), decision_session, target)
-            )
             logger.warning(
                 "presentation_policy event=deferred_action_rechecked decision_id=%s",
                 prediction.decision_id,
             )
+            if prediction.target.tool in LOCALLY_VERIFIED_TOOLS:
+                self._policy_checked(0, None)
+            else:
+                self.policy_runner.submit(
+                    lambda: self.agent.service.check_transition(access(), decision_session, target)
+                )
             self.policy_status.setText("Rechecking the suggestion after slide/session sync…")
             return
 
@@ -2230,13 +2321,16 @@ class PresentWidget(Page):
             self.policy.completed(prediction.decision_id, success=False, now_ns=now_ns)
             return
         decision_session = replace(session, state=local_state)
-        self.policy_runner.submit(
-            lambda: self.agent.service.check_transition(access(), decision_session, target)
-        )
         logger.warning(
             "presentation_policy event=deferred_action_rechecked decision_id=%s",
             prediction.decision_id,
         )
+        if prediction.target.tool in LOCALLY_VERIFIED_TOOLS:
+            self._native_policy_checked(prediction, context, source)
+        else:
+            self.policy_runner.submit(
+                lambda: self.agent.service.check_transition(access(), decision_session, target)
+            )
         self.policy_status.setText("Rechecking the suggestion after PowerPoint/session sync…")
 
     @staticmethod

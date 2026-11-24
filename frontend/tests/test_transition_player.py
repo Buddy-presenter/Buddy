@@ -393,7 +393,9 @@ def highlight_proposal(page, proposal, *, region=(0.1, 0.1, 0.2, 0.2)):
     )
 
 
-def test_zoom_highlight_retains_server_preflight(player, qtbot, caplog):
+def test_zoom_highlight_runs_verified_saved_action_without_second_server_check(
+    player, qtbot, caplog
+):
     import logging
 
     caplog.set_level(logging.INFO, logger="buddy_desktop.present_widget")
@@ -402,8 +404,10 @@ def test_zoom_highlight_retains_server_preflight(player, qtbot, caplog):
     highlight_proposal(page, proposal)
     page._agent_proposed(proposal)
     qtbot.waitUntil(lambda: not page.policy_runner.busy and bool(page.surface.highlight))
-    assert len(checks) == 1
-    assert checks[0][1]["tool"] == "highlight_region"
+    # #237: /agent validated this target moments earlier and the desktop verifies the
+    # saved action itself, so no second read-only /transition-check delays it.
+    assert checks == []
+    assert "preflight_skipped" in caplog.text and "reason=locally_verified" in caplog.text
     # #202: the executed command is the exact saved, verified action, and the
     # presenter is told which one ran.
     assert page._accepted_action_id == "validated-highlight"
@@ -645,3 +649,49 @@ def test_dropped_proposals_always_log_and_show_a_reason(player, qtbot, caplog):
     with caplog.at_level("WARNING"):
         page._consider_policy(stay)
     assert "proposal_dropped" not in caplog.text  # Nothing was going to run.
+
+
+def spoken(current, text):
+    segment = ContextSegment("cmd", 2, text, True, 0, 1, time.monotonic_ns())
+    return replace(current[0], segments=(segment,))
+
+
+def test_explicit_region_command_runs_locally_without_any_server_call(player, qtbot, caplog):
+    # #237: "highlight the revenue figure" resolves on this device, like "next slide".
+    import logging
+
+    caplog.set_level(logging.INFO, logger="buddy_desktop.present_widget")
+    page, _, current, _, checks = player
+    page._generated_analysis = saved_analysis(page)
+    current[0] = spoken(current, "Highlight the revenue figure.")
+    local = page._local_navigation_proposal(page._session, current[0])
+    assert local is not None and local["decision_source"] == "local_command"
+    assert local["target"]["action_id"] == "validated-highlight"
+    page._agent_proposed(local)
+    qtbot.waitUntil(lambda: bool(page.surface.highlight))
+    assert checks == []
+    assert page._accepted_action_id == "validated-highlight"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Highlight the conclusion.",  # Names nothing on this slide.
+        "Zoom into the revenue figure.",  # No saved zoom on this slide.
+        "Don't highlight the revenue figure.",
+        "Should we highlight the revenue figure?",
+        "The revenue figure grew a lot.",  # Contextual: the server decides.
+    ],
+)
+def test_unclear_region_commands_defer_to_the_server(player, text):
+    page, _, current, _, _ = player
+    page._generated_analysis = saved_analysis(page)
+    current[0] = spoken(current, text)
+    assert page._local_navigation_proposal(page._session, current[0]) is None
+
+
+def test_unverified_saved_action_is_never_resolved_locally(player):
+    page, _, current, _, _ = player
+    page._generated_analysis = saved_analysis(page, semantic_verified=False)
+    current[0] = spoken(current, "Highlight the revenue figure.")
+    assert page._local_navigation_proposal(page._session, current[0]) is None

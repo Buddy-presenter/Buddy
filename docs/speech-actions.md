@@ -23,9 +23,13 @@ never triggers anything.
    chooses one offered option or abstains. It abstains on ambiguous, negated,
    hypothetical, quoted or unrelated speech; free-form regions are impossible.
 4. **Policy:** the transition policy (#21, [transition policy](transition-policy.md))
-   applies freshness, duplicate, current-focus, cooldown and evidence rules, then asks
-   the server to re-check the exact target (`transition-check`): active autonomous
-   session, current analysis, and a still-eligible saved action with the same region.
+   applies freshness, duplicate, current-focus, cooldown and evidence rules. Slide moves,
+   zoom, highlight and reset run without a second server round trip: the `/agent`
+   request that proposed them re-read the session and analysis moments earlier, and the
+   desktop verifies the exact saved action itself (#237). Explicit commands such as "zoom
+   into the table" or "highlight the total" are resolved on the device, like "next slide",
+   when their words single out one saved, verified action of that type on the slide on
+   screen; anything less clear goes to the server's contextual decision.
    Any proposal the desktop cannot run (automatic actions off, presentation still loading,
    speech changed, action on another slide, saved action unavailable) is logged as
    `presentation_policy event=proposal_dropped decision_id=… reason=…` and explained in

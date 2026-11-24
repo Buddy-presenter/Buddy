@@ -70,7 +70,10 @@ controls post-action cooldown and manual hold without modifying the decision pro
   and model selection. Every branch still checks freshness, target bounds, deduplication,
   session/source identity and opt-in. Completed slide-navigation moves skip the generic
   post-action cooldown so a fresh next command can execute immediately.
-- Recheck the target through authenticated
+- The desktop no longer calls this for slide moves, zoom, highlight or reset (#237): the
+  proposing `/agent` request validated them moments earlier and the desktop verifies the
+  saved action locally, removing a 0.6-0.9 s round trip. The endpoint remains for other
+  targets. Recheck the target through authenticated
   `POST /api/v1/sessions/{id}/transition-check`. The server uses current ownership, active
   autonomous session state, exact analysis/source lineage and canonical eligibility/geometry.
   Stale, foreign, invented and newly unusable targets deny admission. This endpoint makes
