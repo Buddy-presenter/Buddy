@@ -54,6 +54,8 @@ def documents(analysis: AnalysisResult | PowerPointAnalysisResult) -> tuple[Docu
                         action.action.instance_id,
                         action.action.type,
                         f"Slide {position}. "
+                        + f"Slide context: {(slide.summary.text or '')[:400]}\n"
+                        + f"Action type: {action.action.type}\n"
                         + action.action.purpose
                         + (f" Target: {target}" if target else ""),
                     )

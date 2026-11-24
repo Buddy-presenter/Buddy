@@ -200,6 +200,7 @@ class CandidateSet(Model):
         "cohere-embed5-v2",
         "cohere-embed5-v3",
         "cohere-embed5-v4",
+        "cohere-embed5-v5",
     ] = "summary-overlap-2"
     session_id: UUID
     analysis_id: UUID
@@ -809,7 +810,7 @@ def candidate_router() -> APIRouter:
                         timeout=2,
                     )
                 return CandidateSet(
-                    resolver_version="cohere-embed5-v4"
+                    resolver_version="cohere-embed5-v5"
                     if semantic is not None
                     else "summary-overlap-2",
                     session_id=identifier,
@@ -859,7 +860,7 @@ def candidate_router() -> APIRouter:
                     db, record, principal.id, session.runtime_context
                 )
             created = await semantic.prepare(analysis, principal.id)
-            return {"ready": True, "created": created, "resolver_version": "cohere-embed5-v4"}
+            return {"ready": True, "created": created, "resolver_version": "cohere-embed5-v5"}
         except EmbeddingFailure:
             raise
         except (PersistenceError, SQLAlchemyError, OSError, TimeoutError):

@@ -114,7 +114,7 @@ def test_index_persists_queries_cache_and_budget_is_enforced(ready_session_api):
     request = payload(text=context, latest_utterance="These need protection.")
     result = client.post(path + "/candidates", headers=headers, json=request)
     assert result.status_code == 200, result.text
-    assert result.json()["resolver_version"] == "cohere-embed5-v4"
+    assert result.json()["resolver_version"] == "cohere-embed5-v5"
     assert any(c["reason"] == "topic" for c in result.json()["candidates"])
     # Cached query does not spend a third call; quota is persistent across engines.
     assert client.post(path + "/candidates", headers=headers, json=request).status_code == 200

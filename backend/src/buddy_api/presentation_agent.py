@@ -423,7 +423,12 @@ def options(
             # Show the selector the slide text the action targets, so speech that
             # names that content ("$48 million") visibly matches this option.
             shown = shown_text(source.analysis, action)
-            content = action.action.purpose[:512] + (f" Shows: {shown[:256]}" if shown else "")
+            content = (
+                f"Slide context: {(slide.summary.text or '')[:800]}\n"
+                f"Action purpose: {action.action.purpose[:512]}"
+            )
+            if shown:
+                content += f"\nShows: {shown[:256]}"
         if target in targets:
             continue
         descriptions.append(
