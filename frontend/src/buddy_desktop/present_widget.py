@@ -97,6 +97,7 @@ from buddy_desktop.transition_policy import (
 )
 from buddy_desktop.views import Page, StatusLabel
 from buddy_desktop.visuals import BuddyMark, command
+from buddy_desktop.voice_commands import ReturnToPresentation, VoiceCommandRouter, WebSearch
 
 logger = logging.getLogger(__name__)
 NAVIGATION_TOOLS = {"next_slide", "previous_slide", "go_to_slide"}
@@ -206,6 +207,8 @@ class PresentWidget(Page):
     transition_observed = Signal(object)
     mini_requested = Signal()
     fullscreen_exited = Signal()
+    web_search_requested = Signal(str, bool)
+    return_to_presentation_requested = Signal()
 
     def __init__(self, config: AppConfig, settings: QSettings) -> None:
         super().__init__("Present", "")
@@ -244,6 +247,7 @@ class PresentWidget(Page):
         self._stream_snapshot: PresentationSession | None = None
         self.microphone = MicrophoneController(self)
         self.speech = SpeechController(self)
+        self.voice_commands = VoiceCommandRouter()
         self.transcript_context = TranscriptContext()
         self.agent = AgentLoop(
             AgentService(config),
@@ -554,8 +558,10 @@ class PresentWidget(Page):
         self.agent_enabled.toggled.connect(self._suggestions_toggled)
         microphone_layout.addWidget(self.agent_enabled)
         agent_privacy = QLabel(
-            "When enabled, recognized speech and slide summaries are sent to Cohere. "
-            "Suggestions leave slide changes manual unless you enable automatic transitions."
+            "When enabled, ordinary speech and slide summaries are sent to Cohere. "
+            "Explicit Chrome search commands are handled locally; their search terms are sent "
+            "to Google in Chrome. Suggestions leave slide changes manual unless you enable "
+            "automatic transitions."
         )
         agent_privacy.setWordWrap(True)
         agent_privacy.setObjectName("muted")
@@ -2387,7 +2393,17 @@ class PresentWidget(Page):
 
     @Slot(object)
     def _speech_transcript(self, event: dict[str, object]) -> None:
-        if (
+        command = self.voice_commands.handle(event)
+        if command.suppress_agent:
+            # Explicit external commands stay local. Also invalidate older model
+            # work so it cannot run while Chrome is foregrounded or on return.
+            self.agent.cancel_pending_decision()
+            self.policy.clear_pending()
+            if isinstance(command.command, WebSearch):
+                self.web_search_requested.emit(command.command.query, command.command.images)
+            elif isinstance(command.command, ReturnToPresentation):
+                self.return_to_presentation_requested.emit()
+        elif (
             self._session is not None
             and self._context_connected
             and self._session_pending_state is None

@@ -99,6 +99,20 @@ class AgentLoop(QObject):
             self.proposed.emit(None)
             self.status.emit("Listening for a clear phrase…" if enabled else "Suggestions off")
 
+    def cancel_pending_decision(self) -> None:
+        """Invalidate in-flight model work without erasing prior presenter context."""
+        self._generation += 1
+        self._last_revision = None
+        self._deferred_revision = None
+        self._deferrals = 0
+        self._pending_update = False
+        self._submitted = None
+        self._submitted_at_ns = None
+        self._submitted_capture_end_ns = None
+        self.proposed.emit(None)
+        if self.enabled:
+            self.status.emit("Listening for a clear phrase…")
+
     def update(
         self,
         access: AccessProvider | str | None,

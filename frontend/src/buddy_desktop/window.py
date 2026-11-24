@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from buddy_desktop.account_widget import AccountWidget
 from buddy_desktop.auth import AccountProfile, AccountSession
+from buddy_desktop.browser_search import launch_chrome_search
 from buddy_desktop.buddy_mini import BuddyMini, mini_caption
 from buddy_desktop.config import AppConfig, ConfigurationError, validate_api_url
 from buddy_desktop.library_service import AccessProvider, LibraryAccessExpired
@@ -37,6 +38,7 @@ from buddy_desktop.slide_executor import Completion
 from buddy_desktop.tasks import TaskRunner
 from buddy_desktop.views import HomePage, SettingsPage, divider
 from buddy_desktop.visuals import BuddyMark, app_icon, command, icon
+from buddy_desktop.window_focus import activate_qt_window, allow_current_process_foreground
 from buddy_identity.config import IdentityError, SessionExpired
 
 
@@ -111,6 +113,8 @@ class MainWindow(QMainWindow):
         self.library = LibraryWidget(config, self.account)
         self.review = ReviewWidget(config, self.account)
         self.present = PresentWidget(config, settings)
+        self.present.web_search_requested.connect(self._open_voice_search)
+        self.present.return_to_presentation_requested.connect(self._return_to_presentation_by_voice)
         self._mini: BuddyMini | None = None
         self._mini_session: str | None = None
         self._mini_screen: QScreen | None = None
@@ -719,6 +723,37 @@ class MainWindow(QMainWindow):
             self._mini_auto_deck = deck_id
             self._mini_auto_attempts = 0
             self._mini_auto_poll.start()
+
+    @Slot(str, bool)
+    def _open_voice_search(self, query: str, images: bool) -> None:
+        # Windows grants the current foreground process a narrow foreground
+        # handoff before Chrome takes focus. No shell command is constructed.
+        allow_current_process_foreground()
+        result = launch_chrome_search(query, images=images)
+        if result.opened:
+            message = (
+                "Opening Google Images in Chrome…"
+                if images
+                else "Opening Google Search in Chrome…"
+            )
+            self.statusBar().showMessage(
+                message,
+                5000,
+            )
+        else:
+            self.statusBar().showMessage(result.message, 10000)
+
+    @Slot()
+    def _return_to_presentation_by_voice(self) -> None:
+        fullscreen = self.present.fullscreen
+        target = fullscreen if fullscreen is not None and fullscreen.isVisible() else self
+        if activate_qt_window(target):
+            self.statusBar().showMessage("Returned to the presentation.", 4000)
+        else:
+            self.statusBar().showMessage(
+                "Windows did not focus Buddy. Say “return to the presentation” again.",
+                10000,
+            )
 
     def _maybe_auto_mini(self) -> None:
         self._mini_auto_attempts += 1

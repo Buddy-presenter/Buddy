@@ -104,6 +104,59 @@ def test_transcript_update_runs_agent_immediately_without_waiting_for_timer(pres
     assert calls == ["updated"]
 
 
+def test_voice_search_stays_local_and_suppresses_partial_and_final_agent_input(
+    present, signal_recorder, monkeypatch
+):
+    from PySide6.QtTest import QSignalSpy
+
+    _window, page = present
+    search_spy = QSignalSpy(page.web_search_requested)
+    agent_updates = []
+    monkeypatch.setattr(page, "_update_agent", lambda: agent_updates.append(True))
+    base = {
+        "start_seconds": 0.0,
+        "end_seconds": 0.8,
+        "latency_ms": 20,
+        "segment_id": "search-command",
+        "sequence": 1,
+        "text": "Open Chrome and search for images of cute",
+    }
+    page._speech_transcript({**base, "final": False})
+    assert search_spy.count() == 0
+    page._speech_transcript(
+        {**base, "text": "Open Chrome and search for images of cute cats.", "final": True}
+    )
+    assert search_spy.count() == 1
+    assert search_spy.at(0) == ["cute cats", True]
+    assert agent_updates == []
+    assert "Open Chrome and search" in page.speech_text.toPlainText()
+
+
+def test_voice_return_command_is_local_and_does_not_require_live_suggestions(
+    present, signal_recorder, monkeypatch
+):
+    from PySide6.QtTest import QSignalSpy
+
+    _window, page = present
+    return_spy = QSignalSpy(page.return_to_presentation_requested)
+    agent_updates = []
+    monkeypatch.setattr(page, "_update_agent", lambda: agent_updates.append(True))
+    page._speech_transcript(
+        {
+            "text": "Let's go back to the presentation.",
+            "final": True,
+            "segment_id": "return-command",
+            "sequence": 2,
+            "start_seconds": 1.0,
+            "end_seconds": 1.8,
+            "latency_ms": 20,
+        }
+    )
+    assert return_spy.count() == 1
+    assert return_spy.at(0) == []
+    assert agent_updates == []
+
+
 def test_corrected_speech_revokes_dispatched_native_action(present):
     _window, page = present
     page.transcript_context.bind("session", 1, str(page.speech_language.currentData()))
