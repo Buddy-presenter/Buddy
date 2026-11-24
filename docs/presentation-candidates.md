@@ -8,7 +8,7 @@ See [resumable PDF processing](pdf-workers.md#resumable-pdf-region-processing). 
 `0020_pdf_checkpoints` follows the embedding migration; both require the reviewed rollout.
 Pending-summary inspection does not bypass the candidate route's completed-analysis gates.
 
-When the backend has `BUDDY_COHERE_API_KEY`, retrieval uses `cohere-embed5-v5`.
+When the backend has `BUDDY_COHERE_API_KEY`, retrieval uses `cohere-embed5-v4`.
 Without it, the lexical resolver remains available and identifies itself as
 `summary-overlap-2`; it must not be described as semantic understanding. A configured
 semantic service never silently downgrades after provider failure.
@@ -23,9 +23,10 @@ same slide-topic context that the selector sees, while preserving text-target gr
 The index binds analysis, deck, owner, model space and document fingerprint. Repeated
 preparation of unchanged content makes no model calls. Changes in summaries, action
 eligibility, or the retrieval-description format require preparation again. Stale vectors
-cannot enable actions. V5 changes the document fingerprint, so each existing analysis is
-re-embedded once when preparation next runs; it uses the same Cohere model and database
-schema.
+cannot enable actions. The richer action description changes the document fingerprint,
+so each existing analysis is re-embedded once when preparation next runs. The existing
+resolver response version remains v4 for compatibility with already-installed desktop
+clients; no API protocol or database schema changes are needed.
 
 Live queries use `embed-v5.0-fast` with two independent retrieval views batched in
 one HTTP call: the coherent recent passage and the newest completed segment. Identical
@@ -33,7 +34,7 @@ inputs are embedded once. Each input is bounded to 4096 characters. The passage 
 references across sentences; the newest view prevents an earlier topic from occupying
 the entire shortlist after a topic change. These query vectors are not averaged.
 
-Version 5 keeps the existing eight-candidate budget between both views. Current slide
+The existing eight-candidate budget remains unchanged between both views. Current slide
 and no change occupy two slots. With no usable region documents, the remaining six slots
 allow up to three non-current destinations per view. When usable region documents exist,
 two slots remain reserved for region candidates, leaving two slide destinations per view.
@@ -48,8 +49,8 @@ Desktop callers send as many contiguous completed segments as fit the 4096-chara
 budget within the existing 30-second memory window; there is no four-segment cutoff,
 post-final 200 ms delay or pause-triggered reset. The server bounds older clients' text,
 avoiding a partial leading word when whitespace permits. The embedding model and vector
-dimensions are unchanged. The v5 document text does change, so its one-time re-preparation
-is required; live query inputs and provider-call counts are unchanged.
+dimensions are unchanged. The enriched document text changes the index fingerprint and
+requires one-time re-preparation; live query inputs and provider-call counts are unchanged.
 
 Document indexing uses `search_document`; queries use `search_query`.
 Positive-cosine matches form a ranked shortlist of at
