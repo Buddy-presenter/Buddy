@@ -5,6 +5,7 @@ import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlencode
 
 from PySide6.QtCore import QProcess
@@ -28,17 +29,18 @@ def _registered_windows_chrome() -> str | None:
         import winreg
     except ImportError:
         return None
+    registry: Any = winreg
     key_path = r"Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"
-    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+    for hive in (registry.HKEY_CURRENT_USER, registry.HKEY_LOCAL_MACHINE):
         views = (
             0,
-            getattr(winreg, "KEY_WOW64_64KEY", 0),
-            getattr(winreg, "KEY_WOW64_32KEY", 0),
+            getattr(registry, "KEY_WOW64_64KEY", 0),
+            getattr(registry, "KEY_WOW64_32KEY", 0),
         )
         for view in views:
             try:
-                with winreg.OpenKey(hive, key_path, 0, winreg.KEY_READ | view) as key:
-                    executable, _ = winreg.QueryValueEx(key, "")
+                with registry.OpenKey(hive, key_path, 0, registry.KEY_READ | view) as key:
+                    executable, _ = registry.QueryValueEx(key, "")
                 if isinstance(executable, str) and Path(executable).is_file():
                     return executable
             except OSError:

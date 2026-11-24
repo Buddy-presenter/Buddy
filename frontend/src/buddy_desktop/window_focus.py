@@ -10,7 +10,10 @@ from PySide6.QtWidgets import QWidget
 
 
 def _user32() -> Any:
-    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    # WinDLL is only present on Windows. Treat ctypes dynamically so mypy on
+    # macOS/Linux does not reject the Windows-only symbol.
+    ctypes_api: Any = ctypes
+    user32 = ctypes_api.WinDLL("user32", use_last_error=True)
     user32.AllowSetForegroundWindow.argtypes = [wintypes.DWORD]
     user32.AllowSetForegroundWindow.restype = wintypes.BOOL
     user32.IsIconic.argtypes = [wintypes.HWND]
