@@ -79,14 +79,12 @@ def _is_explicit_command_prefix(text: str) -> bool:
     # Don't suppress common opening words such as “please” or “open Chrome”.
     # Suppression starts only after the complete unique search trigger is spoken.
     search_prefix = any(
-        normalized == prefix or normalized.startswith(prefix + " ")
-        for prefix in _SEARCH_PREFIXES
+        normalized == prefix or normalized.startswith(prefix + " ") for prefix in _SEARCH_PREFIXES
     )
     # The words “go back to” are also used for deterministic slide navigation.
     # Do not claim that speech until it explicitly names the presentation.
     return_prefix = any(
-        normalized == phrase or normalized.startswith(phrase + " ")
-        for phrase in _RETURN_PREFIXES
+        normalized == phrase or normalized.startswith(phrase + " ") for phrase in _RETURN_PREFIXES
     )
     return search_prefix or return_prefix
 

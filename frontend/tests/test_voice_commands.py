@@ -8,9 +8,7 @@ from buddy_desktop.voice_commands import (
 
 
 def test_parses_explicit_general_and_image_search_commands():
-    assert parse_voice_command("Search for cute cat pictures") == WebSearch(
-        "cute cat pictures"
-    )
+    assert parse_voice_command("Search for cute cat pictures") == WebSearch("cute cat pictures")
     assert parse_voice_command("Open Chrome and search for images of cute cats") == WebSearch(
         "cute cats", images=True
     )
@@ -66,9 +64,7 @@ def test_search_command_transcripts_are_suppressed_until_final_and_routed_once()
 
 def test_return_router_does_not_swallow_slide_navigation_commands():
     router = VoiceCommandRouter()
-    partial = router.handle(
-        {"text": "Let's go back to", "segment_id": "slide-nav", "final": False}
-    )
+    partial = router.handle({"text": "Let's go back to", "segment_id": "slide-nav", "final": False})
     assert not partial.suppress_agent
     final = router.handle(
         {"text": "Let's go back to slide one", "segment_id": "slide-nav", "final": True}
@@ -89,9 +85,7 @@ def test_partial_router_does_not_swallow_normal_sentences_with_similar_openings(
         "Open Chrome is already installed",
         "Return on investment increased",
     ):
-        result = router.handle(
-            {"text": text, "segment_id": text, "final": False}
-        )
+        result = router.handle({"text": text, "segment_id": text, "final": False})
         assert not result.suppress_agent
 
 

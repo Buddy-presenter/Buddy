@@ -75,9 +75,7 @@ def activate_native_window(handle: int) -> bool:
             user32.BringWindowToTop(hwnd)
             user32.SetForegroundWindow(hwnd)
             foreground = user32.GetForegroundWindow()
-            foreground_handle = (
-                foreground if isinstance(foreground, int) else foreground.value
-            )
+            foreground_handle = foreground if isinstance(foreground, int) else foreground.value
             return foreground_handle == handle
         finally:
             user32.AttachThreadInput(target_thread, foreground_thread, False)
