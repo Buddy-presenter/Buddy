@@ -197,6 +197,12 @@ otherwise valid result. Embeddings retain their own bounded adapter.
 
 ### Decision provider: Jev by default (#243)
 
+Presenters choose the decider in the desktop app (#245). Under **Automatic transitions** in
+Present, **Suggestions decided by** offers **Jev (fast, default)** or **Cohere**. The choice is
+saved in the app settings (`presentation/decision_model`) and sent with each `/agent` request
+as `decision_model`. The server uses the requested decider. Older clients that send no choice
+get `BUDDY_DECISION_PROVIDER`, and without a Jev key every choice decides with Cohere.
+
 `BUDDY_DECISION_PROVIDER` chooses who makes the decision after retrieval:
 
 - `jev` (default): TypeSafe Jev (`jev-1.14.0`) alone.

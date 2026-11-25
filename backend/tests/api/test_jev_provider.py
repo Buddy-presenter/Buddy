@@ -180,3 +180,22 @@ def test_jev_settings_are_optional_and_validated():
     with pytest.raises(ValueError):
         JevDecisionProvider("k", threshold=0.4)
     assert DECIDED_BY.get() == MODEL
+
+
+def test_presenter_choice_selects_the_decider():
+    # #245: the desktop sends decision_model; older clients send nothing.
+    from buddy_api.app import decision_providers
+    from buddy_api.presentation_agent import AgentRuntime
+
+    settings = AgentSettings("cohere", jev_api_key="k")
+    default, choices = decision_providers(settings, None)
+    runtime = AgentRuntime(settings, default, choices)
+    assert isinstance(runtime.provider_for(None), JevDecisionProvider)
+    assert isinstance(runtime.provider_for("jev"), JevDecisionProvider)
+    assert isinstance(runtime.provider_for("cohere"), CohereDecisionProvider)
+    asyncio.run(runtime.aclose())
+    # Without a Jev key, every choice decides with Cohere.
+    default, choices = decision_providers(AgentSettings("cohere"), None)
+    runtime = AgentRuntime(settings, default, choices)
+    assert isinstance(runtime.provider_for("jev"), CohereDecisionProvider)
+    asyncio.run(runtime.aclose())

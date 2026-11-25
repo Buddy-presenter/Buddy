@@ -835,3 +835,13 @@ def test_unclear_figures_defer_to_the_server(player, text):
     page._generated_analysis = four_highlights(page)
     current[0] = spoken(current, text)
     assert page._local_navigation_proposal(page._session, current[0]) is None
+
+
+def test_decision_model_choice_is_sent_and_remembered(player):
+    # #245: the presenter picks Jev (default) or Cohere in Present.
+    page = player[0]
+    assert page.decision_model.currentData() == "jev"
+    assert page.agent_service.decision_model == "jev"
+    page.decision_model.setCurrentIndex(page.decision_model.findData("cohere"))
+    assert page.agent_service.decision_model == "cohere"
+    assert page.settings.value("presentation/decision_model") == "cohere"

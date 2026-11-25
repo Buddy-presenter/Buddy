@@ -83,21 +83,36 @@ def request_id(request: Request) -> str:
 logger = logging.getLogger(__name__)
 
 
-def decision_provider(
+def decision_providers(
     settings: AgentSettings, semantic: SemanticCandidates | None
-) -> DecisionProvider:
-    """Jev decides by default; Cohere remains selectable and is used without a Jev key (#243)."""
+) -> tuple[DecisionProvider, dict[str, DecisionProvider]]:
+    """The server's default decider and the ones a presenter may pick (#243, #245).
+
+    Jev decides by default; Cohere stays selectable. Without a Jev key only Cohere exists,
+    so every choice decides with Cohere.
+    """
     cohere = CohereDecisionProvider(
         settings, client=semantic.provider.client if semantic is not None else None
     )
-    if settings.decision_provider == "cohere" or settings.jev_api_key is None:
+    if settings.jev_api_key is None:
         if settings.decision_provider != "cohere":
             logger.warning("presentation_agent event=jev_unavailable decided_by=cohere")
-        return cohere
+        return cohere, {"cohere": cohere}
     jev = JevDecisionProvider(settings.jev_api_key, threshold=settings.jev_confidence)
-    if settings.decision_provider == "jev":
-        return jev
-    return ConfidentFirstProvider(jev, cohere, settings.jev_confidence)
+    default: DecisionProvider = (
+        cohere
+        if settings.decision_provider == "cohere"
+        else jev
+        if settings.decision_provider == "jev"
+        else ConfidentFirstProvider(jev, cohere, settings.jev_confidence)
+    )
+    return default, {"jev": jev, "cohere": cohere}
+
+
+def decision_provider(
+    settings: AgentSettings, semantic: SemanticCandidates | None
+) -> DecisionProvider:
+    return decision_providers(settings, semantic)[0]
 
 
 def create_app(
@@ -205,7 +220,7 @@ def create_app(
             if semantic_provider is not None:
                 await semantic_provider.aclose()
             if _app.state.presentation_agent is not None:
-                await _app.state.presentation_agent.provider.aclose()
+                await _app.state.presentation_agent.aclose()
             if database is not None:
                 await database.close()
 
@@ -237,7 +252,7 @@ def create_app(
     )
     app.state.uploads = uploads
     app.state.presentation_agent = (
-        AgentRuntime(config.agent, decision_provider(config.agent, app.state.semantic_candidates))
+        AgentRuntime(config.agent, *decision_providers(config.agent, app.state.semantic_candidates))
         if config.agent
         else None
     )
