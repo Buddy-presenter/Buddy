@@ -180,3 +180,27 @@ def test_jev_settings_are_optional_and_validated():
     with pytest.raises(ValueError):
         JevDecisionProvider("k", threshold=0.4)
     assert DECIDED_BY.get() == MODEL
+
+
+@pytest.mark.parametrize("unfinished", [False, True])
+def test_unfinished_sentences_are_marked_for_jev(unfinished):
+    # #248: the desktop sends the stable start of a sentence still being spoken.
+    from buddy_api.agent_provider import JEV_INSTRUCTIONS, JEV_UNFINISHED
+
+    seen = {}
+
+    def handler(request):
+        seen.update(json.loads(request.content))
+        return answer("c0", 0.9)
+
+    passage = (
+        {**PASSAGE, "latest_segment_status": "provisional stable prefix; speech is ongoing"}
+        if unfinished
+        else PASSAGE
+    )
+    asyncio.run(jev(handler).select(passage))
+    instructions = seen["questions"]["action"]["instructions"]
+    assert ("latest_sentence_status" in seen["state"]) is unfinished
+    assert instructions == (
+        JEV_INSTRUCTIONS + " " + JEV_UNFINISHED if unfinished else JEV_INSTRUCTIONS
+    )

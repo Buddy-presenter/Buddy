@@ -255,6 +255,13 @@ we saw"), is hypothetical ("imagine if", "if X happens"), quotes someone, asks t
 question or repeats one, negates or cancels ("I won't", "never mind"), or previews a later topic
 ("we'll get to", "coming up next")."""
 
+# Added to the instructions only while the sentence is still being spoken (#248). On 528
+# partial sentences from the evaluation set it cut wrong early actions from 26 to 9.
+JEV_UNFINISHED = """\
+The latest sentence is unfinished: the presenter is still speaking. Act only if the words so far
+already clearly name, describe, state a value from or ask for one option; otherwise do nothing
+and wait for the rest of the sentence."""
+
 
 def jev_request(passage: dict[str, object]) -> tuple[dict[str, object], dict[str, str]]:
     """Turn the shared decision passage into Jev's state and plain-language criteria (#243).
@@ -289,11 +296,14 @@ def jev_request(passage: dict[str, object]) -> tuple[dict[str, object], dict[str
             )
             text = f"Go to {where}: {content}"
         criteria[str(option["id"])] = text[:1600]
-    state = {
+    state: dict[str, object] = {
         "latest_sentence": segments[-1],
         "earlier_sentences": segments[:-1],
         "current_slide": {"number": view.get("slide_number"), "summary": view.get("summary")},
     }
+    if passage.get("latest_segment_status"):
+        # The desktop sent the stable start of a sentence still being spoken (#248).
+        state["latest_sentence_status"] = "unfinished: the presenter is still speaking"
     return state, criteria
 
 
@@ -342,7 +352,11 @@ class JevDecisionProvider:
                         "questions": {
                             "action": {
                                 "type": "choice",
-                                "instructions": JEV_INSTRUCTIONS,
+                                "instructions": (
+                                    JEV_INSTRUCTIONS + " " + JEV_UNFINISHED
+                                    if "latest_sentence_status" in state
+                                    else JEV_INSTRUCTIONS
+                                ),
                                 "criteria": criteria,
                             },
                             "presenting_now": {
