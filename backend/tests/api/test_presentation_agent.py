@@ -287,7 +287,8 @@ def test_region_options_show_the_slide_text_they_target():
     )
     # The selector is told that speech about one element selects its region action.
     assert "zoom_region or highlight_region option" in SYSTEM
-    assert "not mere continued explanation" in SYSTEM
+    assert "that is enough evidence" in SYSTEM
+    assert "Prefer c0 only when that element is negated" in SYSTEM
     assert "compare its saved action purpose and target text with the slide" in SYSTEM
 
 

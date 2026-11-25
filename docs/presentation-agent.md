@@ -191,8 +191,8 @@ prompt injection resistance is not a substitute for the deterministic allowlist/
 
 The supported Cohere schema subset omits numeric/array ranges; Buddy still validates
 confidence in [0,1], finite values and at most eight unique valid evidence indexes.
-Responses are bounded to 64 KiB. Chat has a three-second deadline, total backend decision
-work 4.5 seconds, and native HTTP six seconds; stale capture still wins over a slow
+Responses are bounded to 64 KiB. Chat has a 3.8-second deadline, total backend decision
+work five seconds, and native HTTP six seconds; stale capture still wins over a slow
 otherwise valid result. Embeddings retain their own bounded adapter.
 
 The Qt scheduler runs off the GUI thread, with one in-flight operation, newest-only

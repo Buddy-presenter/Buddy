@@ -795,7 +795,7 @@ def agent_router() -> APIRouter:
             phase_started = time.monotonic()
 
         try:
-            async with asyncio.timeout(4.5):
+            async with asyncio.timeout(5):
                 source = await read_input(request, principal, identifier, values)
                 finish_phase()
                 target = Target(tool="no_action", slide_id=source.current)

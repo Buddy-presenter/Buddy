@@ -745,3 +745,93 @@ def test_unresolved_commands_log_a_content_free_reason(player, caplog):
     current[0] = spoken(current, "Zoom into the chart.")
     assert page._local_navigation_proposal(page._session, current[0]) is None
     assert "reason=no_verified_action_of_type" in caplog.text
+
+
+def four_highlights(page):
+    """Four verified highlights sharing "revenue", like the deck tested live (#241)."""
+    from types import SimpleNamespace
+
+    def action(identifier, purpose, shown):
+        return SimpleNamespace(
+            instance_id=identifier,
+            action_type="highlight_region",
+            region=(0.1, 0.1, 0.2, 0.2),
+            purpose=purpose,
+            shown_text=shown,
+            usable=True,
+            state="validated",
+            semantic_verified=True,
+            reasons=(),
+        )
+
+    analysis = saved_analysis(page)
+    slide = analysis.slides[0]
+    slide.actions = (
+        action("rev-q1", "Highlight the revenue figure", "Q1 revenue $48M"),
+        action("rev-q2", "Highlight the revenue figure", "Q2 revenue $52M"),
+        action("rev-growth", "Highlight revenue growth", "Revenue growth 12%"),
+        action("rev-share", "Highlight revenue share", "Revenue share 2024: 31%"),
+    )
+    return analysis
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Highlight the 48 million revenue.", "rev-q1"),
+        ("Highlight revenue growth.", "rev-growth"),
+        ("Highlight the Q2 revenue.", "rev-q2"),
+    ],
+)
+def test_distinctive_words_break_shared_word_ties(player, text, expected):
+    # #241: "revenue" is in every action; the distinctive word decides.
+    page, _, current, _, _ = player
+    page._generated_analysis = four_highlights(page)
+    current[0] = spoken(current, text)
+    local = page._local_navigation_proposal(page._session, current[0])
+    assert local is not None and local["target"]["action_id"] == expected
+    assert local["reason"] == "explicit"
+
+
+def test_genuinely_shared_words_still_defer(player):
+    page, _, current, _, _ = player
+    page._generated_analysis = four_highlights(page)
+    current[0] = spoken(current, "Highlight the revenue.")
+    assert page._local_navigation_proposal(page._session, current[0]) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Revenue came in at 48 million this quarter.", "rev-q1"),
+        ("And in the second quarter we reached 52 million.", "rev-q2"),
+        ("Our share was 31 percent in 2024.", "rev-share"),
+    ],
+)
+def test_stated_figure_shown_by_one_action_runs_locally(player, qtbot, text, expected):
+    page, _, current, _, checks = player
+    page._generated_analysis = four_highlights(page)
+    current[0] = spoken(current, text)
+    local = page._local_navigation_proposal(page._session, current[0])
+    assert local is not None and local["decision_source"] == "local_command"
+    assert local["reason"] == "topic" and local["target"]["action_id"] == expected
+    page._agent_proposed(local)
+    qtbot.waitUntil(lambda: bool(page.surface.highlight))
+    assert checks == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Was revenue 48 million?",
+        "Revenue was not 48 million.",
+        "If we hit 48 million next year.",
+        "We have 3 offices.",  # A lone small number identifies nothing.
+        "Revenue was 52 million and 48 million.",  # Two actions show these figures.
+    ],
+)
+def test_unclear_figures_defer_to_the_server(player, text):
+    page, _, current, _, _ = player
+    page._generated_analysis = four_highlights(page)
+    current[0] = spoken(current, text)
+    assert page._local_navigation_proposal(page._session, current[0]) is None
