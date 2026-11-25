@@ -93,6 +93,7 @@ module "environment" {
   start_services              = var.start_services
   enable_speech               = var.enable_speech
   enable_semantic_candidates  = var.enable_semantic_candidates
+  enable_jev_decisions        = var.enable_jev_decisions
   enable_presentation_agent   = var.enable_presentation_agent
   worker_start_services       = var.worker_start_services
   enable_terraform_monitoring = false
@@ -111,6 +112,11 @@ variable "enable_semantic_candidates" {
 }
 
 variable "enable_presentation_agent" {
+  type    = bool
+  default = false
+}
+
+variable "enable_jev_decisions" {
   type    = bool
   default = false
 }

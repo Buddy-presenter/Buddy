@@ -39,6 +39,8 @@ never triggers anything.
    on the slide contains runs that action locally too ("revenue came in at 48 million");
    questions, hedges and negations, or a figure several actions show, go to the server
    (ambiguous figures log `local_mention_unresolved`).
+   Short whole-sentence moves ("Okay, next.", "Let's move on.", "Go back a slide.") also run
+   locally; a sentence that names a topic ("moving on to costs") goes to the server (#243).
    "Remove the highlight", "zoom out" and "show the whole slide" reset the view the same
    way. A recognised command that cannot be resolved locally logs
    `presentation_policy event=local_command_unresolved tool=… reason=…` (for example
