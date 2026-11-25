@@ -206,6 +206,7 @@ def test_real_http_accepts_slide_navigation_reasons(monkeypatch, reason):
             request_body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             assert request_body["focus_view"] == "slide"
             assert request_body["focus_region"] is None
+            assert request_body["decision_model"] == "jev"  # Default choice (#245).
             answer = {
                 "protocol": "presentation-agent.v1",
                 "decision_id": str(uuid4()),

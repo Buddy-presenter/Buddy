@@ -161,9 +161,14 @@ def conflict_error(exc: HTTPError) -> ServiceError:
     return ServiceError(message)
 
 
+DECISION_MODELS = ("jev", "cohere")
+
+
 class AgentService:
     def __init__(self, config: AppConfig):
         self.config = config
+        # Which model decides suggestions, chosen in Present (#245). Jev is the default.
+        self.decision_model = "jev"
         self._connection: KeptConnection | None = None
         self._connection_url = ""
 
@@ -237,6 +242,8 @@ class AgentService:
             {"sequence": s.sequence, "text": s.text, "final": s.final}
             for s in context.decision_segments
         ]
+        if self.decision_model in DECISION_MODELS:
+            payload["decision_model"] = self.decision_model
         try:
             raw = self._kept().post(
                 f"/api/v1/sessions/{UUID(session.id)}/agent",
