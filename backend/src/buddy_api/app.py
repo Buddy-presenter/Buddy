@@ -1,6 +1,7 @@
 """Factory for a small real service; no private domain workflows in this increment."""
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, suppress
 from typing import Any
@@ -11,7 +12,13 @@ from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 
 from buddy_api import __version__
-from buddy_api.agent_provider import CohereDecisionProvider
+from buddy_api.agent_provider import (
+    AgentSettings,
+    CohereDecisionProvider,
+    ConfidentFirstProvider,
+    DecisionProvider,
+    JevDecisionProvider,
+)
 from buddy_api.analysis.api import analysis_router
 from buddy_api.auth import Authentication, auth_router
 from buddy_api.authorization import private_router
@@ -72,6 +79,41 @@ ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
 def request_id(request: Request) -> str:
     identifier: str = request.state.request_id
     return identifier
+
+
+logger = logging.getLogger(__name__)
+
+
+def decision_providers(
+    settings: AgentSettings, semantic: SemanticCandidates | None
+) -> tuple[DecisionProvider, dict[str, DecisionProvider]]:
+    """The server's default decider and the ones a presenter may pick (#243, #245).
+
+    Jev decides by default; Cohere stays selectable. Without a Jev key only Cohere exists,
+    so every choice decides with Cohere.
+    """
+    cohere = CohereDecisionProvider(
+        settings, client=semantic.provider.client if semantic is not None else None
+    )
+    if settings.jev_api_key is None:
+        if settings.decision_provider != "cohere":
+            logger.warning("presentation_agent event=jev_unavailable decided_by=cohere")
+        return cohere, {"cohere": cohere}
+    jev = JevDecisionProvider(settings.jev_api_key, threshold=settings.jev_confidence)
+    default: DecisionProvider = (
+        cohere
+        if settings.decision_provider == "cohere"
+        else jev
+        if settings.decision_provider == "jev"
+        else ConfidentFirstProvider(jev, cohere, settings.jev_confidence)
+    )
+    return default, {"jev": jev, "cohere": cohere}
+
+
+def decision_provider(
+    settings: AgentSettings, semantic: SemanticCandidates | None
+) -> DecisionProvider:
+    return decision_providers(settings, semantic)[0]
 
 
 def create_app(
@@ -179,7 +221,7 @@ def create_app(
             if semantic_provider is not None:
                 await semantic_provider.aclose()
             if _app.state.presentation_agent is not None:
-                await _app.state.presentation_agent.provider.aclose()
+                await _app.state.presentation_agent.aclose()
             if database is not None:
                 await database.close()
 
@@ -211,15 +253,7 @@ def create_app(
     )
     app.state.uploads = uploads
     app.state.presentation_agent = (
-        AgentRuntime(
-            config.agent,
-            CohereDecisionProvider(
-                config.agent,
-                client=app.state.semantic_candidates.provider.client
-                if app.state.semantic_candidates is not None
-                else None,
-            ),
-        )
+        AgentRuntime(config.agent, *decision_providers(config.agent, app.state.semantic_candidates))
         if config.agent
         else None
     )

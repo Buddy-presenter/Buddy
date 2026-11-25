@@ -393,7 +393,9 @@ def highlight_proposal(page, proposal, *, region=(0.1, 0.1, 0.2, 0.2)):
     )
 
 
-def test_zoom_highlight_retains_server_preflight(player, qtbot, caplog):
+def test_zoom_highlight_runs_verified_saved_action_without_second_server_check(
+    player, qtbot, caplog
+):
     import logging
 
     caplog.set_level(logging.INFO, logger="buddy_desktop.present_widget")
@@ -402,8 +404,10 @@ def test_zoom_highlight_retains_server_preflight(player, qtbot, caplog):
     highlight_proposal(page, proposal)
     page._agent_proposed(proposal)
     qtbot.waitUntil(lambda: not page.policy_runner.busy and bool(page.surface.highlight))
-    assert len(checks) == 1
-    assert checks[0][1]["tool"] == "highlight_region"
+    # #237: /agent validated this target moments earlier and the desktop verifies the
+    # saved action itself, so no second read-only /transition-check delays it.
+    assert checks == []
+    assert "preflight_skipped" in caplog.text and "reason=locally_verified" in caplog.text
     # #202: the executed command is the exact saved, verified action, and the
     # presenter is told which one ran.
     assert page._accepted_action_id == "validated-highlight"
@@ -645,3 +649,199 @@ def test_dropped_proposals_always_log_and_show_a_reason(player, qtbot, caplog):
     with caplog.at_level("WARNING"):
         page._consider_policy(stay)
     assert "proposal_dropped" not in caplog.text  # Nothing was going to run.
+
+
+def spoken(current, text, sequence=2):
+    segment = ContextSegment(f"cmd-{sequence}", sequence, text, True, 0, 1, time.monotonic_ns())
+    return replace(current[0], segments=(segment,))
+
+
+def test_explicit_region_command_runs_locally_without_any_server_call(player, qtbot, caplog):
+    # #237: "highlight the revenue figure" resolves on this device, like "next slide".
+    import logging
+
+    caplog.set_level(logging.INFO, logger="buddy_desktop.present_widget")
+    page, _, current, _, checks = player
+    page._generated_analysis = saved_analysis(page)
+    current[0] = spoken(current, "Highlight the revenue figure.")
+    local = page._local_navigation_proposal(page._session, current[0])
+    assert local is not None and local["decision_source"] == "local_command"
+    assert local["target"]["action_id"] == "validated-highlight"
+    page._agent_proposed(local)
+    qtbot.waitUntil(lambda: bool(page.surface.highlight))
+    assert checks == []
+    assert page._accepted_action_id == "validated-highlight"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Highlight the conclusion.",  # Names nothing on this slide.
+        "Zoom into the revenue figure.",  # No saved zoom on this slide.
+        "Don't highlight the revenue figure.",
+        "Should we highlight the revenue figure?",
+        "The revenue figure grew a lot.",  # Contextual: the server decides.
+    ],
+)
+def test_unclear_region_commands_defer_to_the_server(player, text):
+    page, _, current, _, _ = player
+    page._generated_analysis = saved_analysis(page)
+    current[0] = spoken(current, text)
+    assert page._local_navigation_proposal(page._session, current[0]) is None
+
+
+def test_unverified_saved_action_is_never_resolved_locally(player):
+    page, _, current, _, _ = player
+    page._generated_analysis = saved_analysis(page, semantic_verified=False)
+    current[0] = spoken(current, "Highlight the revenue figure.")
+    assert page._local_navigation_proposal(page._session, current[0]) is None
+
+
+def test_spoken_figure_matches_pdf_slide_text_locally(player, qtbot):
+    # #239: the purpose alone never says "$48M"; the grounded slide text does.
+    page, _, current, _, checks = player
+    page._generated_analysis = saved_analysis(page, shown_text="Total revenue $48M")
+    current[0] = spoken(current, "Highlight 48 million.")
+    local = page._local_navigation_proposal(page._session, current[0])
+    assert local is not None and local["decision_source"] == "local_command"
+    page._agent_proposed(local)
+    qtbot.waitUntil(lambda: bool(page.surface.highlight))
+    assert checks == []
+
+
+def test_remove_highlight_resets_the_view_locally(player, qtbot):
+    page, _, current, _, checks = player
+    page._generated_analysis = saved_analysis(page)
+    current[0] = spoken(current, "Highlight the revenue figure.")
+    page._agent_proposed(page._local_navigation_proposal(page._session, current[0]))
+    qtbot.waitUntil(lambda: bool(page.surface.highlight) and not page.executor.busy)
+    qtbot.waitUntil(lambda: not page.session_runner.busy and page._session_pending_state is None)
+    # Live speech after the sync carries the session's current state version.
+    current[0] = replace(
+        spoken(current, "Remove the highlight.", sequence=3),
+        state_version=page._session.state_version,
+    )
+    local = page._local_navigation_proposal(page._session, current[0])
+    assert local is not None and local["target"]["tool"] == "reset_view"
+    page.policy._hold_until = 0  # Skip the post-action cooldown the test does not wait for.
+    page._agent_proposed(local)
+    # The highlight's session sync defers the reset; the fixture stops the retry timer.
+    qtbot.waitUntil(lambda: not page.session_runner.busy and page._session_pending_state is None)
+    page._retry_deferred_policy()
+    qtbot.waitUntil(lambda: not page.surface.highlight)
+    assert checks == []
+
+
+def test_unresolved_commands_log_a_content_free_reason(player, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO, logger="buddy_desktop.present_widget")
+    page, _, current, _, _ = player
+    page._generated_analysis = saved_analysis(page)
+    current[0] = spoken(current, "Highlight the conclusion.")
+    assert page._local_navigation_proposal(page._session, current[0]) is None
+    assert "local_command_unresolved tool=highlight_region reason=no_matching_words" in caplog.text
+    assert "conclusion" not in caplog.text
+    current[0] = spoken(current, "Zoom into the chart.")
+    assert page._local_navigation_proposal(page._session, current[0]) is None
+    assert "reason=no_verified_action_of_type" in caplog.text
+
+
+def four_highlights(page):
+    """Four verified highlights sharing "revenue", like the deck tested live (#241)."""
+    from types import SimpleNamespace
+
+    def action(identifier, purpose, shown):
+        return SimpleNamespace(
+            instance_id=identifier,
+            action_type="highlight_region",
+            region=(0.1, 0.1, 0.2, 0.2),
+            purpose=purpose,
+            shown_text=shown,
+            usable=True,
+            state="validated",
+            semantic_verified=True,
+            reasons=(),
+        )
+
+    analysis = saved_analysis(page)
+    slide = analysis.slides[0]
+    slide.actions = (
+        action("rev-q1", "Highlight the revenue figure", "Q1 revenue $48M"),
+        action("rev-q2", "Highlight the revenue figure", "Q2 revenue $52M"),
+        action("rev-growth", "Highlight revenue growth", "Revenue growth 12%"),
+        action("rev-share", "Highlight revenue share", "Revenue share 2024: 31%"),
+    )
+    return analysis
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Highlight the 48 million revenue.", "rev-q1"),
+        ("Highlight revenue growth.", "rev-growth"),
+        ("Highlight the Q2 revenue.", "rev-q2"),
+    ],
+)
+def test_distinctive_words_break_shared_word_ties(player, text, expected):
+    # #241: "revenue" is in every action; the distinctive word decides.
+    page, _, current, _, _ = player
+    page._generated_analysis = four_highlights(page)
+    current[0] = spoken(current, text)
+    local = page._local_navigation_proposal(page._session, current[0])
+    assert local is not None and local["target"]["action_id"] == expected
+    assert local["reason"] == "explicit"
+
+
+def test_genuinely_shared_words_still_defer(player):
+    page, _, current, _, _ = player
+    page._generated_analysis = four_highlights(page)
+    current[0] = spoken(current, "Highlight the revenue.")
+    assert page._local_navigation_proposal(page._session, current[0]) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Revenue came in at 48 million this quarter.", "rev-q1"),
+        ("And in the second quarter we reached 52 million.", "rev-q2"),
+        ("Our share was 31 percent in 2024.", "rev-share"),
+    ],
+)
+def test_stated_figure_shown_by_one_action_runs_locally(player, qtbot, text, expected):
+    page, _, current, _, checks = player
+    page._generated_analysis = four_highlights(page)
+    current[0] = spoken(current, text)
+    local = page._local_navigation_proposal(page._session, current[0])
+    assert local is not None and local["decision_source"] == "local_command"
+    assert local["reason"] == "topic" and local["target"]["action_id"] == expected
+    page._agent_proposed(local)
+    qtbot.waitUntil(lambda: bool(page.surface.highlight))
+    assert checks == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Was revenue 48 million?",
+        "Revenue was not 48 million.",
+        "If we hit 48 million next year.",
+        "We have 3 offices.",  # A lone small number identifies nothing.
+        "Revenue was 52 million and 48 million.",  # Two actions show these figures.
+    ],
+)
+def test_unclear_figures_defer_to_the_server(player, text):
+    page, _, current, _, _ = player
+    page._generated_analysis = four_highlights(page)
+    current[0] = spoken(current, text)
+    assert page._local_navigation_proposal(page._session, current[0]) is None
+
+
+def test_decision_model_choice_is_sent_and_remembered(player):
+    # #245: the presenter picks Jev (default) or Cohere in Present.
+    page = player[0]
+    assert page.decision_model.currentData() == "jev"
+    assert page.agent_service.decision_model == "jev"
+    page.decision_model.setCurrentIndex(page.decision_model.findData("cohere"))
+    assert page.agent_service.decision_model == "cohere"
+    assert page.settings.value("presentation/decision_model") == "cohere"

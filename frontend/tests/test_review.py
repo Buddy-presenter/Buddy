@@ -695,3 +695,20 @@ def test_visual_qa_accepts_successful_response_after_default_timeout(monkeypatch
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_review_parser_keeps_pdf_grounded_slide_text_for_spoken_commands():
+    # #239: "highlight 48 million" must match the PDF action that shows "$48M".
+    deck_id, payload = analysis_payload()
+    payload["data"]["inputs"]["grounding"] = [
+        {
+            "instance_id": "action-1",
+            "action_sha256": "c" * 64,
+            "trace": {"method": "pdf_words", "target_text": "Revenue  $48M"},
+        },
+        "malformed entry is skipped",
+    ]
+    result = parse_analysis(payload, deck_id)
+    assert result.slides[0].actions[0].shown_text == "Revenue $48M"
+    deck_id, payload = analysis_payload()
+    assert parse_analysis(payload, deck_id).slides[0].actions[0].shown_text is None

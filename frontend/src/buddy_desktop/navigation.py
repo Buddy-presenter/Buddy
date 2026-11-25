@@ -173,6 +173,18 @@ def navigation_intent(text: str) -> tuple[str, int] | None:
         (r"^(?:please )?(?:let us )?go back one (?:slide|page)",),
     )
     phrase = " ".join(tokens)
+    # Short whole-sentence moves ("Okay, next.", "Let's move on.", "Go back a slide.") that
+    # the server model handled least reliably (#243). Only the entire sentence counts, so
+    # "moving on to costs" still goes to the contextual decision.
+    short = re.fullmatch(
+        r"(?:(?:ok|okay|alright|right|so|and|now) )*(?:please )?(?:let us )?"
+        r"(?:(next)(?: one)?(?: please)?|(?:moving|move) on(?: please)?"
+        r"|go (back) (?:a|one) (?:slide|page)|(back) (?:a|one) (?:slide|page)"
+        r"|(?:go )?(back) one)",
+        phrase,
+    )
+    if short:
+        return ("relative", -1 if "back" in short.groups() else 1)
     for (pattern,) in relative_patterns:
         match = re.match(pattern, phrase)
         if match and _safe_continuation(tokens[len(_tokens(match.group(0))) :]):
@@ -210,3 +222,198 @@ def navigation_intent(text: str) -> tuple[str, int] | None:
             if value is not None and _safe_continuation(number_words[end:]):
                 return ("absolute", value)
     return None
+
+
+_REGION_COMMANDS = (
+    (
+        "zoom_region",
+        r"^(?:please )?(?:let us |can you |could you |now )?"
+        r"(?:zoom (?:in )?(?:into|in on|on|onto|to)|zoom in|focus on|enlarge|magnify)\b ?",
+    ),
+    (
+        "highlight_region",
+        r"^(?:please )?(?:let us |can you |could you |now )?(?:highlight|emphasize|emphasise)\b ?",
+    ),
+)
+_HEDGES = frozenset(
+    [
+        "if",
+        "unless",
+        "until",
+        "only",
+        "provided",
+        "assuming",
+        "depending",
+        "not",
+        "no",
+        "never",
+        "cannot",
+        "without",
+        "actually",
+        "instead",
+        "rather",
+        "sorry",
+        "wait",
+        "cancel",
+        "forget",
+        "scratch",
+        "but",
+        "or",
+        "later",
+    ]
+)
+_FILLER = frozenset(
+    [
+        "the",
+        "percent",
+        "per",
+        "cent",
+        "a",
+        "an",
+        "this",
+        "that",
+        "these",
+        "those",
+        "in",
+        "on",
+        "of",
+        "to",
+        "into",
+        "onto",
+        "at",
+        "please",
+        "here",
+        "there",
+        "it",
+        "its",
+        "one",
+        "slide",
+        "page",
+        "region",
+        "area",
+        "part",
+        "section",
+        "bit",
+        "thing",
+        "now",
+        "for",
+        "me",
+        "us",
+    ]
+)
+
+
+def region_intent(text: str) -> tuple[str, frozenset[str]] | None:
+    """An explicit zoom/highlight command and the words naming its object, or None.
+
+    Like navigation, only clear imperatives qualify; questions, negations and hedged
+    phrases defer to the server's contextual decision.
+    """
+    normalized = unicodedata.normalize("NFKC", text).casefold().strip()
+    if any(char in normalized for char in '?？"“”«»'):
+        return None
+    phrase = " ".join(_tokens(normalized))
+    for tool, pattern in _REGION_COMMANDS:
+        match = re.match(pattern, phrase)
+        if not match:
+            continue
+        rest = phrase[match.end() :].split()
+        if _HEDGES.intersection(rest) or any(
+            rest[i : i + 2] == ["do", "not"] for i in range(len(rest) - 1)
+        ):
+            return None
+        return tool, frozenset(word_stem(w) for w in rest if w not in _FILLER)
+    return None
+
+
+def word_stem(word: str) -> str:
+    """A tiny plural/unit fold so "numbers" names "number" and "million" names "M"."""
+    if word in _UNITS:
+        return _UNITS[word]
+    return word[:-1] if len(word) > 3 and word.endswith("s") and not word.endswith("ss") else word
+
+
+def action_words(*texts: str) -> frozenset[str]:
+    return frozenset(word_stem(w) for text in texts for w in _tokens(text) if w not in _FILLER)
+
+
+_RESET_COMMANDS = (
+    r"^(?:please )?(?:let us |can you |could you |now )?"
+    r"(?:remove|clear|hide|undo|turn off|get rid of) (?:the |that |this )?"
+    r"(?:highlight|highlighting|zoom|focus)\b",
+    r"^(?:please )?(?:let us |can you |could you |now )?(?:unhighlight|zoom out|unzoom)\b",
+    r"^(?:please )?(?:let us |can you |could you |now )?(?:go )?back to the "
+    r"(?:full|whole|entire) (?:slide|page|view)\b",
+    r"^(?:please )?(?:let us |can you |could you |now )?show (?:me |us )?the "
+    r"(?:full|whole|entire) (?:slide|page)\b",
+    r"^(?:please )?(?:let us |can you |could you |now )?reset (?:the )?(?:view|zoom|slide)\b",
+)
+# Spoken units and their usual on-slide abbreviations ("48 million" vs "$48M").
+_UNITS = {
+    "million": "m",
+    "millions": "m",
+    "mn": "m",
+    "billion": "b",
+    "billions": "b",
+    "bn": "b",
+    "thousand": "k",
+    "thousands": "k",
+}
+
+
+def reset_intent(text: str) -> bool:
+    """A clear request to show the whole slide again ("remove the highlight", "zoom out")."""
+    normalized = unicodedata.normalize("NFKC", text).casefold().strip()
+    if any(char in normalized for char in '?？"“”«»'):
+        return False
+    phrase = " ".join(_tokens(normalized))
+    for pattern in _RESET_COMMANDS:
+        match = re.match(pattern, phrase)
+        if match:
+            rest = phrase[match.end() :].split()
+            return not (
+                _HEDGES.intersection(rest)
+                or any(rest[i : i + 2] == ["do", "not"] for i in range(len(rest) - 1))
+            )
+    return False
+
+
+def spoken_figures(text: str) -> tuple[tuple[str, str | None], ...]:
+    """Figures a plain statement says aloud: ("48", "m") for "48 million", ("2024", None).
+
+    Single digits without a unit are too common to identify anything. Questions, quotes,
+    hedges and negations return nothing so the server's contextual decision handles them.
+    """
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    if any(char in normalized for char in '?？"“”«»'):
+        return ()
+    if _HEDGES.intersection(_tokens(normalized)):
+        return ()
+    tokens = _figure_tokens(normalized)
+    figures: list[tuple[str, str | None]] = []
+    for index, token in enumerate(tokens):
+        digits = token.replace(",", "")
+        if not digits[:1].isdigit():
+            continue
+        following = word_stem(tokens[index + 1]) if index + 1 < len(tokens) else None
+        unit = following if following in {"m", "b", "k"} else None
+        if len(digits.replace(".", "")) >= 2 or unit is not None:
+            figures.append((digits, unit))
+    return tuple(figures)
+
+
+def shows_figure(shown_text: str, figure: tuple[str, str | None]) -> bool:
+    """Whether slide text shows the figure: "48" + "m" matches "$48M" and "48 million"."""
+    tokens = [word_stem(w.replace(",", "")) for w in _figure_tokens(shown_text)]
+    digits, unit = figure
+    return any(
+        token == digits
+        and (unit is None or (index + 1 < len(tokens) and tokens[index + 1] == unit))
+        for index, token in enumerate(tokens)
+    )
+
+
+def _figure_tokens(value: str) -> list[str]:
+    """Words and whole numbers, keeping "48.5" and "1,200" as one token."""
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    return re.findall(r"\d+(?:[.,]\d+)*|[^\W\d_]+", normalized)

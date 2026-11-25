@@ -46,7 +46,7 @@ from PySide6.QtWidgets import (
 )
 
 from buddy_desktop.agent_loop import AgentLoop
-from buddy_desktop.agent_service import AgentService
+from buddy_desktop.agent_service import DECISION_MODELS, AgentService
 from buddy_desktop.config import AppConfig
 from buddy_desktop.fullscreen import FullscreenPresentation
 from buddy_desktop.library_service import (
@@ -55,7 +55,14 @@ from buddy_desktop.library_service import (
     access_provider,
 )
 from buddy_desktop.microphone import MicrophoneController
-from buddy_desktop.navigation import navigation_intent
+from buddy_desktop.navigation import (
+    action_words,
+    navigation_intent,
+    region_intent,
+    reset_intent,
+    shows_figure,
+    spoken_figures,
+)
 from buddy_desktop.powerpoint import PowerPointAutomation, PresentationInfo
 from buddy_desktop.powerpoint_contract import (
     PowerPointAction,
@@ -101,6 +108,11 @@ from buddy_desktop.voice_commands import ReturnToPresentation, VoiceCommandRoute
 
 logger = logging.getLogger(__name__)
 NAVIGATION_TOOLS = {"next_slide", "previous_slide", "go_to_slide"}
+# Targets the desktop verifies itself before executing: slide moves against the loaded
+# deck and region actions against this session's saved, verified actions. The /agent
+# request that proposed them re-read the session and analysis moments earlier, so a
+# second read-only /transition-check only added 0.6-0.9 s (#237).
+LOCALLY_VERIFIED_TOOLS = NAVIGATION_TOOLS | {"zoom_region", "highlight_region", "reset_view"}
 
 
 def saved_action_eligible(source_format: str, action: ReviewAction) -> bool:
@@ -249,8 +261,11 @@ class PresentWidget(Page):
         self.speech = SpeechController(self)
         self.voice_commands = VoiceCommandRouter()
         self.transcript_context = TranscriptContext()
+        self.agent_service = AgentService(config)
+        saved_model = str(settings.value("presentation/decision_model", "jev"))
+        self.agent_service.decision_model = saved_model if saved_model in DECISION_MODELS else "jev"
         self.agent = AgentLoop(
-            AgentService(config),
+            self.agent_service,
             self,
             self.transcript_context.snapshot,
             self._local_navigation_proposal,
@@ -601,6 +616,24 @@ class PresentWidget(Page):
         )
         self.policy_enabled.toggled.connect(self._policy_toggled)
         microphone_layout.addWidget(self.policy_enabled)
+        decision_row = QHBoxLayout()
+        decision_label = QLabel("Suggestions decided by")
+        decision_row.addWidget(decision_label)
+        self.decision_model = QComboBox()
+        self.decision_model.addItem("Jev (fast, default)", "jev")
+        self.decision_model.addItem("Cohere", "cohere")
+        self.decision_model.setAccessibleName("Model that decides automatic suggestions")
+        self.decision_model.setToolTip(
+            "Jev answers in about a quarter of a second. Cohere is the earlier, slower model."
+        )
+        decision_label.setBuddy(self.decision_model)
+        self.decision_model.setCurrentIndex(
+            max(0, self.decision_model.findData(self.agent_service.decision_model))
+        )
+        self.decision_model.currentIndexChanged.connect(self._decision_model_changed)
+        decision_row.addWidget(self.decision_model)
+        decision_row.addStretch()
+        microphone_layout.addLayout(decision_row)
         self.policy_pause_button = QPushButton("Resume automatic moves")
         self.policy_pause_button.setAccessibleName("Resume automatic moves")
         self.policy_pause_button.setToolTip("Resume automatic moves (Ctrl+Shift+P)")
@@ -795,6 +828,13 @@ class PresentWidget(Page):
                 self.microphone.start(identifier)
         self._refresh()
 
+    @Slot(int)
+    def _decision_model_changed(self, _index: int) -> None:
+        model = self.decision_model.currentData()
+        if model in DECISION_MODELS:
+            self.agent_service.decision_model = model
+            self.settings.setValue("presentation/decision_model", model)
+
     @Slot(bool)
     def _microphone_compatibility_changed(self, enabled: bool) -> None:
         self.microphone.set_compatibility(enabled)
@@ -943,7 +983,7 @@ class PresentWidget(Page):
             return None
         intent = navigation_intent(segments[-1].text)
         if intent is None:
-            return None
+            return self._local_region_proposal(session, context, local_state.active_slide_id)
         slide_ids = (
             tuple(slide.slide_id for slide in self._powerpoint_binding.slides)
             if self._powerpoint_binding is not None
@@ -984,6 +1024,163 @@ class PresentWidget(Page):
                 "slide_id": slide_ids[destination],
                 "action_id": None,
                 "region": None,
+            },
+            "_client_context": context,
+            "_client_segment_ids": [segment.segment_id for segment in segments],
+        }
+
+    def _local_region_proposal(
+        self, session: PresentationSession, context: ContextSnapshot, slide_id: str
+    ) -> dict[str, object] | None:
+        """Resolve explicit zoom/highlight/reset commands on this device (#237, #239).
+
+        "Zoom into the table", "highlight 48 million" and "remove the highlight" run like
+        "next slide" when the words single out one saved, verified action of that type on
+        the slide on screen (matched against its purpose and the slide text it shows).
+        Anything unclear returns None so the server's contextual decision handles it, and
+        a recognised command that could not be resolved logs a content-free reason.
+        Nothing here can invent a region.
+        """
+        segments = context.decision_segments
+        text = segments[-1].text
+        if reset_intent(text):
+            return self._local_command(session, context, slide_id, "reset_view", None, None)
+        intent = region_intent(text)
+        if intent is None:
+            return self._local_mention_proposal(session, context, slide_id, text)
+        tool, named = intent
+
+        def unresolved(reason: str, candidates: int = 0) -> None:
+            logger.info(
+                "presentation_policy event=local_command_unresolved tool=%s reason=%s "
+                "candidates=%d",
+                tool,
+                reason,
+                candidates,
+            )
+
+        analysis = self._generated_analysis
+        if analysis is None or str(analysis.id) != session.analysis_version_id:
+            unresolved("saved_actions_not_loaded")
+            return None
+        slide = next((s for s in analysis.slides if s.slide_id == slide_id), None)
+        actions = [
+            a
+            for a in (slide.actions if slide is not None else ())
+            if a.action_type == tool and saved_action_eligible(analysis.source_format, a)
+        ]
+        if not actions:
+            unresolved("no_verified_action_of_type")
+            return None
+        if not named:
+            if len(actions) != 1:
+                unresolved("ambiguous", len(actions))
+                return None
+            chosen = actions[0]
+        else:
+            # A word shared by every action cannot tell them apart; a word only one action
+            # shows (especially a number) decides. Weight each spoken word by 1/how many
+            # actions contain it, doubled for numbers (#241).
+            words = [action_words(a.purpose, getattr(a, "shown_text", None) or "") for a in actions]
+
+            def weight(word: str) -> float:
+                holders = sum(word in w for w in words)
+                return (2.0 if word[:1].isdigit() else 1.0) / holders if holders else 0.0
+
+            scored = sorted(
+                ((sum(weight(word) for word in named & w), index) for index, w in enumerate(words)),
+                reverse=True,
+            )
+            best, runner_up = scored[0][0], scored[1][0] if len(scored) > 1 else 0.0
+            if best == 0:
+                unresolved("no_matching_words", len(actions))
+                return None
+            if best - runner_up < 1e-6:
+                unresolved("ambiguous", len(actions))
+                return None
+            chosen = actions[scored[0][1]]
+        x, y, width, height = chosen.region
+        return self._local_command(
+            session,
+            context,
+            slide_id,
+            tool,
+            chosen.instance_id,
+            {"x": x, "y": y, "width": width, "height": height},
+        )
+
+    def _local_mention_proposal(
+        self, session: PresentationSession, context: ContextSnapshot, slide_id: str, text: str
+    ) -> dict[str, object] | None:
+        """Show a figure the presenter states aloud when exactly one action shows it (#241).
+
+        "Revenue came in at 48 million" highlights the one verified zoom/highlight on the
+        slide on screen whose slide text shows "$48M". No figure, several matches, a
+        question, a hedge or a negation returns None for the server's contextual decision.
+        """
+        figures = spoken_figures(text)
+        if not figures:
+            return None
+        analysis = self._generated_analysis
+        if analysis is None or str(analysis.id) != session.analysis_version_id:
+            return None
+        slide = next((s for s in analysis.slides if s.slide_id == slide_id), None)
+        matches = [
+            a
+            for a in (slide.actions if slide is not None else ())
+            if a.action_type in {"zoom_region", "highlight_region"}
+            and saved_action_eligible(analysis.source_format, a)
+            and any(shows_figure(getattr(a, "shown_text", None) or "", f) for f in figures)
+        ]
+        if len(matches) != 1:
+            if matches:
+                logger.info(
+                    "presentation_policy event=local_mention_unresolved reason=ambiguous "
+                    "candidates=%d",
+                    len(matches),
+                )
+            return None
+        chosen = matches[0]
+        x, y, width, height = chosen.region
+        proposal = self._local_command(
+            session,
+            context,
+            slide_id,
+            chosen.action_type,
+            chosen.instance_id,
+            {"x": x, "y": y, "width": width, "height": height},
+        )
+        proposal["reason"] = "topic"
+        return proposal
+
+    def _local_command(
+        self,
+        session: PresentationSession,
+        context: ContextSnapshot,
+        slide_id: str,
+        tool: str,
+        action_id: str | None,
+        region: dict[str, float] | None,
+    ) -> dict[str, object]:
+        segments = context.decision_segments
+        return {
+            "decision_id": str(uuid4()),
+            "session_id": session.id,
+            "analysis_id": session.analysis_version_id,
+            "state_version": context.state_version,
+            "active_slide_id": slide_id,
+            "context_epoch": context.epoch,
+            "stream_id": context.stream_id,
+            "sequence": max(segment.sequence for segment in segments),
+            "confidence": 1.0,
+            "decision_source": "local_command",
+            "reason": "explicit",
+            "evidence": [len(segments) - 1],
+            "target": {
+                "tool": tool,
+                "slide_id": slide_id,
+                "action_id": action_id,
+                "region": region,
             },
             "_client_context": context,
             "_client_segment_ids": [segment.segment_id for segment in segments],
@@ -1183,12 +1380,15 @@ class PresentWidget(Page):
         timing = self._policy_latency.get(prediction.decision_id)
         if timing is None:
             return
-        if prediction.target.tool in NAVIGATION_TOOLS:
+        if prediction.target.tool in LOCALLY_VERIFIED_TOOLS:
             logger.info(
                 "presentation_latency event=preflight_skipped decision_id=%s "
-                "source_format=%s reason=validated_navigation",
+                "source_format=%s reason=%s",
                 prediction.decision_id,
                 source_format,
+                "validated_navigation"
+                if prediction.target.tool in NAVIGATION_TOOLS
+                else "locally_verified",
             )
             return
         execution_ns = timing.get("execution_started_ns", time.monotonic_ns())
@@ -1361,7 +1561,7 @@ class PresentWidget(Page):
         if reason == "accepted" and self._session_access:
             self._policy_check = (prediction, context, native.binding.source_sha256)
             self._start_policy_latency(prediction, context, proposal_received_ns)
-            if navigation:
+            if prediction.target.tool in LOCALLY_VERIFIED_TOOLS:
                 self._native_policy_checked(prediction, context, native.binding.source_sha256)
             else:
                 access = self._session_access
@@ -1848,7 +2048,7 @@ class PresentWidget(Page):
         self._start_policy_latency(prediction, context, proposal_received_ns)
         if prediction.target.tool in {"next_slide", "previous_slide", "go_to_slide"}:
             self.executor.prefetch_slide(prediction.target.slide_id)
-        if navigation:
+        if prediction.target.tool in LOCALLY_VERIFIED_TOOLS:
             # /agent has just re-read the session analysis and validated this
             # target. Keep the current local source, speech and slide guards.
             self._policy_checked(0, None)
@@ -2122,13 +2322,16 @@ class PresentWidget(Page):
                 self.policy.completed(prediction.decision_id, success=False, now_ns=now)
                 return
             decision_session = replace(session, state=local_state)
-            self.policy_runner.submit(
-                lambda: self.agent.service.check_transition(access(), decision_session, target)
-            )
             logger.warning(
                 "presentation_policy event=deferred_action_rechecked decision_id=%s",
                 prediction.decision_id,
             )
+            if prediction.target.tool in LOCALLY_VERIFIED_TOOLS:
+                self._policy_checked(0, None)
+            else:
+                self.policy_runner.submit(
+                    lambda: self.agent.service.check_transition(access(), decision_session, target)
+                )
             self.policy_status.setText("Rechecking the suggestion after slide/session sync…")
             return
 
@@ -2250,13 +2453,16 @@ class PresentWidget(Page):
             self.policy.completed(prediction.decision_id, success=False, now_ns=now_ns)
             return
         decision_session = replace(session, state=local_state)
-        self.policy_runner.submit(
-            lambda: self.agent.service.check_transition(access(), decision_session, target)
-        )
         logger.warning(
             "presentation_policy event=deferred_action_rechecked decision_id=%s",
             prediction.decision_id,
         )
+        if prediction.target.tool in LOCALLY_VERIFIED_TOOLS:
+            self._native_policy_checked(prediction, context, source)
+        else:
+            self.policy_runner.submit(
+                lambda: self.agent.service.check_transition(access(), decision_session, target)
+            )
         self.policy_status.setText("Rechecking the suggestion after PowerPoint/session sync…")
 
     @staticmethod

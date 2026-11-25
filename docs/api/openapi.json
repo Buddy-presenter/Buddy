@@ -8499,6 +8499,21 @@
                     "title": "Context Epoch",
                     "type": "integer"
                   },
+                  "decision_model": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "jev",
+                          "cohere"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Decision Model"
+                  },
                   "expected_state_version": {
                     "minimum": 0,
                     "title": "Expected State Version",

@@ -23,9 +23,28 @@ never triggers anything.
    chooses one offered option or abstains. It abstains on ambiguous, negated,
    hypothetical, quoted or unrelated speech; free-form regions are impossible.
 4. **Policy:** the transition policy (#21, [transition policy](transition-policy.md))
-   applies freshness, duplicate, current-focus, cooldown and evidence rules, then asks
-   the server to re-check the exact target (`transition-check`): active autonomous
-   session, current analysis, and a still-eligible saved action with the same region.
+   applies freshness, duplicate, current-focus, cooldown and evidence rules. Slide moves,
+   zoom, highlight and reset run without a second server round trip: the `/agent`
+   request that proposed them re-read the session and analysis moments earlier, and the
+   desktop verifies the exact saved action itself (#237). Explicit commands such as "zoom
+   into the table" or "highlight the total" are resolved on the device, like "next slide",
+   when their words single out one saved, verified action of that type on the slide on
+   screen; anything less clear goes to the server's contextual decision. Words match the
+   action's purpose and the slide text it shows (the PDF grounding quote or PowerPoint
+   target/shape text), with spoken units folded ("48 million" matches "$48M") (#239).
+   Words that only one action contains, especially numbers, outweigh words several actions
+   share, so a shared word like "revenue" no longer makes commands ambiguous (#241). A
+   plain statement that says a figure (a number of two or more digits, or any number with
+   million/billion/thousand) which the shown text of exactly one verified zoom or highlight
+   on the slide contains runs that action locally too ("revenue came in at 48 million");
+   questions, hedges and negations, or a figure several actions show, go to the server
+   (ambiguous figures log `local_mention_unresolved`).
+   Short whole-sentence moves ("Okay, next.", "Let's move on.", "Go back a slide.") also run
+   locally; a sentence that names a topic ("moving on to costs") goes to the server (#243).
+   "Remove the highlight", "zoom out" and "show the whole slide" reset the view the same
+   way. A recognised command that cannot be resolved locally logs
+   `presentation_policy event=local_command_unresolved tool=… reason=…` (for example
+   `no_matching_words`, `ambiguous`, `no_verified_action_of_type`) without speech text.
    Any proposal the desktop cannot run (automatic actions off, presentation still loading,
    speech changed, action on another slide, saved action unavailable) is logged as
    `presentation_policy event=proposal_dropped decision_id=… reason=…` and explained in

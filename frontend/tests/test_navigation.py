@@ -25,3 +25,41 @@ from buddy_desktop.navigation import navigation_intent
 )
 def test_local_navigation_is_conservative(phrase, expected):
     assert navigation_intent(phrase) == expected
+
+
+def test_spoken_figures_and_shown_figures():
+    from buddy_desktop.navigation import shows_figure, spoken_figures
+
+    assert spoken_figures("Revenue came in at 48 million") == (("48", "m"),)
+    assert spoken_figures("we grew to 48.5 million") == (("48.5", "m"),)
+    assert spoken_figures("1,200 users joined") == (("1200", None),)
+    assert spoken_figures("we have 3 offices") == ()
+    assert spoken_figures("was it 48 million?") == ()
+    assert spoken_figures("not 48 million") == ()
+    assert shows_figure("Revenue $48M", ("48", "m"))
+    assert shows_figure("48 million", ("48", "m"))
+    assert not shows_figure("Revenue $48.5M", ("48", "m"))
+    assert shows_figure("1,200 users", ("1200", None))
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Let's move on.", ("relative", 1)),
+        ("Okay, next.", ("relative", 1)),
+        ("Next, please.", ("relative", 1)),
+        ("Moving on.", ("relative", 1)),
+        ("Go back a slide.", ("relative", -1)),
+        ("Back one slide.", ("relative", -1)),
+        ("Moving on to costs.", None),  # Names a topic: contextual decision.
+        ("Next year we hire 20.", None),
+        ("Next, our customers.", None),
+        ("Don't move on yet.", None),
+        ("Next?", None),
+    ],
+)
+def test_short_whole_sentence_moves_are_local(text, expected):
+    # #243: the short forms the server model handled least reliably.
+    from buddy_desktop.navigation import navigation_intent
+
+    assert navigation_intent(text) == expected
