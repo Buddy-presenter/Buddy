@@ -322,12 +322,16 @@ class TransitionPolicy:
         ):
             return reject("weak_evidence")
         if prediction.source == "local_command":
-            # An explicit spoken zoom/highlight matched on this device to one saved action.
-            if prediction.reason != "explicit" or target.tool not in {
-                "zoom_region",
-                "highlight_region",
-                "reset_view",
-            }:
+            # An explicit spoken zoom/highlight/reset, or a stated figure only one saved
+            # action shows (#241), matched on this device to one saved action.
+            allowed = (
+                {"zoom_region", "highlight_region", "reset_view"}
+                if prediction.reason == "explicit"
+                else {"zoom_region", "highlight_region"}
+                if prediction.reason == "topic"
+                else set()
+            )
+            if target.tool not in allowed:
                 return reject("weak_evidence")
         elif prediction.source == "navigation":
             if prediction.reason not in {"explicit", "topic"} or target.tool not in {

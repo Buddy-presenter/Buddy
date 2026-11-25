@@ -32,6 +32,13 @@ never triggers anything.
    screen; anything less clear goes to the server's contextual decision. Words match the
    action's purpose and the slide text it shows (the PDF grounding quote or PowerPoint
    target/shape text), with spoken units folded ("48 million" matches "$48M") (#239).
+   Words that only one action contains, especially numbers, outweigh words several actions
+   share, so a shared word like "revenue" no longer makes commands ambiguous (#241). A
+   plain statement that says a figure (a number of two or more digits, or any number with
+   million/billion/thousand) which the shown text of exactly one verified zoom or highlight
+   on the slide contains runs that action locally too ("revenue came in at 48 million");
+   questions, hedges and negations, or a figure several actions show, go to the server
+   (ambiguous figures log `local_mention_unresolved`).
    "Remove the highlight", "zoom out" and "show the whole slide" reset the view the same
    way. A recognised command that cannot be resolved locally logs
    `presentation_policy event=local_command_unresolved tool=… reason=…` (for example

@@ -60,6 +60,8 @@ from buddy_desktop.navigation import (
     navigation_intent,
     region_intent,
     reset_intent,
+    shows_figure,
+    spoken_figures,
 )
 from buddy_desktop.powerpoint import PowerPointAutomation, PresentationInfo
 from buddy_desktop.powerpoint_contract import (
@@ -997,7 +999,7 @@ class PresentWidget(Page):
             return self._local_command(session, context, slide_id, "reset_view", None, None)
         intent = region_intent(text)
         if intent is None:
-            return None
+            return self._local_mention_proposal(session, context, slide_id, text)
         tool, named = intent
 
         def unresolved(reason: str, candidates: int = 0) -> None:
@@ -1028,21 +1030,24 @@ class PresentWidget(Page):
                 return None
             chosen = actions[0]
         else:
+            # A word shared by every action cannot tell them apart; a word only one action
+            # shows (especially a number) decides. Weight each spoken word by 1/how many
+            # actions contain it, doubled for numbers (#241).
+            words = [action_words(a.purpose, getattr(a, "shown_text", None) or "") for a in actions]
+
+            def weight(word: str) -> float:
+                holders = sum(word in w for w in words)
+                return (2.0 if word[:1].isdigit() else 1.0) / holders if holders else 0.0
+
             scored = sorted(
-                (
-                    (
-                        len(named & action_words(a.purpose, getattr(a, "shown_text", None) or "")),
-                        index,
-                    )
-                    for index, a in enumerate(actions)
-                ),
+                ((sum(weight(word) for word in named & w), index) for index, w in enumerate(words)),
                 reverse=True,
             )
-            best, runner_up = scored[0][0], scored[1][0] if len(scored) > 1 else 0
+            best, runner_up = scored[0][0], scored[1][0] if len(scored) > 1 else 0.0
             if best == 0:
                 unresolved("no_matching_words", len(actions))
                 return None
-            if best == runner_up:
+            if best - runner_up < 1e-6:
                 unresolved("ambiguous", len(actions))
                 return None
             chosen = actions[scored[0][1]]
@@ -1055,6 +1060,50 @@ class PresentWidget(Page):
             chosen.instance_id,
             {"x": x, "y": y, "width": width, "height": height},
         )
+
+    def _local_mention_proposal(
+        self, session: PresentationSession, context: ContextSnapshot, slide_id: str, text: str
+    ) -> dict[str, object] | None:
+        """Show a figure the presenter states aloud when exactly one action shows it (#241).
+
+        "Revenue came in at 48 million" highlights the one verified zoom/highlight on the
+        slide on screen whose slide text shows "$48M". No figure, several matches, a
+        question, a hedge or a negation returns None for the server's contextual decision.
+        """
+        figures = spoken_figures(text)
+        if not figures:
+            return None
+        analysis = self._generated_analysis
+        if analysis is None or str(analysis.id) != session.analysis_version_id:
+            return None
+        slide = next((s for s in analysis.slides if s.slide_id == slide_id), None)
+        matches = [
+            a
+            for a in (slide.actions if slide is not None else ())
+            if a.action_type in {"zoom_region", "highlight_region"}
+            and saved_action_eligible(analysis.source_format, a)
+            and any(shows_figure(getattr(a, "shown_text", None) or "", f) for f in figures)
+        ]
+        if len(matches) != 1:
+            if matches:
+                logger.info(
+                    "presentation_policy event=local_mention_unresolved reason=ambiguous "
+                    "candidates=%d",
+                    len(matches),
+                )
+            return None
+        chosen = matches[0]
+        x, y, width, height = chosen.region
+        proposal = self._local_command(
+            session,
+            context,
+            slide_id,
+            chosen.action_type,
+            chosen.instance_id,
+            {"x": x, "y": y, "width": width, "height": height},
+        )
+        proposal["reason"] = "topic"
+        return proposal
 
     def _local_command(
         self,

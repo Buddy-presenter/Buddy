@@ -364,3 +364,44 @@ def reset_intent(text: str) -> bool:
                 or any(rest[i : i + 2] == ["do", "not"] for i in range(len(rest) - 1))
             )
     return False
+
+
+def spoken_figures(text: str) -> tuple[tuple[str, str | None], ...]:
+    """Figures a plain statement says aloud: ("48", "m") for "48 million", ("2024", None).
+
+    Single digits without a unit are too common to identify anything. Questions, quotes,
+    hedges and negations return nothing so the server's contextual decision handles them.
+    """
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    if any(char in normalized for char in '?？"“”«»'):
+        return ()
+    if _HEDGES.intersection(_tokens(normalized)):
+        return ()
+    tokens = _figure_tokens(normalized)
+    figures: list[tuple[str, str | None]] = []
+    for index, token in enumerate(tokens):
+        digits = token.replace(",", "")
+        if not digits[:1].isdigit():
+            continue
+        following = word_stem(tokens[index + 1]) if index + 1 < len(tokens) else None
+        unit = following if following in {"m", "b", "k"} else None
+        if len(digits.replace(".", "")) >= 2 or unit is not None:
+            figures.append((digits, unit))
+    return tuple(figures)
+
+
+def shows_figure(shown_text: str, figure: tuple[str, str | None]) -> bool:
+    """Whether slide text shows the figure: "48" + "m" matches "$48M" and "48 million"."""
+    tokens = [word_stem(w.replace(",", "")) for w in _figure_tokens(shown_text)]
+    digits, unit = figure
+    return any(
+        token == digits
+        and (unit is None or (index + 1 < len(tokens) and tokens[index + 1] == unit))
+        for index, token in enumerate(tokens)
+    )
+
+
+def _figure_tokens(value: str) -> list[str]:
+    """Words and whole numbers, keeping "48.5" and "1,200" as one token."""
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    return re.findall(r"\d+(?:[.,]\d+)*|[^\W\d_]+", normalized)
