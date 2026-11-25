@@ -128,7 +128,7 @@ def test_voice_search_stays_local_and_suppresses_partial_and_final_agent_input(
         {**base, "text": "Open Chrome and search for images of cute cats.", "final": True}
     )
     assert search_spy.count() == 0
-    qtbot.waitUntil(lambda: search_spy.count() == 1, timeout=1000)
+    qtbot.waitUntil(lambda: search_spy.count() == 1, timeout=4000)
     assert search_spy.count() == 1
     assert search_spy.at(0) == ["cute cats", True]
     assert agent_updates == []
@@ -179,7 +179,7 @@ def test_quick_search_correction_updates_pending_query_before_chrome_opens(
     )
 
     assert search_spy.count() == 0
-    qtbot.waitUntil(lambda: search_spy.count() == 1, timeout=1000)
+    qtbot.waitUntil(lambda: search_spy.count() == 1, timeout=4000)
     assert search_spy.at(0) == ["cute cats", True]
 
 
@@ -224,7 +224,7 @@ def test_incomplete_image_search_waits_for_a_concrete_query(present, signal_reco
             "latency_ms": 20,
         }
     )
-    qtbot.waitUntil(lambda: search_spy.count() == 1, timeout=1000)
+    qtbot.waitUntil(lambda: search_spy.count() == 1, timeout=4000)
     assert search_spy.at(0) == ["cute cats", True]
 
 
@@ -270,7 +270,7 @@ def test_incomplete_correction_keeps_the_original_search_queued_until_query_arri
             "latency_ms": 20,
         }
     )
-    qtbot.waitUntil(lambda: search_spy.count() == 1, timeout=1000)
+    qtbot.waitUntil(lambda: search_spy.count() == 1, timeout=4000)
     assert search_spy.at(0) == ["cute cats", True]
 
 

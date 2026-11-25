@@ -27,6 +27,8 @@ from buddy_desktop.auth import AccountProfile, AccountSession
 from buddy_desktop.browser_search import launch_chrome_search
 from buddy_desktop.buddy_mini import BuddyMini, mini_caption
 from buddy_desktop.config import AppConfig, ConfigurationError, validate_api_url
+from buddy_desktop.information_search_panel import InformationSearchPanel
+from buddy_desktop.information_search_service import InformationAnswer, InformationSearchService
 from buddy_desktop.library_service import AccessProvider, LibraryAccessExpired
 from buddy_desktop.library_widget import LibraryWidget
 from buddy_desktop.present_widget import PresentWidget
@@ -64,6 +66,18 @@ class MainWindow(QMainWindow):
         self.runner.succeeded.connect(self._health_succeeded)
         self.runner.failed.connect(self._health_failed)
         self.runner.idle.connect(self._task_idle)
+        self.information_search_runner = TaskRunner(self)
+        self.information_search_runner.succeeded.connect(self._information_search_succeeded)
+        self.information_search_runner.failed.connect(self._information_search_failed)
+        self.information_search_runner.idle.connect(self._information_search_idle)
+        self._information_search_generation = 0
+        self._information_search_task: int | None = None
+        self._information_search_task_generation: int | None = None
+        self._queued_information_search: tuple[int, str, AccessProvider] | None = None
+        self.information_search_panel = InformationSearchPanel(
+            reduce_motion=bool(settings.value("appearance/reduce_motion", False, type=bool))
+        )
+        self.information_search_panel.close_requested.connect(self._close_information_search)
         self.setWindowTitle("Buddy")
         self.setMinimumSize(800, 600)
         self.resize(1200, 800)
@@ -524,6 +538,8 @@ class MainWindow(QMainWindow):
         if 0 <= index < self.pages.count():
             if index != 3:
                 self._mini_auto_poll.stop()
+                if self.information_search_panel.isVisible():
+                    self._close_information_search()
             previous = self.pages.currentIndex()
             self.pages.setCurrentIndex(index)
             self.route_title.setText(
@@ -726,26 +742,102 @@ class MainWindow(QMainWindow):
 
     @Slot(str, bool)
     def _open_voice_search(self, query: str, images: bool) -> None:
-        # Windows grants the current foreground process a narrow foreground
-        # handoff before Chrome takes focus. No shell command is constructed.
-        allow_current_process_foreground()
-        result = launch_chrome_search(query, images=images)
-        if result.opened:
+        self._information_search_generation += 1
+        generation = self._information_search_generation
+        self._queued_information_search = None
+        if images:
+            self.information_search_panel.close_panel()
+            # Windows grants the current foreground process a narrow foreground
+            # handoff before Chrome takes focus. No shell command is constructed.
+            allow_current_process_foreground()
+            result = launch_chrome_search(query, images=True)
+            if not result.opened:
+                self._show_voice_command_feedback(result.message, 10000)
             return
-        else:
-            self._show_voice_command_feedback(result.message, 10000)
+
+        fullscreen_owner = self.present.fullscreen
+        owner: QWidget = self
+        if fullscreen_owner is not None and fullscreen_owner.isVisible():
+            owner = fullscreen_owner
+        self.information_search_panel.present(owner, query)
+        session = self.account.session
+        if session is None or not self.account.account_id:
+            self.information_search_panel.show_error(
+                "Sign in to Buddy to get a web answer and sources."
+            )
+            return
+        access = self._access_provider(session)
+        if self.information_search_runner.busy:
+            self._queued_information_search = (generation, query, access)
+            return
+        self._submit_information_search(generation, query, access)
 
     @Slot()
     def _return_to_presentation_by_voice(self) -> None:
+        self._information_search_generation += 1
+        self._queued_information_search = None
+        had_information_panel = self.information_search_panel.isVisible()
+        if had_information_panel:
+            self.information_search_panel.close_panel()
         fullscreen = self.present.fullscreen
         target = fullscreen if fullscreen is not None and fullscreen.isVisible() else self
         if activate_qt_window(target):
-            self._show_voice_command_feedback("Returned to the presentation.", 4000)
+            if not had_information_panel:
+                self._show_voice_command_feedback("Returned to the presentation.", 4000)
         else:
             self._show_voice_command_feedback(
                 "Windows did not focus Buddy. Say “return to the presentation” again.",
                 10000,
             )
+
+    def _close_information_search(self) -> None:
+        self._information_search_generation += 1
+        self._queued_information_search = None
+        self.information_search_panel.close_panel()
+
+    def _submit_information_search(
+        self, generation: int, query: str, access: AccessProvider
+    ) -> None:
+        if generation != self._information_search_generation or self._closing:
+            return
+        self._information_search_task_generation = generation
+        self._information_search_task = self.information_search_runner.submit(
+            lambda: InformationSearchService(self.config).answer(access, query)
+        )
+
+    @Slot(int, object)
+    def _information_search_succeeded(self, identifier: int, result: object) -> None:
+        if (
+            identifier != self._information_search_task
+            or self._information_search_task_generation != self._information_search_generation
+            or self._closing
+            or not isinstance(result, InformationAnswer)
+            or not self.information_search_panel.isVisible()
+        ):
+            return
+        self.information_search_panel.show_answer(result)
+
+    @Slot(int, str)
+    def _information_search_failed(self, identifier: int, message: str) -> None:
+        if (
+            identifier != self._information_search_task
+            or self._information_search_task_generation != self._information_search_generation
+            or self._closing
+            or not self.information_search_panel.isVisible()
+        ):
+            return
+        self.information_search_panel.show_error(message)
+
+    @Slot()
+    def _information_search_idle(self) -> None:
+        self._information_search_task = None
+        self._information_search_task_generation = None
+        queued, self._queued_information_search = self._queued_information_search, None
+        if queued is not None and not self._closing:
+            generation, query, access = queued
+            self._submit_information_search(generation, query, access)
+        if self._closing:
+            self.close()
 
     def _show_voice_command_feedback(self, message: str, timeout_ms: int) -> None:
         fullscreen = self.present.fullscreen
@@ -1001,9 +1093,12 @@ class MainWindow(QMainWindow):
             or self.present.powerpoint_runner.busy
             or self.present.policy_runner.busy
             or self.present.generated_runner.busy
+            or self.information_search_runner.busy
         ):
             self._closing = True
             self.runner.stop()
+            self.information_search_runner.stop()
+            self.information_search_panel.close_panel()
             central = self.centralWidget()
             if central is not None:
                 central.setEnabled(False)

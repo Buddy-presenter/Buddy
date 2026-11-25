@@ -124,6 +124,9 @@ acceptance are documented in [speech recognition](speech-recognition.md).
 The separate [voice-to-slide acceptance runbook](voice-navigation-acceptance.md) covers
 real spoken commands, safe abstention, cleanup and independent PDF/PowerPoint evidence.
 
+Voice-triggered information searches, image searches, correction phrases and provider data
+handling are documented in [voice web search](voice-web-search.md).
+
 The ephemeral decision-input window and its capture-time invalidation rules are
 documented in [rolling speech context](transcript-context.md).
 

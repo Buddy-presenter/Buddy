@@ -2412,10 +2412,10 @@ class PresentWidget(Page):
             self._voice_search_dispatch_timer.stop()
             self._pending_voice_search = None
         if command.correction_pending and self._pending_voice_search is not None:
-            # Let the correction finish before opening Chrome, but keep the wait
-            # bounded to the short search correction window.
-            delay = 1800 if command.correction_waiting_for_query else 500
-            self._voice_search_dispatch_timer.start(delay)
+            # Keep the query replaceable for the full correction window. In
+            # particular, don't launch Chrome before an immediately spoken
+            # correction can update the pending query.
+            self._voice_search_dispatch_timer.start(3000)
         if command.suppress_agent:
             # Explicit external commands stay local. Also invalidate older model
             # work so it cannot run while Chrome is foregrounded or on return.
@@ -2423,7 +2423,9 @@ class PresentWidget(Page):
             self.policy.clear_pending()
             if isinstance(command.command, WebSearch):
                 self._pending_voice_search = command.command
-                self._voice_search_dispatch_timer.start(500)
+                # Leave a correction window before opening Chrome or starting a
+                # request. A later “I mean …” replaces this pending query.
+                self._voice_search_dispatch_timer.start(3000)
             elif isinstance(command.command, ReturnToPresentation):
                 self._voice_search_dispatch_timer.stop()
                 self._pending_voice_search = None

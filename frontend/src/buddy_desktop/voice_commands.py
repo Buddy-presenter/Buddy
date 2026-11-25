@@ -35,11 +35,55 @@ class VoiceCommandResult:
 
 
 _SEARCH = re.compile(
-    r"^(?:please\s+)?(?:(?:open\s+(?:google\s+)?chrome\s+and\s+)?search\s+for)\s*(?P<query>.*)$",
+    r"^(?:please\s+)?(?:(?:open\s+(?:google\s+)?chrome\s+and\s+)?search\s+(?:the\s+web\s+)?for"
+    r"|(?:can|could|would)\s+you\s+(?:search\s+(?:the\s+web\s+)?for|find|show(?:\s+me)?)"
+    r"|(?:i'd\s+like|i\s+would\s+like)\s+(?:you\s+to\s+)?(?:search\s+for|find|show\s+me)"
+    r"|search\s+(?:google\s+)?images?\s+(?:for|of)"
+    r"|(?:look\s+up|lookup|look\s+for|find|show(?:\s+me)?|get\s+me|pull\s+up)\s+)\s*(?P<query>.*)$",
     re.IGNORECASE,
 )
-_IMAGE_QUERY = re.compile(r"^images?\s+of(?:\s+(?P<query>.*))?$", re.IGNORECASE)
+_IMAGE_QUERY = re.compile(
+    r"^(?:images?|photos?|pictures?)\s+of(?:\s+(?P<query>.*))?$", re.IGNORECASE
+)
 _IMAGE_ONLY = re.compile(r"^images?$", re.IGNORECASE)
+_IMAGE_LOOKUP = re.compile(
+    r"^(?:google\s+)?(?:images?|photos?|pictures?)\s+for\s+(?P<query>.+)$",
+    re.IGNORECASE,
+)
+_SEARCH_IMAGES = re.compile(r"^search\s+(?:google\s+)?images?\s+(?:for|of)\b", re.IGNORECASE)
+_INFORMATION_QUERIES = (
+    re.compile(r"^(?:what'?s|what\s+is)\s+the\s+definition\s+of\s+(?P<query>.+)$", re.I),
+    re.compile(r"^(?:what'?s|what\s+is)\s+the\s+meaning\s+of\s+(?P<query>.+)$", re.I),
+    re.compile(r"^what\s+does\s+(?P<query>.+?)\s+mean$", re.I),
+    re.compile(r"^(?:look\s+up|lookup)\s+(?:the\s+)?definition\s+of\s+(?P<query>.+)$", re.I),
+    re.compile(r"^tell\s+me\s+the\s+definition\s+of\s+(?P<query>.+)$", re.I),
+    re.compile(r"^what\s+is\s+meant\s+by\s+(?P<query>.+)$", re.I),
+    re.compile(r"^tell\s+me\s+the\s+meaning\s+of\s+(?P<query>.+)$", re.I),
+    re.compile(r"^tell\s+me\s+what\s+(?P<query>.+?)\s+means$", re.I),
+    re.compile(r"^can\s+you\s+tell\s+me\s+what\s+(?P<query>.+?)\s+means$", re.I),
+    re.compile(r"^explain\s+what\s+(?P<query>.+?)\s+means$", re.I),
+    re.compile(r"^can\s+you\s+explain\s+the\s+meaning\s+of\s+(?P<query>.+)$", re.I),
+    re.compile(r"^define\s+(?P<query>.+)$", re.I),
+)
+_INFORMATION_PREFIXES = (
+    "what is the definition of",
+    "what's the definition of",
+    "whats the definition of",
+    "look up the definition of",
+    "lookup the definition of",
+    "tell me the definition of",
+    "what is the meaning of",
+    "what's the meaning of",
+    "whats the meaning of",
+    "what is meant by",
+    "what does",
+    "tell me the meaning of",
+    "tell me what",
+    "can you tell me what",
+    "explain what",
+    "can you explain the meaning of",
+    "define",
+)
 _CORRECTION_MARKER = re.compile(
     r"\b(?:i\s+mean|i\s+meant|make\s+that|scratch\s+that)\b"
     r"|[,;:—–-]\s*actually\b"
@@ -71,8 +115,31 @@ _SEARCH_PREFIXES = (
     "please open chrome and search for",
     "please open google chrome and search for",
     "search for",
+    "can you search for",
+    "could you search for",
+    "would you search for",
+    "can you find",
+    "could you find",
+    "would you find",
+    "can you show",
+    "could you show",
+    "i'd like you to search for",
+    "i would like you to search for",
+    "search the web for",
+    "look for",
+    "get me",
+    "pull up",
+    "search google images for",
+    "search images for",
+    "search google images of",
+    "search images of",
     "open chrome and search for",
     "open google chrome and search for",
+    "look up",
+    "lookup",
+    "find",
+    "show me",
+    "show",
 )
 _RETURN_TARGETS = (
     "the presentation",
@@ -197,19 +264,74 @@ def _has_concrete_content(query: str) -> bool:
 def _search_parts(text: str) -> tuple[bool, str, bool] | None:
     """Return (image search, query text, ends in an unfinished correction)."""
     normalized = _remove_wake_word(_clean_text(text))
-    match = _SEARCH.fullmatch(normalized)
-    if match is None:
+    raw_query = ""
+    images = False
+    for pattern in _INFORMATION_QUERIES:
+        info_match = pattern.fullmatch(normalized)
+        if info_match is not None:
+            raw_query = "definition of " + _clean_text(info_match.group("query"))
+            break
+    match = _SEARCH.fullmatch(normalized) if not raw_query else None
+    if match is not None:
+        raw_query = _clean_text(match.group("query"))
+        image_match = _IMAGE_QUERY.fullmatch(raw_query)
+        image_lookup = _IMAGE_LOOKUP.fullmatch(raw_query)
+        images = (
+            image_match is not None
+            or _IMAGE_ONLY.fullmatch(raw_query) is not None
+            or image_lookup is not None
+            or _SEARCH_IMAGES.match(normalized) is not None
+        )
+        if image_match is not None:
+            raw_query = image_match.group("query") or ""
+        elif image_lookup is not None:
+            raw_query = image_lookup.group("query")
+        elif _IMAGE_ONLY.fullmatch(raw_query):
+            raw_query = ""
+        elif raw_query.casefold() in {
+            "definition of",
+            "the definition of",
+            "meaning of",
+            "the meaning of",
+        }:
+            return False, "", False
+    elif not raw_query:
+        normalized_folded = normalized.casefold()
+        if any(
+            normalized_folded == prefix or normalized_folded.startswith(prefix + " ")
+            for prefix in _INFORMATION_PREFIXES
+        ):
+            return False, "", False
         return None
-    raw_query = _clean_text(match.group("query"))
-    image_match = _IMAGE_QUERY.fullmatch(raw_query)
-    images = image_match is not None or _IMAGE_ONLY.fullmatch(raw_query) is not None
-    if image_match is not None:
-        raw_query = image_match.group("query") or ""
-    elif images:
-        raw_query = ""
     query, was_corrected = _corrected_query(raw_query)
     correction_incomplete = was_corrected and not query
     return images, query, correction_incomplete
+
+
+def _information_query_seed(text: str) -> str | None:
+    """Return the already spoken subject for a definition question still in progress."""
+    normalized = _remove_wake_word(_clean_text(text)).casefold()
+    for prefix in (
+        "what does",
+        "what is the definition of",
+        "what's the definition of",
+        "whats the definition of",
+        "look up the definition of",
+        "lookup the definition of",
+        "tell me the definition of",
+        "what is meant by",
+        "what is the meaning of",
+        "what's the meaning of",
+        "whats the meaning of",
+        "tell me the meaning of",
+        "can you explain the meaning of",
+        "define",
+    ):
+        if normalized == prefix:
+            return ""
+        if normalized.startswith(prefix + " "):
+            return _clean_text(normalized[len(prefix) :])
+    return None
 
 
 def _continuation_query(text: str, *, images: bool) -> tuple[str, bool]:
@@ -248,12 +370,16 @@ def _is_explicit_command_prefix(text: str) -> bool:
     search_prefix = any(
         normalized == prefix or normalized.startswith(prefix + " ") for prefix in _SEARCH_PREFIXES
     )
+    info_prefix = any(
+        normalized == prefix or normalized.startswith(prefix + " ")
+        for prefix in _INFORMATION_PREFIXES
+    ) or any(pattern.fullmatch(normalized) for pattern in _INFORMATION_QUERIES)
     # The words “go back to” are also used for deterministic slide navigation.
     # Do not claim that speech until it explicitly names the presentation.
     return_prefix = any(
         normalized == phrase or normalized.startswith(phrase + " ") for phrase in _RETURN_PREFIXES
     )
-    return search_prefix or return_prefix
+    return search_prefix or info_prefix or return_prefix
 
 
 def parse_voice_command(text: str) -> VoiceCommand | None:
@@ -282,7 +408,7 @@ class VoiceCommandRouter:
     """Route final explicit commands locally and keep their transcript out of the agent."""
 
     _INCOMPLETE_SEARCH_SECONDS = 4.0
-    _CORRECTION_SECONDS = 1.8
+    _CORRECTION_SECONDS = 3.0
 
     def __init__(self) -> None:
         self._command_segments: deque[str] = deque(maxlen=16)
@@ -292,21 +418,25 @@ class VoiceCommandRouter:
         self._recent_search_at = 0.0
         self._pending_search_images = False
         self._pending_search_at = 0.0
+        self._pending_information_seed: str | None = None
+        self._pending_information_needs_mean = False
         self._correction_waiting_for_query = False
         self._correction_waiting_at = 0.0
 
     def _recent_search_is_correctable(self) -> bool:
-        return self._recent_search is not None and monotonic() - self._recent_search_at <= 0.5
+        return self._recent_search is not None and monotonic() - self._recent_search_at <= 3.0
 
     def _expire_pending(self, now: float) -> None:
         if now - self._pending_search_at > self._INCOMPLETE_SEARCH_SECONDS:
             self._pending_search_images = False
             self._pending_search_at = 0.0
+            self._pending_information_seed = None
+            self._pending_information_needs_mean = False
             self._intent_segments.clear()
         if now - self._correction_waiting_at > self._CORRECTION_SECONDS:
             self._correction_waiting_for_query = False
             self._correction_waiting_at = 0.0
-            if self._recent_search is not None and now - self._recent_search_at > 0.5:
+            if self._recent_search is not None and now - self._recent_search_at > 3.0:
                 self._recent_search = None
 
     def _remember_search(self, command: WebSearch, now: float) -> None:
@@ -316,6 +446,8 @@ class VoiceCommandRouter:
         self._correction_waiting_at = 0.0
         self._pending_search_images = False
         self._pending_search_at = 0.0
+        self._pending_information_seed = None
+        self._pending_information_needs_mean = False
         self._intent_segments.clear()
 
     def _clear_search_state(self) -> None:
@@ -325,6 +457,8 @@ class VoiceCommandRouter:
         self._correction_waiting_at = 0.0
         self._pending_search_images = False
         self._pending_search_at = 0.0
+        self._pending_information_seed = None
+        self._pending_information_needs_mean = False
         self._intent_segments.clear()
 
     def handle(self, event: dict[str, object]) -> VoiceCommandResult:
@@ -410,6 +544,10 @@ class VoiceCommandRouter:
             self._clear_search_state()
             self._pending_search_images = images
             self._pending_search_at = now
+            self._pending_information_seed = _information_query_seed(text)
+            self._pending_information_needs_mean = (
+                _remove_wake_word(_clean_text(text)).casefold().startswith("what does")
+            )
             return VoiceCommandResult(True, search_pending=True)
 
         if (correction_prefix or correction_remembered) and self._recent_search is not None:
@@ -451,6 +589,18 @@ class VoiceCommandRouter:
                 return VoiceCommandResult(False)
             query, images = _continuation_query(text, images=self._pending_search_images)
             if _has_concrete_content(query) and len(query) <= 300:
+                seed, self._pending_information_seed = self._pending_information_seed, None
+                if seed is not None:
+                    if self._pending_information_needs_mean:
+                        term = " ".join(part for part in (seed, query) if part)
+                        term = re.sub(r"\s+mean$", "", term, flags=re.IGNORECASE)
+                        query = "definition of " + term
+                    else:
+                        query = "definition of " + " ".join(part for part in (seed, query) if part)
+                    self._pending_information_needs_mean = False
+                    if not _has_concrete_content(query):
+                        self._pending_search_at = now
+                        return VoiceCommandResult(True, search_pending=True)
                 command = WebSearch(query, images=images)
                 self._remember_search(command, now)
                 return VoiceCommandResult(True, command)

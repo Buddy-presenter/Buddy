@@ -46,6 +46,59 @@ def test_search_self_corrections_replace_the_query_without_losing_search_mode():
     assert parse_voice_command("Search for something") is None
 
 
+def test_parses_definition_questions_and_common_image_search_phrasings():
+    for phrase, expected in (
+        ("What's the definition of opportunity cost", "definition of opportunity cost"),
+        ("What does amortization mean", "definition of amortization"),
+        ("Lookup the definition of compound interest", "definition of compound interest"),
+        ("What is meant by machine learning", "definition of machine learning"),
+        ("Define gross domestic product", "definition of gross domestic product"),
+    ):
+        assert parse_voice_command(phrase) == WebSearch(expected)
+
+    for phrase in (
+        "Show me pictures of solar panels",
+        "Could you find images of a wind turbine",
+        "Look for photos of an electric car",
+        "Search Google Images for cute cats",
+        "Would you search the web for images of the moon",
+    ):
+        command = parse_voice_command(phrase)
+        assert isinstance(command, WebSearch)
+        assert command.images
+
+
+def test_incomplete_definition_question_waits_for_its_subject_and_meaning(monkeypatch):
+    from buddy_desktop import voice_commands
+
+    now = [10.0]
+    monkeypatch.setattr(voice_commands, "monotonic", lambda: now[0])
+    router = VoiceCommandRouter()
+    pending = router.handle(
+        {"text": "What does inflation", "segment_id": "question", "final": True}
+    )
+    continuation = router.handle({"text": "mean", "segment_id": "ending", "final": True})
+
+    assert pending.suppress_agent and pending.search_pending and pending.command is None
+    assert continuation.command == WebSearch("definition of inflation")
+
+
+def test_correction_after_a_short_pause_still_replaces_image_query(monkeypatch):
+    from buddy_desktop import voice_commands
+
+    now = [10.0]
+    monkeypatch.setattr(voice_commands, "monotonic", lambda: now[0])
+    router = VoiceCommandRouter()
+    initial = router.handle(
+        {"text": "Search for images of cats", "segment_id": "initial", "final": True}
+    )
+    now[0] += 2.5
+    corrected = router.handle({"text": "I mean dogs", "segment_id": "correction", "final": True})
+
+    assert initial.command == WebSearch("cats", images=True)
+    assert corrected.command == WebSearch("dogs", images=True)
+
+
 def test_parses_clear_return_phrases_only():
     for phrase in (
         "Return to the presentation",
