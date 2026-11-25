@@ -314,7 +314,7 @@ class JevDecisionProvider:
         *,
         threshold: float = 0.6,
         presenting_floor: float = 0.2,
-        deadline: float = 1.5,
+        deadline: float = 2.0,
     ):
         if not api_key or len(api_key) > 4096 or any(c.isspace() for c in api_key):
             raise ValueError("Invalid Jev credentials")

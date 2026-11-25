@@ -173,6 +173,18 @@ def navigation_intent(text: str) -> tuple[str, int] | None:
         (r"^(?:please )?(?:let us )?go back one (?:slide|page)",),
     )
     phrase = " ".join(tokens)
+    # Short whole-sentence moves ("Okay, next.", "Let's move on.", "Go back a slide.") that
+    # the server model handled least reliably (#243). Only the entire sentence counts, so
+    # "moving on to costs" still goes to the contextual decision.
+    short = re.fullmatch(
+        r"(?:(?:ok|okay|alright|right|so|and|now) )*(?:please )?(?:let us )?"
+        r"(?:(next)(?: one)?(?: please)?|(?:moving|move) on(?: please)?"
+        r"|go (back) (?:a|one) (?:slide|page)|(back) (?:a|one) (?:slide|page)"
+        r"|(?:go )?(back) one)",
+        phrase,
+    )
+    if short:
+        return ("relative", -1 if "back" in short.groups() else 1)
     for (pattern,) in relative_patterns:
         match = re.match(pattern, phrase)
         if match and _safe_continuation(tokens[len(_tokens(match.group(0))) :]):

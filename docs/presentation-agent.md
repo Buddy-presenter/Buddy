@@ -220,7 +220,7 @@ sentence, the earlier sentences and the current slide summary, and asks two type
 
 **When Buddy acts.** Buddy acts only when `presenting_now` is at least 0.2 and the chosen option
 has a probability of at least `BUDDY_JEV_CONFIDENCE` (default 0.6). Otherwise it does nothing:
-reason `stay`, or `uncertain` when the chosen option is below the bar. Jev has a 1.5-second
+reason `stay`, or `uncertain` when the chosen option is below the bar. Jev has a 2-second
 deadline.
 
 **Evaluation.** The wording and both thresholds were tuned on a 300-case labelled set across an
