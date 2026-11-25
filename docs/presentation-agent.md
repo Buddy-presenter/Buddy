@@ -195,108 +195,41 @@ Responses are bounded to 64 KiB. Chat has a 3.8-second deadline, total backend d
 work five seconds, and native HTTP six seconds; stale capture still wins over a slow
 otherwise valid result. Embeddings retain their own bounded adapter.
 
-### Jev first, Cohere when unsure (#243)
+### Decision provider: Jev by default (#243)
 
-Optional and off by default. When `BUDDY_JEV_API_KEY` is set (Terraform:
-`enable_jev_decisions`, secret `<env>/agent/jev`, populated by the operator), the same
-retrieved options and passage go first to TypeSafe Jev (`jev-1.14.0`) as one typed
-`choice` question with the system guidance as instructions. Jev returns a probability
-per option. If the chosen option's probability is at least `BUDDY_JEV_CONFIDENCE`
-(default 0.7), that answer is used (about 250 ms); otherwise, or if Jev fails or exceeds
-its 0.7-second deadline, Cohere decides exactly as above. The decision log's `model`
-field names the model whose answer was used. Retrieval (Cohere embeddings) is unchanged.
-Jev is served from the US with zero data retention and no training, so enabling it
-sends the decision passage (recent speech and slide text) to TypeSafe in the US.
-In an offline 18-case check Jev alone scored 15/18; all misses were below 0.62
-probability, which is why unsure answers go to Cohere.
+`BUDDY_DECISION_PROVIDER` chooses who makes the decision after retrieval:
 
-The Qt scheduler runs off the GUI thread, with one in-flight operation, newest-only
-coalescing, no queue of old transcripts and no fixed post-final wait. The server admits
-model work immediately while its rolling 60-second provider window has capacity,
-rather than spacing requests 3.2 seconds apart. Unspent admission deferrals
-follow the server wait for that revision only. New completed speech can be checked
-immediately, so a navigation command does not inherit an earlier model admission wait.
-New stable interim checkpoints and completed revisions can trigger requests; only one
-operation is in flight and newer evidence is coalesced rather than queued. The same
-revision is not automatically retried after a provider failure. A `paced` response
-includes bounded `retry_after_ms`: since no provider attempt was spent, the latest
-still-fresh revision can be deferred at most twice without entering a FIFO. Expired or
-changed input is discarded rather than retried. A pending result survives ordinary
-continuation only while the submitted stable prefix remains unchanged; a corrected prefix,
-explicit correction/negation, or session/view change supersedes it. Preparation has its existing 125-second client bound and
-stays off the GUI thread; shutdown waits for bounded work after the event loop exits.
+- `jev` (default): TypeSafe Jev (`jev-1.14.0`) alone.
+- `cohere`: Cohere Command A, unchanged.
+- `jev+cohere`: Jev first, Cohere when Jev is unsure.
 
-An atomic PostgreSQL row per API-key hash shares the rolling provider window and any
-explicit operator budget across API replicas/restarts. The DB clock sets UTC month
-boundaries and window expiration; at most 500 timestamps are retained. Lowering the rate
-does not forget prior reservations. A real Chat 429 causes a shared 60-second cooldown,
-including across restarts; no automatic provider retry is issued. External uses of the
-key and provider-specific enforcement windows remain outside Buddy's accounting, so
-local admission cannot guarantee provider acceptance. The provider's limits win.
-Unambiguous whole-utterance next/previous commands reuse the validated deterministic path,
-including no action at deck boundaries, without spending Chat/embedding allowance.
-Other admission reserves before embeddings too, so a caller beyond the model allowance
-cannot spend query calls. Failed admitted attempts count conservatively, even if Chat is never
-reached. At most one decision per owner and sixteen owners are in flight per process.
-The former default 100-decision and 750-embedding monthly caps are removed. This does
-not remove Cohere's trial monthly allowance, token/input limits or rate enforcement.
-The two-second per-owner embedding interval is also removed; in-flight concurrency
-and identical-input caching remain. These changes remove scheduling delays, not the
-network/model processing time of a single decision.
+Jev is used only when `BUDDY_JEV_API_KEY` is set. In Terraform that means `enable_jev_decisions`
+and the secret `<env>/agent/jev`, populated by the operator. Without the key, every choice
+decides with Cohere and logs `presentation_agent event=jev_unavailable`.
 
-Migration 0022 is additive and preserves usage counts. Because the old row has no
-complete request window, existing credentials are conservatively blocked until 60 seconds
-after their last recorded call during upgrade; inactive keys are unaffected. Use the
-existing compatibility-bridge/worker rollout for the new schema head, not a live schema
-downgrade. No cloud deployment is performed by this change.
+Retrieval, the option list and every server and desktop check are the same for all three. The
+decision log's `model` field names the model whose answer was used.
 
-The deterministic navigation path accepts complete next/previous instructions and
-numbered destinations such as “go to slide 8”, “show me page twenty-one” and “take me to
-slide 125”. It supports every numbered destination within Buddy's 500-slide deck limit,
-using digits or English cardinal words. Numbered commands outside the deck or for the
-current slide safely propose no action; they never fall through to a potentially unrelated
-semantic match. Quoted, negated, conditional, question and embedded-command forms are not
-treated as navigation. Exact navigation commands bypass embedding and chat provider calls.
-Other natural phrasing and content-driven matching still use semantic retrieval and the
-model. The model receives the current page number and deck size and is instructed to
-prioritize the latest navigation intent over old topics.
+**How Jev is asked.** Jev returns probabilities rather than text. One request sends the latest
+sentence, the earlier sentences and the current slide summary, and asks two typed questions:
 
-## Privacy and decision traces
+1. `action`, a choice. Each option is described in plain language, for example "Highlight this
+   item on the current slide: ... It shows: ...", "Go to the next slide: ..." or "Do nothing".
+2. `presenting_now`, a yes/no question: is the sentence presenting or requesting something now,
+   rather than recalling, hypothetical, quoted, a question, negated or a preview?
 
-The standard Cohere API receives completed speech and selected slide summaries/purposes;
-audio still goes only to the configured speech provider. The requester's acceptance of
-standard API retention and training-enabled development applies here. This is not EU-only
-or zero-retention processing. Agent requests/results are not persisted as speech history. Scheduler dedupe keys contain
-segment ids/revision numbers, not transcript text; completed/failed in-flight snapshots
-are released, and disabling/shutdown clears pending snapshots.
-The existing five-minute speech journal is unchanged, as are its backup limitations.
+**When Buddy acts.** Buddy acts only when `presenting_now` is at least 0.2 and the chosen option
+has a probability of at least `BUDDY_JEV_CONFIDENCE` (default 0.6). Otherwise it does nothing:
+reason `stay`, or `uncertain` when the chosen option is below the bar. Jev has a 1.5-second
+deadline.
 
-The `presentation_agent_decision` operational log contains only decision_id, request_id, finite tool,
-finite reason, decision_source, elapsed_ms, operation phase, a whitelisted dependency
-failure code and fixed model id. No transcripts, summaries, prompts, raw
-provider responses, evidence text, secret keys, action coordinates or exception messages
-are logged. Evidence indexes/confidence live in the no-store response, not ordinary logs.
-Failures return safe finite status/reason codes; they do not cause slide movement.
+**Evaluation.** The wording and both thresholds were tuned on a 300-case labelled set across an
+8-slide deck, tuning on one half and checking on the other:
 
-## Verification
+- Production code: 285/300 correct (95%), 139/150 on the held-out half, 7 false triggers.
+- About 250 ms average and 0.8 s worst case, with no errors.
+- For comparison: Jev with the Cohere prompt scored 85%. Cohere alone scored 64% on a 100-case
+  sample weighted towards hard cases, with 6 deadline misses.
 
-See [presentation replay evaluation](presentation-replay.md) for deterministic corpus
-replay, candidate allowlist gates, captured execution scoring and recording permission.
-Synthetic contract gates are separate from real service/policy release evidence.
-
-Component tests use real PostgreSQL/session state and a substituted provider boundary.
-They cover owner denial, no action, valid selection, authoritative region geometry,
-malformed/extra/tool/truncated output, finite confidence/evidence, stale state after
-provider work, deadlines, shared atomic pacing, restart/monthly budgets, native response
-validation, partials, newest-only coalescing and manual invalidation before GUI delivery.
-Paid/live checks are explicit and excluded from CI. Natural-language evaluation and
-latency samples are evidence for those cases, not a general accuracy or P95 guarantee.
-
-
-Provider references: [Command A](https://docs.cohere.com/docs/command-a),
-[structured output subset](https://docs.cohere.com/docs/structured-outputs), and
-[rate limits](https://docs.cohere.com/docs/rate-limits). During live integration,
-Command A+ intermittently returned prose/truncation despite JSON mode and disabled
-thinking, so the shipped adapter uses the established non-reasoning Command A model.
-Buddy rejected those earlier results; they were not successful abstention decisions.
-This change does not replace either Embed 5 model or rebuild document indexes.
+**Data.** Jev is served from the US with zero data retention and no training. Enabling it sends
+recent speech and slide text to TypeSafe in the US.

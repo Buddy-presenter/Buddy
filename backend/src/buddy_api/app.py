@@ -1,6 +1,7 @@
 """Factory for a small real service; no private domain workflows in this increment."""
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, suppress
 from typing import Any
@@ -79,18 +80,24 @@ def request_id(request: Request) -> str:
     return identifier
 
 
+logger = logging.getLogger(__name__)
+
+
 def decision_provider(
     settings: AgentSettings, semantic: SemanticCandidates | None
 ) -> DecisionProvider:
-    """Cohere decides; with a Jev key, Jev decides first and Cohere only when unsure (#243)."""
+    """Jev decides by default; Cohere remains selectable and is used without a Jev key (#243)."""
     cohere = CohereDecisionProvider(
         settings, client=semantic.provider.client if semantic is not None else None
     )
-    if settings.jev_api_key is None:
+    if settings.decision_provider == "cohere" or settings.jev_api_key is None:
+        if settings.decision_provider != "cohere":
+            logger.warning("presentation_agent event=jev_unavailable decided_by=cohere")
         return cohere
-    return ConfidentFirstProvider(
-        JevDecisionProvider(settings.jev_api_key), cohere, settings.jev_confidence
-    )
+    jev = JevDecisionProvider(settings.jev_api_key, threshold=settings.jev_confidence)
+    if settings.decision_provider == "jev":
+        return jev
+    return ConfidentFirstProvider(jev, cohere, settings.jev_confidence)
 
 
 def create_app(

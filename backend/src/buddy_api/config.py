@@ -149,13 +149,15 @@ class Settings:
                     else None,
                     int(values.get("BUDDY_AGENT_REQUESTS_PER_MINUTE", "20")),
                     values.get("BUDDY_JEV_API_KEY") or None,
-                    float(values.get("BUDDY_JEV_CONFIDENCE", "0.7")),
+                    float(values.get("BUDDY_JEV_CONFIDENCE", "0.6")),
+                    values.get("BUDDY_DECISION_PROVIDER", "jev"),
                 )
             except ValueError:
                 raise ConfigurationError(
                     "Agent requires a Cohere key, optional positive monthly budget, "
-                    "rate from 1 to 500 requests per minute, and an optional Jev key "
-                    "with confidence from 0.5 to 1."
+                    "rate from 1 to 500 requests per minute, an optional Jev key with "
+                    "confidence from 0.5 to 1, and a decision provider of jev, cohere or "
+                    "jev+cohere."
                 ) from None
         preflight = None
         if values.get("BUDDY_PREFLIGHT_ENABLED", "false") not in {"true", "false"}:
