@@ -224,6 +224,12 @@ sentence, the earlier sentences and the current slide summary, and asks two type
 2. `presenting_now`, a yes/no question: is the sentence presenting or requesting something now,
    rather than recalling, hypothetical, quoted, a question, negated or a preview?
 
+**Unfinished sentences (#248).** When the desktop sends the stable start of a sentence that is
+still being spoken (`provisional`), Jev's state is marked `latest_sentence_status: unfinished`.
+The instructions also add one rule: act only if the words so far already clearly name, describe,
+state a value from or ask for one option. On 528 partial sentences from the evaluation set,
+wrong early actions fell from 26 to 9. Finished sentences are unchanged at 286/300.
+
 **When Buddy acts.** Buddy acts only when `presenting_now` is at least 0.2 and the chosen option
 has a probability of at least `BUDDY_JEV_CONFIDENCE` (default 0.6). Otherwise it does nothing:
 reason `stay`, or `uncertain` when the chosen option is below the bar. Jev has a 2-second
