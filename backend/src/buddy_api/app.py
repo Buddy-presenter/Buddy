@@ -11,7 +11,13 @@ from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 
 from buddy_api import __version__
-from buddy_api.agent_provider import CohereDecisionProvider
+from buddy_api.agent_provider import (
+    AgentSettings,
+    CohereDecisionProvider,
+    ConfidentFirstProvider,
+    DecisionProvider,
+    JevDecisionProvider,
+)
 from buddy_api.analysis.api import analysis_router
 from buddy_api.auth import Authentication, auth_router
 from buddy_api.authorization import private_router
@@ -71,6 +77,20 @@ ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
 def request_id(request: Request) -> str:
     identifier: str = request.state.request_id
     return identifier
+
+
+def decision_provider(
+    settings: AgentSettings, semantic: SemanticCandidates | None
+) -> DecisionProvider:
+    """Cohere decides; with a Jev key, Jev decides first and Cohere only when unsure (#243)."""
+    cohere = CohereDecisionProvider(
+        settings, client=semantic.provider.client if semantic is not None else None
+    )
+    if settings.jev_api_key is None:
+        return cohere
+    return ConfidentFirstProvider(
+        JevDecisionProvider(settings.jev_api_key), cohere, settings.jev_confidence
+    )
 
 
 def create_app(
@@ -210,15 +230,7 @@ def create_app(
     )
     app.state.uploads = uploads
     app.state.presentation_agent = (
-        AgentRuntime(
-            config.agent,
-            CohereDecisionProvider(
-                config.agent,
-                client=app.state.semantic_candidates.provider.client
-                if app.state.semantic_candidates is not None
-                else None,
-            ),
-        )
+        AgentRuntime(config.agent, decision_provider(config.agent, app.state.semantic_candidates))
         if config.agent
         else None
     )

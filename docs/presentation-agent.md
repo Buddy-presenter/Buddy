@@ -195,6 +195,21 @@ Responses are bounded to 64 KiB. Chat has a 3.8-second deadline, total backend d
 work five seconds, and native HTTP six seconds; stale capture still wins over a slow
 otherwise valid result. Embeddings retain their own bounded adapter.
 
+### Jev first, Cohere when unsure (#243)
+
+Optional and off by default. When `BUDDY_JEV_API_KEY` is set (Terraform:
+`enable_jev_decisions`, secret `<env>/agent/jev`, populated by the operator), the same
+retrieved options and passage go first to TypeSafe Jev (`jev-1.14.0`) as one typed
+`choice` question with the system guidance as instructions. Jev returns a probability
+per option. If the chosen option's probability is at least `BUDDY_JEV_CONFIDENCE`
+(default 0.7), that answer is used (about 250 ms); otherwise, or if Jev fails or exceeds
+its 0.7-second deadline, Cohere decides exactly as above. The decision log's `model`
+field names the model whose answer was used. Retrieval (Cohere embeddings) is unchanged.
+Jev is served from the US with zero data retention and no training, so enabling it
+sends the decision passage (recent speech and slide text) to TypeSafe in the US.
+In an offline 18-case check Jev alone scored 15/18; all misses were below 0.62
+probability, which is why unsure answers go to Cohere.
+
 The Qt scheduler runs off the GUI thread, with one in-flight operation, newest-only
 coalescing, no queue of old transcripts and no fixed post-final wait. The server admits
 model work immediately while its rolling 60-second provider window has capacity,

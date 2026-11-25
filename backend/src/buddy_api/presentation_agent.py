@@ -19,7 +19,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException
 
 from buddy_api.agent_provider import (
-    MODEL,
+    DECIDED_BY,
     AgentFailure,
     AgentSettings,
     DecisionProvider,
@@ -961,7 +961,7 @@ def agent_router() -> APIRouter:
             "tool": proposal.target.tool,
             "reason": proposal.reason,
             "elapsed_ms": proposal.elapsed_ms,
-            "model": MODEL if runtime else "disabled",
+            "model": DECIDED_BY.get() if runtime else "disabled",
             "decision_source": proposal.decision_source,
             "phase": phase,
             "phase_timings_ms": phase_timings_ms,

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
@@ -11,6 +12,9 @@ from pydantic import Field
 from buddy_api.analysis.contracts import Model
 
 MODEL = "command-a-03-2025"
+JEV_MODEL = "jev-1.14.0"
+# The model whose answer this request used (#243); read by the content-free decision log.
+DECIDED_BY: ContextVar[str] = ContextVar("decided_by", default=MODEL)
 type FailureReason = Literal[
     "busy",
     "budget",
@@ -52,8 +56,19 @@ class AgentSettings:
     # Optional operator budget. Provider allowances are independent of this counter.
     monthly_limit: int | None = None
     requests_per_minute: int = 20
+    # Optional TypeSafe Jev key: decide with Jev first, Cohere when unsure (#243).
+    jev_api_key: str | None = field(default=None, repr=False)
+    jev_confidence: float = 0.7
 
     def __post_init__(self) -> None:
+        if self.jev_api_key is not None and (
+            not self.jev_api_key
+            or len(self.jev_api_key) > 4096
+            or any(c.isspace() for c in self.jev_api_key)
+        ):
+            raise ValueError("Invalid Jev credentials")
+        if not 0.5 <= self.jev_confidence <= 1:
+            raise ValueError("Jev confidence must be between 0.5 and 1")
         if not self.api_key or len(self.api_key) > 4096 or any(c.isspace() for c in self.api_key):
             raise ValueError("Invalid agent credentials")
         if self.monthly_limit is not None and (
@@ -132,6 +147,7 @@ class CohereDecisionProvider:
             await self.client.aclose()
 
     async def select(self, passage: dict[str, object]) -> Selection:
+        DECIDED_BY.set(MODEL)
         # Cohere excludes numeric/array ranges from its schema subset.
         # Enforce them with Selection and checked_selection after parsing.
         schema = {
@@ -149,7 +165,7 @@ class CohereDecisionProvider:
             },
         }
         try:
-            async with asyncio.timeout(3):
+            async with asyncio.timeout(3.8):
                 async with self.client.stream(
                     "POST",
                     "https://api.cohere.com/v2/chat",
@@ -214,3 +230,101 @@ class CohereDecisionProvider:
             raise AgentFailure("provider_unavailable") from None
         except (ValueError, KeyError, TypeError, AttributeError, IndexError, RecursionError):
             raise AgentFailure("invalid_output") from None
+
+
+class JevDecisionProvider:
+    """TypeSafe Jev answers the same passage as one typed choice question (#243).
+
+    Jev returns a calibrated probability per option instead of text, so there is no JSON
+    to parse; the top probability becomes the selection's confidence.
+    """
+
+    def __init__(self, api_key: str, client: httpx.AsyncClient | None = None):
+        if not api_key or len(api_key) > 4096 or any(c.isspace() for c in api_key):
+            raise ValueError("Invalid Jev credentials")
+        self._api_key = api_key
+        self._owns_client = client is None
+        self.client = client or httpx.AsyncClient(follow_redirects=False, timeout=0.7)
+
+    async def aclose(self) -> None:
+        if self._owns_client:
+            await self.client.aclose()
+
+    async def select(self, passage: dict[str, object]) -> Selection:
+        options = passage.get("options")
+        segments = passage.get("segments")
+        if not isinstance(options, list) or not isinstance(segments, list):
+            raise AgentFailure("invalid_output")
+        criteria = {
+            str(o["id"]): json.dumps({k: v for k, v in o.items() if k != "id"}, ensure_ascii=False)
+            for o in options
+            if isinstance(o, dict)
+        }
+        state = {k: v for k, v in passage.items() if k != "options"}
+        try:
+            async with asyncio.timeout(0.7):
+                response = await self.client.post(
+                    "https://api.typesafe.ai/v1/systemone",
+                    headers={"Authorization": "Bearer " + self._api_key},
+                    json={
+                        "model": JEV_MODEL,
+                        "state": state,
+                        "questions": {
+                            "action": {
+                                "type": "choice",
+                                "instructions": SYSTEM,
+                                "criteria": criteria,
+                            }
+                        },
+                    },
+                )
+            if response.status_code == 429:
+                raise AgentFailure("rate_limited")
+            if response.status_code != 200 or len(response.content) > 65536:
+                raise AgentFailure("provider_unavailable")
+            answer = response.json()["answers"]["action"]
+            choice = answer["choice"]
+            probabilities = answer["probabilities"]
+            if choice not in criteria or not isinstance(probabilities, dict):
+                raise AgentFailure("invalid_output")
+            confidence = float(probabilities[choice])
+            selection = Selection.model_validate(
+                {
+                    "choice": choice,
+                    "reason": "stay" if choice == "c0" else "topic",
+                    "confidence": min(max(confidence, 0.0), 1.0),
+                    "evidence": () if choice == "c0" else (len(segments) - 1,),
+                }
+            )
+        except AgentFailure:
+            raise
+        except (TimeoutError, httpx.TimeoutException):
+            raise AgentFailure("deadline") from None
+        except httpx.HTTPError:
+            raise AgentFailure("provider_unavailable") from None
+        except (ValueError, KeyError, TypeError, AttributeError, IndexError):
+            raise AgentFailure("invalid_output") from None
+        DECIDED_BY.set(JEV_MODEL)
+        return selection
+
+
+class ConfidentFirstProvider:
+    """Use the fast provider's answer when it is sure enough, else the careful one (#243)."""
+
+    def __init__(self, fast: DecisionProvider, careful: DecisionProvider, threshold: float = 0.7):
+        if not 0.5 <= threshold <= 1:
+            raise ValueError("Confidence threshold must be between 0.5 and 1")
+        self.fast, self.careful, self.threshold = fast, careful, threshold
+
+    async def aclose(self) -> None:
+        await self.fast.aclose()
+        await self.careful.aclose()
+
+    async def select(self, passage: dict[str, object]) -> Selection:
+        try:
+            selection = await self.fast.select(passage)
+            if selection.confidence >= self.threshold:
+                return selection
+        except AgentFailure:
+            pass
+        return await self.careful.select(passage)
