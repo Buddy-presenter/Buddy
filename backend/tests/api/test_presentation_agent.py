@@ -120,6 +120,11 @@ def agent_api(ready_session_api):
 
 def test_context_is_coherent_and_bounded():
     AgentRequest.model_validate(payload())
+    # The presenter's decider choice is optional and closed (#245).
+    for model in ("jev", "cohere"):
+        assert AgentRequest.model_validate(payload(decision_model=model)).decision_model == model
+    with pytest.raises(ValueError):
+        AgentRequest.model_validate(payload(decision_model="groq"))
     for changes in (
         {"text": "different"},
         {"latest_utterance": "other"},
@@ -287,7 +292,8 @@ def test_region_options_show_the_slide_text_they_target():
     )
     # The selector is told that speech about one element selects its region action.
     assert "zoom_region or highlight_region option" in SYSTEM
-    assert "not mere continued explanation" in SYSTEM
+    assert "that is enough evidence" in SYSTEM
+    assert "Prefer c0 only when that element is negated" in SYSTEM
     assert "compare its saved action purpose and target text with the slide" in SYSTEM
 
 

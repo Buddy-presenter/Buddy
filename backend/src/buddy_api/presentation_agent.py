@@ -19,7 +19,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException
 
 from buddy_api.agent_provider import (
-    MODEL,
+    DECIDED_BY,
     AgentFailure,
     AgentSettings,
     DecisionProvider,
@@ -68,13 +68,21 @@ class AgentRequest(Model):
     latest_utterance: str = Field(min_length=1, max_length=4096, repr=False)
     segments: tuple[SpeechSegment, ...] = Field(min_length=1, max_length=64, repr=False)
     provisional: bool = False
+    # The presenter's choice in the desktop app (#245); None keeps the server default.
+    decision_model: Literal["jev", "cohere"] | None = None
 
     @model_validator(mode="after")
     def coherent(self) -> "AgentRequest":
         CandidateRequest.model_validate(
             {
                 **self.model_dump(
-                    exclude={"segments", "provisional", "focus_view", "focus_region"}
+                    exclude={
+                        "segments",
+                        "provisional",
+                        "focus_view",
+                        "focus_region",
+                        "decision_model",
+                    }
                 ),
                 "protocol": "presentation-candidates.v1",
             }
@@ -576,9 +584,24 @@ def topic_navigation_selection(
 
 
 class AgentRuntime:
-    def __init__(self, settings: AgentSettings, provider: DecisionProvider):
+    def __init__(
+        self,
+        settings: AgentSettings,
+        provider: DecisionProvider,
+        choices: dict[str, DecisionProvider] | None = None,
+    ):
         self.settings, self.provider = settings, provider
+        # Deciders a presenter may pick in the desktop app (#245); others use the default.
+        self.choices = dict(choices or {})
         self.active: set[UUID] = set()
+
+    def provider_for(self, choice: str | None) -> DecisionProvider:
+        return self.choices.get(choice, self.provider) if choice else self.provider
+
+    async def aclose(self) -> None:
+        unique = {id(p): p for p in (*self.choices.values(), self.provider)}
+        for provider in unique.values():
+            await provider.aclose()
 
     async def reserve(self, database: Database) -> None:
         # DB clock + row lock share a rolling provider window across replicas/restarts.
@@ -795,7 +818,7 @@ def agent_router() -> APIRouter:
             phase_started = time.monotonic()
 
         try:
-            async with asyncio.timeout(4.5):
+            async with asyncio.timeout(5):
                 source = await read_input(request, principal, identifier, values)
                 finish_phase()
                 target = Target(tool="no_action", slide_id=source.current)
@@ -861,7 +884,7 @@ def agent_router() -> APIRouter:
                             finish_phase()
                         else:
                             begin_phase("selection")
-                            selection = await runtime.provider.select(
+                            selection = await runtime.provider_for(values.decision_model).select(
                                 decision_passage(source, values, descriptions)
                             )
                             finish_phase()
@@ -961,7 +984,7 @@ def agent_router() -> APIRouter:
             "tool": proposal.target.tool,
             "reason": proposal.reason,
             "elapsed_ms": proposal.elapsed_ms,
-            "model": MODEL if runtime else "disabled",
+            "model": DECIDED_BY.get() if runtime else "disabled",
             "decision_source": proposal.decision_source,
             "phase": phase,
             "phase_timings_ms": phase_timings_ms,
