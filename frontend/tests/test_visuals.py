@@ -79,7 +79,10 @@ def test_routes_fit_and_commands_have_accessible_names(desktop_window, qtbot, th
             if button.isVisible():
                 assert button.accessibleName()
                 assert button.toolTip()
-                assert button.width() >= button.minimumSizeHint().width()
+                if button.property("iconOnly"):
+                    assert button.width() >= 38
+                else:
+                    assert button.width() >= button.minimumSizeHint().width()
         route_titles = ("Home", "Library", "Review", "Present", "Settings")
         assert window.route_title.text() == route_titles[route]
     window.navigation.setCurrentRow(0)
