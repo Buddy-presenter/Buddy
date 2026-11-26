@@ -347,3 +347,42 @@ def test_chrome_launch_uses_argument_list_and_reports_missing_browser(tmp_path, 
     missing = launch_chrome_search("cute cats", system="win32", environ={})
     assert not missing.opened
     assert "could not be found" in missing.message
+
+
+def test_everyday_presenting_phrases_never_start_a_web_search():
+    # #250: these belong to Buddy's slide commands or ordinary narration.
+    for phrase in (
+        "Show me the revenue chart",
+        "Show me the whole slide",
+        "Show the whole slide",
+        "Find the margin on this slide",
+        "Pull up the cost table",
+        "Can you show me the next slide",
+        "Find out more on our website",
+        "Look for value in every customer",
+        "Get me the next slide",
+        "Zoom into the table",
+        "Highlight the total",
+        "Next slide",
+    ):
+        assert parse_voice_command(phrase) is None, phrase
+
+
+def test_explicit_online_phrasings_still_search():
+    assert parse_voice_command("Search online for electric cars") == WebSearch("electric cars")
+    assert parse_voice_command("Look up EBITDA") == WebSearch("EBITDA")
+    assert parse_voice_command("Google the Eiffel Tower") == WebSearch("the Eiffel Tower")
+    assert parse_voice_command("Can you find electric car prices online") == WebSearch(
+        "electric car prices"
+    )
+    assert parse_voice_command("Show me Tesla news on Google") == WebSearch("Tesla news")
+    assert parse_voice_command("Find some pictures of red pandas") == WebSearch(
+        "red pandas", images=True
+    )
+
+
+def test_partial_everyday_phrases_are_not_held_back_from_slide_decisions():
+    router = VoiceCommandRouter()
+    for text in ("Show me the", "Find the", "Pull up the"):
+        result = router.handle({"text": text, "segment_id": text, "final": False})
+        assert not result.suppress_agent, text

@@ -6,7 +6,7 @@ import time
 from dataclasses import replace
 from uuid import UUID
 
-from PySide6.QtCore import QByteArray, QSettings, QSize, Qt, QTimer, Slot
+from PySide6.QtCore import QByteArray, QRect, QSettings, QSize, Qt, QTimer, Slot
 from PySide6.QtGui import QAction, QCloseEvent, QGuiApplication, QIcon, QKeySequence, QScreen
 from PySide6.QtWidgets import (
     QDialog,
@@ -44,6 +44,7 @@ from buddy_desktop.window_focus import (
     activate_native_window,
     activate_qt_window,
     allow_current_process_foreground,
+    native_window_rect,
 )
 from buddy_identity.config import IdentityError, SessionExpired
 
@@ -760,8 +761,11 @@ class MainWindow(QMainWindow):
             return
 
         fullscreen_owner = self.present.fullscreen
-        owner: QWidget = self
-        if fullscreen_owner is not None and fullscreen_owner.isVisible():
+        owner: QWidget | QRect = self
+        slideshow_area = self._powerpoint_slideshow_area()
+        if slideshow_area is not None:
+            owner = slideshow_area
+        elif fullscreen_owner is not None and fullscreen_owner.isVisible():
             owner = fullscreen_owner
         self.information_search_panel.present(owner, query)
         session = self.account.session
@@ -775,6 +779,31 @@ class MainWindow(QMainWindow):
             self._queued_information_search = (generation, query, access)
             return
         self._submit_information_search(generation, query, access)
+
+    def _powerpoint_slideshow_area(self) -> QRect | None:
+        """The screen area of a live PowerPoint slideshow in Qt coordinates (#250).
+
+        Windows reports physical pixels; Qt places windows in scaled pixels. A slideshow
+        fills one monitor, so use the monitor whose physical area contains its centre.
+        """
+        slideshow = self.present.powerpoint_slideshow_window()
+        rect = native_window_rect(slideshow) if slideshow is not None else None
+        if rect is None:
+            return None
+        left, top, right, bottom = rect
+        centre_x, centre_y = (left + right) // 2, (top + bottom) // 2
+        for screen in QGuiApplication.screens():
+            area, ratio = screen.geometry(), screen.devicePixelRatio()
+            physical = QRect(
+                area.x(),
+                area.y(),
+                round(area.width() * ratio),
+                round(area.height() * ratio),
+            )
+            if physical.contains(centre_x, centre_y):
+                return area
+        primary = QGuiApplication.primaryScreen()
+        return primary.geometry() if primary is not None else None
 
     @Slot()
     def _return_to_presentation_by_voice(self) -> None:

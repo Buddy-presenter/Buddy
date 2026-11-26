@@ -6,7 +6,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from time import monotonic
 
-from .navigation import navigation_intent
+from .navigation import navigation_intent, region_intent, reset_intent
 
 
 @dataclass(frozen=True)
@@ -34,16 +34,32 @@ class VoiceCommandResult:
     search_pending: bool = False
 
 
+# Only unmistakable search phrasings start a web search. Everyday presenting phrases such as
+# "show me the revenue chart", "find the margin" or "pull up the cost table" belong to Buddy's
+# own slide commands, so they search only with an explicit "online"/"on the web"/"on Google"
+# or when asking for images (#250).
+_WEB = r"(?:the\s+web\s+|online\s+|google\s+|the\s+internet\s+)?"
 _SEARCH = re.compile(
-    r"^(?:please\s+)?(?:(?:open\s+(?:google\s+)?chrome\s+and\s+)?search\s+(?:the\s+web\s+)?for"
-    r"|(?:can|could|would)\s+you\s+(?:search\s+(?:the\s+web\s+)?for|find|show(?:\s+me)?)"
-    r"|(?:i'd\s+like|i\s+would\s+like)\s+(?:you\s+to\s+)?(?:search\s+for|find|show\s+me)"
+    r"^(?:please\s+)?(?:"
+    r"(?:open\s+(?:google\s+)?chrome\s+and\s+)?search\s+" + _WEB + r"for"
+    r"|(?:can|could|would)\s+you\s+(?:search\s+" + _WEB + r"for|look\s+up|google)"
+    r"|(?:i'd\s+like|i\s+would\s+like)\s+(?:you\s+to\s+)?(?:search\s+" + _WEB + r"for|look\s+up)"
     r"|search\s+(?:google\s+)?images?\s+(?:for|of)"
-    r"|(?:look\s+up|lookup|look\s+for|find|show(?:\s+me)?|get\s+me|pull\s+up)\s+)\s*(?P<query>.*)$",
+    r"|google"
+    r"|(?:look\s+up|lookup)"
+    r"|(?:(?:can|could|would)\s+you\s+)?(?:find|show(?:\s+me)?|get\s+me|pull\s+up|look\s+for)"
+    r"(?=\s+(?:some\s+)?(?:images?|photos?|pictures?)\s+(?:of|for)\b)"
+    r")\s*(?P<query>.*)$",
+    re.IGNORECASE,
+)
+_ONLINE_SEARCH = re.compile(
+    r"^(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?"
+    r"(?:find|show(?:\s+me)?|look\s+for|get\s+me|pull\s+up)\s+(?P<query>.+?)\s+"
+    r"(?:online|on\s+the\s+(?:web|internet)|on\s+google)$",
     re.IGNORECASE,
 )
 _IMAGE_QUERY = re.compile(
-    r"^(?:images?|photos?|pictures?)\s+of(?:\s+(?P<query>.*))?$", re.IGNORECASE
+    r"^(?:some\s+)?(?:images?|photos?|pictures?)\s+of(?:\s+(?P<query>.*))?$", re.IGNORECASE
 )
 _IMAGE_ONLY = re.compile(r"^images?$", re.IGNORECASE)
 _IMAGE_LOOKUP = re.compile(
@@ -115,20 +131,18 @@ _SEARCH_PREFIXES = (
     "please open chrome and search for",
     "please open google chrome and search for",
     "search for",
+    "search the web for",
+    "search online for",
+    "search google for",
+    "search the internet for",
     "can you search for",
     "could you search for",
     "would you search for",
-    "can you find",
-    "could you find",
-    "would you find",
-    "can you show",
-    "could you show",
+    "can you look up",
+    "could you look up",
+    "can you google",
     "i'd like you to search for",
     "i would like you to search for",
-    "search the web for",
-    "look for",
-    "get me",
-    "pull up",
     "search google images for",
     "search images for",
     "search google images of",
@@ -137,9 +151,7 @@ _SEARCH_PREFIXES = (
     "open google chrome and search for",
     "look up",
     "lookup",
-    "find",
-    "show me",
-    "show",
+    "google",
 )
 _RETURN_TARGETS = (
     "the presentation",
@@ -272,6 +284,8 @@ def _search_parts(text: str) -> tuple[bool, str, bool] | None:
             raw_query = "definition of " + _clean_text(info_match.group("query"))
             break
     match = _SEARCH.fullmatch(normalized) if not raw_query else None
+    if match is None and not raw_query:
+        match = _ONLINE_SEARCH.fullmatch(normalized)
     if match is not None:
         raw_query = _clean_text(match.group("query"))
         image_match = _IMAGE_QUERY.fullmatch(raw_query)
@@ -382,6 +396,13 @@ def _is_explicit_command_prefix(text: str) -> bool:
     return search_prefix or info_prefix or return_prefix
 
 
+def _is_slide_command(text: str) -> bool:
+    """Buddy's own slide commands always win over web search (#250)."""
+    return (
+        navigation_intent(text) is not None or reset_intent(text) or region_intent(text) is not None
+    )
+
+
 def parse_voice_command(text: str) -> VoiceCommand | None:
     """Parse only clear, leading spoken commands; ordinary sentence mentions do not match."""
     normalized = _clean_text(text)
@@ -390,6 +411,8 @@ def parse_voice_command(text: str) -> VoiceCommand | None:
     normalized = _remove_wake_word(normalized)
     if _RETURN.fullmatch(normalized):
         return ReturnToPresentation()
+    if _is_slide_command(normalized):
+        return None
     parts = _search_parts(normalized)
     if parts is None:
         return None

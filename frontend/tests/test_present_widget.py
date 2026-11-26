@@ -512,3 +512,58 @@ def test_return_by_voice_focuses_the_powerpoint_slideshow(present, monkeypatch):
 def test_powerpoint_slideshow_window_is_none_without_a_powerpoint_session(present):
     _window, page = present
     assert page.powerpoint_slideshow_window() is None
+
+
+def test_search_panel_covers_the_powerpoint_slideshow_screen(present, monkeypatch):
+    # #250: when PowerPoint presents, the answer panel goes over its slideshow screen.
+    from PySide6.QtGui import QGuiApplication
+
+    import buddy_desktop.window as window_module
+
+    window, page = present
+    screen = QGuiApplication.primaryScreen()
+    area, ratio = screen.geometry(), screen.devicePixelRatio()
+    physical = (
+        area.x(),
+        area.y(),
+        area.x() + round(area.width() * ratio),
+        area.y() + round(area.height() * ratio),
+    )
+    monkeypatch.setattr(page, "powerpoint_slideshow_window", lambda: 4242)
+    monkeypatch.setattr(window_module, "native_window_rect", lambda h: physical)
+    assert window._powerpoint_slideshow_area() == area
+
+    shown = []
+    monkeypatch.setattr(
+        window.information_search_panel, "present", lambda owner, query: shown.append(owner)
+    )
+    window._open_voice_search("definition of churn", False)
+    assert shown == [area]
+
+
+def test_text_search_starts_at_once_and_a_correction_replaces_it(present, qtbot):
+    # #250: the in-presentation panel does not wait 3 s; "I mean" sends a new query.
+    from PySide6.QtTest import QSignalSpy
+
+    _window, page = present
+    spy = QSignalSpy(page.web_search_requested)
+
+    def say(text, segment):
+        page._speech_transcript(
+            {
+                "text": text,
+                "final": True,
+                "segment_id": segment,
+                "sequence": len(segment),
+                "start_seconds": 0.0,
+                "end_seconds": 0.7,
+                "latency_ms": 20,
+            }
+        )
+
+    say("Search for electric cars", "s1")
+    qtbot.waitUntil(lambda: spy.count() == 1, timeout=500)
+    assert spy.at(0) == ["electric cars", False]
+    say("I mean hybrid cars", "s12")
+    qtbot.waitUntil(lambda: spy.count() == 2, timeout=500)
+    assert spy.at(1) == ["hybrid cars", False]

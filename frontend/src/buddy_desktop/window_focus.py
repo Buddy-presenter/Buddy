@@ -30,6 +30,10 @@ def _user32() -> Any:
     user32.GetWindowThreadProcessId.restype = wintypes.DWORD
     user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
     user32.AttachThreadInput.restype = wintypes.BOOL
+    user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    user32.GetWindowRect.restype = wintypes.BOOL
+    user32.IsWindow.argtypes = [wintypes.HWND]
+    user32.IsWindow.restype = wintypes.BOOL
     return user32
 
 
@@ -100,3 +104,18 @@ def activate_qt_window(window: QWidget) -> bool:
         return True
     except (RuntimeError, TypeError, ValueError):
         return False
+
+
+def native_window_rect(handle: int) -> tuple[int, int, int, int] | None:
+    """A native window's (left, top, right, bottom) in physical pixels, or None."""
+    if handle <= 0 or sys.platform != "win32":
+        return None
+    try:
+        user32 = _user32()
+        hwnd = wintypes.HWND(handle)
+        rect = wintypes.RECT()
+        if not user32.IsWindow(hwnd) or not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return None
+        return rect.left, rect.top, rect.right, rect.bottom
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None

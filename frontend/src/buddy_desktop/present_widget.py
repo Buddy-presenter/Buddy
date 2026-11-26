@@ -2629,9 +2629,10 @@ class PresentWidget(Page):
             self.policy.clear_pending()
             if isinstance(command.command, WebSearch):
                 self._pending_voice_search = command.command
-                # Leave a correction window before opening Chrome or starting a
-                # request. A later “I mean …” replaces this pending query.
-                self._voice_search_dispatch_timer.start(3000)
+                # Leave a correction window before opening Chrome, which cannot be
+                # taken back. The in-presentation answer panel starts at once: a
+                # later “I mean …” sends a new query that replaces its answer (#250).
+                self._voice_search_dispatch_timer.start(3000 if command.command.images else 0)
             elif isinstance(command.command, ReturnToPresentation):
                 self._voice_search_dispatch_timer.stop()
                 self._pending_voice_search = None

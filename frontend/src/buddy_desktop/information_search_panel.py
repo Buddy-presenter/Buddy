@@ -2,7 +2,7 @@
 
 from urllib.parse import urlsplit
 
-from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, Qt, QUrl, Signal
+from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QKeyEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QFrame,
@@ -27,6 +27,7 @@ class InformationSearchPanel(QFrame):
         super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
         self.reduce_motion = reduce_motion
         self._owner: QWidget | None = None
+        self._area: QRect | None = None
         self._closing = False
         self.setObjectName("informationSearchPanel")
         self.setAccessibleName("Web search answer")
@@ -93,10 +94,29 @@ class InformationSearchPanel(QFrame):
         self._animation.finished.connect(self._animation_finished)
         self.close_requested.connect(self.close_panel)
 
-    def present(self, owner: QWidget, query: str) -> None:
-        if self._owner is not owner:
+    def present(self, owner: QWidget | QRect, query: str) -> None:
+        """Show over a Buddy window, or over a screen area such as PowerPoint's slideshow.
+
+        Over another application's slideshow the panel stays on top without taking focus,
+        so the presenter's clicker and keyboard keep controlling PowerPoint (#250).
+        """
+        if isinstance(owner, QRect):
+            if self._owner is not None or self._area is None:
+                self.hide()
+                self.setParent(
+                    None,
+                    Qt.WindowType.Tool
+                    | Qt.WindowType.FramelessWindowHint
+                    | Qt.WindowType.WindowStaysOnTopHint
+                    | Qt.WindowType.WindowDoesNotAcceptFocus,
+                )
+                self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+            self._owner, self._area = None, QRect(owner)
+        elif self._owner is not owner:
+            self.hide()
             self.setParent(owner, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
-            self._owner = owner
+            self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
+            self._owner, self._area = owner, None
         self._closing = False
         self._animation.stop()
         self._clear_content()
@@ -141,14 +161,19 @@ class InformationSearchPanel(QFrame):
         self._animation.setEndValue(QPoint(self.x() + 30, self.y()))
         self._animation.start()
 
+    def _target_area(self) -> QRect | None:
+        if self._owner is not None:
+            return QRect(self._owner.mapToGlobal(QPoint(0, 0)), self._owner.size())
+        return self._area
+
     def _place(self, *, show: bool) -> None:
-        owner = self._owner
-        if owner is None:
+        area = self._target_area()
+        if area is None:
             return
-        width = min(460, max(320, round(owner.width() * 0.36)))
-        height = max(360, owner.height() - 48)
+        width = min(460, max(320, round(area.width() * 0.36)))
+        height = max(360, area.height() - 48)
         self.resize(width, height)
-        global_top_left = owner.mapToGlobal(QPoint(owner.width() - width - 18, 24))
+        global_top_left = QPoint(area.right() + 1 - width - 18, area.top() + 24)
         end = global_top_left
         if show and not self.isVisible():
             self.move(end.x() + (0 if self.reduce_motion else 28), end.y())
