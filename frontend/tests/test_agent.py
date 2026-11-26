@@ -85,6 +85,7 @@ def inputs():
         "region",
         "confidence",
         "extra",
+        "diagnostics",
         "expired",
         "partial",
         "retry",
@@ -145,6 +146,8 @@ def test_real_http_validates_proposals_and_context(corrupt, monkeypatch):
                 answer["confidence"] = float("nan")
             if corrupt == "extra":
                 answer["code"] = "bad"
+            if corrupt == "diagnostics":
+                answer["diagnostics"] = {"provider_request": {"private": "trace"}}
             if corrupt == "fallback_action":
                 answer["decision_source"] = "fallback"
             if corrupt == "retry":
@@ -171,13 +174,12 @@ def test_real_http_validates_proposals_and_context(corrupt, monkeypatch):
     thread.start()
     try:
         service = AgentService(AppConfig(f"http://127.0.0.1:{server.server_port}"))
-        if corrupt is None:
-            assert (
-                service.propose(
-                    "private-token", session, context, current_context=lambda: current[0]
-                )["target"]["tool"]
-                == "next_slide"
+        if corrupt in {None, "diagnostics"}:
+            proposal = service.propose(
+                "private-token", session, context, current_context=lambda: current[0]
             )
+            assert proposal["target"]["tool"] == "next_slide"
+            assert "diagnostics" not in proposal
         else:
             with pytest.raises(ServiceError):
                 service.propose(

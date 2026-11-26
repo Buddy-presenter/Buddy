@@ -250,10 +250,16 @@ class AgentService:
                 json.dumps(payload, ensure_ascii=False).encode(),
                 {"Authorization": "Bearer " + access, "Content-Type": "application/json"},
                 timeout=6,
-                limit=32768,
+                limit=65536,
             )
             result = json.loads(raw)
-            if not isinstance(result, dict) or set(result) != {
+            if not isinstance(result, dict):
+                raise ValueError
+            # Session-scoped server diagnostics are returned only for an explicit
+            # operator capture. Keep them out of the presenter/UI proposal contract.
+            if "diagnostics" in result and not isinstance(result.pop("diagnostics"), dict):
+                raise ValueError
+            if set(result) != {
                 "protocol",
                 "decision_id",
                 "session_id",

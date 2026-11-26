@@ -5,6 +5,7 @@ import json
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
+from uuid import UUID
 
 import httpx
 from pydantic import Field
@@ -15,6 +16,17 @@ MODEL = "command-a-03-2025"
 JEV_MODEL = "jev-1.14.0"
 # The model whose answer this request used (#243); read by the content-free decision log.
 DECIDED_BY: ContextVar[str] = ContextVar("decided_by", default=MODEL)
+# Request-local, opt-in diagnostics. The API owns creation and emission; providers
+# add only the exact model payload/result needed to explain a decision.
+DECISION_TRACE: ContextVar[dict[str, object] | None] = ContextVar("decision_trace", default=None)
+
+
+def record_decision_trace(**values: object) -> None:
+    trace = DECISION_TRACE.get()
+    if trace is not None:
+        trace.update(values)
+
+
 type FailureReason = Literal[
     "busy",
     "budget",
@@ -62,6 +74,8 @@ class AgentSettings:
     # Which path decides: "jev" (default), "cohere", or "jev+cohere" (Cohere when Jev is
     # unsure). Without a Jev key every choice decides with Cohere.
     decision_provider: str = "jev"
+    diagnostics_enabled: bool = False
+    diagnostics_session_id: UUID | None = None
 
     def __post_init__(self) -> None:
         if self.jev_api_key is not None and (
@@ -74,6 +88,8 @@ class AgentSettings:
             raise ValueError("Jev confidence must be between 0.5 and 1")
         if self.decision_provider not in {"jev", "cohere", "jev+cohere"}:
             raise ValueError("Decision provider must be jev, cohere or jev+cohere")
+        if self.diagnostics_enabled != (self.diagnostics_session_id is not None):
+            raise ValueError("Decision diagnostics require exactly one session id")
         if not self.api_key or len(self.api_key) > 4096 or any(c.isspace() for c in self.api_key):
             raise ValueError("Invalid agent credentials")
         if self.monthly_limit is not None and (
@@ -169,38 +185,38 @@ class CohereDecisionProvider:
                 "evidence": {"type": "array", "items": {"type": "integer"}},
             },
         }
+        provider_payload = {
+            "model": MODEL,
+            "temperature": 0,
+            "max_tokens": 160,
+            "messages": [
+                {"role": "system", "content": SYSTEM},
+                {
+                    "role": "user",
+                    "content": 'Return only JSON. Data: {"segments":'
+                    '["One moment while I adjust the microphone."],'
+                    '"options":[{"id":"c0","tool":"no_action"}]}',
+                },
+                {
+                    "role": "assistant",
+                    "content": '{"choice":"c0","reason":"stay","confidence":0.95,"evidence":[]}',
+                },
+                {
+                    "role": "user",
+                    "content": "Return only the selection JSON object, "
+                    "without explanation.\nData: " + json.dumps(passage, ensure_ascii=False),
+                },
+            ],
+            "response_format": {"type": "json_object", "schema": schema},
+        }
+        record_decision_trace(provider_request=provider_payload)
         try:
             async with asyncio.timeout(3.8):
                 async with self.client.stream(
                     "POST",
                     "https://api.cohere.com/v2/chat",
                     headers={"Authorization": "Bearer " + self.settings.api_key},
-                    json={
-                        "model": MODEL,
-                        "temperature": 0,
-                        "max_tokens": 160,
-                        "messages": [
-                            {"role": "system", "content": SYSTEM},
-                            {
-                                "role": "user",
-                                "content": 'Return only JSON. Data: {"segments":'
-                                '["One moment while I adjust the microphone."],'
-                                '"options":[{"id":"c0","tool":"no_action"}]}',
-                            },
-                            {
-                                "role": "assistant",
-                                "content": '{"choice":"c0","reason":"stay",'
-                                '"confidence":0.95,"evidence":[]}',
-                            },
-                            {
-                                "role": "user",
-                                "content": "Return only the selection JSON object, "
-                                "without explanation.\nData: "
-                                + json.dumps(passage, ensure_ascii=False),
-                            },
-                        ],
-                        "response_format": {"type": "json_object", "schema": schema},
-                    },
+                    json=provider_payload,
                 ) as reply:
                     if reply.status_code != 200:
                         raise AgentFailure(
@@ -223,6 +239,12 @@ class CohereDecisionProvider:
             ):
                 raise AgentFailure("invalid_output")
             selection = Selection.model_validate_json(content[0]["text"], strict=True)
+            record_decision_trace(
+                provider_response={
+                    "finish_reason": result.get("finish_reason"),
+                    "selection": selection.model_dump(),
+                }
+            )
             # bool is an int in Python, but never a valid evidence index.
             if any(type(i) is not int for i in selection.evidence):
                 raise AgentFailure("invalid_output")
@@ -342,29 +364,31 @@ class JevDecisionProvider:
     async def select(self, passage: dict[str, object]) -> Selection:
         try:
             state, criteria = jev_request(passage)
+            provider_payload = {
+                "model": JEV_MODEL,
+                "state": state,
+                "questions": {
+                    "action": {
+                        "type": "choice",
+                        "instructions": (
+                            JEV_INSTRUCTIONS + " " + JEV_UNFINISHED
+                            if "latest_sentence_status" in state
+                            else JEV_INSTRUCTIONS
+                        ),
+                        "criteria": criteria,
+                    },
+                    "presenting_now": {
+                        "type": "noul",
+                        "instructions": JEV_PRESENTING_NOW,
+                    },
+                },
+            }
+            record_decision_trace(provider_request=provider_payload)
             async with asyncio.timeout(self.deadline):
                 response = await self.client.post(
                     "https://api.typesafe.ai/v1/systemone",
                     headers={"Authorization": "Bearer " + self._api_key},
-                    json={
-                        "model": JEV_MODEL,
-                        "state": state,
-                        "questions": {
-                            "action": {
-                                "type": "choice",
-                                "instructions": (
-                                    JEV_INSTRUCTIONS + " " + JEV_UNFINISHED
-                                    if "latest_sentence_status" in state
-                                    else JEV_INSTRUCTIONS
-                                ),
-                                "criteria": criteria,
-                            },
-                            "presenting_now": {
-                                "type": "noul",
-                                "instructions": JEV_PRESENTING_NOW,
-                            },
-                        },
-                    },
+                    json=provider_payload,
                 )
             if response.status_code == 429:
                 raise AgentFailure("rate_limited")
@@ -378,6 +402,16 @@ class JevDecisionProvider:
                 0 <= value <= 1 for value in (probability, presenting)
             ):
                 raise AgentFailure("invalid_output")
+            record_decision_trace(
+                provider_response={
+                    "action_choice": choice,
+                    "action_probabilities": answers["action"]["probabilities"],
+                    "presenting_now_probability": presenting,
+                    "action_probability": probability,
+                    "threshold": self.threshold,
+                    "presenting_floor": self.presenting_floor,
+                }
+            )
             if presenting < self.presenting_floor:
                 # Recalled, hypothetical, quoted, questioned or previewed: never act.
                 selection = Selection(

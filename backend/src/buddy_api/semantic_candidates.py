@@ -17,7 +17,15 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
 from buddy_api.analysis.contracts import AnalysisResult, PowerPointAnalysisResult
-from buddy_api.embeddings import SPACE, CohereEmbeddings, EmbeddingFailure, normalize
+from buddy_api.embeddings import (
+    DIMENSIONS,
+    DOCUMENT_MODEL,
+    QUERY_MODEL,
+    SPACE,
+    CohereEmbeddings,
+    EmbeddingFailure,
+    normalize,
+)
 from buddy_api.persistence.database import Database
 from buddy_api.persistence.models import CandidateIndex, EmbeddingQuota
 
@@ -199,8 +207,15 @@ class SemanticCandidates:
         current: str,
         latest: str,
         recent: str,
+        *,
+        diagnostics: dict[str, object] | None = None,
     ) -> tuple["Candidate", ...]:
-        from buddy_api.presentation_candidates import Candidate, navigation_intent, resolve
+        from buddy_api.presentation_candidates import (
+            Candidate,
+            candidate_slides,
+            navigation_intent,
+            resolve,
+        )
 
         base = resolve(analysis, current, "", latest)
         if navigation_intent(latest) is not None:
@@ -221,6 +236,11 @@ class SemanticCandidates:
         if not isinstance(raw, list) or len(raw) != len(items):
             raise EmbeddingFailure("embedding_invalid_index")
         vectors = tuple(normalize(v) for v in raw)
+        # Keep the request views available on both cache misses and hits so the
+        # diagnostic trace can describe the exact query evidence either way.
+        texts = [combined_context(recent)]
+        if latest.strip() and latest.strip() != texts[0]:
+            texts.append(combined_context(latest))
         cache_key = (
             owner,
             analysis.id,
@@ -229,6 +249,7 @@ class SemanticCandidates:
         now = time.monotonic()
         self._cache = {k: v for k, v in self._cache.items() if now - v[0] <= 5}
         cached = self._cache.get(cache_key)
+        cache_hit = cached is not None
         if cached:
             queries = cached[1]
         else:
@@ -238,9 +259,6 @@ class SemanticCandidates:
             try:
                 # Keep contextual references and the newest topic as independent
                 # retrieval evidence; batch both inputs in one provider request.
-                texts = [combined_context(recent)]
-                if latest.strip() and latest.strip() != texts[0]:
-                    texts.append(combined_context(latest))
                 queries = await self._embed(texts, "query")
             finally:
                 self._queries.discard(owner)
@@ -252,6 +270,85 @@ class SemanticCandidates:
             for query in queries
         )
         scored, destinations = balanced_shortlist(items, similarities, current)
+        if diagnostics is not None:
+            slides = candidate_slides(analysis)
+            slide_numbers = {slide.slide_id: index + 1 for index, slide in enumerate(slides)}
+            query_views = []
+            for query_index, scores in enumerate(similarities):
+                ranking = sorted(
+                    range(len(items)),
+                    key=lambda index: (
+                        -scores[index],
+                        items[index].slide_id,
+                        items[index].action_id or "",
+                    ),
+                )
+                best_by_slide: dict[str, tuple[int, float, Document]] = {}
+                for rank, index in enumerate(ranking, 1):
+                    document = items[index]
+                    previous = best_by_slide.get(document.slide_id)
+                    if previous is None or scores[index] > previous[1]:
+                        best_by_slide[document.slide_id] = (rank, scores[index], document)
+                query_views.append(
+                    {
+                        "query_index": query_index,
+                        "query_text": texts[query_index],
+                        "top_documents": [
+                            {
+                                "rank": rank,
+                                "cosine_similarity": round(scores[index], 8),
+                                "slide_number": slide_numbers[items[index].slide_id],
+                                "slide_id": items[index].slide_id,
+                                "action_id": items[index].action_id,
+                                "kind": items[index].kind,
+                                "indexed_text": items[index].text[:400],
+                            }
+                            for rank, index in enumerate(ranking[:12], 1)
+                        ],
+                        "best_document_per_slide": [
+                            {
+                                "best_document_rank": rank,
+                                "cosine_similarity": round(score, 8),
+                                "slide_number": slide_numbers[slide_id],
+                                "slide_id": slide_id,
+                                "action_id": document.action_id,
+                                "kind": document.kind,
+                            }
+                            for slide_id, (rank, score, document) in sorted(
+                                best_by_slide.items(), key=lambda item: slide_numbers[item[0]]
+                            )
+                        ],
+                    }
+                )
+            diagnostics["embedding_retrieval"] = {
+                "query_model": QUERY_MODEL,
+                "document_model": DOCUMENT_MODEL,
+                "query_input_type": "search_query",
+                "document_input_type": "search_document",
+                "dimensions": DIMENSIONS,
+                "index_fingerprint": fingerprint(items),
+                "indexed_document_count": len(items),
+                "cache_hit": cache_hit,
+                "scoring": (
+                    "positive-cosine document ranks fused by reciprocal rank; "
+                    "fused score scaled by 1000"
+                ),
+                "query_views": query_views,
+                "fused_top_documents": [
+                    {
+                        "reciprocal_rank_score": round(score, 8),
+                        "slide_number": slide_numbers[document.slide_id],
+                        "slide_id": document.slide_id,
+                        "action_id": document.action_id,
+                        "kind": document.kind,
+                        "indexed_text": document.text[:400],
+                    }
+                    for score, document in scored[:24]
+                ],
+                "shortlisted_slide_ids": sorted(
+                    destinations, key=lambda slide_id: slide_numbers[slide_id]
+                ),
+            }
         result = [
             Candidate(kind="no_change", slide_id=current, reason="stay", score=0),
             Candidate(kind="slide", slide_id=current, reason="current", score=0),

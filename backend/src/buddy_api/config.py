@@ -7,6 +7,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+from uuid import UUID
 
 from buddy_api.agent_provider import AgentSettings
 from buddy_api.embeddings import EmbeddingSettings
@@ -139,6 +140,17 @@ class Settings:
             raise ConfigurationError(str(exc)) from None
         if values.get("BUDDY_AGENT_ENABLED", "false") not in {"true", "false"}:
             raise ConfigurationError("BUDDY_AGENT_ENABLED must be true or false.")
+        if values.get("BUDDY_AGENT_DIAGNOSTICS", "false") not in {"true", "false"}:
+            raise ConfigurationError("BUDDY_AGENT_DIAGNOSTICS must be true or false.")
+        diagnostic_session = values.get("BUDDY_AGENT_DIAGNOSTICS_SESSION_ID")
+        if values.get("BUDDY_AGENT_DIAGNOSTICS") == "true" and not diagnostic_session:
+            raise ConfigurationError(
+                "BUDDY_AGENT_DIAGNOSTICS_SESSION_ID is required when diagnostics are enabled."
+            )
+        if values.get("BUDDY_AGENT_DIAGNOSTICS") != "true" and diagnostic_session:
+            raise ConfigurationError(
+                "BUDDY_AGENT_DIAGNOSTICS_SESSION_ID requires diagnostics to be enabled."
+            )
         agent = None
         if values.get("BUDDY_AGENT_ENABLED") == "true":
             try:
@@ -151,6 +163,8 @@ class Settings:
                     values.get("BUDDY_JEV_API_KEY") or None,
                     float(values.get("BUDDY_JEV_CONFIDENCE", "0.6")),
                     values.get("BUDDY_DECISION_PROVIDER", "jev"),
+                    values.get("BUDDY_AGENT_DIAGNOSTICS", "false") == "true",
+                    UUID(diagnostic_session) if diagnostic_session else None,
                 )
             except ValueError:
                 raise ConfigurationError(
