@@ -2669,6 +2669,11 @@ class PresentWidget(Page):
             self._native_guard.clear()
             self._native_policy_context = None
 
+    def powerpoint_slideshow_window(self) -> int | None:
+        """The live PowerPoint slideshow window when presenting PowerPoint, else None."""
+        binding = self._powerpoint_binding
+        return binding.window_id if binding is not None and binding.window_id > 0 else None
+
     def show_voice_command_status(self, message: str, timeout_ms: int = 5000) -> None:
         self._voice_command_status_timer.stop()
         self.voice_command_status.setText(message)

@@ -38,7 +38,11 @@ from buddy_desktop.slide_executor import Completion
 from buddy_desktop.tasks import TaskRunner
 from buddy_desktop.views import HomePage, SettingsPage, divider
 from buddy_desktop.visuals import BuddyMark, app_icon, command, icon
-from buddy_desktop.window_focus import activate_qt_window, allow_current_process_foreground
+from buddy_desktop.window_focus import (
+    activate_native_window,
+    activate_qt_window,
+    allow_current_process_foreground,
+)
 from buddy_identity.config import IdentityError, SessionExpired
 
 
@@ -737,6 +741,18 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _return_to_presentation_by_voice(self) -> None:
+        slideshow = self.present.powerpoint_slideshow_window()
+        if slideshow is not None:
+            # PowerPoint presents in its own slideshow window, not in Buddy (#236).
+            if activate_native_window(slideshow):
+                self._show_voice_command_feedback("Returned to the PowerPoint slideshow.", 4000)
+            else:
+                self._show_voice_command_feedback(
+                    "Windows did not focus the PowerPoint slideshow. "
+                    "Say “return to the presentation” again.",
+                    10000,
+                )
+            return
         fullscreen = self.present.fullscreen
         target = fullscreen if fullscreen is not None and fullscreen.isVisible() else self
         if activate_qt_window(target):

@@ -490,3 +490,25 @@ def test_close_during_slide_read_waits_without_blocking(present, qtbot, monkeypa
     qtbot.waitUntil(lambda: not page.executor.busy)
     qtbot.waitUntil(lambda: not window.isVisible())
     assert page.executor.current_index == 0
+
+
+def test_return_by_voice_focuses_the_powerpoint_slideshow(present, monkeypatch):
+    # #236: PowerPoint presents in its own slideshow window, not in Buddy.
+    import buddy_desktop.window as window_module
+
+    window, page = present
+    focused = []
+    monkeypatch.setattr(
+        window_module, "activate_native_window", lambda h: focused.append(h) or True
+    )
+    monkeypatch.setattr(
+        window_module, "activate_qt_window", lambda w: pytest.fail("Buddy window was focused")
+    )
+    monkeypatch.setattr(page, "powerpoint_slideshow_window", lambda: 4242)
+    window._return_to_presentation_by_voice()
+    assert focused == [4242]
+
+
+def test_powerpoint_slideshow_window_is_none_without_a_powerpoint_session(present):
+    _window, page = present
+    assert page.powerpoint_slideshow_window() is None
