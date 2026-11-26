@@ -587,10 +587,10 @@ class PresentWidget(Page):
         self.agent_enabled.toggled.connect(self._suggestions_toggled)
         microphone_layout.addWidget(self.agent_enabled)
         agent_privacy = QLabel(
-            "When enabled, ordinary speech and slide summaries are sent to Cohere. "
-            "Explicit Chrome search commands are handled locally; their search terms are sent "
-            "to Google in Chrome. Suggestions leave slide changes manual unless you enable "
-            "automatic transitions."
+            "When enabled, ordinary speech and slide summaries are sent to the model chosen "
+            "below (Jev or Cohere). Spoken web searches are handled separately: their search "
+            "terms go to Buddy's web search and results show in a panel over the slides. "
+            "Suggestions leave slide changes manual unless you enable automatic transitions."
         )
         agent_privacy.setWordWrap(True)
         agent_privacy.setObjectName("muted")
