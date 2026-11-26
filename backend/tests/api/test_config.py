@@ -66,3 +66,34 @@ def test_agent_is_opt_in_and_credentials_are_backend_only():
     ):
         with pytest.raises(ConfigurationError):
             Settings.from_environment({**base, **values})
+
+
+def test_agent_diagnostics_require_a_session_scoped_opt_in():
+    base = {
+        "BUDDY_ENVIRONMENT": "development",
+        "BUDDY_COHERE_API_KEY": "private-key",
+        "BUDDY_AGENT_ENABLED": "true",
+    }
+    session_id = "e3349d4b-c468-4f78-aed5-bd6f5a314a00"
+    with pytest.raises(ConfigurationError):
+        Settings.from_environment({**base, "BUDDY_AGENT_DIAGNOSTICS": "true"})
+    with pytest.raises(ConfigurationError):
+        Settings.from_environment({**base, "BUDDY_AGENT_DIAGNOSTICS_SESSION_ID": session_id})
+    with pytest.raises(ConfigurationError):
+        Settings.from_environment(
+            {
+                **base,
+                "BUDDY_AGENT_DIAGNOSTICS": "true",
+                "BUDDY_AGENT_DIAGNOSTICS_SESSION_ID": "not-a-uuid",
+            }
+        )
+
+    configured = Settings.from_environment(
+        {
+            **base,
+            "BUDDY_AGENT_DIAGNOSTICS": "true",
+            "BUDDY_AGENT_DIAGNOSTICS_SESSION_ID": session_id,
+        }
+    )
+    assert configured.agent.diagnostics_enabled
+    assert str(configured.agent.diagnostics_session_id) == session_id

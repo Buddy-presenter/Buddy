@@ -8,6 +8,7 @@ import pytest
 
 from buddy_api.agent_provider import (
     DECIDED_BY,
+    DECISION_TRACE,
     JEV_MODEL,
     MODEL,
     AgentFailure,
@@ -77,6 +78,29 @@ def test_request_uses_plain_language_criteria_and_two_questions():
     )
     assert criteria["c2"] == "Go to the next slide: Customers"
     assert seen["questions"]["presenting_now"]["type"] == "noul"
+
+
+def test_opt_in_trace_captures_exact_jev_request_and_raw_probabilities():
+    trace = {}
+    token = DECISION_TRACE.set(trace)
+    try:
+        selection = asyncio.run(jev(lambda request: answer("c1", 0.83, 0.75)).select(PASSAGE))
+    finally:
+        DECISION_TRACE.reset(token)
+
+    assert trace["provider_request"]["state"]["latest_sentence"] == PASSAGE["segments"][-1]
+    assert trace["provider_request"]["questions"]["action"]["criteria"]["c1"].startswith(
+        "Highlight this item"
+    )
+    assert trace["provider_response"] == {
+        "action_choice": "c1",
+        "action_probabilities": {"c1": 0.83},
+        "presenting_now_probability": 0.75,
+        "action_probability": 0.83,
+        "threshold": 0.6,
+        "presenting_floor": 0.2,
+    }
+    assert selection.choice == "c1"
 
 
 @pytest.mark.parametrize(
@@ -180,6 +204,30 @@ def test_jev_settings_are_optional_and_validated():
     with pytest.raises(ValueError):
         JevDecisionProvider("k", threshold=0.4)
     assert DECIDED_BY.get() == MODEL
+
+
+@pytest.mark.parametrize("unfinished", [False, True])
+def test_unfinished_sentences_are_marked_for_jev(unfinished):
+    # #248: the desktop sends the stable start of a sentence still being spoken.
+    from buddy_api.agent_provider import JEV_INSTRUCTIONS, JEV_UNFINISHED
+
+    seen = {}
+
+    def handler(request):
+        seen.update(json.loads(request.content))
+        return answer("c0", 0.9)
+
+    passage = (
+        {**PASSAGE, "latest_segment_status": "provisional stable prefix; speech is ongoing"}
+        if unfinished
+        else PASSAGE
+    )
+    asyncio.run(jev(handler).select(passage))
+    instructions = seen["questions"]["action"]["instructions"]
+    assert ("latest_sentence_status" in seen["state"]) is unfinished
+    assert instructions == (
+        JEV_INSTRUCTIONS + " " + JEV_UNFINISHED if unfinished else JEV_INSTRUCTIONS
+    )
 
 
 def test_presenter_choice_selects_the_decider():

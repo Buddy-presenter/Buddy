@@ -176,6 +176,21 @@ This prevents a saved zoom or highlight on an older slide from being treated as 
 view after automatic navigation. Older clients without these fields retain the persisted
 focus behavior; a changed local slide defaults to full-slide focus.
 
+### Temporary decision diagnostics
+
+For a controlled evaluation only, set `BUDDY_AGENT_DIAGNOSTICS=true` and
+`BUDDY_AGENT_DIAGNOSTICS_SESSION_ID=<session UUID>` on the API. Both values are required
+together; traces are emitted only for that exact session. The resulting
+no-store API response includes the utterance/segments, retrieved candidates and scores, the
+exact option descriptions and target mapping, embedding query views with per-document cosine
+scores and per-slide ranks, the shortlist/fusion evidence, the provider request and structured
+response (including Jev's per-option/action and `presenting_now` probabilities), and Buddy's
+validated proposal. The normal server log remains content-free, and the desktop strips the
+diagnostics before the proposal reaches the UI. Capture the response in the authorized test
+harness, keep it in the private local evaluation artifact, and turn both settings off when
+the test ends. This is sensitive speech and presentation content; do not commit or upload
+the captured artifact. With diagnostics disabled, the response contract is unchanged.
+
 ## Provider, scheduling and limits
 
 `DecisionProvider` separates the selection contract from its replaceable adapter.
@@ -223,6 +238,12 @@ sentence, the earlier sentences and the current slide summary, and asks two type
    item on the current slide: ... It shows: ...", "Go to the next slide: ..." or "Do nothing".
 2. `presenting_now`, a yes/no question: is the sentence presenting or requesting something now,
    rather than recalling, hypothetical, quoted, a question, negated or a preview?
+
+**Unfinished sentences (#248).** When the desktop sends the stable start of a sentence that is
+still being spoken (`provisional`), Jev's state is marked `latest_sentence_status: unfinished`.
+The instructions also add one rule: act only if the words so far already clearly name, describe,
+state a value from or ask for one option. On 528 partial sentences from the evaluation set,
+wrong early actions fell from 26 to 9. Finished sentences are unchanged at 286/300.
 
 **When Buddy acts.** Buddy acts only when `presenting_now` is at least 0.2 and the chosen option
 has a probability of at least `BUDDY_JEV_CONFIDENCE` (default 0.6). Otherwise it does nothing:
