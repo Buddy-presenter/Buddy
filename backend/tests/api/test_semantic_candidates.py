@@ -137,9 +137,23 @@ def test_index_persists_queries_cache_and_budget_is_enforced(ready_session_api):
             context,
             diagnostics=trace,
         )
-        return trace, candidates
+        cached_trace = {}
+        cached_candidates = await diagnostic_engine.retrieve(
+            analysis,
+            owner,
+            analysis.slides[0].slide_id,
+            "These need protection.",
+            context,
+            diagnostics=cached_trace,
+        )
+        return trace, candidates, cached_trace, cached_candidates
 
-    retrieval_trace, retrieval_candidates = client.portal.call(capture_retrieval)
+    (
+        retrieval_trace,
+        retrieval_candidates,
+        cached_trace,
+        cached_candidates,
+    ) = client.portal.call(capture_retrieval)
     embedding_trace = retrieval_trace["embedding_retrieval"]
     assert embedding_trace["query_model"] == "embed-v5.0-fast"
     assert embedding_trace["query_views"][0]["query_text"] == context
@@ -148,6 +162,14 @@ def test_index_persists_queries_cache_and_budget_is_enforced(ready_session_api):
     assert embedding_trace["fused_top_documents"]
     assert [candidate.model_dump() for candidate in retrieval_candidates]
     assert provider.inputs[-1] == [context, "These need protection."]
+    assert cached_trace["embedding_retrieval"]["cache_hit"] is True
+    assert cached_trace["embedding_retrieval"]["query_views"][1]["query_text"] == (
+        "These need protection."
+    )
+    assert [candidate.model_dump() for candidate in cached_candidates] == [
+        candidate.model_dump() for candidate in retrieval_candidates
+    ]
+    assert provider.calls == [("document", 2), ("query", 2)]
     new_engine = SemanticCandidates(client.app.state.database, provider, call_limit=2)
     client.app.state.semantic_candidates = new_engine
     exhausted = client.post(path + "/candidates", headers=headers, json=payload(text="new query"))

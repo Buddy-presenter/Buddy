@@ -236,6 +236,11 @@ class SemanticCandidates:
         if not isinstance(raw, list) or len(raw) != len(items):
             raise EmbeddingFailure("embedding_invalid_index")
         vectors = tuple(normalize(v) for v in raw)
+        # Keep the request views available on both cache misses and hits so the
+        # diagnostic trace can describe the exact query evidence either way.
+        texts = [combined_context(recent)]
+        if latest.strip() and latest.strip() != texts[0]:
+            texts.append(combined_context(latest))
         cache_key = (
             owner,
             analysis.id,
@@ -254,9 +259,6 @@ class SemanticCandidates:
             try:
                 # Keep contextual references and the newest topic as independent
                 # retrieval evidence; batch both inputs in one provider request.
-                texts = [combined_context(recent)]
-                if latest.strip() and latest.strip() != texts[0]:
-                    texts.append(combined_context(latest))
                 queries = await self._embed(texts, "query")
             finally:
                 self._queries.discard(owner)
