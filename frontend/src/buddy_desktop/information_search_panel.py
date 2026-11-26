@@ -57,7 +57,7 @@ class InformationSearchPanel(QFrame):
         self.heading = QLabel("Web answer")
         self.heading.setObjectName("informationSearchTitle")
         header.addWidget(self.heading, 1)
-        self.close_button = QPushButton("×")
+        self.close_button = QPushButton()
         command(self.close_button, "x")
         self.close_button.setObjectName("quietButton")
         self.close_button.setAccessibleName("Close web answer and return to presentation")
@@ -80,6 +80,9 @@ class InformationSearchPanel(QFrame):
         scroll_area.setObjectName("informationSearchScroll")
         scroll_area.setWidgetResizable(True)
         scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        # Content wraps to the panel width; never scroll sideways.
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll = scroll_area
         self.content = QWidget()
         self.content.setObjectName("informationSearchContent")
         self.content_layout = QVBoxLayout(self.content)
@@ -158,6 +161,10 @@ class InformationSearchPanel(QFrame):
                 self.content_layout.addWidget(self._source_card(source))
         self.content_layout.addStretch(1)
 
+    def _content_width(self) -> int:
+        """Width available to panel content inside the margins and vertical scrollbar."""
+        return self.width() - 42 - self._scroll.verticalScrollBar().sizeHint().width() - 4
+
     def _image_grid(self, images: tuple[InformationImage, ...]) -> QWidget:
         grid_widget = QWidget()
         grid_widget.setObjectName("informationSearchImages")
@@ -165,7 +172,9 @@ class InformationSearchPanel(QFrame):
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(8)
         columns = 3
-        side = max(88, (self.width() - 22 - 20 - 8 * (columns - 1) - 8) // columns)
+        # Fit three tiles inside the scroll area, leaving room for its vertical scrollbar.
+        available = self._content_width() - 8 * (columns - 1)
+        side = max(72, available // columns)
         for index, image in enumerate(images):
             pixmap = QPixmap()
             if image.data is None or not pixmap.loadFromData(image.data):
@@ -236,11 +245,19 @@ class InformationSearchPanel(QFrame):
         layout = QVBoxLayout(card)
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(6)
-        title = QPushButton(source.title)
+        title = QPushButton()
         command(title, "external-link")
         title.setObjectName("informationSearchSourceLink")
+        # One-line titles must not widen the panel: shorten with “…” to the card width and
+        # keep the full title in the tooltip and accessible name.
+        title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        title.setMinimumWidth(0)
+        text_width = max(80, self._content_width() - 24 - 28 - 32)
+        title.setText(
+            title.fontMetrics().elidedText(source.title, Qt.TextElideMode.ElideRight, text_width)
+        )
         title.setAccessibleName("Open source: " + source.title)
-        title.setToolTip(source.url)
+        title.setToolTip(source.title + "\n" + source.url)
         title.clicked.connect(lambda _checked=False, url=source.url: self._open_source(url))
         layout.addWidget(title)
         snippet = QLabel(source.snippet)
