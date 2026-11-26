@@ -119,6 +119,34 @@ def test_index_persists_queries_cache_and_budget_is_enforced(ready_session_api):
     # Cached query does not spend a third call; quota is persistent across engines.
     assert client.post(path + "/candidates", headers=headers, json=request).status_code == 200
     assert provider.calls == [("document", 2), ("query", 2)]
+
+    diagnostic_provider = FakeProvider()
+    diagnostic_engine = SemanticCandidates(client.app.state.database, diagnostic_provider)
+
+    async def capture_retrieval():
+        from buddy_api.analysis.store import Analyses
+
+        async with client.app.state.database.sessions() as db:
+            analysis = await Analyses(db).read(ids["analyses"], owner_id=owner)
+        trace = {}
+        candidates = await diagnostic_engine.retrieve(
+            analysis,
+            owner,
+            analysis.slides[0].slide_id,
+            "These need protection.",
+            context,
+            diagnostics=trace,
+        )
+        return trace, candidates
+
+    retrieval_trace, retrieval_candidates = client.portal.call(capture_retrieval())
+    embedding_trace = retrieval_trace["embedding_retrieval"]
+    assert embedding_trace["query_model"] == "embed-v5.0-fast"
+    assert embedding_trace["query_views"][0]["query_text"] == context
+    assert embedding_trace["query_views"][1]["query_text"] == "These need protection."
+    assert embedding_trace["query_views"][0]["top_documents"][0]["cosine_similarity"] == 1.0
+    assert embedding_trace["fused_top_documents"]
+    assert [candidate.model_dump() for candidate in retrieval_candidates]
     assert provider.inputs[-1] == [context, "These need protection."]
     new_engine = SemanticCandidates(client.app.state.database, provider, call_limit=2)
     client.app.state.semantic_candidates = new_engine

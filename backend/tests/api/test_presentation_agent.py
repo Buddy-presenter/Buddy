@@ -394,6 +394,35 @@ def test_valid_reset_proposal_uses_persisted_focus_and_does_not_execute(agent_ap
 
 
 @pytest.mark.postgres
+def test_opt_in_diagnostics_capture_real_candidates_options_and_final_mapping(agent_api, capsys):
+    client, ids, provider = agent_api
+    client.app.state.presentation_agent.settings = AgentSettings(
+        "test-key", diagnostics_enabled=True, diagnostics_session_id=ids["sessions"]
+    )
+    phrase = "Let's look at the first slide now."
+    request = payload(
+        text=phrase, latest_utterance=phrase, segments=[{"sequence": 1, "text": phrase}]
+    )
+    reply = client.post(
+        f"/api/v1/sessions/{ids['sessions']}/agent",
+        headers={"Authorization": "Bearer owner"},
+        json=request,
+    )
+    assert reply.status_code == 200, reply.text
+    assert len(provider.calls) == 1
+    diagnostics = reply.json()["diagnostics"]
+    assert diagnostics["input"]["latest_utterance"] == phrase
+    assert diagnostics["candidate_retrieval"]
+    assert diagnostics["candidate_options"] == provider.calls[0]["options"]
+    assert diagnostics["provider_passage"] == provider.calls[0]
+    assert len(diagnostics["option_targets"]) == len(diagnostics["candidate_options"])
+    assert diagnostics["selection"]["choice"] == "c0"
+    assert diagnostics["selected_target"]["tool"] == "no_action"
+    assert diagnostics["final_proposal"]["decision_id"] == reply.json()["decision_id"]
+    assert phrase not in capsys.readouterr().out
+
+
+@pytest.mark.postgres
 def test_exact_navigation_boundary_does_not_spend_provider_allowance(agent_api, capsys):
     client, ids, provider = agent_api
     phrase = "Please go to the previous slide."

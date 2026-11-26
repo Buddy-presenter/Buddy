@@ -17,14 +17,17 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException
+from starlette.responses import JSONResponse
 
 from buddy_api.agent_provider import (
     DECIDED_BY,
+    DECISION_TRACE,
     AgentFailure,
     AgentSettings,
     DecisionProvider,
     FailureReason,
     Selection,
+    record_decision_trace,
 )
 from buddy_api.analysis.contracts import AnalysisResult, Model, PowerPointAnalysisResult, Region
 from buddy_api.auth import Principal, authenticated
@@ -775,7 +778,7 @@ def agent_router() -> APIRouter:
         request: Request,
         response: Response,
         principal: Annotated[Principal, Depends(authenticated)],
-    ) -> AgentProposal:
+    ) -> AgentProposal | JSONResponse:
         response.headers["Cache-Control"] = "no-store"
         body = bytearray()
         try:
@@ -800,6 +803,22 @@ def agent_router() -> APIRouter:
             )
         started = time.monotonic()
         runtime: AgentRuntime | None = request.app.state.presentation_agent
+        decision_diagnostics: dict[str, object] | None = (
+            {
+                "input": values.model_dump(mode="json"),
+                "analysis_id": None,
+                "candidate_retrieval": None,
+                "candidate_options": None,
+                "option_targets": None,
+            }
+            if (
+                runtime is not None
+                and runtime.settings.diagnostics_enabled
+                and runtime.settings.diagnostics_session_id == identifier
+            )
+            else None
+        )
+        trace_token = DECISION_TRACE.set(decision_diagnostics)
         admitted = False
         retry_after_ms = None
         phase = "session"
@@ -820,6 +839,9 @@ def agent_router() -> APIRouter:
         try:
             async with asyncio.timeout(5):
                 source = await read_input(request, principal, identifier, values)
+                if decision_diagnostics is not None:
+                    decision_diagnostics["analysis_id"] = str(source.analysis.id)
+                    decision_diagnostics["current_slide_id"] = source.current
                 finish_phase()
                 target = Target(tool="no_action", slide_id=source.current)
                 reason: AgentReason = "disabled"
@@ -839,7 +861,14 @@ def agent_router() -> APIRouter:
                         candidates = resolve(
                             source.analysis, source.current, values.text, values.latest_utterance
                         )
-                        targets, _ = options(source, candidates)
+                        targets, descriptions = options(source, candidates)
+                        if decision_diagnostics is not None:
+                            decision_diagnostics.update(
+                                route="explicit_navigation_fastpath",
+                                candidate_retrieval=[c.model_dump(mode="json") for c in candidates],
+                                candidate_options=descriptions,
+                                option_targets=[t.model_dump(mode="json") for t in targets],
+                            )
                         selection = navigation_selection(targets, candidates, len(values.segments))
                         finish_phase()
                     else:
@@ -856,6 +885,7 @@ def agent_router() -> APIRouter:
                                 source.current,
                                 values.latest_utterance or values.text,
                                 values.text,
+                                diagnostics=decision_diagnostics,
                             )
                             if semantic is not None
                             else resolve(
@@ -866,6 +896,20 @@ def agent_router() -> APIRouter:
                             )
                         )
                         targets, descriptions = options(source, candidates)
+                        if decision_diagnostics is not None:
+                            decision_diagnostics.update(
+                                route="semantic_retrieval"
+                                if semantic is not None
+                                else "lexical_retrieval",
+                                candidate_retrieval=[c.model_dump(mode="json") for c in candidates],
+                                candidate_options=descriptions,
+                                option_targets=[t.model_dump(mode="json") for t in targets],
+                                resolver_version=(
+                                    "cohere-embed5-v4"
+                                    if semantic is not None
+                                    else "summary-overlap-2"
+                                ),
+                            )
                         finish_phase()
                         fast_topic = (
                             topic_navigation_selection(
@@ -881,12 +925,22 @@ def agent_router() -> APIRouter:
                             begin_phase("topic_navigation")
                             selection = fast_topic
                             decision_source = "navigation"
+                            record_decision_trace(
+                                bypass="confident_topic_fastpath",
+                                selected_choice=selection.choice,
+                                selected_reason=selection.reason,
+                                selected_confidence=selection.confidence,
+                                selected_evidence=list(selection.evidence),
+                            )
                             finish_phase()
                         else:
                             begin_phase("selection")
-                            selection = await runtime.provider_for(values.decision_model).select(
-                                decision_passage(source, values, descriptions)
-                            )
+                            passage = decision_passage(source, values, descriptions)
+                            provider = runtime.provider_for(values.decision_model)
+                            if decision_diagnostics is not None:
+                                decision_diagnostics["provider_passage"] = passage
+                                decision_diagnostics["provider_class"] = type(provider).__name__
+                            selection = await provider.select(passage)
                             finish_phase()
                             decision_source = "model"
                     target = checked_selection(selection, targets, len(values.segments))
@@ -907,11 +961,19 @@ def agent_router() -> APIRouter:
                     if fresh.identity != source.identity:
                         raise AgentFailure("stale")
                     finish_phase()
+                    if decision_diagnostics is not None and selection is not None:
+                        decision_diagnostics["selection"] = selection.model_dump(mode="json")
+                        decision_diagnostics["selected_target"] = target.model_dump(mode="json")
         except HTTPException:
             # Ownership/auth failures must remain denied; stale session failures never propose.
             raise
         except (AgentFailure, EmbeddingFailure) as exc:
             reason = exc.code if isinstance(exc, AgentFailure) else "candidates_unavailable"
+            if decision_diagnostics is not None:
+                decision_diagnostics["failure"] = {
+                    "kind": type(exc).__name__,
+                    "reason": reason,
+                }
             target = Target(tool="no_action", slide_id=source.current)
             selection = None
             decision_source = "fallback"
@@ -945,6 +1007,11 @@ def agent_router() -> APIRouter:
                 None,
             )
             decision_source = "fallback"
+            if decision_diagnostics is not None:
+                decision_diagnostics["failure"] = {
+                    "kind": "TimeoutError",
+                    "reason": "deadline",
+                }
         except (PersistenceError, SQLAlchemyError, OSError):
             raise HTTPException(503, "Agent temporarily unavailable.") from None
         finally:
@@ -952,6 +1019,7 @@ def agent_router() -> APIRouter:
                 finish_phase()
             if admitted and runtime is not None:
                 runtime.active.discard(principal.id)
+            DECISION_TRACE.reset(trace_token)
         proposal_values: dict[str, object] = {
             "protocol": "presentation-agent.v1",
             "decision_id": uuid4(),
@@ -995,6 +1063,18 @@ def agent_router() -> APIRouter:
             sys.stdout.flush()
         except OSError:
             pass  # Telemetry cannot fail a presentation request.
+        if decision_diagnostics is not None:
+            decision_diagnostics["phase"] = phase
+            decision_diagnostics["phase_timings_ms"] = phase_timings_ms
+            if decision_source == "model":
+                decision_diagnostics["resolved_provider"] = DECIDED_BY.get()
+            proposal_body = proposal.model_dump(mode="json", exclude_unset=True)
+            decision_diagnostics["final_proposal"] = {**proposal_body}
+            proposal_body["diagnostics"] = decision_diagnostics
+            return JSONResponse(
+                content=proposal_body,
+                headers={"Cache-Control": "no-store"},
+            )
         return proposal
 
     return router
