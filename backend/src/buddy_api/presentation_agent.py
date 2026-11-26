@@ -878,8 +878,8 @@ def agent_router() -> APIRouter:
                         finish_phase()
                         begin_phase("retrieval")
                         semantic = request.app.state.semantic_candidates
-                        candidates = (
-                            await semantic.retrieve(
+                        if semantic is not None and decision_diagnostics is not None:
+                            candidates = await semantic.retrieve(
                                 source.analysis,
                                 principal.id,
                                 source.current,
@@ -887,14 +887,21 @@ def agent_router() -> APIRouter:
                                 values.text,
                                 diagnostics=decision_diagnostics,
                             )
-                            if semantic is not None
-                            else resolve(
+                        elif semantic is not None:
+                            candidates = await semantic.retrieve(
+                                source.analysis,
+                                principal.id,
+                                source.current,
+                                values.latest_utterance or values.text,
+                                values.text,
+                            )
+                        else:
+                            candidates = resolve(
                                 source.analysis,
                                 source.current,
                                 values.text,
                                 values.latest_utterance,
                             )
-                        )
                         targets, descriptions = options(source, candidates)
                         if decision_diagnostics is not None:
                             decision_diagnostics.update(

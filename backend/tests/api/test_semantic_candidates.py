@@ -139,7 +139,7 @@ def test_index_persists_queries_cache_and_budget_is_enforced(ready_session_api):
         )
         return trace, candidates
 
-    retrieval_trace, retrieval_candidates = client.portal.call(capture_retrieval())
+    retrieval_trace, retrieval_candidates = client.portal.call(capture_retrieval)
     embedding_trace = retrieval_trace["embedding_retrieval"]
     assert embedding_trace["query_model"] == "embed-v5.0-fast"
     assert embedding_trace["query_views"][0]["query_text"] == context
