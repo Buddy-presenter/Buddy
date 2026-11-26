@@ -187,3 +187,13 @@ def test_loaded_presenter_with_coordinates_fits_minimum_window(
     assert all(field.isEnabled() for field in page.fields.values())
     for control in (page.open_button, page.fullscreen_button, page.coordinates_button):
         assert control.accessibleName() and control.toolTip() and not control.icon().isNull()
+
+
+def test_theme_font_placeholders_expand_to_valid_declarations():
+    # A bare text-font placeholder expands to a family list, an invalid declaration that
+    # makes Qt drop every later rule (it hid the orange account avatar, #250).
+    import re
+    from importlib.resources import files
+
+    theme = files("buddy_desktop").joinpath("theme.qss").read_text(encoding="utf-8")
+    assert not re.search(r"[{;]\s*__FONT_TEXT__", theme)

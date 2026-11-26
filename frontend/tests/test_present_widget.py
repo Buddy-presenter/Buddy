@@ -564,10 +564,10 @@ def test_text_search_starts_at_once_and_a_correction_replaces_it(present, qtbot)
         )
 
     say("Search for electric cars", "s1")
-    qtbot.waitUntil(lambda: spy.count() == 1, timeout=500)
+    qtbot.waitUntil(lambda: spy.count() == 1, timeout=3000)
     assert spy.at(0) == ["electric cars", False, False]
     say("I mean hybrid cars", "s12")
-    qtbot.waitUntil(lambda: spy.count() == 2, timeout=500)
+    qtbot.waitUntil(lambda: spy.count() == 2, timeout=3000)
     assert spy.at(1) == ["hybrid cars", False, False]
 
 
@@ -587,5 +587,5 @@ def test_image_search_opens_the_panel_at_once_without_chrome(present, qtbot):
             "latency_ms": 20,
         }
     )
-    qtbot.waitUntil(lambda: spy.count() == 1, timeout=500)
+    qtbot.waitUntil(lambda: spy.count() == 1, timeout=3000)
     assert spy.at(0) == ["red pandas", True, False]

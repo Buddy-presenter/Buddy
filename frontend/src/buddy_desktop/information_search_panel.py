@@ -54,9 +54,8 @@ class InformationSearchPanel(QFrame):
         header = QHBoxLayout()
         header.setSpacing(10)
         header.addWidget(BuddyMark(26))
-        self.heading = QLabel("Web answer")
-        self.heading.setObjectName("informationSearchTitle")
-        header.addWidget(self.heading, 1)
+        # No title or echo of the spoken query: results start right below the header.
+        header.addStretch(1)
         self.close_button = QPushButton()
         command(self.close_button, "x")
         self.close_button.setObjectName("quietButton")
@@ -64,12 +63,6 @@ class InformationSearchPanel(QFrame):
         self.close_button.clicked.connect(self.close_requested.emit)
         header.addWidget(self.close_button)
         root.addLayout(header)
-
-        self.query = QLabel()
-        self.query.setObjectName("informationSearchQuery")
-        self.query.setWordWrap(True)
-        self.query.setTextFormat(Qt.TextFormat.PlainText)
-        root.addWidget(self.query)
 
         self.state = QLabel("Searching the web…")
         self.state.setObjectName("informationSearchState")
@@ -83,6 +76,8 @@ class InformationSearchPanel(QFrame):
         # Content wraps to the panel width; never scroll sideways.
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._scroll = scroll_area
+        scroll_area.setStyleSheet("background: #000000;")
+        scroll_area.viewport().setStyleSheet("background: #000000;")
         self.content = QWidget()
         self.content.setObjectName("informationSearchContent")
         self.content_layout = QVBoxLayout(self.content)
@@ -129,9 +124,7 @@ class InformationSearchPanel(QFrame):
         self._closing = False
         self._animation.stop()
         self._clear_content()
-        self.heading.setText("Images" if images else "Web answer")
-        self.query.setText(query)
-        self.query.show()
+        self.setAccessibleDescription(("Images for " if images else "Web results for ") + query)
         self.state.setText("Finding images…" if images else "Searching the web…")
         self.state.show()
         self.dismiss_hint.show()
@@ -252,6 +245,7 @@ class InformationSearchPanel(QFrame):
         # keep the full title in the tooltip and accessible name.
         title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         title.setMinimumWidth(0)
+        title.ensurePolished()  # measure with the themed (bold) font
         text_width = max(80, self._content_width() - 24 - 28 - 32)
         title.setText(
             title.fontMetrics().elidedText(source.title, Qt.TextElideMode.ElideRight, text_width)
