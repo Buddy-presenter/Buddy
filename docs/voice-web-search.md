@@ -9,6 +9,10 @@ current slide stays visible behind it:
   four source links.
 - Image searches (“show me images of cats”) show a grid of up to nine small images only.
 - Clicking a source title or an image opens its HTTPS source page in the default browser.
+- The panel takes the top half of the right-hand side of the presentation, with no title,
+  logo or echoed query; images are cropped to fill their tiles.
+- Scroll with the mouse wheel or by saying “scroll down”/“read more” or “scroll up”/“go
+  back up” (these act only while the panel is open).
 - Close the panel with its × button, Esc, or by saying “close the panel”, “close the
   results” or “back to the presentation”; the same slide stays on screen.
 - Chrome opens only when asked for explicitly (“open Chrome and search for …”), after a

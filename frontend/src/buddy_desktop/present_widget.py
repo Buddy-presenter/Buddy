@@ -104,7 +104,12 @@ from buddy_desktop.transition_policy import (
 )
 from buddy_desktop.views import Page, StatusLabel
 from buddy_desktop.visuals import BuddyMark, command
-from buddy_desktop.voice_commands import ReturnToPresentation, VoiceCommandRouter, WebSearch
+from buddy_desktop.voice_commands import (
+    ReturnToPresentation,
+    ScrollPanel,
+    VoiceCommandRouter,
+    WebSearch,
+)
 
 logger = logging.getLogger(__name__)
 NAVIGATION_TOOLS = {"next_slide", "previous_slide", "go_to_slide"}
@@ -221,6 +226,7 @@ class PresentWidget(Page):
     fullscreen_exited = Signal()
     web_search_requested = Signal(str, bool, bool)
     return_to_presentation_requested = Signal()
+    scroll_panel_requested = Signal(int)
 
     def __init__(self, config: AppConfig, settings: QSettings) -> None:
         super().__init__("Present", "")
@@ -2637,6 +2643,8 @@ class PresentWidget(Page):
                 self._voice_search_dispatch_timer.stop()
                 self._pending_voice_search = None
                 self.return_to_presentation_requested.emit()
+            elif isinstance(command.command, ScrollPanel):
+                self.scroll_panel_requested.emit(command.command.direction)
         elif (
             self._session is not None
             and self._context_connected

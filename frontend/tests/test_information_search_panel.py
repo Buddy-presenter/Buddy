@@ -37,7 +37,9 @@ def test_panel_over_a_powerpoint_slideshow_stays_on_top_without_taking_focus(qtb
     assert panel.parentWidget() is None
     geometry = panel.frameGeometry()
     assert area.contains(geometry.topLeft()) and area.right() >= geometry.left()
-    assert geometry.top() == area.top() + 24
+    assert geometry.top() == area.top() + 16
+    # Top half of the right-hand side.
+    assert geometry.height() <= area.height() // 2
 
 
 def test_panel_returns_to_a_buddy_window_after_a_slideshow(qtbot):
@@ -55,3 +57,20 @@ def test_panel_returns_to_a_buddy_window_after_a_slideshow(qtbot):
     assert panel.parentWidget() is owner
     assert not panel.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
     assert not panel.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+
+
+def test_panel_scrolls_its_results(qtbot):
+    from PySide6.QtCore import QRect
+    from PySide6.QtWidgets import QLabel
+
+    panel = InformationSearchPanel(reduce_motion=True)
+    qtbot.addWidget(panel)
+    panel.present(QRect(0, 0, 1600, 900), "long answer")
+    for index in range(40):
+        panel.content_layout.addWidget(QLabel(f"line {index}"))
+    qtbot.waitUntil(lambda: panel._scroll.verticalScrollBar().maximum() > 0, timeout=1000)
+    bar = panel._scroll.verticalScrollBar()
+    panel.scroll_by(1)
+    assert bar.value() > 0
+    panel.scroll_by(-1)
+    assert bar.value() == 0

@@ -2,13 +2,12 @@
 
 from urllib.parse import urlsplit
 
-from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, Qt, QUrl, Signal
+from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, QSize, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QKeyEvent, QPixmap, QResizeEvent
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
     QGridLayout,
-    QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
@@ -23,7 +22,10 @@ from buddy_desktop.information_search_service import (
     InformationImage,
     InformationSource,
 )
-from buddy_desktop.visuals import BuddyMark, command
+from buddy_desktop.visuals import command
+
+MARGIN = 10
+SCROLLBAR = 8
 
 
 class InformationSearchPanel(QFrame):
@@ -48,21 +50,20 @@ class InformationSearchPanel(QFrame):
         shadow.setColor(QColor(0, 0, 0, 180))
         self.setGraphicsEffect(shadow)
 
+        # Results fill the panel: no logo, title, query echo or footer. The close button
+        # floats over the top-right corner (#250).
         root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 20, 20)
-        root.setSpacing(14)
-        header = QHBoxLayout()
-        header.setSpacing(10)
-        header.addWidget(BuddyMark(26))
-        # No title or echo of the spoken query: results start right below the header.
-        header.addStretch(1)
-        self.close_button = QPushButton()
-        command(self.close_button, "x")
-        self.close_button.setObjectName("quietButton")
-        self.close_button.setAccessibleName("Close web answer and return to presentation")
+        root.setContentsMargins(MARGIN, MARGIN, MARGIN, MARGIN)
+        root.setSpacing(6)
+        self.close_button = QPushButton(self)
+        command(self.close_button, "x", compact=True)
+        self.close_button.setObjectName("informationSearchClose")
+        self.close_button.setFixedSize(28, 28)
+        self.close_button.setAccessibleName("Close web results and return to presentation")
+        self.close_button.setToolTip(
+            "Close (Esc). You can also say “close the panel” or “back to the presentation”."
+        )
         self.close_button.clicked.connect(self.close_requested.emit)
-        header.addWidget(self.close_button)
-        root.addLayout(header)
 
         self.state = QLabel("Searching the web…")
         self.state.setObjectName("informationSearchState")
@@ -81,17 +82,11 @@ class InformationSearchPanel(QFrame):
         self.content = QWidget()
         self.content.setObjectName("informationSearchContent")
         self.content_layout = QVBoxLayout(self.content)
-        self.content_layout.setContentsMargins(0, 0, 4, 0)
-        self.content_layout.setSpacing(12)
+        # Leave room on the right of the first lines for the floating close button.
+        self.content_layout.setContentsMargins(0, 0, 0, 0)
+        self.content_layout.setSpacing(8)
         scroll_area.setWidget(self.content)
         root.addWidget(scroll_area, 1)
-
-        self.dismiss_hint = QLabel(
-            "Say “back to the presentation” or close this panel to continue."
-        )
-        self.dismiss_hint.setObjectName("informationSearchHint")
-        self.dismiss_hint.setWordWrap(True)
-        root.addWidget(self.dismiss_hint)
 
         self._animation = QPropertyAnimation(self, b"pos", self)
         self._animation.setEasingCurve(QEasingCurve.Type.OutCubic)
@@ -127,7 +122,6 @@ class InformationSearchPanel(QFrame):
         self.setAccessibleDescription(("Images for " if images else "Web results for ") + query)
         self.state.setText("Finding images…" if images else "Searching the web…")
         self.state.show()
-        self.dismiss_hint.show()
         self._place(show=True)
 
     def show_answer(self, result: InformationAnswer) -> None:
@@ -140,6 +134,7 @@ class InformationSearchPanel(QFrame):
             answer.setWordWrap(True)
             answer.setTextFormat(Qt.TextFormat.PlainText)
             answer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+            answer.setContentsMargins(0, 0, 30, 0)
             self.content_layout.addWidget(answer)
         if result.images:
             self.content_layout.addWidget(self._image_grid(result.images))
@@ -156,7 +151,7 @@ class InformationSearchPanel(QFrame):
 
     def _content_width(self) -> int:
         """Width available to panel content inside the margins and vertical scrollbar."""
-        return self.width() - 42 - self._scroll.verticalScrollBar().sizeHint().width() - 4
+        return self.width() - 2 * MARGIN - SCROLLBAR - 6
 
     def _image_grid(self, images: tuple[InformationImage, ...]) -> QWidget:
         grid_widget = QWidget()
@@ -172,11 +167,27 @@ class InformationSearchPanel(QFrame):
             pixmap = QPixmap()
             if image.data is None or not pixmap.loadFromData(image.data):
                 continue
+            # Fill the whole 4:3 tile (crop the centre) so no black bands are left.
+            height = round(side * 0.75)
+            ratio = self.devicePixelRatioF()
+            target = QSize(round(side * ratio), round(height * ratio))
+            filled = pixmap.scaled(
+                target,
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            filled = filled.copy(
+                (filled.width() - target.width()) // 2,
+                (filled.height() - target.height()) // 2,
+                target.width(),
+                target.height(),
+            )
+            filled.setDevicePixelRatio(ratio)
             tile = QToolButton()
             tile.setObjectName("informationSearchImage")
-            tile.setIcon(pixmap)
-            tile.setIconSize(pixmap.size().scaled(side, side, Qt.AspectRatioMode.KeepAspectRatio))
-            tile.setFixedSize(side, side)
+            tile.setIcon(filled)
+            tile.setIconSize(QSize(side, height))
+            tile.setFixedSize(side, height)
             tile.setCursor(Qt.CursorShape.PointingHandCursor)
             label = image.title or image.source or "Web image"
             tile.setAccessibleName("Open image source: " + label)
@@ -214,10 +225,11 @@ class InformationSearchPanel(QFrame):
         area = self._target_area()
         if area is None:
             return
+        # The top half of the right-hand side of the presentation (#250).
         width = min(460, max(320, round(area.width() * 0.36)))
-        height = max(360, area.height() - 48)
+        height = max(260, (area.height() - 32) // 2)
         self.resize(width, height)
-        global_top_left = QPoint(area.right() + 1 - width - 18, area.top() + 24)
+        global_top_left = QPoint(area.right() + 1 - width - 16, area.top() + 16)
         end = global_top_left
         if show and not self.isVisible():
             self.move(end.x() + (0 if self.reduce_motion else 28), end.y())
@@ -261,6 +273,12 @@ class InformationSearchPanel(QFrame):
         layout.addWidget(snippet)
         return card
 
+    def scroll_by(self, direction: int) -> None:
+        """Scroll the results by most of a page: 1 down, -1 up (voice "scroll down/up")."""
+        bar = self._scroll.verticalScrollBar()
+        step = max(60, round(self._scroll.viewport().height() * 0.8))
+        bar.setValue(bar.value() + direction * step)
+
     def _clear_content(self) -> None:
         while self.content_layout.count():
             item = self.content_layout.takeAt(0)
@@ -281,6 +299,8 @@ class InformationSearchPanel(QFrame):
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
+        self.close_button.move(self.width() - self.close_button.width() - 6, 6)
+        self.close_button.raise_()
         if self.isVisible() and not self._closing:
             self._place(show=False)
 

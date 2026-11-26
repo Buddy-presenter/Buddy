@@ -134,6 +134,7 @@ class MainWindow(QMainWindow):
         self.present = PresentWidget(config, settings)
         self.present.web_search_requested.connect(self._open_voice_search)
         self.present.return_to_presentation_requested.connect(self._return_to_presentation_by_voice)
+        self.present.scroll_panel_requested.connect(self._scroll_information_search)
         self._mini: BuddyMini | None = None
         self._mini_session: str | None = None
         self._mini_screen: QScreen | None = None
@@ -835,6 +836,11 @@ class MainWindow(QMainWindow):
                 "Windows did not focus Buddy. Say “return to the presentation” again.",
                 10000,
             )
+
+    @Slot(int)
+    def _scroll_information_search(self, direction: int) -> None:
+        if self.information_search_panel.isVisible():
+            self.information_search_panel.scroll_by(direction)
 
     def _close_information_search(self) -> None:
         self._information_search_generation += 1

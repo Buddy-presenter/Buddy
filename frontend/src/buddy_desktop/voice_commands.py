@@ -22,7 +22,23 @@ class ReturnToPresentation:
     pass
 
 
-VoiceCommand = WebSearch | ReturnToPresentation
+@dataclass(frozen=True)
+class ScrollPanel:
+    """Scroll the open search panel: 1 down, -1 up (#250)."""
+
+    direction: int
+
+
+VoiceCommand = WebSearch | ReturnToPresentation | ScrollPanel
+
+_SCROLL = re.compile(
+    r"^(?:please\s+)?(?:"
+    r"(?:scroll|go|move)\s+(?P<way>down|up)(?:\s+(?:a\s+bit|a\s+little|more|please))*"
+    r"|(?P<more>read\s+more|show\s+more|keep\s+scrolling|scroll)"
+    r"|(?P<back>go\s+back\s+up|back\s+to\s+the\s+top)"
+    r")$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -429,6 +445,9 @@ def parse_voice_command(text: str) -> VoiceCommand | None:
     normalized = _remove_wake_word(normalized)
     if _RETURN.fullmatch(normalized):
         return ReturnToPresentation()
+    scroll = _SCROLL.fullmatch(normalized)
+    if scroll is not None:
+        return ScrollPanel(-1 if scroll.group("way") == "up" or scroll.group("back") else 1)
     if _is_slide_command(normalized):
         return None
     parts = _search_parts(normalized)
@@ -567,6 +586,8 @@ class VoiceCommandRouter:
         command = parse_voice_command(text) if prefix or remembered else None
         if isinstance(command, ReturnToPresentation):
             self._clear_search_state()
+            return VoiceCommandResult(True, command)
+        if isinstance(command, ScrollPanel):
             return VoiceCommandResult(True, command)
 
         parts = _search_parts(text) if prefix or remembered else None

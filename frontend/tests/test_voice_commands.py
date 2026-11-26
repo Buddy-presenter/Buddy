@@ -398,3 +398,13 @@ def test_searches_use_the_panel_unless_chrome_is_named():
 def test_close_the_panel_by_voice():
     for phrase in ("Close the panel", "close the results", "Hide the images", "dismiss the search"):
         assert parse_voice_command(phrase) == ReturnToPresentation(), phrase
+
+
+def test_scroll_the_panel_by_voice():
+    from buddy_desktop.voice_commands import ScrollPanel
+
+    for phrase in ("Scroll down", "scroll down a bit", "Read more", "show more"):
+        assert parse_voice_command(phrase) == ScrollPanel(1), phrase
+    for phrase in ("Scroll up", "go up", "Go back up", "back to the top"):
+        assert parse_voice_command(phrase) == ScrollPanel(-1), phrase
+    assert parse_voice_command("Go back") is None  # slide navigation stays with Buddy
