@@ -78,7 +78,7 @@ class MainWindow(QMainWindow):
         self._information_search_generation = 0
         self._information_search_task: int | None = None
         self._information_search_task_generation: int | None = None
-        self._queued_information_search: tuple[int, str, AccessProvider] | None = None
+        self._queued_information_search: tuple[int, str, bool, AccessProvider] | None = None
         self.information_search_panel = InformationSearchPanel(
             reduce_motion=bool(settings.value("appearance/reduce_motion", False, type=bool))
         )
@@ -746,16 +746,16 @@ class MainWindow(QMainWindow):
             self._mini_auto_poll.start()
 
     @Slot(str, bool)
-    def _open_voice_search(self, query: str, images: bool) -> None:
+    def _open_voice_search(self, query: str, images: bool, browser: bool = False) -> None:
         self._information_search_generation += 1
         generation = self._information_search_generation
         self._queued_information_search = None
-        if images:
+        if browser:
             self.information_search_panel.close_panel()
             # Windows grants the current foreground process a narrow foreground
             # handoff before Chrome takes focus. No shell command is constructed.
             allow_current_process_foreground()
-            result = launch_chrome_search(query, images=True)
+            result = launch_chrome_search(query, images=images)
             if not result.opened:
                 self._show_voice_command_feedback(result.message, 10000)
             return
@@ -767,18 +767,18 @@ class MainWindow(QMainWindow):
             owner = slideshow_area
         elif fullscreen_owner is not None and fullscreen_owner.isVisible():
             owner = fullscreen_owner
-        self.information_search_panel.present(owner, query)
+        self.information_search_panel.present(owner, query, images=images)
         session = self.account.session
         if session is None or not self.account.account_id:
             self.information_search_panel.show_error(
-                "Sign in to Buddy to get a web answer and sources."
+                "Sign in to Buddy to search the web from your presentation."
             )
             return
         access = self._access_provider(session)
         if self.information_search_runner.busy:
-            self._queued_information_search = (generation, query, access)
+            self._queued_information_search = (generation, query, images, access)
             return
-        self._submit_information_search(generation, query, access)
+        self._submit_information_search(generation, query, images, access)
 
     def _powerpoint_slideshow_area(self) -> QRect | None:
         """The screen area of a live PowerPoint slideshow in Qt coordinates (#250).
@@ -842,13 +842,13 @@ class MainWindow(QMainWindow):
         self.information_search_panel.close_panel()
 
     def _submit_information_search(
-        self, generation: int, query: str, access: AccessProvider
+        self, generation: int, query: str, images: bool, access: AccessProvider
     ) -> None:
         if generation != self._information_search_generation or self._closing:
             return
         self._information_search_task_generation = generation
         self._information_search_task = self.information_search_runner.submit(
-            lambda: InformationSearchService(self.config).answer(access, query)
+            lambda: InformationSearchService(self.config).answer(access, query, images=images)
         )
 
     @Slot(int, object)
@@ -880,8 +880,8 @@ class MainWindow(QMainWindow):
         self._information_search_task_generation = None
         queued, self._queued_information_search = self._queued_information_search, None
         if queued is not None and not self._closing:
-            generation, query, access = queued
-            self._submit_information_search(generation, query, access)
+            generation, query, images, access = queued
+            self._submit_information_search(generation, query, images, access)
         if self._closing:
             self.close()
 

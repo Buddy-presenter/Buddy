@@ -3,20 +3,26 @@
 from urllib.parse import urlsplit
 
 from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, Qt, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QKeyEvent, QResizeEvent
+from PySide6.QtGui import QColor, QDesktopServices, QKeyEvent, QPixmap, QResizeEvent
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from buddy_desktop.information_search_service import InformationAnswer, InformationSource
+from buddy_desktop.information_search_service import (
+    InformationAnswer,
+    InformationImage,
+    InformationSource,
+)
 from buddy_desktop.visuals import BuddyMark, command
 
 
@@ -48,9 +54,9 @@ class InformationSearchPanel(QFrame):
         header = QHBoxLayout()
         header.setSpacing(10)
         header.addWidget(BuddyMark(26))
-        heading = QLabel("Quick answer")
-        heading.setObjectName("informationSearchTitle")
-        header.addWidget(heading, 1)
+        self.heading = QLabel("Web answer")
+        self.heading.setObjectName("informationSearchTitle")
+        header.addWidget(self.heading, 1)
         self.close_button = QPushButton("×")
         command(self.close_button, "x")
         self.close_button.setObjectName("quietButton")
@@ -94,7 +100,7 @@ class InformationSearchPanel(QFrame):
         self._animation.finished.connect(self._animation_finished)
         self.close_requested.connect(self.close_panel)
 
-    def present(self, owner: QWidget | QRect, query: str) -> None:
+    def present(self, owner: QWidget | QRect, query: str, *, images: bool = False) -> None:
         """Show over a Buddy window, or over a screen area such as PowerPoint's slideshow.
 
         Over another application's slideshow the panel stays on top without taking focus,
@@ -120,28 +126,64 @@ class InformationSearchPanel(QFrame):
         self._closing = False
         self._animation.stop()
         self._clear_content()
+        self.heading.setText("Images" if images else "Web answer")
         self.query.setText(query)
         self.query.show()
-        self.state.setText("Searching the web…")
+        self.state.setText("Finding images…" if images else "Searching the web…")
         self.state.show()
         self.dismiss_hint.show()
         self._place(show=True)
 
     def show_answer(self, result: InformationAnswer) -> None:
+        """Answer text, a few images and source links; or an image grid on its own."""
         self._clear_content()
         self.state.hide()
-        answer = QLabel(result.answer)
-        answer.setObjectName("informationSearchAnswer")
-        answer.setWordWrap(True)
-        answer.setTextFormat(Qt.TextFormat.PlainText)
-        answer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-        self.content_layout.addWidget(answer)
-        sources_title = QLabel("Sources")
-        sources_title.setObjectName("informationSearchSourcesTitle")
-        self.content_layout.addWidget(sources_title)
-        for source in result.sources:
-            self.content_layout.addWidget(self._source_card(source))
+        if result.answer:
+            answer = QLabel(result.answer)
+            answer.setObjectName("informationSearchAnswer")
+            answer.setWordWrap(True)
+            answer.setTextFormat(Qt.TextFormat.PlainText)
+            answer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+            self.content_layout.addWidget(answer)
+        if result.images:
+            self.content_layout.addWidget(self._image_grid(result.images))
+        elif not result.answer:
+            self.state.setText("No images could be loaded for that search.")
+            self.state.show()
+        if result.sources:
+            sources_title = QLabel("Sources")
+            sources_title.setObjectName("informationSearchSourcesTitle")
+            self.content_layout.addWidget(sources_title)
+            for source in result.sources:
+                self.content_layout.addWidget(self._source_card(source))
         self.content_layout.addStretch(1)
+
+    def _image_grid(self, images: tuple[InformationImage, ...]) -> QWidget:
+        grid_widget = QWidget()
+        grid_widget.setObjectName("informationSearchImages")
+        grid = QGridLayout(grid_widget)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(8)
+        columns = 3
+        side = max(88, (self.width() - 22 - 20 - 8 * (columns - 1) - 8) // columns)
+        for index, image in enumerate(images):
+            pixmap = QPixmap()
+            if image.data is None or not pixmap.loadFromData(image.data):
+                continue
+            tile = QToolButton()
+            tile.setObjectName("informationSearchImage")
+            tile.setIcon(pixmap)
+            tile.setIconSize(pixmap.size().scaled(side, side, Qt.AspectRatioMode.KeepAspectRatio))
+            tile.setFixedSize(side, side)
+            tile.setCursor(Qt.CursorShape.PointingHandCursor)
+            label = image.title or image.source or "Web image"
+            tile.setAccessibleName("Open image source: " + label)
+            tile.setToolTip(f"{label}\n{image.source}" if image.source else label)
+            tile.clicked.connect(
+                lambda _checked=False, url=image.source_url: self._open_source(url)
+            )
+            grid.addWidget(tile, index // columns, index % columns)
+        return grid_widget
 
     def show_error(self, message: str) -> None:
         self._clear_content()

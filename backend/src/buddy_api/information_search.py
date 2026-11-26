@@ -1,9 +1,9 @@
-"""Authenticated, bounded web answers for a presenter-side information panel."""
+"""Authenticated, bounded web answers and images for a presenter-side panel."""
 
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
 import httpx
@@ -17,6 +17,9 @@ from buddy_api.auth import Principal, authenticated
 from buddy_api.contracts import ErrorResponse
 
 MAX_SOURCES = 4
+# Small, bounded image sets: an image search fills a grid; a web answer adds a few.
+MAX_IMAGES = 9
+WEB_IMAGES = 3
 SYSTEM_PROMPT = """Answer the user's question briefly using only the web search results supplied.
 Use one to three plain-language sentences, ideally under 70 words. If the results do not
 support a reliable answer, say that you could not find a reliable answer. Do not invent
@@ -29,6 +32,8 @@ search-result sources separately."""
 class InformationSearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     query: str = Field(min_length=2, max_length=300, strict=True)
+    # "web": short answer, source links and a few images. "images": an image grid only.
+    mode: Literal["web", "images"] = "web"
 
     @field_validator("query")
     @classmethod
@@ -54,10 +59,33 @@ class InformationSource(BaseModel):
         return value
 
 
+def _https(value: str) -> str:
+    parts = urlsplit(value)
+    if parts.scheme != "https" or not parts.hostname or parts.username or parts.password:
+        raise ValueError("invalid URL")
+    return value
+
+
+class InformationImage(BaseModel):
+    """One web image: the panel downloads only the small thumbnail."""
+
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(max_length=180)
+    thumbnail: str = Field(min_length=9, max_length=2048)
+    source_url: str = Field(min_length=9, max_length=2048)
+    source: str = Field(max_length=120)
+
+    @field_validator("thumbnail", "source_url")
+    @classmethod
+    def safe_url(cls, value: str) -> str:
+        return _https(value)
+
+
 class InformationSearchResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    answer: str = Field(min_length=1, max_length=1200)
-    sources: tuple[InformationSource, ...] = Field(max_length=MAX_SOURCES)
+    answer: str | None = Field(default=None, min_length=1, max_length=1200)
+    sources: tuple[InformationSource, ...] = Field(default=(), max_length=MAX_SOURCES)
+    images: tuple[InformationImage, ...] = Field(default=(), max_length=MAX_IMAGES)
 
 
 class InformationSearchFailure(Exception):
@@ -75,16 +103,71 @@ class InformationSearchService:
         client: httpx.AsyncClient,
         *,
         search: Callable[[str], list[dict[str, Any]]] | None = None,
+        search_images: Callable[[str, int], list[dict[str, Any]]] | None = None,
         reserve_model_call: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self.settings = settings
         self.client = client
         self.search = search or self._search_web
+        self.search_images = search_images or self._search_images
         self.reserve_model_call = reserve_model_call
 
     @staticmethod
     def _search_web(query: str) -> list[dict[str, Any]]:
         return DDGS(timeout=5).text(query, region="us-en", safesearch="on", max_results=MAX_SOURCES)
+
+    @staticmethod
+    def _search_images(query: str, limit: int) -> list[dict[str, Any]]:
+        return DDGS(timeout=5).images(query, region="us-en", safesearch="on", max_results=limit)
+
+    @staticmethod
+    def _images(results: list[dict[str, Any]], limit: int) -> tuple[InformationImage, ...]:
+        images: list[InformationImage] = []
+        seen: set[str] = set()
+        for result in results:
+            if len(images) >= limit:
+                break
+            if not isinstance(result, dict):
+                continue
+            thumbnail, page = result.get("thumbnail"), result.get("url")
+            title, source = result.get("title", ""), result.get("source", "")
+            if not (
+                isinstance(thumbnail, str)
+                and isinstance(page, str)
+                and isinstance(title, str)
+                and isinstance(source, str)
+            ):
+                continue
+            if thumbnail in seen:
+                continue
+            try:
+                images.append(
+                    InformationImage(
+                        title=" ".join(title.split())[:180],
+                        thumbnail=thumbnail,
+                        source_url=page,
+                        source=" ".join(source.split())[:120],
+                    )
+                )
+                seen.add(thumbnail)
+            except ValueError:
+                continue
+        return tuple(images)
+
+    async def _fetch_images(self, query: str, limit: int) -> tuple[InformationImage, ...]:
+        try:
+            async with asyncio.timeout(6):
+                raw = await asyncio.to_thread(self.search_images, query, limit + 4)
+        except Exception:
+            # Images are optional for a web answer; an image-only search reports failure.
+            return ()
+        return self._images(raw if isinstance(raw, list) else [], limit)
+
+    async def images(self, query: str) -> InformationSearchResult:
+        images = await self._fetch_images(query, MAX_IMAGES)
+        if not images:
+            raise InformationSearchFailure("no_results")
+        return InformationSearchResult(images=images)
 
     @staticmethod
     def _sources(results: list[dict[str, Any]]) -> tuple[InformationSource, ...]:
@@ -114,14 +197,19 @@ class InformationSearchService:
         return tuple(sources)
 
     async def answer(self, query: str) -> InformationSearchResult:
+        # Text results and a few images are fetched in parallel; images never delay or
+        # block the written answer.
+        image_task = asyncio.create_task(self._fetch_images(query, WEB_IMAGES))
         try:
             async with asyncio.timeout(6):
                 raw_results = await asyncio.to_thread(self.search, query)
         except Exception as exc:
+            image_task.cancel()
             # Do not expose provider details, query text, or network addresses.
             raise InformationSearchFailure("search_unavailable") from exc
         sources = self._sources(raw_results)
         if not sources:
+            image_task.cancel()
             raise InformationSearchFailure("no_results")
         source_data = [source.model_dump() for source in sources]
         try:
@@ -176,7 +264,8 @@ class InformationSearchService:
             answer = " ".join(content[0]["text"].split())
             if not answer or len(answer) > 1200:
                 raise ValueError
-            return InformationSearchResult(answer=answer, sources=sources)
+            images = await image_task
+            return InformationSearchResult(answer=answer, sources=sources, images=images)
         except (ValueError, KeyError, TypeError, AttributeError, RecursionError) as exc:
             raise InformationSearchFailure("answer_unavailable") from exc
 
@@ -200,6 +289,8 @@ def information_search_router() -> APIRouter:
         if service is None:
             raise HTTPException(503)
         try:
+            if values.mode == "images":
+                return await service.images(values.query)
             return await service.answer(values.query)
         except InformationSearchFailure as exc:
             code = {

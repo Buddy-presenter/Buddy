@@ -130,7 +130,7 @@ def test_voice_search_stays_local_and_suppresses_partial_and_final_agent_input(
     assert search_spy.count() == 0
     qtbot.waitUntil(lambda: search_spy.count() == 1, timeout=4000)
     assert search_spy.count() == 1
-    assert search_spy.at(0) == ["cute cats", True]
+    assert search_spy.at(0) == ["cute cats", True, True]
     assert agent_updates == []
     assert "Open Chrome and search" in page.speech_text.toPlainText()
 
@@ -144,7 +144,7 @@ def test_quick_search_correction_updates_pending_query_before_chrome_opens(
     search_spy = QSignalSpy(page.web_search_requested)
     page._speech_transcript(
         {
-            "text": "Search for images of dogs",
+            "text": "Open Chrome and search for images of dogs",
             "final": True,
             "segment_id": "first-search",
             "sequence": 1,
@@ -180,7 +180,7 @@ def test_quick_search_correction_updates_pending_query_before_chrome_opens(
 
     assert search_spy.count() == 0
     qtbot.waitUntil(lambda: search_spy.count() == 1, timeout=4000)
-    assert search_spy.at(0) == ["cute cats", True]
+    assert search_spy.at(0) == ["cute cats", True, True]
 
 
 def test_incomplete_image_search_waits_for_a_concrete_query(present, signal_recorder, qtbot):
@@ -190,7 +190,7 @@ def test_incomplete_image_search_waits_for_a_concrete_query(present, signal_reco
     search_spy = QSignalSpy(page.web_search_requested)
     page._speech_transcript(
         {
-            "text": "Search for images of",
+            "text": "Open Chrome and search for images of",
             "final": True,
             "segment_id": "incomplete-search",
             "sequence": 1,
@@ -225,7 +225,7 @@ def test_incomplete_image_search_waits_for_a_concrete_query(present, signal_reco
         }
     )
     qtbot.waitUntil(lambda: search_spy.count() == 1, timeout=4000)
-    assert search_spy.at(0) == ["cute cats", True]
+    assert search_spy.at(0) == ["cute cats", True, True]
 
 
 def test_incomplete_correction_keeps_the_original_search_queued_until_query_arrives(
@@ -237,7 +237,7 @@ def test_incomplete_correction_keeps_the_original_search_queued_until_query_arri
     search_spy = QSignalSpy(page.web_search_requested)
     page._speech_transcript(
         {
-            "text": "Search for images of dogs",
+            "text": "Open Chrome and search for images of dogs",
             "final": True,
             "segment_id": "initial-search",
             "sequence": 1,
@@ -271,7 +271,7 @@ def test_incomplete_correction_keeps_the_original_search_queued_until_query_arri
         }
     )
     qtbot.waitUntil(lambda: search_spy.count() == 1, timeout=4000)
-    assert search_spy.at(0) == ["cute cats", True]
+    assert search_spy.at(0) == ["cute cats", True, True]
 
 
 def test_return_command_cancels_a_search_still_waiting_for_correction_window(
@@ -284,7 +284,7 @@ def test_return_command_cancels_a_search_still_waiting_for_correction_window(
     return_spy = QSignalSpy(page.return_to_presentation_requested)
     page._speech_transcript(
         {
-            "text": "Search for images of dogs",
+            "text": "Open Chrome and search for images of dogs",
             "final": True,
             "segment_id": "search-before-return",
             "sequence": 1,
@@ -535,7 +535,9 @@ def test_search_panel_covers_the_powerpoint_slideshow_screen(present, monkeypatc
 
     shown = []
     monkeypatch.setattr(
-        window.information_search_panel, "present", lambda owner, query: shown.append(owner)
+        window.information_search_panel,
+        "present",
+        lambda owner, query, images=False: shown.append(owner),
     )
     window._open_voice_search("definition of churn", False)
     assert shown == [area]
@@ -563,7 +565,27 @@ def test_text_search_starts_at_once_and_a_correction_replaces_it(present, qtbot)
 
     say("Search for electric cars", "s1")
     qtbot.waitUntil(lambda: spy.count() == 1, timeout=500)
-    assert spy.at(0) == ["electric cars", False]
+    assert spy.at(0) == ["electric cars", False, False]
     say("I mean hybrid cars", "s12")
     qtbot.waitUntil(lambda: spy.count() == 2, timeout=500)
-    assert spy.at(1) == ["hybrid cars", False]
+    assert spy.at(1) == ["hybrid cars", False, False]
+
+
+def test_image_search_opens_the_panel_at_once_without_chrome(present, qtbot):
+    from PySide6.QtTest import QSignalSpy
+
+    _window, page = present
+    spy = QSignalSpy(page.web_search_requested)
+    page._speech_transcript(
+        {
+            "text": "Show me images of red pandas",
+            "final": True,
+            "segment_id": "images-panel",
+            "sequence": 1,
+            "start_seconds": 0.0,
+            "end_seconds": 0.7,
+            "latency_ms": 20,
+        }
+    )
+    qtbot.waitUntil(lambda: spy.count() == 1, timeout=500)
+    assert spy.at(0) == ["red pandas", True, False]

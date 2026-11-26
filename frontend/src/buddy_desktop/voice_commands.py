@@ -13,6 +13,8 @@ from .navigation import navigation_intent, region_intent, reset_intent
 class WebSearch:
     query: str
     images: bool = False
+    # Searches show in Buddy's panel; only "open Chrome and search ..." opens Chrome (#250).
+    browser: bool = False
 
 
 @dataclass(frozen=True)
@@ -52,6 +54,7 @@ _SEARCH = re.compile(
     r")\s*(?P<query>.*)$",
     re.IGNORECASE,
 )
+_OPEN_CHROME = re.compile(r"^(?:please\s+)?open\s+(?:google\s+)?chrome\b", re.IGNORECASE)
 _ONLINE_SEARCH = re.compile(
     r"^(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?"
     r"(?:find|show(?:\s+me)?|look\s+for|get\s+me|pull\s+up)\s+(?P<query>.+?)\s+"
@@ -122,11 +125,14 @@ _RETURN = re.compile(
     rf"^(?:(?:please\s+)?(?:return|go\s+back|switch\s+back|take\s+me\s+back)\s+to\s+{_RETURN_TARGET}"
     rf"|let'?s\s+(?:go\s+back|return)\s+to\s+{_RETURN_TARGET}"
     rf"|let\s+us\s+(?:go\s+back|return)\s+to\s+{_RETURN_TARGET}"
-    rf"|back\s+to\s+{_RETURN_TARGET})"
+    rf"|back\s+to\s+{_RETURN_TARGET}"
+    # Closing the search panel by voice also returns to presenting (#250).
+    r"|(?:please\s+)?(?:close|hide|dismiss)\s+(?:the\s+|this\s+)?"
+    r"(?:panel|search|search\s+panel|results|search\s+results|web\s+results|images))"
     r"(?:\s+please)?$",
     re.IGNORECASE,
 )
-_SEARCH_PREFIXES = (
+_SEARCH_PREFIXES: tuple[str, ...] = (
     "please search for",
     "please open chrome and search for",
     "please open google chrome and search for",
@@ -152,6 +158,15 @@ _SEARCH_PREFIXES = (
     "look up",
     "lookup",
     "google",
+)
+# Image requests phrased with everyday verbs ("show me images of ...") are searches only
+# because they name images; the bare verbs stay with Buddy's slide commands (#250).
+_SEARCH_PREFIXES += tuple(
+    f"{lead}{verb} {some}{kind} of"
+    for lead in ("", "please ", "can you ", "could you ", "would you ")
+    for verb in ("show me", "show", "find", "get me", "pull up", "look for")
+    for some in ("", "some ")
+    for kind in ("images", "image", "photos", "pictures")
 )
 _RETURN_TARGETS = (
     "the presentation",
@@ -393,7 +408,10 @@ def _is_explicit_command_prefix(text: str) -> bool:
     return_prefix = any(
         normalized == phrase or normalized.startswith(phrase + " ") for phrase in _RETURN_PREFIXES
     )
-    return search_prefix or info_prefix or return_prefix
+    # A complete sentence that parses as a search (for example "show me Tesla news online")
+    # is a command even when it does not start with one of the prefixes above.
+    complete = parse_voice_command(text) is not None
+    return search_prefix or info_prefix or return_prefix or complete
 
 
 def _is_slide_command(text: str) -> bool:
@@ -424,7 +442,8 @@ def parse_voice_command(text: str) -> VoiceCommand | None:
         or any(ord(char) < 32 for char in query)
     ):
         return None
-    return WebSearch(query, images=images)
+    browser = _OPEN_CHROME.match(normalized) is not None
+    return WebSearch(query, images=images, browser=browser)
 
 
 class VoiceCommandRouter:
@@ -440,6 +459,7 @@ class VoiceCommandRouter:
         self._recent_search: WebSearch | None = None
         self._recent_search_at = 0.0
         self._pending_search_images = False
+        self._pending_search_browser = False
         self._pending_search_at = 0.0
         self._pending_information_seed: str | None = None
         self._pending_information_needs_mean = False
@@ -452,6 +472,7 @@ class VoiceCommandRouter:
     def _expire_pending(self, now: float) -> None:
         if now - self._pending_search_at > self._INCOMPLETE_SEARCH_SECONDS:
             self._pending_search_images = False
+            self._pending_search_browser = False
             self._pending_search_at = 0.0
             self._pending_information_seed = None
             self._pending_information_needs_mean = False
@@ -468,6 +489,7 @@ class VoiceCommandRouter:
         self._correction_waiting_for_query = False
         self._correction_waiting_at = 0.0
         self._pending_search_images = False
+        self._pending_search_browser = False
         self._pending_search_at = 0.0
         self._pending_information_seed = None
         self._pending_information_needs_mean = False
@@ -479,6 +501,7 @@ class VoiceCommandRouter:
         self._correction_waiting_for_query = False
         self._correction_waiting_at = 0.0
         self._pending_search_images = False
+        self._pending_search_browser = False
         self._pending_search_at = 0.0
         self._pending_information_seed = None
         self._pending_information_needs_mean = False
@@ -549,12 +572,13 @@ class VoiceCommandRouter:
         parts = _search_parts(text) if prefix or remembered else None
         if parts is not None:
             images, query, correction_incomplete = parts
+            browser = _OPEN_CHROME.match(_remove_wake_word(_clean_text(text))) is not None
             if _has_concrete_content(query) and len(query) <= 300:
-                command = WebSearch(query, images=images)
+                command = WebSearch(query, images=images, browser=browser)
                 self._remember_search(command, now)
                 return VoiceCommandResult(True, command)
             if correction_incomplete:
-                self._recent_search = WebSearch("", images=images)
+                self._recent_search = WebSearch("", images=images, browser=browser)
                 self._recent_search_at = now
                 self._correction_waiting_for_query = True
                 self._correction_waiting_at = now
@@ -566,6 +590,7 @@ class VoiceCommandRouter:
                 )
             self._clear_search_state()
             self._pending_search_images = images
+            self._pending_search_browser = browser
             self._pending_search_at = now
             self._pending_information_seed = _information_query_seed(text)
             self._pending_information_needs_mean = (
@@ -576,7 +601,11 @@ class VoiceCommandRouter:
         if (correction_prefix or correction_remembered) and self._recent_search is not None:
             corrected = _correction_fragment(_remove_wake_word(text))
             if corrected is not None and _has_concrete_content(corrected) and len(corrected) <= 300:
-                command = WebSearch(corrected, images=self._recent_search.images)
+                command = WebSearch(
+                    corrected,
+                    images=self._recent_search.images,
+                    browser=self._recent_search.browser,
+                )
                 self._remember_search(command, now)
                 return VoiceCommandResult(True, command)
             self._correction_waiting_for_query = True
@@ -591,7 +620,7 @@ class VoiceCommandRouter:
         if correction_followup and self._recent_search is not None:
             corrected, images = _continuation_query(text, images=self._recent_search.images)
             if _has_concrete_content(corrected) and len(corrected) <= 300:
-                command = WebSearch(corrected, images=images)
+                command = WebSearch(corrected, images=images, browser=self._recent_search.browser)
                 self._remember_search(command, now)
                 return VoiceCommandResult(True, command)
             self._correction_waiting_at = now
@@ -607,6 +636,7 @@ class VoiceCommandRouter:
                 _clean_text(_remove_wake_word(text))
             ):
                 self._pending_search_images = False
+                self._pending_search_browser = False
                 self._pending_search_at = 0.0
                 self._intent_segments.clear()
                 return VoiceCommandResult(False)
@@ -624,7 +654,7 @@ class VoiceCommandRouter:
                     if not _has_concrete_content(query):
                         self._pending_search_at = now
                         return VoiceCommandResult(True, search_pending=True)
-                command = WebSearch(query, images=images)
+                command = WebSearch(query, images=images, browser=self._pending_search_browser)
                 self._remember_search(command, now)
                 return VoiceCommandResult(True, command)
             self._pending_search_at = now

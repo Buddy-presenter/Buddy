@@ -10,7 +10,7 @@ from buddy_desktop.voice_commands import (
 def test_parses_explicit_general_and_image_search_commands():
     assert parse_voice_command("Search for cute cat pictures") == WebSearch("cute cat pictures")
     assert parse_voice_command("Open Chrome and search for images of cute cats") == WebSearch(
-        "cute cats", images=True
+        "cute cats", images=True, browser=True
     )
     assert parse_voice_command("Search for quarterly revenue forecast 2027") == WebSearch(
         "quarterly revenue forecast 2027"
@@ -138,7 +138,7 @@ def test_search_command_transcripts_are_suppressed_until_final_and_routed_once()
         }
     )
     assert final.suppress_agent
-    assert final.command == WebSearch("cute cats", images=True)
+    assert final.command == WebSearch("cute cats", images=True, browser=True)
     ordinary = router.handle(
         {
             "text": "Marketing strategies were mentioned earlier.",
@@ -386,3 +386,15 @@ def test_partial_everyday_phrases_are_not_held_back_from_slide_decisions():
     for text in ("Show me the", "Find the", "Pull up the"):
         result = router.handle({"text": text, "segment_id": text, "final": False})
         assert not result.suppress_agent, text
+
+
+def test_searches_use_the_panel_unless_chrome_is_named():
+    # #250: answers and images show in Buddy's panel; Chrome only when asked for.
+    assert parse_voice_command("Show me images of cats") == WebSearch("cats", images=True)
+    assert parse_voice_command("Search for cats") == WebSearch("cats")
+    assert parse_voice_command("Open Chrome and search for cats") == WebSearch("cats", browser=True)
+
+
+def test_close_the_panel_by_voice():
+    for phrase in ("Close the panel", "close the results", "Hide the images", "dismiss the search"):
+        assert parse_voice_command(phrase) == ReturnToPresentation(), phrase

@@ -1287,9 +1287,54 @@
         "pattern": "\\S",
         "type": "string"
       },
+      "InformationImage": {
+        "additionalProperties": false,
+        "description": "One web image: the panel downloads only the small thumbnail.",
+        "properties": {
+          "source": {
+            "maxLength": 120,
+            "title": "Source",
+            "type": "string"
+          },
+          "source_url": {
+            "maxLength": 2048,
+            "minLength": 9,
+            "title": "Source Url",
+            "type": "string"
+          },
+          "thumbnail": {
+            "maxLength": 2048,
+            "minLength": 9,
+            "title": "Thumbnail",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 180,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "thumbnail",
+          "source_url",
+          "source"
+        ],
+        "title": "InformationImage",
+        "type": "object"
+      },
       "InformationSearchRequest": {
         "additionalProperties": false,
         "properties": {
+          "mode": {
+            "default": "web",
+            "enum": [
+              "web",
+              "images"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
           "query": {
             "maxLength": 300,
             "minLength": 2,
@@ -1307,12 +1352,29 @@
         "additionalProperties": false,
         "properties": {
           "answer": {
-            "maxLength": 1200,
-            "minLength": 1,
-            "title": "Answer",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 1200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "images": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/InformationImage"
+            },
+            "maxItems": 9,
+            "title": "Images",
+            "type": "array"
           },
           "sources": {
+            "default": [],
             "items": {
               "$ref": "#/components/schemas/InformationSource"
             },
@@ -1321,10 +1383,6 @@
             "type": "array"
           }
         },
-        "required": [
-          "answer",
-          "sources"
-        ],
         "title": "InformationSearchResult",
         "type": "object"
       },

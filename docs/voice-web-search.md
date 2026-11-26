@@ -1,14 +1,23 @@
 # Voice-triggered web search
 
 Buddy routes clear spoken searches separately from slide navigation and the live
-presentation agent. Text and image searches share the voice command router, but use
-different presentation surfaces:
+presentation agent. Every search shows in a compact Buddy panel over the presentation; the
+current slide stays visible behind it:
 
-- Image and photo searches open Google Images in Chrome.
-- Information and definition questions open a compact Buddy side panel. The current slide
-  remains visible behind the panel. A source title opens its HTTPS URL in the default
-  browser; closing the panel or saying “back to the presentation” returns to the same
-  slide.
+- Web searches and definition questions (“search for electric cars”, “what does EBITDA
+  mean”) show a short grounded answer, up to three small images when relevant, and up to
+  four source links.
+- Image searches (“show me images of cats”) show a grid of up to nine small images only.
+- Clicking a source title or an image opens its HTTPS source page in the default browser.
+- Close the panel with its × button, Esc, or by saying “close the panel”, “close the
+  results” or “back to the presentation”; the same slide stays on screen.
+- Chrome opens only when asked for explicitly (“open Chrome and search for …”), after a
+  three-second correction window.
+
+The panel downloads only the small thumbnails the server returns (HTTPS, no redirects,
+JPEG/PNG/GIF/WebP, at most 512 KiB each, four-second timeout, in parallel); full-size images
+are never fetched, and nothing is saved after the panel closes. Image searches use
+DuckDuckGo's image search with safe search on and make no Cohere call.
 
 Examples include “search for images of cute cats,” “find photos of solar panels,” “what's
 the definition of opportunity cost,” “what does amortization mean,” “look up the
@@ -33,7 +42,8 @@ top of it and does not take keyboard focus, so a clicker or the keyboard keeps c
 PowerPoint. “Back to the presentation” closes the panel and returns focus to the PowerPoint
 slideshow window. PDF presentations use Buddy's own presentation window as before.
 
-Information answers use the authenticated `POST /api/v1/web-search/answer` endpoint. The
+Answers and images use the authenticated `POST /api/v1/web-search/answer` endpoint with
+`mode` `web` (default) or `images`. The
 backend performs a bounded text search (four results, five-second provider timeout, safe
 search enabled), sends the question and result snippets to the configured Cohere Command A
 model for a short grounded answer, then returns that answer with the original HTTPS source
@@ -43,3 +53,11 @@ search snippets as needed to provide the requested result.
 
 The feature is available only when the server-side presentation-agent Cohere credential is
 configured. Tests and UI code must mock network providers; never use production credentials.
+
+## Testing search changes without deploying
+
+`BUDDY_WEB_SEARCH_URL` points only the desktop's web-search requests at another server;
+everything else keeps using the configured Buddy API. It accepts HTTPS or a loopback HTTP
+address (for example `http://127.0.0.1:8765`). A developer can run this branch's
+`information_search_router` locally behind a check that staging accepts the same sign-in
+token, and start Buddy with the variable set to test the panel end to end.

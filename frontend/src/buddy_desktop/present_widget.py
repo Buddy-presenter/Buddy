@@ -219,7 +219,7 @@ class PresentWidget(Page):
     transition_observed = Signal(object)
     mini_requested = Signal()
     fullscreen_exited = Signal()
-    web_search_requested = Signal(str, bool)
+    web_search_requested = Signal(str, bool, bool)
     return_to_presentation_requested = Signal()
 
     def __init__(self, config: AppConfig, settings: QSettings) -> None:
@@ -2630,9 +2630,9 @@ class PresentWidget(Page):
             if isinstance(command.command, WebSearch):
                 self._pending_voice_search = command.command
                 # Leave a correction window before opening Chrome, which cannot be
-                # taken back. The in-presentation answer panel starts at once: a
-                # later “I mean …” sends a new query that replaces its answer (#250).
-                self._voice_search_dispatch_timer.start(3000 if command.command.images else 0)
+                # taken back. Buddy's panel (answers and images) starts at once: a
+                # later “I mean …” sends a new query that replaces its results (#250).
+                self._voice_search_dispatch_timer.start(3000 if command.command.browser else 0)
             elif isinstance(command.command, ReturnToPresentation):
                 self._voice_search_dispatch_timer.stop()
                 self._pending_voice_search = None
@@ -2688,7 +2688,7 @@ class PresentWidget(Page):
     def _dispatch_voice_search(self) -> None:
         search, self._pending_voice_search = self._pending_voice_search, None
         if search is not None:
-            self.web_search_requested.emit(search.query, search.images)
+            self.web_search_requested.emit(search.query, search.images, search.browser)
 
     def _clear_voice_command_status(self) -> None:
         self.voice_command_status.clear()
