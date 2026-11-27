@@ -535,7 +535,7 @@ def test_search_panel_covers_the_powerpoint_slideshow_screen(present, monkeypatc
 
     shown = []
     monkeypatch.setattr(
-        window.information_search_panel,
+        window._information_search_panel(),
         "present",
         lambda owner, query, images=False: shown.append(owner),
     )
@@ -589,3 +589,28 @@ def test_image_search_opens_the_panel_at_once_without_chrome(present, qtbot):
     )
     qtbot.waitUntil(lambda: spy.count() == 1, timeout=3000)
     assert spy.at(0) == ["red pandas", True, False]
+
+
+def test_window_recreates_a_deleted_search_panel(present):
+    # #250: even if the panel is ever deleted, the next search gets a working panel.
+    import shiboken6
+
+    window, _page = present
+    first = window._information_search_panel()
+    shiboken6.delete(first)
+    second = window._information_search_panel()
+    assert second is not first and shiboken6.isValid(second)
+    window._open_voice_search("red pandas", True)
+    assert second.isVisible()
+    window._close_information_search()
+
+
+def test_search_panel_shows_on_screen_when_the_workspace_is_hidden(present, monkeypatch):
+    # #250: in Buddy Mini the main window is hidden; the panel goes on the screen instead.
+    window, _page = present
+    shown = []
+    panel = window._information_search_panel()
+    monkeypatch.setattr(panel, "present", lambda owner, query, images=False: shown.append(owner))
+    monkeypatch.setattr(window, "isVisible", lambda: False)
+    window._open_voice_search("red pandas", True)
+    assert shown and shown[0] == window.screen().availableGeometry()

@@ -51,7 +51,12 @@ class InformationSearchPanel(QFrame):
     close_requested = Signal()
 
     def __init__(self, *, reduce_motion: bool = False) -> None:
-        super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
+        super().__init__(
+            None,
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint,
+        )
         self.reduce_motion = reduce_motion
         self._owner: QWidget | None = None
         self._area: QRect | None = None
@@ -127,30 +132,20 @@ class InformationSearchPanel(QFrame):
         self.close_requested.connect(self.close_panel)
 
     def present(self, owner: QWidget | QRect, query: str, *, images: bool = False) -> None:
-        """Show over a Buddy window, or over a screen area such as PowerPoint's slideshow.
+        """Show over a Buddy window or a screen area such as PowerPoint's slideshow.
 
-        Over another application's slideshow the panel stays on top without taking focus,
-        so the presenter's clicker and keyboard keep controlling PowerPoint (#250).
+        The panel is always its own floating window and is never placed inside the window
+        it covers: presentation windows are deleted when closed, and a panel inside one
+        would be deleted with it and never appear again (#250). The covered area is read
+        once here, so a window closing later cannot break the panel.
         """
         if isinstance(owner, QRect):
-            if self._owner is not None or self._area is None:
-                self.hide()
-                self.setParent(
-                    None,
-                    Qt.WindowType.Tool
-                    | Qt.WindowType.FramelessWindowHint
-                    | Qt.WindowType.WindowStaysOnTopHint
-                    | Qt.WindowType.WindowDoesNotAcceptFocus,
-                )
-                self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-                self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-            self._owner, self._area = None, QRect(owner)
-        elif self._owner is not owner:
-            self.hide()
-            self.setParent(owner, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
-            self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
-            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-            self._owner, self._area = owner, None
+            area, take_focus = QRect(owner), False
+        else:
+            area = QRect(owner.mapToGlobal(QPoint(0, 0)), owner.size())
+            take_focus = True
+        self._set_window_mode(take_focus)
+        self._owner, self._area = None, area
         self._closing = False
         self._animation.stop()
         self._clear_content()
@@ -251,9 +246,25 @@ class InformationSearchPanel(QFrame):
         self._animation.setEndValue(QPoint(self.x() + 30, self.y()))
         self._animation.start()
 
+    def _set_window_mode(self, take_focus: bool) -> None:
+        """Floating, frameless and on top; over another app's slideshow it never takes focus."""
+        flags = (
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        if not take_focus:
+            flags |= Qt.WindowType.WindowDoesNotAcceptFocus
+        if self.parentWidget() is not None or self.windowFlags() != flags:
+            visible = self.isVisible()
+            self.hide()
+            self.setParent(None, flags)
+            if visible:
+                self._closing = False
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, not take_focus)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
     def _target_area(self) -> QRect | None:
-        if self._owner is not None:
-            return QRect(self._owner.mapToGlobal(QPoint(0, 0)), self._owner.size())
         return self._area
 
     def _place(self, *, show: bool) -> None:
