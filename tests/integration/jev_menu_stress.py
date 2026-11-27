@@ -26,7 +26,10 @@ async def evaluate(key, passage, target):
                         dict(
                             tool="go_to_slide",
                             slide_number=len(options) + 2,
-                            content=f"Appendix {len(options)}: unrelated equipment inventory",
+                            content=(
+                                f"Appendix {len(options)}: unrelated equipment inventory "
+                                "and logistics"
+                            ),
                             is_current_view=False,
                         )
                     )

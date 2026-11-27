@@ -55,6 +55,10 @@ AWS S3 stores only synthetic source/evidence objects beneath a new owner's prefi
 the runner removes those exact prefixes and writes `cleanup.json`. It also invokes
 Bedrock for actual native visual validation. These are paid, explicitly opt-in checks.
 None of these provider calls run in normal tests or CI.
+The opt-in `--preserve-on-error` flag keeps only that run's synthetic schema and S3
+evidence after interruption, with `checkpoint.json` identifying the exact fixtures for
+recovery. Successful runs still clean up normally. Without that flag, failures also
+clean up immediately.
 
 The primary corpus is 43 labelled synthetic cases on equivalent eight-slide PDF and
 PowerPoint sources. Labels precede the provider predictions. Each A/B pair uses the
@@ -63,10 +67,17 @@ within each pair and is shuffled with a fixed seed for each of three repetitions
 Both local variants use the same 500-request/minute operator allowance so ordinary
 benchmark replay is not measuring Buddy's lower default pacing limit. Actual provider
 limits still apply; this is not a throughput/load test.
+The driver waits for a minimum four-second interval between paired cases to respect
+provider account limits. That wait is outside measured request latency and adds no wait
+to Buddy's application code. `--pair-interval 0` disables it for an explicit throughput
+probe; provider failures still count as failures, never correct abstentions.
 `--also-audio` adds eight representative cases recognized once through the real
 session WebSocket and Deepgram EU, then supplies those identical recognized words
 to both approaches in both formats. Windows SAPI generates this audio; it is not a
 human microphone/noise/accent test. The original text corpus stays unchanged.
+Use `--speech-only --also-audio` instead of native validation/execution flags to remeasure
+just those eight ASR cases in the common speech pipeline. This uses an ordinary PDF
+session, does not select/execute actions, and makes no Office-readiness claim.
 
 The source analyses are authored fixtures, not fresh LLM-generated analyses. Each saved
 focus action must pass the real isolated native runner and Bedrock judge before it can

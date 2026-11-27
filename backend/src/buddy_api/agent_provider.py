@@ -255,8 +255,11 @@ class CohereDecisionProvider:
                     "selection": selection.model_dump(),
                 }
             )
+            # Preserve Cohere's ten-choice contract while Jev supports larger menus.
             # bool is an int in Python, but never a valid evidence index.
-            if any(type(i) is not int for i in selection.evidence):
+            if int(selection.choice[1:]) >= 10 or any(
+                type(i) is not int for i in selection.evidence
+            ):
                 raise AgentFailure("invalid_output")
             return selection
         except AgentFailure:

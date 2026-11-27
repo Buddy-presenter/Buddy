@@ -77,7 +77,23 @@ def main():
     parser.add_argument("--case-ids", help="Comma-separated frozen case IDs")
     parser.add_argument("--audio-replay", action="store_true")
     parser.add_argument("--also-audio", action="store_true", help="Add eight paired speech replays")
+    parser.add_argument(
+        "--speech-only", action="store_true", help="Measure ASR without selecting actions"
+    )
+    parser.add_argument(
+        "--pair-interval",
+        type=float,
+        default=4,
+        help="Minimum seconds between cases, outside measured request latency",
+    )
+    parser.add_argument(
+        "--preserve-on-error",
+        action="store_true",
+        help="Keep this synthetic schema/S3 evidence for recovery if interrupted",
+    )
     args = parser.parse_args()
+    if args.speech_only and not (args.audio_replay or args.also_audio):
+        parser.error("--speech-only requires --audio-replay or --also-audio")
     os.environ["AWS_PROFILE"] = args.profile
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QGuiApplication
@@ -113,6 +129,9 @@ def main():
     upload_settings = UploadSettings(bucket=args.bucket, region=args.region, kms_key=kms)
     storage = SourceStorage(upload_settings, s3)
     paths = sources(folder / "sources")
+    if args.speech_only:
+        # ASR is format-independent; use a real PDF session without claiming Office readiness.
+        paths = {"pdf": paths["pdf"]}
     corpus = cases()
     if args.case_ids:
         selected = set(args.case_ids.split(","))
@@ -124,6 +143,7 @@ def main():
     corpus_raw = json.dumps(corpus, sort_keys=True).encode()
     (folder / "cases.json").write_bytes(corpus_raw)
     owner, receipt, fixtures, records = None, [], {}, []
+    succeeded = False
     native_player = None
     db = Database(database_settings)
 
@@ -218,12 +238,15 @@ def main():
             for kind, path in paths.items():
                 deck, analysis_id, doc = client.portal.call(seed, kind, path)
                 fixtures[kind] = dict(deck=deck, analysis_id=analysis_id, document=doc, path=path)
-                if not args.native_validation:
+                if not args.native_validation and not args.speech_only:
                     raise RuntimeError(
                         "Native validation is required before claiming eligible actions"
                     )
                 for slide in doc.slides:
                     for action in slide.actions:
+                        if args.speech_only:
+                            # ASR-only mode makes no action eligibility/execution claim.
+                            continue
                         if (
                             (args.limit or args.case_ids)
                             and action.instance_id
@@ -353,6 +376,28 @@ def main():
                     )
 
             semantic.provider.embed = measured_embed
+            (folder / "checkpoint.json").write_text(
+                json.dumps(
+                    dict(
+                        schema=schema,
+                        owner=str(owner),
+                        prefixes=receipt,
+                        profile=pdf_profile,
+                        viewport=native_viewport,
+                        fixtures={
+                            kind: dict(
+                                deck=str(f["deck"]),
+                                analysis_id=str(f["analysis_id"]),
+                                path=str(f["path"].resolve()),
+                                session=f["session"],
+                                document=f["document"].model_dump(mode="json"),
+                            )
+                            for kind, f in fixtures.items()
+                        },
+                    ),
+                    indent=2,
+                )
+            )
             audio_cases = {}
             if args.audio_replay or args.also_audio:
                 from tests.integration.jev_speech_replay import replay
@@ -374,6 +419,13 @@ def main():
                     )
                     print(json.dumps(dict(stage="speech_replay", case=case["id"])), flush=True)
                 (folder / "speech.json").write_text(json.dumps(audio_cases, indent=2))
+                if args.speech_only:
+                    print(
+                        json.dumps(dict(stage="speech_complete", cases=len(audio_cases))),
+                        flush=True,
+                    )
+                    succeeded = True
+                    return
                 if args.also_audio:
                     corpus += [
                         {
@@ -417,6 +469,7 @@ def main():
                     ordered = list(corpus)
                     random.Random(252 + repeat).shuffle(ordered)
                     for index, case in enumerate(ordered):
+                        pair_started = time.perf_counter()
                         if args.audio_replay:
                             case = {**case, "text": audio_cases[case["id"]]["text"], "earlier": []}
                         for mode in (
@@ -476,7 +529,7 @@ def main():
                             )
                             wall = (time.perf_counter() - started) * 1000
                             value = response.json()
-                            diagnostics = value.get("diagnostics", {})
+                            diagnostics = value.get("diagnostics") or {}
                             target = value.get("target", {})
                             error = response.status_code != 200 or value.get("reason") in {
                                 "disabled",
@@ -506,8 +559,8 @@ def main():
                                 error=value.get("reason", response.status_code) if error else None,
                                 wall_ms=wall,
                                 server_ms=value.get("elapsed_ms"),
-                                phases=diagnostics.get("phase_timings_ms", {}),
-                                option_count=len(diagnostics.get("candidate_options", [])),
+                                phases=diagnostics.get("phase_timings_ms") or {},
+                                option_count=len(diagnostics.get("candidate_options") or []),
                                 route=diagnostics.get("route"),
                                 decision_source=value.get("decision_source"),
                                 embedding_calls=len(embedding_calls) - before,
@@ -533,6 +586,10 @@ def main():
                                     )
                             with (folder / "records.jsonl").open("a", encoding="utf-8") as output:
                                 output.write(json.dumps(row) + "\n")
+                        # Pacing respects account limits and is not request latency.
+                        time.sleep(
+                            max(0, args.pair_interval - (time.perf_counter() - pair_started))
+                        )
                         print(
                             json.dumps(
                                 dict(
@@ -566,39 +623,49 @@ def main():
             )
             (folder / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
             print(json.dumps(summary), flush=True)
+            succeeded = True
     finally:
         if native_player is not None:
             native_player.close()
-        cleanup_errors = []
-        cleanup_storage = SourceStorage(upload_settings, cloud.client("s3"))
-        try:
-            for prefix in receipt:
-                if owner is None or not prefix.startswith(f"sources/{owner}/"):
-                    raise AssertionError("Cleanup escaped the synthetic owner's scope")
-                try:
-                    cleanup_storage.remove_prefix(prefix)
-                except Exception as exc:
-                    cleanup_errors.append(dict(prefix=prefix, error=type(exc).__name__))
-        finally:
-            cleanup_storage.close()
-
-        async def cleanup():
-            engine = create_engine(admin)
-            try:
-                async with engine.begin() as connection:
-                    await connection.execute(DropSchema(schema, cascade=True, if_exists=True))
-            finally:
-                await engine.dispose()
-
-        asyncio.run(cleanup())
-        storage.close()
-        (folder / "cleanup.json").write_text(
-            json.dumps(
-                dict(schema_dropped=schema, prefixes=receipt, errors=cleanup_errors), indent=2
+        if not succeeded and args.preserve_on_error:
+            storage.close()
+            print(
+                json.dumps(dict(stage="recovery_preserved", schema=schema, prefixes=receipt)),
+                flush=True,
             )
-        )
-        if cleanup_errors:
-            raise RuntimeError("Synthetic S3 cleanup incomplete; inspect cleanup.json")
+        else:
+            cleanup_run(cloud, upload_settings, owner, receipt, admin, schema, folder, storage)
+
+
+def cleanup_run(cloud, upload_settings, owner, receipt, admin, schema, folder, storage):
+    cleanup_errors = []
+    cleanup_storage = SourceStorage(upload_settings, cloud.client("s3"))
+    try:
+        for prefix in receipt:
+            if owner is None or not prefix.startswith(f"sources/{owner}/"):
+                raise AssertionError("Cleanup escaped the synthetic owner's scope")
+            try:
+                cleanup_storage.remove_prefix(prefix)
+            except Exception as exc:
+                cleanup_errors.append(dict(prefix=prefix, error=type(exc).__name__))
+    finally:
+        cleanup_storage.close()
+
+    async def cleanup():
+        engine = create_engine(admin)
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(DropSchema(schema, cascade=True, if_exists=True))
+        finally:
+            await engine.dispose()
+
+    asyncio.run(cleanup())
+    storage.close()
+    (folder / "cleanup.json").write_text(
+        json.dumps(dict(schema_dropped=schema, prefixes=receipt, errors=cleanup_errors), indent=2)
+    )
+    if cleanup_errors:
+        raise RuntimeError("Synthetic S3 cleanup incomplete; inspect cleanup.json")
 
 
 if __name__ == "__main__":

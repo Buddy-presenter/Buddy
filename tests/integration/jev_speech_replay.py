@@ -51,7 +51,8 @@ def replay(client, session, case, folder):
         def receive():
             try:
                 while True:
-                    events.put((time.monotonic_ns(), socket.receive_json()))
+                    event = socket.receive_json()
+                    events.put((time.monotonic_ns(), event))
             except Exception:
                 pass  # Expected socket close after bounded playback.
 

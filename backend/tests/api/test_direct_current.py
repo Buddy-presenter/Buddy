@@ -15,7 +15,13 @@ from backend.tests.api.test_presentation_agent import (
 )
 from backend.tests.api.test_presentation_candidates import analysis
 
-from buddy_api.agent_provider import AgentFailure, AgentSettings, JevDecisionProvider, Selection
+from buddy_api.agent_provider import (
+    AgentFailure,
+    AgentSettings,
+    CohereDecisionProvider,
+    JevDecisionProvider,
+    Selection,
+)
 from buddy_api.analysis.contracts import Region
 from buddy_api.app import decision_providers
 from buddy_api.config import Settings
@@ -175,6 +181,41 @@ def test_oversized_provider_menu_is_rejected_before_any_provider_call(count, con
                     )
                 )
             assert failure.value.code == "candidates_unavailable"
+
+    asyncio.run(check())
+
+
+def test_cohere_keeps_its_existing_ten_choice_provider_contract():
+    def response(request):
+        import json
+
+        sent = json.loads(request.content)
+        assert sent["response_format"]["schema"]["properties"]["choice"]["enum"] == [
+            f"c{i}" for i in range(10)
+        ]
+        return httpx.Response(
+            200,
+            json={
+                "finish_reason": "COMPLETE",
+                "message": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                dict(choice="c10", reason="topic", confidence=1.0, evidence=[0])
+                            ),
+                        }
+                    ]
+                },
+            },
+        )
+
+    async def check():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as client:
+            provider = CohereDecisionProvider(AgentSettings("test"), client)
+            with pytest.raises(AgentFailure) as error:
+                await provider.select(dict(segments=["Show result"], options=[]))
+            assert error.value.code == "invalid_output"
 
     asyncio.run(check())
 
