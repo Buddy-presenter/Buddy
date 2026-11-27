@@ -159,7 +159,7 @@ class Settings:
                     int(values["BUDDY_AGENT_MONTHLY_LIMIT"])
                     if values.get("BUDDY_AGENT_MONTHLY_LIMIT")
                     else None,
-                    int(values.get("BUDDY_AGENT_REQUESTS_PER_MINUTE", "20")),
+                    int(values.get("BUDDY_AGENT_REQUESTS_PER_MINUTE", "200")),
                     values.get("BUDDY_JEV_API_KEY") or None,
                     float(values.get("BUDDY_JEV_CONFIDENCE", "0.6")),
                     values.get("BUDDY_DECISION_PROVIDER", "jev"),
