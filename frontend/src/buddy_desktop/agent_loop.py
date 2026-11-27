@@ -308,7 +308,7 @@ class AgentLoop(QObject):
             and current is not None
             # A request to look something up stays valid as the presenter talks on.
             and (
-                (isinstance(result, dict) and bool(result.get("search")))
+                (isinstance(result, dict) and bool(result.get("search") or result.get("panel")))
                 or submitted.matches_decision(current)
             )
         )
@@ -358,7 +358,8 @@ class AgentLoop(QObject):
             if (
                 isinstance(target, dict)
                 and target.get("tool") == "no_action"
-                and not result.get("search")  # A search request is never superseded.
+                # A search or panel request is never superseded.
+                and not (result.get("search") or result.get("panel"))
             ):
                 logger.warning("presentation_speech event=decision_superseded_by_newer_speech")
                 return

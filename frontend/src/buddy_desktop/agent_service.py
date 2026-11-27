@@ -186,6 +186,9 @@ class AgentService:
         self.config = config
         # Which model decides suggestions, chosen in Present (#245). Jev is the default.
         self.decision_model = "jev"
+        # Set on the GUI thread while Buddy's search panel is on screen: Jev may then also
+        # close or scroll it.
+        self.search_panel_open = False
         self._connection: KeptConnection | None = None
         self._connection_url = ""
 
@@ -263,6 +266,8 @@ class AgentService:
             payload["decision_model"] = self.decision_model
         # Let Jev also decide that the presenter asked Buddy to look something up.
         payload["web_search"] = True
+        if self.search_panel_open:
+            payload["search_panel_open"] = True
         try:
             raw = self._kept().post(
                 f"/api/v1/sessions/{UUID(session.id)}/agent",
@@ -279,7 +284,13 @@ class AgentService:
             if "diagnostics" in result and not isinstance(result.pop("diagnostics"), dict):
                 raise ValueError
             search = result.pop("search", None)
-            if search not in {None, "web", "images"}:
+            panel = result.pop("panel", None)
+            if (
+                search not in {None, "web", "images"}
+                or panel not in {None, "close", "scroll_down", "scroll_up"}
+                or (search is not None and panel is not None)
+                or (panel is not None and not payload.get("search_panel_open"))
+            ):
                 raise ValueError
             if set(result) != {
                 "protocol",
@@ -401,12 +412,15 @@ class AgentService:
                 session.state is None or target["slide_id"] != session.state.active_slide_id
             ):
                 raise ValueError
-            if search is not None:
-                # A request to look something up stays valid while the presenter keeps
-                # talking: it changes no slide, and its words are already spoken.
+            if search is not None or panel is not None:
+                # A request to look something up, or to close or scroll the panel, stays
+                # valid while the presenter keeps talking: it changes no slide.
                 if target["tool"] != "no_action" or result["decision_source"] != "model":
                     raise ValueError
-                result["search"] = search
+                if search is not None:
+                    result["search"] = search
+                else:
+                    result["panel"] = panel
                 return result
             if (
                 not context.matches_decision(current_context())

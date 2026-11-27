@@ -70,6 +70,17 @@ once, and a search decision stays valid while the presenter keeps talking. Only 
 send `web_search: true` ever receive `search`. This path needs a presentation session with
 live suggestions on and Jev selected as the decider; Cohere decisions never search.
 
+While the panel is on screen the desktop also sends `search_panel_open: true`. Jev then gets
+three more fixed options, close the panel, scroll down and scroll up, and is told that a results
+panel is showing, so “okay, that's enough”, “thanks, let's get back to it”, “what else is
+there?” or “go back up to the answer” work without fixed words. The agent response then carries
+`panel: "close"`, `"scroll_down"` or `"scroll_up"`, again with no slide action, and acts once per
+sentence. These options are never offered while the panel is closed. Moving to another slide
+while the panel is open also closes it. On 57 labelled sentences spoken with the panel open
+(15 close requests, 18 scroll requests, 15 ordinary sentences, 4 new searches, 5 slide moves),
+Jev was right on 52: every close request and new search, 16 of 18 scrolls; it never closed or
+scrolled on ordinary talk, and once closed when asked to go back to the top.
+
 On a 92-sentence labelled set (52 search requests in varied wording, 15 rhetorical questions,
 15 narration sentences with words such as “look” or “search”, 10 “let's look at” sentences
 that slides cover), Jev found 48 of 52 searches with no false searches. On the 300-sentence

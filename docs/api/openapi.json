@@ -306,6 +306,22 @@
             "title": "Input Sha256",
             "type": "string"
           },
+          "panel": {
+            "anyOf": [
+              {
+                "enum": [
+                  "close",
+                  "scroll_down",
+                  "scroll_up"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Panel"
+          },
           "protocol": {
             "const": "presentation-agent.v1",
             "default": "presentation-agent.v1",
@@ -8663,6 +8679,11 @@
                   "provisional": {
                     "default": false,
                     "title": "Provisional",
+                    "type": "boolean"
+                  },
+                  "search_panel_open": {
+                    "default": false,
+                    "title": "Search Panel Open",
                     "type": "boolean"
                   },
                   "segments": {

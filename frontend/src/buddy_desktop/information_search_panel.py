@@ -16,12 +16,14 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QColor,
     QDesktopServices,
+    QHideEvent,
     QKeyEvent,
     QPainter,
     QPaintEvent,
     QPen,
     QPixmap,
     QResizeEvent,
+    QShowEvent,
 )
 from PySide6.QtWidgets import (
     QFrame,
@@ -49,6 +51,9 @@ SCROLLBAR = 8
 
 class InformationSearchPanel(QFrame):
     close_requested = Signal()
+    # True when the panel appears, False when it is hidden: Jev may close or scroll it only
+    # while it is on screen.
+    shown_changed = Signal(bool)
 
     def __init__(self, *, reduce_motion: bool = False) -> None:
         super().__init__(
@@ -232,6 +237,14 @@ class InformationSearchPanel(QFrame):
         self._clear_content()
         self.state.setText(message)
         self.state.show()
+
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
+        super().showEvent(event)
+        self.shown_changed.emit(True)
+
+    def hideEvent(self, event: QHideEvent) -> None:  # noqa: N802
+        super().hideEvent(event)
+        self.shown_changed.emit(False)
 
     def close_panel(self) -> None:
         if not self.isVisible() or self._closing:

@@ -101,6 +101,13 @@ def test_search_is_sent_only_when_jev_decided_it_and_never_with_a_slide_action()
         with pytest.raises(ValueError):
             AgentProposal.model_validate({**common, **change, "search": "web"})
     assert AgentRequest.model_validate(payload(web_search=True)).web_search
+    closing = AgentProposal.model_validate({**common, "panel": "close"})
+    assert closing.model_dump(mode="json", exclude_unset=True)["panel"] == "close"
+    with pytest.raises(ValueError):
+        AgentProposal.model_validate({**common, "panel": "close", "search": "web"})
+    with pytest.raises(ValueError):
+        AgentProposal.model_validate({**common, "decision_source": "navigation", "panel": "close"})
+    assert AgentRequest.model_validate(payload(search_panel_open=True)).search_panel_open
     assert not AgentRequest.model_validate(payload()).web_search
 
 

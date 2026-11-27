@@ -697,3 +697,35 @@ def test_spoken_search_reaches_the_service_as_speech(present, monkeypatch):
         time.sleep(0.01)
     assert calls == [("Let's find out who founded Tesla.", False, "Next topic.")]
     window._close_information_search()
+
+
+def test_jev_panel_decisions_close_or_scroll_once_per_sentence(present):
+    from types import SimpleNamespace
+
+    from PySide6.QtTest import QSignalSpy
+
+    _window, page = present
+    closes = QSignalSpy(page.return_to_presentation_requested)
+    scrolls = QSignalSpy(page.scroll_panel_requested)
+
+    def decide(segment, panel):
+        context = SimpleNamespace(
+            decision_segments=(SimpleNamespace(segment_id=segment, text="x", final=True),)
+        )
+        page._panel_action_decided({"panel": panel, "_client_context": context})
+
+    decide("p1", "scroll_down")
+    decide("p1", "scroll_down")  # The same sentence acts once.
+    decide("p2", "scroll_up")
+    decide("p3", "close")
+    assert [scrolls.at(i) for i in range(scrolls.count())] == [[1], [-1]]
+    assert closes.count() == 1
+
+
+def test_window_tells_the_agent_while_the_search_panel_is_on_screen(present):
+    window, page = present
+    assert page.agent_service.search_panel_open is False
+    window._open_voice_search("red pandas", True)
+    assert page.agent_service.search_panel_open is True
+    window._information_search_panel().hide()
+    assert page.agent_service.search_panel_open is False

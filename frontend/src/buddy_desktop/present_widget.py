@@ -2548,6 +2548,20 @@ class PresentWidget(Page):
     def _agent_proposed(self, result: object) -> None:
         if isinstance(result, dict) and result.get("search") in {"web", "images"}:
             self._spoken_search_decided(result)
+        if isinstance(result, dict) and result.get("panel") in {
+            "close",
+            "scroll_down",
+            "scroll_up",
+        }:
+            self._panel_action_decided(result)
+        if (
+            isinstance(result, dict)
+            and self.agent_service.search_panel_open
+            and isinstance(result.get("target"), dict)
+            and result["target"].get("tool") in {"next_slide", "previous_slide", "go_to_slide"}
+        ):
+            # Moving to another slide means the presenter has moved on from the results.
+            self.return_to_presentation_requested.emit()
         if not isinstance(result, dict):
             # AgentLoop emits None while `_update_agent` deliberately marks its
             # context stale during session synchronization. Keep the proposal
@@ -2640,6 +2654,22 @@ class PresentWidget(Page):
             return
         earlier = segments[-2].text if len(segments) > 1 else ""
         self._emit_spoken_search(segment.segment_id, segment.text, earlier, images)
+
+    def _panel_action_decided(self, result: dict[str, object]) -> None:
+        """Close or scroll the search panel once per spoken sentence."""
+        context = result.get("_client_context")
+        segments = getattr(context, "decision_segments", ())
+        if not segments:
+            return
+        key = "panel:" + segments[-1].segment_id
+        if key in self._searched_segments:
+            return
+        self._searched_segments = [*self._searched_segments[-31:], key]
+        action = result["panel"]
+        if action == "close":
+            self.return_to_presentation_requested.emit()
+        else:
+            self.scroll_panel_requested.emit(1 if action == "scroll_down" else -1)
 
     def _emit_spoken_search(self, segment_id: str, text: str, earlier: str, images: bool) -> None:
         self._pending_spoken_search = None

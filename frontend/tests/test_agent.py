@@ -94,6 +94,9 @@ def inputs():
         "search",
         "search_unknown",
         "search_with_action",
+        "panel",
+        "panel_while_closed",
+        "panel_and_search",
     ],
 )
 def test_real_http_validates_proposals_and_context(corrupt, monkeypatch):
@@ -160,7 +163,13 @@ def test_real_http_validates_proposals_and_context(corrupt, monkeypatch):
                 current[0] = replace(context, fresh=False)
             if corrupt == "capture_expired":
                 clock[0] += 5_000_000_001
-            if corrupt in {"search", "search_unknown"}:
+            if corrupt in {
+                "search",
+                "search_unknown",
+                "panel",
+                "panel_while_closed",
+                "panel_and_search",
+            }:
                 # Jev decided to look something up; no slide action.
                 answer["target"] = {
                     "tool": "no_action",
@@ -176,6 +185,10 @@ def test_real_http_validates_proposals_and_context(corrupt, monkeypatch):
             if corrupt == "search_unknown":
                 answer["search"] = "shell"
             if corrupt == "search_with_action":
+                answer["search"] = "web"
+            if corrupt in {"panel", "panel_while_closed", "panel_and_search"}:
+                answer["panel"] = "scroll_up"
+            if corrupt == "panel_and_search":
                 answer["search"] = "web"
             if corrupt == "partial":
                 current[0] = replace(
@@ -194,6 +207,7 @@ def test_real_http_validates_proposals_and_context(corrupt, monkeypatch):
     thread.start()
     try:
         service = AgentService(AppConfig(f"http://127.0.0.1:{server.server_port}"))
+        service.search_panel_open = corrupt in {"panel", "panel_and_search"}
         if corrupt in {None, "diagnostics"}:
             proposal = service.propose(
                 "private-token", session, context, current_context=lambda: current[0]
@@ -205,6 +219,12 @@ def test_real_http_validates_proposals_and_context(corrupt, monkeypatch):
                 "private-token", session, context, current_context=lambda: current[0]
             )
             assert proposal["search"] == "images"
+        elif corrupt == "panel":
+            proposal = service.propose(
+                "private-token", session, context, current_context=lambda: current[0]
+            )
+            assert proposal["panel"] == "scroll_up"
+            assert seen[0]["search_panel_open"] is True
         else:
             with pytest.raises(ServiceError):
                 service.propose(

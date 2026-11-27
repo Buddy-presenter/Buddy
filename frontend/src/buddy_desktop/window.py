@@ -807,8 +807,14 @@ class MainWindow(QMainWindow):
         if panel is None or not shiboken6.isValid(panel):
             panel = InformationSearchPanel(reduce_motion=self._reduce_motion)
             panel.close_requested.connect(self._close_information_search)
+            panel.shown_changed.connect(self._search_panel_shown)
             self._search_panel = panel
         return panel
+
+    @Slot(bool)
+    def _search_panel_shown(self, shown: bool) -> None:
+        # Read by the live-suggestion worker: a plain flag, never a Qt call off the GUI thread.
+        self.present.agent_service.search_panel_open = shown
 
     def _powerpoint_slideshow_area(self) -> QRect | None:
         """The screen area of a live PowerPoint slideshow in Qt coordinates (#250).

@@ -57,6 +57,8 @@ class Selection(Model):
     # Set when Jev decided the presenter wants Buddy to search the web: the slide
     # choice is then "c0" and the desktop opens the search panel instead.
     search: Literal["web", "images"] | None = None
+    # Set when Jev decided the presenter wants the open search panel closed or scrolled.
+    panel: Literal["close", "scroll_down", "scroll_up"] | None = None
 
 
 class DecisionProvider(Protocol):
@@ -210,7 +212,11 @@ class CohereDecisionProvider:
                     "without explanation.\nData: "
                     # Only Jev decides web searches; Cohere sees the slide options.
                     + json.dumps(
-                        {k: v for k, v in passage.items() if k != "web_search"},
+                        {
+                            k: v
+                            for k, v in passage.items()
+                            if k not in {"web_search", "search_panel_open"}
+                        },
                         ensure_ascii=False,
                     ),
                 },
@@ -306,6 +312,38 @@ JEV_SEARCH_OPTIONS = {
     ),
 }
 
+# Offered only while Buddy's search panel is open, so nothing else can close or scroll it.
+JEV_PANEL_OPTIONS = {
+    "panel_close": (
+        "Close the search results panel: the presenter is done with the web results Buddy is"
+        " showing and wants them gone or wants to get back to the presentation, in any wording."
+        " Examples: 'okay, that's enough', 'thanks, let's get back to it', 'alright, moving on',"
+        " 'got it, you can hide that', 'great, back to our slides'. Not for ordinary talk about"
+        " the slides or the results."
+    ),
+    "panel_scroll_down": (
+        "Scroll the search results panel down: the presenter wants to see more of the web"
+        " results or what is further down, in any wording. Examples: 'show me more of that',"
+        " 'what else does it say', 'let's see the rest', 'keep going down'."
+    ),
+    "panel_scroll_up": (
+        "Scroll the search results panel back up: the presenter wants to see the top or the"
+        " earlier part of the web results again, in any wording. Examples: 'go back to the top',"
+        " 'let me see the answer again', 'up a bit'."
+    ),
+}
+# Added to the instructions and state while the panel is open: without it, "more, please" or
+# "okay, get rid of that" has nothing to refer to.
+JEV_PANEL_OPEN = """\
+Buddy is showing a web search results panel over the slide right now. Short requests about
+"that", "it", "the results", "more" or "the top", or saying the presenter is done with it and
+wants to continue, refer to this panel. Ordinary presenting does not."""
+PANEL_CHOICES: dict[str, Literal["close", "scroll_down", "scroll_up"]] = {
+    "panel_close": "close",
+    "panel_scroll_down": "scroll_down",
+    "panel_scroll_up": "scroll_up",
+}
+
 # Added to the instructions only while the sentence is still being spoken (#248). On 528
 # partial sentences from the evaluation set it cut wrong early actions from 26 to 9.
 JEV_UNFINISHED = """\
@@ -349,11 +387,15 @@ def jev_request(passage: dict[str, object]) -> tuple[dict[str, object], dict[str
         criteria[str(option["id"])] = text[:1600]
     if passage.get("web_search"):
         criteria.update(JEV_SEARCH_OPTIONS)
+        if passage.get("search_panel_open"):
+            criteria.update(JEV_PANEL_OPTIONS)
     state: dict[str, object] = {
         "latest_sentence": segments[-1],
         "earlier_sentences": segments[:-1],
         "current_slide": {"number": view.get("slide_number"), "summary": view.get("summary")},
     }
+    if passage.get("web_search") and passage.get("search_panel_open"):
+        state["on_screen"] = "a web search results panel from Buddy is open over the slide"
     if passage.get("latest_segment_status"):
         # The desktop sent the stable start of a sentence still being spoken (#248).
         state["latest_sentence_status"] = "unfinished: the presenter is still speaking"
@@ -401,10 +443,14 @@ class JevDecisionProvider:
                 "questions": {
                     "action": {
                         "type": "choice",
-                        "instructions": (
-                            JEV_INSTRUCTIONS + " " + JEV_UNFINISHED
-                            if "latest_sentence_status" in state
-                            else JEV_INSTRUCTIONS
+                        "instructions": " ".join(
+                            text
+                            for text, used in (
+                                (JEV_INSTRUCTIONS, True),
+                                (JEV_PANEL_OPEN, "on_screen" in state),
+                                (JEV_UNFINISHED, "latest_sentence_status" in state),
+                            )
+                            if used
                         ),
                         "criteria": criteria,
                     },
@@ -446,7 +492,17 @@ class JevDecisionProvider:
                     "presenting_floor": self.presenting_floor,
                 }
             )
-            if search is not None:
+            panel = PANEL_CHOICES.get(choice)
+            if panel is not None:
+                # A request about the open search panel: no slide action.
+                selection = Selection(
+                    choice="c0",
+                    reason="stay" if probability >= self.threshold else "uncertain",
+                    confidence=probability,
+                    evidence=(),
+                    panel=panel if probability >= self.threshold else None,
+                )
+            elif search is not None:
                 # A request to Buddy to look something up: no slide action.
                 selection = Selection(
                     choice="c0",
