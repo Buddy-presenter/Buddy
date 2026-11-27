@@ -964,3 +964,20 @@ def test_reset_command_parser_accepts_only_clear_imperatives():
         "highlight the total",
     ):
         assert not reset_intent(text), text
+
+
+@pytest.mark.parametrize(
+    ("override", "expected"),
+    [
+        ("", "https://api.example.com"),
+        ("http://127.0.0.1:8765/", "http://127.0.0.1:8765"),
+        ("https://agent.example.com", "https://agent.example.com"),
+        ("http://evil.example.com", "https://api.example.com"),
+        ("http://user@127.0.0.1:8765", "https://api.example.com"),
+    ],
+)
+def test_developer_agent_override_accepts_only_https_or_loopback(monkeypatch, override, expected):
+    from buddy_desktop.agent_service import _agent_base
+
+    monkeypatch.setenv("BUDDY_AGENT_URL", override)
+    assert _agent_base(AppConfig("https://api.example.com")) == expected

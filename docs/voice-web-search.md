@@ -107,3 +107,7 @@ everything else keeps using the configured Buddy API. It accepts HTTPS or a loop
 address (for example `http://127.0.0.1:8765`). A developer can run this branch's
 `information_search_router` locally behind a check that staging accepts the same sign-in
 token, and start Buddy with the variable set to test the panel end to end.
+
+`BUDDY_AGENT_URL` does the same for live-suggestion requests only, with the same address
+rules. A local stand-in can pass each request to staging and add a search decision from Jev,
+so searches decided from natural speech can be tried before the server change is deployed.

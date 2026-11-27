@@ -4,6 +4,7 @@ import http.client
 import io
 import json
 import math
+import os
 import re
 import ssl
 import threading
@@ -164,6 +165,22 @@ def conflict_error(exc: HTTPError) -> ServiceError:
 DECISION_MODELS = ("jev", "cohere")
 
 
+def _agent_base(config: AppConfig) -> str:
+    """The API deciding live suggestions: the app's API, or a local developer server.
+
+    `BUDDY_AGENT_URL` lets a developer test decision changes against a local server while
+    everything else keeps using the configured Buddy API. Only HTTPS or a loopback HTTP
+    address is accepted.
+    """
+    override = os.environ.get("BUDDY_AGENT_URL", "").rstrip("/")
+    if override:
+        parts = urlsplit(override)
+        loopback = parts.scheme == "http" and parts.hostname in {"127.0.0.1", "localhost"}
+        if (parts.scheme == "https" or loopback) and parts.hostname and not parts.username:
+            return override
+    return config.api_url
+
+
 class AgentService:
     def __init__(self, config: AppConfig):
         self.config = config
@@ -173,7 +190,7 @@ class AgentService:
         self._connection_url = ""
 
     def _kept(self) -> KeptConnection:
-        url = self.config.api_url
+        url = _agent_base(self.config)
         if self._connection is None or self._connection_url != url:
             self._connection, self._connection_url = KeptConnection(url), url
         return self._connection
