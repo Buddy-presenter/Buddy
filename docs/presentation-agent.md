@@ -210,26 +210,30 @@ Responses are bounded to 64 KiB. Chat has a 3.8-second deadline, total backend d
 work five seconds, and native HTTP six seconds; stale capture still wins over a slow
 otherwise valid result. Embeddings retain their own bounded adapter.
 
-### Decision provider: Jev by default (#243)
+### Decision provider: Jev alone (#243, #252)
 
-Presenters choose the decider in the desktop app (#245). Under **Automatic transitions** in
-Present, **Suggestions decided by** offers **Jev (fast, default)** or **Cohere**. The choice is
-saved in the app settings (`presentation/decision_model`) and sent with each `/agent` request
-as `decision_model`. The server uses the requested decider. Older clients that send no choice
-get `BUDDY_DECISION_PROVIDER`, and without a Jev key every choice decides with Cohere.
+Jev decides every slide action; Cohere takes no part in slide decisions. When
+`BUDDY_JEV_API_KEY` is set (Terraform `enable_jev_decisions` and the secret
+`<env>/agent/jev`), the candidate mode defaults to `direct_current`: Jev receives one option
+per other slide, every eligible zoom/highlight action on the current slide, do nothing, and
+reset when the view is focused, built from the saved deck analysis. There is no Cohere
+embedding index, no per-sentence Cohere shortlist and no retrieval-based topic shortcut;
+deck preparation returns ready at once. Explicit navigation ("next slide", "slide 5") keeps
+its deterministic fast path. Jev accepts at most 255 choices, five of which are reserved for
+the web-search and search-panel options, so a deck whose complete menu would exceed it
+fails closed with `candidates_unavailable` and is never silently shortened.
 
-`BUDDY_DECISION_PROVIDER` chooses who makes the decision after retrieval:
+The desktop no longer offers a decider setting. Older clients that still send
+`decision_model: "cohere"` are decided by Jev. Without a Jev key the server falls back to the
+earlier Cohere shortlist and Cohere decider (`BUDDY_AGENT_CANDIDATE_MODE=semantic`), which
+is not used on staging or production. Cohere is still used by web search to write search words
+and short answers ([voice web search](voice-web-search.md)).
 
-- `jev` (default): TypeSafe Jev (`jev-1.14.0`) alone.
-- `cohere`: Cohere Command A, unchanged.
-- `jev+cohere`: Jev first, Cohere when Jev is unsure.
-
-Jev is used only when `BUDDY_JEV_API_KEY` is set. In Terraform that means `enable_jev_decisions`
-and the secret `<env>/agent/jev`, populated by the operator. Without the key, every choice
-decides with Cohere and logs `presentation_agent event=jev_unavailable`.
-
-Retrieval, the option list and every server and desktop check are the same for all three. The
-decision log's `model` field names the model whose answer was used.
+Measured on 1,020 labelled sentences (decks of 8–120 slides) against the earlier Cohere
+shortlist plus Jev: 85.0% against 65.7% correct on the same 220 sentences, 76.5% against 48.8%
+on contextual sentences, about 244 ms against 480 ms per decision, and 0 errors in 1,020
+decisions; accuracy held from 40 to 120 slides. See
+[the Jev-only decision guide](jev-direct-current-prototype.md).
 
 **How Jev is asked.** Jev returns probabilities rather than text. One request sends the latest
 sentence, the earlier sentences and the current slide summary, and asks two typed questions:

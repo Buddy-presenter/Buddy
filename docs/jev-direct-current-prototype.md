@@ -1,37 +1,43 @@
-# Jev without Cohere retrieval prototype (#252)
+# Jev-only slide decisions (#252)
 
-This is an opt-in experiment, not a rollout. The default remains semantic retrieval.
-Run the prototype on a separate local API; do not enable it on shared staging or merge it
-without reviewing the paired evaluation results.
-
-Set `BUDDY_AGENT_ENABLED=true`, `BUDDY_DECISION_PROVIDER=jev`,
-`BUDDY_AGENT_CANDIDATE_MODE=direct_current`, and the server-side `BUDDY_JEV_API_KEY`.
-A Cohere key is not required for this decision path. Normal deck analysis providers
-remain separate. No provider credential belongs in the desktop or its settings.
+Jev alone decides slide actions; this replaced the Cohere shortlist. It is the default
+whenever `BUDDY_JEV_API_KEY` is set (`BUDDY_AGENT_CANDIDATE_MODE` defaults to
+`direct_current`). A Cohere key is not needed for slide decisions. No provider credential
+belongs in the desktop or its settings.
 
 The complete menu contains every currently eligible zoom/highlight action on the visible
-slide, navigation to every saved slide, no action, and reset when the current view is
-focused. Other manual PowerPoint drawing tools are not new live-agent tools in this
-experiment. Descriptions and source-measured target geometry use the existing production
-builders. The same server and desktop eligibility, authorization, source, freshness,
-transition-policy and execution checks still apply.
+slide, navigation to every other saved slide, no action, and reset when the current view is
+focused, plus Jev's web-search and search-panel options. Other manual PowerPoint drawing
+tools are not live-agent tools. Descriptions and source-measured target geometry use the
+existing production builders. The same server and desktop eligibility, authorization, source,
+freshness, transition-policy and execution checks still apply.
 
-Jev supports at most 255 choices. Serialized criteria are additionally capped at 256 KiB.
-A larger complete menu returns the existing safe
+Jev supports at most 255 choices and five are reserved for search options; serialized
+criteria are additionally capped at 256 KiB. A larger complete menu returns the safe
 `candidates_unavailable` fallback; it is never silently shortened and never falls back to
-Cohere. Selecting the Cohere decider in this mode also fails closed. Index preparation
-checks session ownership/source and returns ready without document or query embeddings.
+Cohere. Preparation checks session ownership/source and returns ready without embeddings.
+Explicit navigation fast paths remain; contextual navigation goes through Jev instead of the
+retrieval-based topic shortcut, which jumped to the wrong slide when several slides share an
+item name.
 
-For the primary comparison, keep `jev-1.14.0`, its instructions, the 0.6 choice threshold,
-and the 0.2 presenting-now threshold identical in both variants. The prototype changes
-candidate construction only. Explicit navigation fast paths remain available in both.
-The prototype sends contextual navigation through Jev instead of the retrieval-based
-topic fast path. Report such routing differences separately.
+## Measured results
 
-Evaluation artifacts and measured results will be documented here after the paired
-live-provider and native-player checks. A transcript-only replay must never be described
-as a microphone test, and successful proposal selection must not count as successful
-player execution.
+Paired with the earlier Cohere shortlist + Jev on the same Jev model and thresholds:
+
+| | Jev only | Cohere + Jev |
+|---|---|---|
+| Correct, same 220/210 sentences (decks of 8–120 slides) | 85.0% | 65.7% |
+| Correct, all 1,020 sentences | 87.5% | not run (trial-key limit) |
+| Contextual sentences | 76.5% | 48.8% |
+| Wrong target / missed action | 2 / 27 of 160 | 15 / 53 of 150 |
+| Mean decision latency | ~244 ms | ~480 ms (Cohere ~249 + Jev ~231) |
+| Errors | 0 of 1,020 | 0 of 210 |
+
+Accuracy held from 40 slides (83.8%) to 120 slides (84.3%). On the 51-case native fixture
+corpus (PDF and PowerPoint, three repeats, including Deepgram-recognized speech) Jev only
+was 98.0% correct with no false triggers; PDF executed 42/43 chosen actions and PowerPoint
+37/43. The weakest areas are topic carry-over across sentences and paraphrased slide names.
+Synthetic decks and text replay, not human microphone recordings, produced these numbers.
 
 ## Reproduce the paired evaluation
 

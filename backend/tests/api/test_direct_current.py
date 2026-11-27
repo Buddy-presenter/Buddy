@@ -25,7 +25,12 @@ from buddy_api.agent_provider import (
 from buddy_api.analysis.contracts import Region
 from buddy_api.app import decision_providers
 from buddy_api.config import Settings
-from buddy_api.presentation_agent import AgentInput, checked_selection, direct_current_options
+from buddy_api.presentation_agent import (
+    JEV_EXTRA_OPTIONS,
+    AgentInput,
+    checked_selection,
+    direct_current_options,
+)
 
 
 def region(identifier, **changes):
@@ -77,12 +82,17 @@ def test_oversized_complete_menu_is_not_silently_truncated():
         direct_current_options(source)
 
 
-def test_exact_choice_limit_accounts_for_no_action_and_reset():
-    source = AgentInput(analysis(*(str(i) for i in range(255))), "slide-0", "slide", "hash")
+def test_exact_choice_limit_accounts_for_no_action_reset_and_search_options():
+    # 255 Jev choices = this menu + up to five web-search and search-panel options.
+    source = AgentInput(analysis(*(str(i) for i in range(250))), "slide-0", "slide", "hash")
     _, targets, _ = direct_current_options(source)
-    assert len(targets) == 255
+    assert len(targets) + JEV_EXTRA_OPTIONS == 255
     with pytest.raises(AgentFailure):
         direct_current_options(replace(source, focus="zoom_region"))
+    with pytest.raises(AgentFailure):
+        direct_current_options(
+            AgentInput(analysis(*(str(i) for i in range(251))), "slide-0", "slide", "hash")
+        )
 
 
 @pytest.mark.parametrize("choice", ["c255", "c999", "c-1", "c01", "arbitrary"])
@@ -96,9 +106,13 @@ def test_prototype_requires_jev_and_constructs_no_cohere_client():
     default, choices = decision_providers(settings, None)
     assert isinstance(default, JevDecisionProvider) and set(choices) == {"jev"}
     asyncio.run(default.aclose())
+    # An older app that still asks for Cohere gets Jev: Cohere has no part in decisions.
+    cohere_choice = replace(settings, decision_provider="cohere")
+    default, choices = decision_providers(cohere_choice, None)
+    assert isinstance(default, JevDecisionProvider) and set(choices) == {"jev"}
+    asyncio.run(default.aclose())
     for changes in (
         {"jev_api_key": None},
-        {"decision_provider": "cohere"},
         {"candidate_mode": "unknown"},
     ):
         with pytest.raises(ValueError):
@@ -120,9 +134,23 @@ def test_environment_enables_direct_mode_without_cohere_or_embeddings():
     app = create_app(config)
     assert app.state.semantic_candidates is None
     assert set(app.state.presentation_agent.choices) == {"jev"}
-    with pytest.raises(AgentFailure):
-        app.state.presentation_agent.provider_for("cohere")
-    asyncio.run(app.state.presentation_agent.aclose())
+    runtime = app.state.presentation_agent
+    assert runtime.provider_for("cohere") is runtime.provider_for("jev") is runtime.provider
+    asyncio.run(runtime.aclose())
+
+
+@pytest.mark.parametrize(
+    ("jev_key", "mode"), [("synthetic-key", "direct_current"), (None, "semantic")]
+)
+def test_jev_only_is_the_default_whenever_a_jev_key_is_configured(jev_key, mode):
+    values = {
+        "BUDDY_ENVIRONMENT": "development",
+        "BUDDY_AGENT_ENABLED": "true",
+        "BUDDY_COHERE_API_KEY": "synthetic-cohere",
+    }
+    if jev_key:
+        values["BUDDY_JEV_API_KEY"] = jev_key
+    assert Settings.from_environment(values).agent.candidate_mode == mode
 
 
 def test_jev_can_choose_beyond_the_old_ten_option_limit():

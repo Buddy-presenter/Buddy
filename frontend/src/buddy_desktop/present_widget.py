@@ -46,7 +46,7 @@ from PySide6.QtWidgets import (
 )
 
 from buddy_desktop.agent_loop import AgentLoop
-from buddy_desktop.agent_service import DECISION_MODELS, AgentService
+from buddy_desktop.agent_service import AgentService
 from buddy_desktop.config import AppConfig
 from buddy_desktop.fullscreen import FullscreenPresentation
 from buddy_desktop.library_service import (
@@ -271,8 +271,6 @@ class PresentWidget(Page):
         self.voice_commands = VoiceCommandRouter()
         self.transcript_context = TranscriptContext()
         self.agent_service = AgentService(config)
-        saved_model = str(settings.value("presentation/decision_model", "jev"))
-        self.agent_service.decision_model = saved_model if saved_model in DECISION_MODELS else "jev"
         self.agent = AgentLoop(
             self.agent_service,
             self,
@@ -628,24 +626,6 @@ class PresentWidget(Page):
         )
         self.policy_enabled.toggled.connect(self._policy_toggled)
         microphone_layout.addWidget(self.policy_enabled)
-        decision_row = QHBoxLayout()
-        decision_label = QLabel("Suggestions decided by")
-        decision_row.addWidget(decision_label)
-        self.decision_model = QComboBox()
-        self.decision_model.addItem("Jev (fast, default)", "jev")
-        self.decision_model.addItem("Cohere", "cohere")
-        self.decision_model.setAccessibleName("Model that decides automatic suggestions")
-        self.decision_model.setToolTip(
-            "Jev answers in about a quarter of a second. Cohere is the earlier, slower model."
-        )
-        decision_label.setBuddy(self.decision_model)
-        self.decision_model.setCurrentIndex(
-            max(0, self.decision_model.findData(self.agent_service.decision_model))
-        )
-        self.decision_model.currentIndexChanged.connect(self._decision_model_changed)
-        decision_row.addWidget(self.decision_model)
-        decision_row.addStretch()
-        microphone_layout.addLayout(decision_row)
         self.policy_pause_button = QPushButton("Resume automatic moves")
         self.policy_pause_button.setAccessibleName("Resume automatic moves")
         self.policy_pause_button.setToolTip("Resume automatic moves (Ctrl+Shift+P)")
@@ -839,13 +819,6 @@ class PresentWidget(Page):
             if isinstance(identifier, bytes):
                 self.microphone.start(identifier)
         self._refresh()
-
-    @Slot(int)
-    def _decision_model_changed(self, _index: int) -> None:
-        model = self.decision_model.currentData()
-        if model in DECISION_MODELS:
-            self.agent_service.decision_model = model
-            self.settings.setValue("presentation/decision_model", model)
 
     @Slot(bool)
     def _microphone_compatibility_changed(self, enabled: bool) -> None:

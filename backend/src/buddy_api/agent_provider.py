@@ -87,10 +87,8 @@ class AgentSettings:
     def __post_init__(self) -> None:
         if self.candidate_mode not in {"semantic", "direct_current"}:
             raise ValueError("Invalid candidate mode")
-        if self.candidate_mode == "direct_current" and (
-            not self.jev_api_key or self.decision_provider != "jev"
-        ):
-            raise ValueError("Direct-current prototype requires Jev without a chat fallback")
+        if self.candidate_mode == "direct_current" and not self.jev_api_key:
+            raise ValueError("Jev-only decisions require a Jev key")
         if self.jev_api_key is not None and (
             not self.jev_api_key
             or len(self.jev_api_key) > 4096

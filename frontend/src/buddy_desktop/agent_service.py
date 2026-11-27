@@ -162,9 +162,6 @@ def conflict_error(exc: HTTPError) -> ServiceError:
     return ServiceError(message)
 
 
-DECISION_MODELS = ("jev", "cohere")
-
-
 def _agent_base(config: AppConfig) -> str:
     """The API deciding live suggestions: the app's API, or a local developer server.
 
@@ -184,8 +181,6 @@ def _agent_base(config: AppConfig) -> str:
 class AgentService:
     def __init__(self, config: AppConfig):
         self.config = config
-        # Which model decides suggestions, chosen in Present (#245). Jev is the default.
-        self.decision_model = "jev"
         # Set on the GUI thread while Buddy's search panel is on screen: Jev may then also
         # close or scroll it.
         self.search_panel_open = False
@@ -262,8 +257,6 @@ class AgentService:
             {"sequence": s.sequence, "text": s.text, "final": s.final}
             for s in context.decision_segments
         ]
-        if self.decision_model in DECISION_MODELS:
-            payload["decision_model"] = self.decision_model
         # Let Jev also decide that the presenter asked Buddy to look something up.
         payload["web_search"] = True
         if self.search_panel_open:

@@ -165,7 +165,12 @@ class Settings:
                     values.get("BUDDY_DECISION_PROVIDER", "jev"),
                     values.get("BUDDY_AGENT_DIAGNOSTICS", "false") == "true",
                     UUID(diagnostic_session) if diagnostic_session else None,
-                    values.get("BUDDY_AGENT_CANDIDATE_MODE", "semantic"),
+                    # Jev decides from every slide and current-slide action whenever a
+                    # Jev key is configured: Cohere takes no part in slide decisions.
+                    values.get(
+                        "BUDDY_AGENT_CANDIDATE_MODE",
+                        "direct_current" if values.get("BUDDY_JEV_API_KEY") else "semantic",
+                    ),
                 )
             except ValueError:
                 raise ConfigurationError(

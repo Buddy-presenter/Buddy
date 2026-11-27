@@ -497,6 +497,10 @@ def options(
     return tuple(targets), descriptions
 
 
+# Web search (2) and search-panel (3) options Jev may also receive with the slide menu.
+JEV_EXTRA_OPTIONS = 5
+
+
 def direct_current_options(
     source: AgentInput,
 ) -> tuple[tuple[Candidate, ...], tuple[Target, ...], list[dict[str, object]]]:
@@ -514,8 +518,9 @@ def direct_current_options(
         if candidate_action_eligible(action)
     )
     # Bound the complete menu before the existing option builder performs lookups.
-    # One no-action + all other slides + eligible actions + an optional reset.
-    if len(slides) + len(actions) + (source.focus != "slide") > 255:
+    # One no-action + every other slide + eligible actions + an optional reset, plus up to
+    # five web-search and search-panel options added for Jev: never above its 255 choices.
+    if len(slides) + len(actions) + (source.focus != "slide") + JEV_EXTRA_OPTIONS > 255:
         raise AgentFailure("candidates_unavailable")
     candidates = tuple(
         Candidate(kind="slide", slide_id=slide.slide_id, reason="topic", score=0)
@@ -657,8 +662,8 @@ class AgentRuntime:
         self.active: set[UUID] = set()
 
     def provider_for(self, choice: str | None) -> DecisionProvider:
-        if self.settings.candidate_mode == "direct_current" and choice not in {None, "jev"}:
-            raise AgentFailure("candidates_unavailable")
+        # Jev-only mode has no other decider: an older app that still asks for Cohere
+        # simply gets Jev.
         return self.choices.get(choice, self.provider) if choice else self.provider
 
     async def aclose(self) -> None:
