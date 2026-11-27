@@ -10,11 +10,15 @@ from backend.tests.api.test_authorization import private_api as private_api
 from backend.tests.api.test_authorization import ready_session_api as ready_session_api
 from backend.tests.api.test_presentation_agent import agent_api as agent_api
 from backend.tests.api.test_presentation_agent import payload
+from backend.tests.api.test_presentation_agent import (
+    test_proposal_fallback_and_inflight_state_changes as check_fallback,
+)
 from backend.tests.api.test_presentation_candidates import analysis
 
 from buddy_api.agent_provider import AgentFailure, AgentSettings, JevDecisionProvider, Selection
 from buddy_api.analysis.contracts import Region
 from buddy_api.app import decision_providers
+from buddy_api.config import Settings
 from buddy_api.presentation_agent import AgentInput, checked_selection, direct_current_options
 
 
@@ -85,6 +89,26 @@ def test_prototype_requires_jev_and_constructs_no_cohere_client():
     ):
         with pytest.raises(ValueError):
             replace(settings, **changes)
+
+
+def test_environment_enables_direct_mode_without_cohere_or_embeddings():
+    from buddy_api.app import create_app
+
+    config = Settings.from_environment(
+        {
+            "BUDDY_ENVIRONMENT": "development",
+            "BUDDY_AGENT_ENABLED": "true",
+            "BUDDY_AGENT_CANDIDATE_MODE": "direct_current",
+            "BUDDY_JEV_API_KEY": "synthetic-key",
+        }
+    )
+    assert config.embeddings is None and config.agent.api_key == ""
+    app = create_app(config)
+    assert app.state.semantic_candidates is None
+    assert set(app.state.presentation_agent.choices) == {"jev"}
+    with pytest.raises(AgentFailure):
+        app.state.presentation_agent.provider_for("cohere")
+    asyncio.run(app.state.presentation_agent.aclose())
 
 
 def test_jev_can_choose_beyond_the_old_ten_option_limit():
@@ -163,3 +187,14 @@ def test_real_session_prepare_and_agent_do_not_touch_embeddings(agent_api):
         ).status_code
         == 403
     )
+
+
+@pytest.mark.postgres
+@pytest.mark.parametrize("mode", ["stale", "source_changed", "failure", "malformed", "busy"])
+def test_direct_mode_retains_fallback_and_inflight_source_guards(agent_api, mode):
+    client, _, _ = agent_api
+    runtime = client.app.state.presentation_agent
+    runtime.settings = replace(
+        runtime.settings, jev_api_key="prototype", candidate_mode="direct_current"
+    )
+    check_fallback(agent_api, mode)

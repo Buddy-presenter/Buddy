@@ -31,3 +31,55 @@ Evaluation artifacts and measured results will be documented here after the pair
 live-provider and native-player checks. A transcript-only replay must never be described
 as a microphone test, and successful proposal selection must not count as successful
 player execution.
+
+## Reproduce the paired evaluation
+
+Use a separate Windows checkout with Microsoft PowerPoint, an interactive unlocked
+desktop, and the normal shared/backend/frontend development dependencies installed.
+Install the optional fixture generator with
+`python -m pip install -r tests/integration/requirements-jev-comparison.txt`.
+Provide `BUDDY_TEST_DATABASE_URL` for a local disposable PostgreSQL database whose name
+ends in `_test`. The runner creates and drops a random schema; it does not modify
+the staging database. Sign in with `aws login --profile buddy-staging` first.
+
+Save and close PowerPoint and leave the desktop idle during native captures. Run:
+
+```powershell
+python -m tests.integration.compare_jev_candidates --live --native-validation --execute --also-audio --repeats 3 --output build/jev-comparison
+```
+
+The AWS profile defaults to `buddy-staging-tools`. Secrets Manager provides Jev, Cohere
+and Deepgram credentials to the Python process; the runner never writes those keys.
+AWS S3 stores only synthetic source/evidence objects beneath a new owner's prefix;
+the runner removes those exact prefixes and writes `cleanup.json`. It also invokes
+Bedrock for actual native visual validation. These are paid, explicitly opt-in checks.
+None of these provider calls run in normal tests or CI.
+
+The primary corpus is 43 labelled synthetic cases on equivalent eight-slide PDF and
+PowerPoint sources. Labels precede the provider predictions. Each A/B pair uses the
+same transcript, source, saved analysis and eligibility evidence. Order alternates
+within each pair and is shuffled with a fixed seed for each of three repetitions.
+`--also-audio` adds eight representative cases recognized once through the real
+session WebSocket and Deepgram EU, then supplies those identical recognized words
+to both approaches in both formats. Windows SAPI generates this audio; it is not a
+human microphone/noise/accent test. The original text corpus stays unchanged.
+
+The source analyses are authored fixtures, not fresh LLM-generated analyses. Each saved
+focus action must pass the real isolated native runner and Bedrock judge before it can
+be offered. Transient failures at the initial capture may retry at most three times;
+all attempts remain in `validation-attempts.jsonl`. Retries never change a verdict or
+bypass focus, source, ownership or eligibility checks. A fixture that cannot pass stops
+the comparison rather than becoming an assumed executable option.
+
+The runner exercises the real local FastAPI routes, PostgreSQL, Cohere embedding API,
+Jev API, transition-check route and isolated PDF/PowerPoint players. Authentication
+uses a synthetic identity at the local test boundary; Cognito sign-in and the deployed
+staging API are not part of this benchmark. First-repeat text cases execute in the
+native players. Later repetitions and audio cases measure selection, not repeated
+player execution. Native execution timings include cold isolated player startup;
+they must not be described as normal warm-app or microphone-to-visible latency.
+
+`summary.json`, `records.jsonl`, captures and speech WAVs stay under ignored `build/`.
+The public report includes aggregate metrics and synthetic case failures, never keys,
+private deck content or raw provider diagnostic traces. Three repetitions of one case
+are repeated measurements, not three independent accuracy examples.
