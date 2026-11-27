@@ -91,6 +91,9 @@ def inputs():
         "retry",
         "capture_expired",
         "fallback_action",
+        "search",
+        "search_unknown",
+        "search_with_action",
     ],
 )
 def test_real_http_validates_proposals_and_context(corrupt, monkeypatch):
@@ -157,6 +160,23 @@ def test_real_http_validates_proposals_and_context(corrupt, monkeypatch):
                 current[0] = replace(context, fresh=False)
             if corrupt == "capture_expired":
                 clock[0] += 5_000_000_001
+            if corrupt in {"search", "search_unknown"}:
+                # Jev decided to look something up; no slide action.
+                answer["target"] = {
+                    "tool": "no_action",
+                    "slide_id": session.state.active_slide_id,
+                    "action_id": None,
+                    "region": None,
+                }
+                answer.update(reason="stay", evidence=[])
+            if corrupt == "search":
+                answer["search"] = "images"
+                # Still valid after the presenter keeps talking.
+                current[0] = replace(context, fresh=False)
+            if corrupt == "search_unknown":
+                answer["search"] = "shell"
+            if corrupt == "search_with_action":
+                answer["search"] = "web"
             if corrupt == "partial":
                 current[0] = replace(
                     context,
@@ -180,6 +200,11 @@ def test_real_http_validates_proposals_and_context(corrupt, monkeypatch):
             )
             assert proposal["target"]["tool"] == "next_slide"
             assert "diagnostics" not in proposal
+        elif corrupt == "search":
+            proposal = service.propose(
+                "private-token", session, context, current_context=lambda: current[0]
+            )
+            assert proposal["search"] == "images"
         else:
             with pytest.raises(ServiceError):
                 service.propose(
@@ -188,6 +213,7 @@ def test_real_http_validates_proposals_and_context(corrupt, monkeypatch):
         assert seen[0]["segments"] == [
             {"sequence": 1, "text": "Our sales are growing.", "final": True}
         ]
+        assert seen[0]["web_search"] is True
     finally:
         server.shutdown()
         server.server_close()

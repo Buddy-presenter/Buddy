@@ -76,13 +76,25 @@ class InformationSearchService:
         self.config = config
 
     def answer(
-        self, access: AccessProvider, query: str, *, images: bool = False
+        self,
+        access: AccessProvider,
+        query: str,
+        *,
+        images: bool = False,
+        spoken_context: str | None = None,
     ) -> InformationAnswer:
+        """Search for ``query``; with ``spoken_context`` (the sentence before, possibly
+        empty) ``query`` is a spoken sentence and the server writes the search."""
         mode = "images" if images else "web"
+        body: dict[str, object] = {"query": query[-300:], "mode": mode}
+        if spoken_context is not None:
+            body["spoken"] = True
+            if spoken_context:
+                body["context"] = spoken_context[-600:]
         request = Request(
             f"{_search_base(self.config)}/api/v1/web-search/answer",
             method="POST",
-            data=json.dumps({"query": query, "mode": mode}, ensure_ascii=False).encode(),
+            data=json.dumps(body, ensure_ascii=False).encode(),
             headers={
                 "Authorization": "Bearer " + access(),
                 "Content-Type": "application/json",
@@ -90,7 +102,7 @@ class InformationSearchService:
             },
         )
         try:
-            with build_opener(NoRedirects()).open(request, timeout=12) as response:
+            with build_opener(NoRedirects()).open(request, timeout=20) as response:
                 raw = response.read(MAX_RESPONSE_BYTES + 1)
                 if (
                     len(raw) > MAX_RESPONSE_BYTES

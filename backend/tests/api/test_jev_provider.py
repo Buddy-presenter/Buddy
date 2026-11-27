@@ -1,6 +1,7 @@
 """Jev decides by default; Cohere stays selectable (#243)."""
 
 import asyncio
+import contextlib
 import json
 
 import httpx
@@ -247,3 +248,71 @@ def test_presenter_choice_selects_the_decider():
     runtime = AgentRuntime(settings, default, choices)
     assert isinstance(runtime.provider_for("jev"), CohereDecisionProvider)
     asyncio.run(runtime.aclose())
+
+
+def test_jev_search_options_only_when_the_desktop_asks():
+    # Jev decides "search the web" alongside the slide options, never for old clients.
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content)["questions"]["action"]["criteria"])
+        return answer("c0", 0.9)
+
+    provider = jev(handler)
+    asyncio.run(provider.select(PASSAGE))
+    asyncio.run(provider.select({**PASSAGE, "web_search": True}))
+    assert "search_web" not in seen[0] and "search_images" not in seen[0]
+    assert {"search_web", "search_images"} <= set(seen[1])
+    assert set(seen[1]) - {"search_web", "search_images"} == set(seen[0])
+
+
+@pytest.mark.parametrize(
+    ("choice", "probability", "presenting", "search", "reason"),
+    [
+        ("search_web", 0.9, 0.9, "web", "stay"),
+        ("search_images", 0.8, 0.9, "images", "stay"),
+        # A search request is not "presenting" a slide; the slide guard must not block it.
+        ("search_web", 0.9, 0.05, "web", "stay"),
+        ("search_web", 0.55, 0.9, None, "uncertain"),
+    ],
+)
+def test_jev_search_choice_returns_no_slide_action(choice, probability, presenting, search, reason):
+    provider = jev(lambda request: answer(choice, probability, presenting))
+    selection = asyncio.run(provider.select({**PASSAGE, "web_search": True}))
+    assert (selection.choice, selection.search, selection.reason) == ("c0", search, reason)
+    assert selection.evidence == ()
+
+
+def test_cohere_never_sees_the_search_flag():
+    seen = {}
+
+    def handler(request):
+        seen.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "finish_reason": "COMPLETE",
+                "message": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "choice": "c0",
+                                    "reason": "stay",
+                                    "confidence": 0.9,
+                                    "evidence": [],
+                                }
+                            ),
+                        }
+                    ]
+                },
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = CohereDecisionProvider(AgentSettings("test-key"), client=client)
+    with contextlib.suppress(AgentFailure):  # Only the request matters here.
+        asyncio.run(provider.select({**PASSAGE, "web_search": True}))
+    assert "Revenue came in" in seen["messages"][-1]["content"]
+    assert "web_search" not in seen["messages"][-1]["content"]

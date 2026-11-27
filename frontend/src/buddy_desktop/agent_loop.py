@@ -306,7 +306,11 @@ class AgentLoop(QObject):
             and self._request_generation == self._generation
             and submitted is not None
             and current is not None
-            and submitted.matches_decision(current)
+            # A request to look something up stays valid as the presenter talks on.
+            and (
+                (isinstance(result, dict) and bool(result.get("search")))
+                or submitted.matches_decision(current)
+            )
         )
         age_ms = (
             max(0, (time.monotonic_ns() - submitted_at_ns) // 1_000_000)
@@ -351,7 +355,11 @@ class AgentLoop(QObject):
             )
         if self._pending_update and isinstance(result, dict):
             target = result.get("target")
-            if isinstance(target, dict) and target.get("tool") == "no_action":
+            if (
+                isinstance(target, dict)
+                and target.get("tool") == "no_action"
+                and not result.get("search")  # A search request is never superseded.
+            ):
                 logger.warning("presentation_speech event=decision_superseded_by_newer_speech")
                 return
             if (

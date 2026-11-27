@@ -73,6 +73,8 @@ class AgentRequest(Model):
     provisional: bool = False
     # The presenter's choice in the desktop app (#245); None keeps the server default.
     decision_model: Literal["jev", "cohere"] | None = None
+    # Desktop clients with the search panel let Jev also decide "search the web".
+    web_search: bool = False
 
     @model_validator(mode="after")
     def coherent(self) -> "AgentRequest":
@@ -85,6 +87,7 @@ class AgentRequest(Model):
                         "focus_view",
                         "focus_region",
                         "decision_model",
+                        "web_search",
                     }
                 ),
                 "protocol": "presentation-candidates.v1",
@@ -229,6 +232,9 @@ class AgentProposal(Model):
     evidence: tuple[int, ...] = ()
     elapsed_ms: int = Field(ge=0)
     retry_after_ms: int | None = Field(default=None, ge=1, le=5000)
+    # Jev decided the presenter asked Buddy to look something up. The target is
+    # then "no_action"; the desktop writes the search from the spoken sentence.
+    search: Literal["web", "images"] | None = None
 
     @model_validator(mode="after")
     def consistent_outcome(self) -> "AgentProposal":
@@ -245,6 +251,10 @@ class AgentProposal(Model):
             "go_to_slide",
         }:
             raise ValueError("Deterministic navigation cannot select another tool")
+        if self.search is not None and (
+            self.decision_source != "model" or self.target.tool != "no_action"
+        ):
+            raise ValueError("Only a model decision without a slide action can search")
         return self
 
 
@@ -527,6 +537,8 @@ def decision_passage(
         },
         "options": descriptions,
     }
+    if getattr(values, "web_search", False):
+        passage["web_search"] = True
     if values.provisional:
         passage["latest_segment_status"] = "provisional stable prefix; speech is ongoing"
     return passage
@@ -1047,6 +1059,13 @@ def agent_router() -> APIRouter:
             "elapsed_ms": round((time.monotonic() - started) * 1000),
             "retry_after_ms": retry_after_ms,
         }
+        if (
+            values.web_search
+            and selection is not None
+            and selection.search is not None
+            and decision_source == "model"
+        ):
+            proposal_values["search"] = selection.search
         if values.active_slide_id is not None:
             proposal_values["active_slide_id"] = source.current
         proposal = AgentProposal.model_validate(proposal_values)
@@ -1057,6 +1076,7 @@ def agent_router() -> APIRouter:
             "decision_id": str(proposal.decision_id),
             "request_id": request.state.request_id,
             "tool": proposal.target.tool,
+            "search": proposal.search,
             "reason": proposal.reason,
             "elapsed_ms": proposal.elapsed_ms,
             "model": DECIDED_BY.get() if runtime else "disabled",

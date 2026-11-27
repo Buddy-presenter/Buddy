@@ -614,3 +614,86 @@ def test_search_panel_shows_on_screen_when_the_workspace_is_hidden(present, monk
     monkeypatch.setattr(window, "isVisible", lambda: False)
     window._open_voice_search("red pandas", True)
     assert shown and shown[0] == window.screen().availableGeometry()
+
+
+def _jev_search(page, segments, kind="web"):
+    from types import SimpleNamespace
+
+    context = SimpleNamespace(
+        decision_segments=tuple(
+            SimpleNamespace(segment_id=sid, text=text, final=final) for sid, text, final in segments
+        )
+    )
+    page._spoken_search_decided({"search": kind, "_client_context": context})
+
+
+def test_jev_search_decision_searches_the_finished_sentence_once(present):
+    # Jev decided "search"; the panel gets the sentence and the one before it.
+    from PySide6.QtTest import QSignalSpy
+
+    _window, page = present
+    spy = QSignalSpy(page.spoken_search_requested)
+    segments = [
+        ("a", "Our Dubai office opened in March.", True),
+        ("b", "I'm curious how tall the Burj Khalifa is, let's check.", True),
+    ]
+    _jev_search(page, segments)
+    _jev_search(page, segments)  # The same sentence never searches twice.
+    assert spy.count() == 1
+    assert spy.at(0) == [
+        "I'm curious how tall the Burj Khalifa is, let's check.",
+        "Our Dubai office opened in March.",
+        False,
+    ]
+
+
+def test_jev_search_on_unfinished_speech_waits_for_the_final_words(present, monkeypatch):
+    from types import SimpleNamespace
+
+    from PySide6.QtTest import QSignalSpy
+
+    _window, page = present
+    spy = QSignalSpy(page.spoken_search_requested)
+    _jev_search(page, [("c", "Let's see some pictures of", False)], kind="images")
+    assert spy.count() == 0
+    final = SimpleNamespace(
+        segment_id="c", text="Let's see some pictures of red pandas.", final=True
+    )
+    monkeypatch.setattr(
+        page.transcript_context, "snapshot", lambda: SimpleNamespace(segments=(final,))
+    )
+    page._finish_pending_spoken_search()
+    monkeypatch.undo()
+    assert spy.count() == 1
+    assert spy.at(0) == ["Let's see some pictures of red pandas.", "", True]
+    page._finish_pending_spoken_search()
+    assert spy.count() == 1
+
+
+def test_spoken_search_reaches_the_service_as_speech(present, monkeypatch):
+    window, _page = present
+    calls = []
+
+    class Service:
+        def __init__(self, _config):
+            pass
+
+        def answer(self, access, query, *, images=False, spoken_context=None):
+            calls.append((query, images, spoken_context))
+            raise RuntimeError("stop here")
+
+    monkeypatch.setattr("buddy_desktop.window.InformationSearchService", Service)
+    monkeypatch.setattr(window.account, "session", object(), raising=False)
+    monkeypatch.setattr(window.account, "account_id", "account", raising=False)
+    monkeypatch.setattr(window, "_access_provider", lambda _session: lambda: "token")
+    window._open_spoken_search("Let's find out who founded Tesla.", "Next topic.", False)
+    import time
+
+    deadline = time.monotonic() + 3
+    while not calls and time.monotonic() < deadline:
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.processEvents()
+        time.sleep(0.01)
+    assert calls == [("Let's find out who founded Tesla.", False, "Next topic.")]
+    window._close_information_search()

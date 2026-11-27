@@ -225,6 +225,9 @@ class PresentWidget(Page):
     mini_requested = Signal()
     fullscreen_exited = Signal()
     web_search_requested = Signal(str, bool, bool)
+    # Jev decided the presenter asked Buddy to look something up: the finished
+    # sentence, the sentence before it, and whether pictures were asked for.
+    spoken_search_requested = Signal(str, str, bool)
     return_to_presentation_requested = Signal()
     scroll_panel_requested = Signal(int)
 
@@ -569,6 +572,9 @@ class PresentWidget(Page):
         self._voice_command_status_timer.setSingleShot(True)
         self._voice_command_status_timer.timeout.connect(self._clear_voice_command_status)
         self._pending_voice_search: WebSearch | None = None
+        # Jev's search decision on a sentence still being spoken waits for its final words.
+        self._pending_spoken_search: tuple[str, bool] | None = None
+        self._searched_segments: list[str] = []
         self._voice_search_dispatch_timer = QTimer(self)
         self._voice_search_dispatch_timer.setSingleShot(True)
         self._voice_search_dispatch_timer.setInterval(500)
@@ -2540,6 +2546,8 @@ class PresentWidget(Page):
 
     @Slot(object)
     def _agent_proposed(self, result: object) -> None:
+        if isinstance(result, dict) and result.get("search") in {"web", "images"}:
+            self._spoken_search_decided(result)
         if not isinstance(result, dict):
             # AgentLoop emits None while `_update_agent` deliberately marks its
             # context stale during session synchronization. Keep the proposal
@@ -2617,6 +2625,40 @@ class PresentWidget(Page):
         self.agent_proposal.setText(message)
         self._consider_policy(result)
 
+    def _spoken_search_decided(self, result: dict[str, object]) -> None:
+        """Search once per spoken sentence, with its final words."""
+        context = result.get("_client_context")
+        segments = getattr(context, "decision_segments", ())
+        if not segments:
+            return
+        segment = segments[-1]
+        if segment.segment_id in self._searched_segments:
+            return
+        images = result.get("search") == "images"
+        if not segment.final:
+            self._pending_spoken_search = (segment.segment_id, images)
+            return
+        earlier = segments[-2].text if len(segments) > 1 else ""
+        self._emit_spoken_search(segment.segment_id, segment.text, earlier, images)
+
+    def _emit_spoken_search(self, segment_id: str, text: str, earlier: str, images: bool) -> None:
+        self._pending_spoken_search = None
+        self._searched_segments = [*self._searched_segments[-31:], segment_id]
+        if text.strip():
+            self.spoken_search_requested.emit(text.strip(), earlier.strip(), images)
+
+    def _finish_pending_spoken_search(self) -> None:
+        pending = self._pending_spoken_search
+        if pending is None:
+            return
+        segment_id, images = pending
+        segments = self.transcript_context.snapshot().segments
+        for index, segment in enumerate(segments):
+            if segment.segment_id == segment_id and segment.final:
+                earlier = segments[index - 1].text if index > 0 else ""
+                self._emit_spoken_search(segment_id, segment.text, earlier, images)
+                return
+
     @Slot(object)
     def _speech_transcript(self, event: dict[str, object]) -> None:
         command = self.voice_commands.handle(event)
@@ -2633,6 +2675,7 @@ class PresentWidget(Page):
             # work so it cannot run while Chrome is foregrounded or on return.
             self.agent.cancel_pending_decision()
             self.policy.clear_pending()
+            self._pending_spoken_search = None
             if isinstance(command.command, WebSearch):
                 self._pending_voice_search = command.command
                 # Leave a correction window before opening Chrome, which cannot be
@@ -2657,6 +2700,7 @@ class PresentWidget(Page):
                 str(self.speech_language.currentData()),
             )
             self.transcript_context.accept(event)
+            self._finish_pending_spoken_search()
             self._revoke_native_guard_if_speech_changed()
             # Process each recognized update as soon as Qt receives it. The 100 ms
             # timer remains a recovery path for session/state changes, not a speech

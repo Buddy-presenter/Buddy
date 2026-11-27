@@ -54,6 +54,9 @@ class Selection(Model):
     reason: Literal["explicit", "topic", "correction", "stay", "uncertain"]
     confidence: float = Field(ge=0, le=1, strict=True)
     evidence: tuple[int, ...] = Field(max_length=8)
+    # Set when Jev decided the presenter wants Buddy to search the web: the slide
+    # choice is then "c0" and the desktop opens the search panel instead.
+    search: Literal["web", "images"] | None = None
 
 
 class DecisionProvider(Protocol):
@@ -204,7 +207,12 @@ class CohereDecisionProvider:
                 {
                     "role": "user",
                     "content": "Return only the selection JSON object, "
-                    "without explanation.\nData: " + json.dumps(passage, ensure_ascii=False),
+                    "without explanation.\nData: "
+                    # Only Jev decides web searches; Cohere sees the slide options.
+                    + json.dumps(
+                        {k: v for k, v in passage.items() if k != "web_search"},
+                        ensure_ascii=False,
+                    ),
                 },
             ],
             "response_format": {"type": "json_object", "schema": schema},
@@ -277,6 +285,27 @@ we saw"), is hypothetical ("imagine if", "if X happens"), quotes someone, asks t
 question or repeats one, negates or cancels ("I won't", "never mind"), or previews a later topic
 ("we'll get to", "coming up next")."""
 
+# Two fixed options that let Jev decide, from natural speech, that the presenter wants Buddy
+# to look something up. Jev only chooses; the search words are written afterwards from the
+# spoken sentence, because Jev cannot return text.
+JEV_SEARCH_OPTIONS = {
+    "search_web": (
+        "Search the web: the presenter asks Buddy, the assistant, to look up, search, find out,"
+        " check or explain something that the slide options do not cover, in any wording and"
+        " with any words before or after the request. Examples: 'let me search what a"
+        " stablecoin is', 'let's look up who founded Tesla', 'Buddy, what does EBITDA mean?',"
+        " 'can we quickly check the population of Lebanon', 'I'm curious how fast a cheetah"
+        " runs, let's find out'. Not when the presenter asks the audience a question or answers"
+        " their own question, and not when a slide option covers what they want to see."
+    ),
+    "search_images": (
+        "Show pictures from the web: the presenter asks Buddy to show or find images, photos or"
+        " pictures of something that the slide options do not show, in any wording. Examples:"
+        " 'let's see some pictures of the Eiffel Tower', 'show me what a pangolin looks like',"
+        " 'can we get photos of the new iPhone up'."
+    ),
+}
+
 # Added to the instructions only while the sentence is still being spoken (#248). On 528
 # partial sentences from the evaluation set it cut wrong early actions from 26 to 9.
 JEV_UNFINISHED = """\
@@ -318,6 +347,8 @@ def jev_request(passage: dict[str, object]) -> tuple[dict[str, object], dict[str
             )
             text = f"Go to {where}: {content}"
         criteria[str(option["id"])] = text[:1600]
+    if passage.get("web_search"):
+        criteria.update(JEV_SEARCH_OPTIONS)
     state: dict[str, object] = {
         "latest_sentence": segments[-1],
         "earlier_sentences": segments[:-1],
@@ -398,6 +429,9 @@ class JevDecisionProvider:
             choice = answers["action"]["choice"]
             probability = float(answers["action"]["probabilities"][choice])
             presenting = float(answers["presenting_now"]["noul"])
+            search: Literal["web", "images"] | None = (
+                "web" if choice == "search_web" else "images" if choice == "search_images" else None
+            )
             if choice not in criteria or not all(
                 0 <= value <= 1 for value in (probability, presenting)
             ):
@@ -412,7 +446,16 @@ class JevDecisionProvider:
                     "presenting_floor": self.presenting_floor,
                 }
             )
-            if presenting < self.presenting_floor:
+            if search is not None:
+                # A request to Buddy to look something up: no slide action.
+                selection = Selection(
+                    choice="c0",
+                    reason="stay" if probability >= self.threshold else "uncertain",
+                    confidence=probability,
+                    evidence=(),
+                    search=search if probability >= self.threshold else None,
+                )
+            elif presenting < self.presenting_floor:
                 # Recalled, hypothetical, quoted, questioned or previewed: never act.
                 selection = Selection(
                     choice="c0", reason="stay", confidence=1 - presenting, evidence=()

@@ -79,7 +79,9 @@ class MainWindow(QMainWindow):
         self._information_search_generation = 0
         self._information_search_task: int | None = None
         self._information_search_task_generation: int | None = None
-        self._queued_information_search: tuple[int, str, bool, AccessProvider] | None = None
+        self._queued_information_search: (
+            tuple[int, str, bool, AccessProvider, str | None] | None
+        ) = None
         self._reduce_motion = bool(settings.value("appearance/reduce_motion", False, type=bool))
         self._search_panel: InformationSearchPanel | None = None
         self.setWindowTitle("Buddy")
@@ -132,6 +134,7 @@ class MainWindow(QMainWindow):
         self.review = ReviewWidget(config, self.account)
         self.present = PresentWidget(config, settings)
         self.present.web_search_requested.connect(self._open_voice_search)
+        self.present.spoken_search_requested.connect(self._open_spoken_search)
         self.present.return_to_presentation_requested.connect(self._return_to_presentation_by_voice)
         self.present.scroll_panel_requested.connect(self._scroll_information_search)
         self._mini: BuddyMini | None = None
@@ -747,7 +750,19 @@ class MainWindow(QMainWindow):
             self._mini_auto_poll.start()
 
     @Slot(str, bool)
-    def _open_voice_search(self, query: str, images: bool, browser: bool = False) -> None:
+    @Slot(str, str, bool)
+    def _open_spoken_search(self, sentence: str, context: str, images: bool) -> None:
+        """Jev decided the presenter asked Buddy to look something up."""
+        self._open_voice_search(sentence, images, spoken_context=context)
+
+    def _open_voice_search(
+        self,
+        query: str,
+        images: bool,
+        browser: bool = False,
+        *,
+        spoken_context: str | None = None,
+    ) -> None:
         self._information_search_generation += 1
         generation = self._information_search_generation
         self._queued_information_search = None
@@ -782,9 +797,9 @@ class MainWindow(QMainWindow):
             return
         access = self._access_provider(session)
         if self.information_search_runner.busy:
-            self._queued_information_search = (generation, query, images, access)
+            self._queued_information_search = (generation, query, images, access, spoken_context)
             return
-        self._submit_information_search(generation, query, images, access)
+        self._submit_information_search(generation, query, images, access, spoken_context)
 
     def _information_search_panel(self) -> InformationSearchPanel:
         """The search panel, recreated if anything ever deleted it (#250)."""
@@ -862,13 +877,20 @@ class MainWindow(QMainWindow):
         self._information_search_panel().close_panel()
 
     def _submit_information_search(
-        self, generation: int, query: str, images: bool, access: AccessProvider
+        self,
+        generation: int,
+        query: str,
+        images: bool,
+        access: AccessProvider,
+        spoken_context: str | None = None,
     ) -> None:
         if generation != self._information_search_generation or self._closing:
             return
         self._information_search_task_generation = generation
         self._information_search_task = self.information_search_runner.submit(
-            lambda: InformationSearchService(self.config).answer(access, query, images=images)
+            lambda: InformationSearchService(self.config).answer(
+                access, query, images=images, spoken_context=spoken_context
+            )
         )
 
     @Slot(int, object)
@@ -900,8 +922,7 @@ class MainWindow(QMainWindow):
         self._information_search_task_generation = None
         queued, self._queued_information_search = self._queued_information_search, None
         if queued is not None and not self._closing:
-            generation, query, images, access = queued
-            self._submit_information_search(generation, query, images, access)
+            self._submit_information_search(*queued)
         if self._closing:
             self.close()
 

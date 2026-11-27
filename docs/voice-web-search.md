@@ -44,6 +44,40 @@ when it asks for images, photos or pictures, or ends with “online,” “on th
 Google.” Any sentence that Buddy's local slide commands recognise (next/previous slide, zoom,
 highlight, reset) is never treated as a search.
 
+## Searches Jev decides from natural speech
+
+The phrasings above are Buddy's instant path. Anything else is decided by Jev, the same model
+that decides slide actions, in the same request: the desktop sends `web_search: true` with
+each live-suggestion request, and Jev's choice gets two fixed extra options next to the slide
+options, “search the web” and “show pictures from the web.” No fixed words are needed: “let's
+look at what the average SaaS churn is,” “I wonder who invented the internet, let's find
+out,” “can we get the definition of operating leverage up there?” or “let me show you what a
+narwhal looks like” all search. Jev chooses “do nothing” for rhetorical or audience questions
+(“why did costs go up? Mostly because of cloud”) and ordinary narration (“we searched for
+months”), and a slide option when a slide covers what the presenter wants to see (“let's
+look at our revenue for the quarter”). A search needs Jev's probability of at least 0.6.
+
+Jev only chooses; it cannot return text. When it chooses a search, the agent response carries
+`search: "web"` or `"images"` with no slide action, and the desktop sends the finished
+sentence (and the sentence before it, for pronouns) to the search endpoint with
+`spoken: true`. The server asks Cohere to write short search words from it, then searches as
+usual; if the sentence asks for nothing, the search returns no results. If Cohere is slow
+(over four seconds) or fails, the sentence itself is searched. DuckDuckGo fails or stalls on
+roughly one text search in eight, so a failed or empty text search is retried once, within
+eight seconds in all. A decision made while
+the sentence is still being spoken waits for its final words, each sentence searches at most
+once, and a search decision stays valid while the presenter keeps talking. Only desktops that
+send `web_search: true` ever receive `search`. This path needs a presentation session with
+live suggestions on and Jev selected as the decider; Cohere decisions never search.
+
+On a 92-sentence labelled set (52 search requests in varied wording, 15 rhetorical questions,
+15 narration sentences with words such as “look” or “search”, 10 “let's look at” sentences
+that slides cover), Jev found 48 of 52 searches with no false searches. On the 300-sentence
+slide set it scored 285/300 against 286/300 without the search options and never chose a
+search.
+
+## Timing and corrections
+
 Information searches start immediately, so the panel appears as soon as the sentence ends.
 Recent explicit searches can still be corrected for three seconds with phrases such as “I
 mean …”; a correction sends a new query that replaces the panel's answer. Image searches wait

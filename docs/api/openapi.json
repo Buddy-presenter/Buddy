@@ -328,6 +328,21 @@
             ],
             "title": "Retry After Ms"
           },
+          "search": {
+            "anyOf": [
+              {
+                "enum": [
+                  "web",
+                  "images"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Search"
+          },
           "sequence": {
             "title": "Sequence",
             "type": "integer"
@@ -1326,6 +1341,18 @@
       "InformationSearchRequest": {
         "additionalProperties": false,
         "properties": {
+          "context": {
+            "anyOf": [
+              {
+                "maxLength": 600,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context"
+          },
           "mode": {
             "default": "web",
             "enum": [
@@ -1340,6 +1367,11 @@
             "minLength": 2,
             "title": "Query",
             "type": "string"
+          },
+          "spoken": {
+            "default": false,
+            "title": "Spoken",
+            "type": "boolean"
           }
         },
         "required": [
@@ -1372,6 +1404,19 @@
             "maxItems": 9,
             "title": "Images",
             "type": "array"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query"
           },
           "sources": {
             "default": [],
@@ -8673,6 +8718,11 @@
                     "minLength": 1,
                     "title": "Text",
                     "type": "string"
+                  },
+                  "web_search": {
+                    "default": false,
+                    "title": "Web Search",
+                    "type": "boolean"
                   }
                 },
                 "required": [

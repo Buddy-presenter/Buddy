@@ -203,3 +203,152 @@ def test_request_mode_is_closed():
     assert InformationSearchRequest(query="cats").mode == "web"
     with pytest.raises(ValueError):
         InformationSearchRequest(query="cats", mode="video")
+
+
+def spoken_service(query_text, calls):
+    def respond(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        calls.append(body)
+        if body["max_tokens"] == 40:
+            return httpx.Response(
+                200, json={"message": {"content": [{"type": "text", "text": query_text}]}}
+            )
+        return httpx.Response(
+            200,
+            json={
+                "finish_reason": "COMPLETE",
+                "message": {"content": [{"type": "text", "text": "A short answer."}]},
+            },
+        )
+
+    return respond
+
+
+def test_spoken_request_is_turned_into_search_words():
+    # Jev cannot return text, so the search words are written from the sentence.
+    calls: list[dict] = []
+    searched: list[str] = []
+
+    async def scenario() -> str:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(spoken_service('"population of Lebanon"', calls))
+        ) as client:
+            service = InformationSearchService(
+                AgentSettings("server-only-test-key"),
+                client,
+                search_images=lambda query, limit: [],
+                search=lambda query: (
+                    searched.append(query)
+                    or [{"title": "T", "href": "https://example.org/x", "body": "B"}]
+                ),
+            )
+            return await service.query_from_speech(
+                "Okay, can we quickly check how many people live in Lebanon?",
+                "Our Beirut office grew.",
+                images=False,
+            )
+
+    assert asyncio.run(scenario()) == "population of Lebanon"
+    prompt = json.loads(calls[0]["messages"][-1]["content"])
+    assert prompt == {
+        "wants": "information",
+        "earlier_sentence": "Our Beirut office grew.",
+        "latest_sentence": "Okay, can we quickly check how many people live in Lebanon?",
+    }
+
+
+@pytest.mark.parametrize("reply", ["NONE", "none.", "", "x" * 200])
+def test_spoken_request_without_a_usable_query_finds_nothing(reply):
+    async def scenario() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(spoken_service(reply, []))
+        ) as client:
+            service = InformationSearchService(AgentSettings("k"), client)
+            await service.query_from_speech("Thanks everyone.", None, images=True)
+
+    with pytest.raises(InformationSearchFailure) as caught:
+        asyncio.run(scenario())
+    assert caught.value.code == "no_results"
+
+
+def test_spoken_flag_and_context_are_bounded():
+    values = InformationSearchRequest.model_validate(
+        {"query": "let me look up EBITDA", "spoken": True, "context": "Costs rose."}
+    )
+    assert values.spoken and values.context == "Costs rose."
+    assert not InformationSearchRequest.model_validate({"query": "EBITDA"}).spoken
+    with pytest.raises(ValueError):
+        InformationSearchRequest.model_validate({"query": "EBITDA", "context": "x" * 601})
+
+
+@pytest.mark.parametrize("first", ["error", "empty"])
+def test_web_search_retries_once_when_the_search_provider_fails(first):
+    attempts: list[str] = []
+
+    def search(query):
+        attempts.append(query)
+        if len(attempts) == 1:
+            if first == "error":
+                raise RuntimeError("No results found.")
+            return []
+        return [{"title": "T", "href": "https://example.org/x", "body": "B"}]
+
+    async def scenario():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(spoken_service("unused", []))
+        ) as client:
+            service = InformationSearchService(
+                AgentSettings("k"), client, search=search, search_images=lambda q, n: []
+            )
+            return await service.answer("EBITDA meaning")
+
+    assert asyncio.run(scenario()).answer == "A short answer."
+    assert attempts == ["EBITDA meaning", "EBITDA meaning"]
+
+
+def test_web_search_gives_up_after_the_retry():
+    def search(query):
+        raise RuntimeError("down")
+
+    async def scenario():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(spoken_service("unused", []))
+        ) as client:
+            service = InformationSearchService(
+                AgentSettings("k"), client, search=search, search_images=lambda q, n: []
+            )
+            await service.answer("EBITDA meaning")
+
+    with pytest.raises(InformationSearchFailure) as caught:
+        asyncio.run(scenario())
+    assert caught.value.code == "search_unavailable"
+
+
+@pytest.mark.parametrize("failure", ["timeout", "500", "garbled"])
+def test_spoken_search_falls_back_to_the_sentence_when_the_rewrite_fails(failure):
+    def respond(request: httpx.Request) -> httpx.Response:
+        if failure == "timeout":
+            raise httpx.ReadTimeout("slow", request=request)
+        if failure == "500":
+            return httpx.Response(500)
+        return httpx.Response(200, json={"message": {}})
+
+    async def scenario() -> str:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            service = InformationSearchService(AgentSettings("k"), client)
+            return await service.query_from_speech("Who invented the internet?", None, images=False)
+
+    assert asyncio.run(scenario()) == "Who invented the internet?"
+
+
+def test_spoken_search_rate_limit_is_reported():
+    async def scenario() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(429))
+        ) as client:
+            service = InformationSearchService(AgentSettings("k"), client)
+            await service.query_from_speech("Who invented the internet?", None, images=False)
+
+    with pytest.raises(InformationSearchFailure) as caught:
+        asyncio.run(scenario())
+    assert caught.value.code == "rate_limited"

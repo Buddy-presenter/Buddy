@@ -244,6 +244,8 @@ class AgentService:
         ]
         if self.decision_model in DECISION_MODELS:
             payload["decision_model"] = self.decision_model
+        # Let Jev also decide that the presenter asked Buddy to look something up.
+        payload["web_search"] = True
         try:
             raw = self._kept().post(
                 f"/api/v1/sessions/{UUID(session.id)}/agent",
@@ -258,6 +260,9 @@ class AgentService:
             # Session-scoped server diagnostics are returned only for an explicit
             # operator capture. Keep them out of the presenter/UI proposal contract.
             if "diagnostics" in result and not isinstance(result.pop("diagnostics"), dict):
+                raise ValueError
+            search = result.pop("search", None)
+            if search not in {None, "web", "images"}:
                 raise ValueError
             if set(result) != {
                 "protocol",
@@ -379,6 +384,13 @@ class AgentService:
                 session.state is None or target["slide_id"] != session.state.active_slide_id
             ):
                 raise ValueError
+            if search is not None:
+                # A request to look something up stays valid while the presenter keeps
+                # talking: it changes no slide, and its words are already spoken.
+                if target["tool"] != "no_action" or result["decision_source"] != "model":
+                    raise ValueError
+                result["search"] = search
+                return result
             if (
                 not context.matches_decision(current_context())
                 or time.monotonic_ns() - context.segments[-1].capture_end_ns > 5_000_000_000
