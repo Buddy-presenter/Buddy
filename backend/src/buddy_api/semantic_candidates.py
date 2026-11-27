@@ -101,10 +101,13 @@ def balanced_shortlist(
     # Current slide and no change occupy two slots. Reserve three action slots
     # only when the current slide has usable region actions; actions on other
     # slides cannot execute yet and should not reduce the navigation shortlist.
-    current_has_actions = any(
-        doc.action_id is not None and doc.slide_id == current for doc in items
+    current_has_action_evidence = any(
+        doc.action_id is not None
+        and doc.slide_id == current
+        and any(scores[index] > 0 for scores in similarities)
+        for index, doc in enumerate(items)
     )
-    other_slides = 3 if current_has_actions else 6
+    other_slides = 3 if current_has_action_evidence else 6
     per_view = other_slides // len(similarities)
     rankings = [
         sorted(

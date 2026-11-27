@@ -366,6 +366,17 @@ def test_actions_on_other_slides_do_not_reserve_retrieval_budget():
     assert len(selected) == 7
 
 
+def test_irrelevant_current_slide_actions_do_not_reserve_retrieval_budget():
+    items = tuple(Document(str(i), None, "slide", "Synthetic") for i in range(20)) + (
+        Document("0", "irrelevant-action", "highlight_region", "Unrelated detail"),
+    )
+    similarities = (tuple(1 / (i + 1) for i in range(20)) + (-0.1,),)
+
+    _, selected = balanced_shortlist(items, similarities, "0")
+
+    assert len(selected) == 7
+
+
 @pytest.mark.parametrize("usable_regions", [False, True])
 def test_current_slide_and_action_reservation_fit_eight_candidate_contract(usable_regions):
     items = tuple(Document(str(i), None, "slide", "Synthetic") for i in range(20))
