@@ -70,7 +70,8 @@ class AgentSettings:
     requests_per_minute: int = 20
     # Optional TypeSafe Jev key: decide with Jev first, Cohere when unsure (#243).
     jev_api_key: str | None = field(default=None, repr=False)
-    jev_confidence: float = 0.6
+    jev_confidence: float = 0.5
+    jev_presenting_floor: float = 0.4
     # Which path decides: "jev" (default), "cohere", or "jev+cohere" (Cohere when Jev is
     # unsure). Without a Jev key every choice decides with Cohere.
     decision_provider: str = "jev"
@@ -86,6 +87,8 @@ class AgentSettings:
             raise ValueError("Invalid Jev credentials")
         if not 0.5 <= self.jev_confidence <= 1:
             raise ValueError("Jev confidence must be between 0.5 and 1")
+        if not 0 <= self.jev_presenting_floor < 1:
+            raise ValueError("Jev presenting-now floor must be between 0 and 1")
         if self.decision_provider not in {"jev", "cohere", "jev+cohere"}:
             raise ValueError("Decision provider must be jev, cohere or jev+cohere")
         if self.diagnostics_enabled != (self.diagnostics_session_id is not None):
@@ -335,8 +338,9 @@ class JevDecisionProvider:
     One request asks two typed questions: which option fits the latest sentence, and whether
     the sentence is presenting something now at all. Buddy acts only when the presenter is
     presenting now (probability >= ``presenting_floor``) and the chosen option's probability
-    reaches ``threshold``; otherwise it does nothing. Tuned on a 300-case labelled set
-    (95% correct; 93% on the half held out from tuning).
+    reaches ``threshold``; otherwise it does nothing. The two gates are independently
+    configurable because action-selection confidence and present-time intent are separate
+    signals.
     """
 
     def __init__(
@@ -344,8 +348,8 @@ class JevDecisionProvider:
         api_key: str,
         client: httpx.AsyncClient | None = None,
         *,
-        threshold: float = 0.6,
-        presenting_floor: float = 0.2,
+        threshold: float = 0.5,
+        presenting_floor: float = 0.4,
         deadline: float = 2.0,
     ):
         if not api_key or len(api_key) > 4096 or any(c.isspace() for c in api_key):

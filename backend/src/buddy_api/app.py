@@ -98,7 +98,11 @@ def decision_providers(
         if settings.decision_provider != "cohere":
             logger.warning("presentation_agent event=jev_unavailable decided_by=cohere")
         return cohere, {"cohere": cohere}
-    jev = JevDecisionProvider(settings.jev_api_key, threshold=settings.jev_confidence)
+    jev = JevDecisionProvider(
+        settings.jev_api_key,
+        threshold=settings.jev_confidence,
+        presenting_floor=settings.jev_presenting_floor,
+    )
     default: DecisionProvider = (
         cohere
         if settings.decision_provider == "cohere"

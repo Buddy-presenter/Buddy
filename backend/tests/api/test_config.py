@@ -46,16 +46,22 @@ def test_agent_is_opt_in_and_credentials_are_backend_only():
     enabled = Settings.from_environment({**base, "BUDDY_AGENT_ENABLED": "true"})
     assert enabled.agent.monthly_limit is None
     assert enabled.agent.requests_per_minute == 20
+    assert enabled.agent.jev_confidence == 0.5
+    assert enabled.agent.jev_presenting_floor == 0.4
     configured = Settings.from_environment(
         {
             **base,
             "BUDDY_AGENT_ENABLED": "true",
             "BUDDY_AGENT_MONTHLY_LIMIT": "5000",
             "BUDDY_AGENT_REQUESTS_PER_MINUTE": "500",
+            "BUDDY_JEV_CONFIDENCE": "0.55",
+            "BUDDY_JEV_PRESENTING_FLOOR": "0.35",
         }
     )
     assert configured.agent.monthly_limit == 5000
     assert configured.agent.requests_per_minute == 500
+    assert configured.agent.jev_confidence == 0.55
+    assert configured.agent.jev_presenting_floor == 0.35
     assert "private-key" not in repr(enabled)
     for values in (
         {"BUDDY_AGENT_ENABLED": "yes"},

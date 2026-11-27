@@ -133,6 +133,24 @@ def balanced_shortlist(
     return scored, destinations
 
 
+def current_slide_action_documents(
+    scored: list[tuple[float, Document]], current: str, limit: int
+) -> tuple[tuple[float, Document], ...]:
+    """Return ranked positive action matches that can be executed on this request.
+
+    Region actions on other slides are not executable until navigation has happened,
+    so presentation_agent.options drops them. Do not let those documents occupy the
+    bounded candidate slots intended for Jev.
+    """
+    if limit <= 0:
+        return ()
+    return tuple(
+        (score, doc)
+        for score, doc in scored
+        if score > 0 and doc.slide_id == current and doc.action_id is not None
+    )[:limit]
+
+
 class SemanticCandidates:
     def __init__(
         self, database: Database, provider: CohereEmbeddings, call_limit: int | None = None
@@ -374,18 +392,15 @@ class SemanticCandidates:
                         score=round(score * 1000),
                     )
                 )
-        for score, doc in scored:
-            if len(result) >= 8:
-                break
-            if score > 0 and doc.slide_id in selected and doc.action_id:
-                kind = cast(Literal["zoom_region", "highlight_region"], doc.kind)
-                result.append(
-                    Candidate(
-                        kind=kind,
-                        slide_id=doc.slide_id,
-                        action_id=doc.action_id,
-                        reason="purpose",
-                        score=round(score * 1000),
-                    )
+        for score, doc in current_slide_action_documents(scored, current, 8 - len(result)):
+            kind = cast(Literal["zoom_region", "highlight_region"], doc.kind)
+            result.append(
+                Candidate(
+                    kind=kind,
+                    slide_id=doc.slide_id,
+                    action_id=doc.action_id,
+                    reason="purpose",
+                    score=round(score * 1000),
                 )
+            )
         return tuple(result)

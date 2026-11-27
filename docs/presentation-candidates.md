@@ -38,7 +38,10 @@ The existing eight-candidate budget remains unchanged between both views. Curren
 and no change occupy two slots. With no usable region documents, the remaining six slots
 allow up to three non-current destinations per view. When usable region documents exist,
 two slots remain reserved for region candidates, leaving two slide destinations per view.
-This avoids discarding a third contextual hit merely to reserve unavailable actions.
+Only actions on the current slide can be included in those slots because off-screen region
+actions cannot execute before navigation. This avoids spending Jev's bounded options on
+actions that the option builder would discard. The shortlist avoids discarding a third
+contextual hit merely to reserve unavailable actions.
 Identical views use one ranking. It fills remaining slide slots using reciprocal-rank fusion (sum of 1 / one-based document rank for
 positive-cosine evidence). Current slide and no change remain present. Region eligibility
 is unchanged. The shortlist expresses competing evidence, not a final interpretation of

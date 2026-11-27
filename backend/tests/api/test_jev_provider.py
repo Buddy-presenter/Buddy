@@ -97,8 +97,8 @@ def test_opt_in_trace_captures_exact_jev_request_and_raw_probabilities():
         "action_probabilities": {"c1": 0.83},
         "presenting_now_probability": 0.75,
         "action_probability": 0.83,
-        "threshold": 0.6,
-        "presenting_floor": 0.2,
+        "threshold": 0.5,
+        "presenting_floor": 0.4,
     }
     assert selection.choice == "c1"
 
@@ -106,9 +106,10 @@ def test_opt_in_trace_captures_exact_jev_request_and_raw_probabilities():
 @pytest.mark.parametrize(
     ("choice", "probability", "presenting", "expected"),
     [
-        ("c1", 0.6, 0.9, ("c1", "topic")),  # At the 60% bar: act.
-        ("c1", 0.59, 0.9, ("c0", "uncertain")),  # Below it: do nothing.
-        ("c1", 0.95, 0.1, ("c0", "stay")),  # Recalled/hypothetical/preview: never act.
+        ("c1", 0.5, 0.9, ("c1", "topic")),  # At the 50% bar: act.
+        ("c1", 0.49, 0.9, ("c0", "uncertain")),  # Below it: do nothing.
+        ("c1", 0.95, 0.39, ("c0", "stay")),  # Below the presenting-now floor: abstain.
+        ("c1", 0.95, 0.4, ("c1", "topic")),  # At the presenting-now floor: act.
         ("c0", 0.8, 0.9, ("c0", "stay")),
     ],
 )
@@ -194,11 +195,14 @@ def test_decision_provider_defaults_to_jev_and_keeps_cohere(choice, jev_key, kin
 def test_jev_settings_are_optional_and_validated():
     settings = AgentSettings("cohere")
     assert settings.jev_api_key is None
-    assert (settings.decision_provider, settings.jev_confidence) == ("jev", 0.6)
+    assert (settings.decision_provider, settings.jev_confidence) == ("jev", 0.5)
+    assert settings.jev_presenting_floor == 0.4
     with pytest.raises(ValueError):
         AgentSettings("cohere", jev_api_key="bad key")
     with pytest.raises(ValueError):
         AgentSettings("cohere", jev_confidence=0.2)
+    with pytest.raises(ValueError):
+        AgentSettings("cohere", jev_presenting_floor=1.0)
     with pytest.raises(ValueError):
         AgentSettings("cohere", decision_provider="groq")
     with pytest.raises(ValueError):

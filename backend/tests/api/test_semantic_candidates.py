@@ -19,6 +19,7 @@ from buddy_api.semantic_candidates import (
     SemanticCandidates,
     balanced_shortlist,
     combined_context,
+    current_slide_action_documents,
 )
 
 
@@ -333,6 +334,21 @@ def test_duplicate_region_documents_cannot_consume_all_reserved_slide_slots():
         items, ((0.9, 0.8, 0.7, 0.2, 0.1), (0.1, 0.2, 0.3, 0.9, 0.8)), "current"
     )
     assert selected == {"current", "old", "older", "new", "newer"}
+
+
+def test_offscreen_action_documents_do_not_consume_jev_candidate_slots():
+    ranked = [
+        (0.9, Document("other-slide", "offscreen-1", "highlight_region", "Other")),
+        (0.8, Document("other-slide", "offscreen-2", "zoom_region", "Other")),
+        (0.7, Document("current", "visible-1", "highlight_region", "Target one")),
+        (0.6, Document("current", "visible-2", "zoom_region", "Target two")),
+        (0.5, Document("current", "visible-3", "highlight_region", "Target three")),
+    ]
+
+    selected = current_slide_action_documents(ranked, "current", limit=2)
+
+    assert [doc.action_id for _, doc in selected] == ["visible-1", "visible-2"]
+    assert current_slide_action_documents(ranked, "current", limit=0) == ()
 
 
 @pytest.mark.parametrize("usable_regions", [False, True])
