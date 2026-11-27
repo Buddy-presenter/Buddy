@@ -71,6 +71,14 @@ def test_oversized_complete_menu_is_not_silently_truncated():
         direct_current_options(source)
 
 
+def test_exact_choice_limit_accounts_for_no_action_and_reset():
+    source = AgentInput(analysis(*(str(i) for i in range(255))), "slide-0", "slide", "hash")
+    _, targets, _ = direct_current_options(source)
+    assert len(targets) == 255
+    with pytest.raises(AgentFailure):
+        direct_current_options(replace(source, focus="zoom_region"))
+
+
 @pytest.mark.parametrize("choice", ["c255", "c999", "c-1", "c01", "arbitrary"])
 def test_choice_identifiers_remain_bounded(choice):
     with pytest.raises(ValueError):
@@ -143,6 +151,30 @@ def test_jev_can_choose_beyond_the_old_ten_option_limit():
         async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as client:
             result = await JevDecisionProvider("test", client).select(passage)
             assert result.choice == "c19" and result.evidence == (0,)
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("count,content", [(0, "brief"), (256, "brief"), (255, "x" * 1600)])
+def test_oversized_provider_menu_is_rejected_before_any_provider_call(count, content):
+    def forbidden(request):
+        raise AssertionError("Invalid menus must not spend provider calls")
+
+    async def check():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(forbidden)) as client:
+            provider = JevDecisionProvider("test", client)
+            with pytest.raises(AgentFailure) as failure:
+                await provider.select(
+                    dict(
+                        segments=["Show the result"],
+                        current_view={},
+                        options=[
+                            dict(id=f"c{i}", tool="go_to_slide", content=content)
+                            for i in range(count)
+                        ],
+                    )
+                )
+            assert failure.value.code == "candidates_unavailable"
 
     asyncio.run(check())
 

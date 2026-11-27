@@ -16,7 +16,8 @@ experiment. Descriptions and source-measured target geometry use the existing pr
 builders. The same server and desktop eligibility, authorization, source, freshness,
 transition-policy and execution checks still apply.
 
-Jev supports at most 255 choices. A larger complete menu returns the existing safe
+Jev supports at most 255 choices. Serialized criteria are additionally capped at 256 KiB.
+A larger complete menu returns the existing safe
 `candidates_unavailable` fallback; it is never silently shortened and never falls back to
 Cohere. Selecting the Cohere decider in this mode also fails closed. Index preparation
 checks session ownership/source and returns ready without document or query embeddings.
@@ -59,6 +60,9 @@ The primary corpus is 43 labelled synthetic cases on equivalent eight-slide PDF 
 PowerPoint sources. Labels precede the provider predictions. Each A/B pair uses the
 same transcript, source, saved analysis and eligibility evidence. Order alternates
 within each pair and is shuffled with a fixed seed for each of three repetitions.
+Both local variants use the same 500-request/minute operator allowance so ordinary
+benchmark replay is not measuring Buddy's lower default pacing limit. Actual provider
+limits still apply; this is not a throughput/load test.
 `--also-audio` adds eight representative cases recognized once through the real
 session WebSocket and Deepgram EU, then supplies those identical recognized words
 to both approaches in both formats. Windows SAPI generates this audio; it is not a
@@ -78,6 +82,12 @@ staging API are not part of this benchmark. First-repeat text cases execute in t
 native players. Later repetitions and audio cases measure selection, not repeated
 player execution. Native execution timings include cold isolated player startup;
 they must not be described as normal warm-app or microphone-to-visible latency.
+
+For a separate provider-only capacity probe, run
+`python -m tests.integration.jev_menu_stress --live build/jev-comparison/records.jsonl --output build/jev-menu-stress.json`.
+This puts one clearly relevant choice last among 16, 32, 64, 128 and 255 options, three
+times each. Its unrelated synthetic distractors are not validated executable actions
+and its accuracy cannot stand in for a full large-deck benchmark.
 
 `summary.json`, `records.jsonl`, captures and speech WAVs stay under ignored `build/`.
 The public report includes aggregate metrics and synthetic case failures, never keys,

@@ -488,21 +488,30 @@ def direct_current_options(
     Reuse the same descriptions, exact saved geometry, and server-owned target mapping.
     Fail closed when the complete menu exceeds Jev's limit; never silently truncate it.
     """
+    slides = tuple(candidate_slides(source.analysis))
+    actions = tuple(
+        action
+        for slide in slides
+        if slide.slide_id == source.current
+        for action in slide.actions
+        if candidate_action_eligible(action)
+    )
+    # Bound the complete menu before the existing option builder performs lookups.
+    # One no-action + all other slides + eligible actions + an optional reset.
+    if len(slides) + len(actions) + (source.focus != "slide") > 255:
+        raise AgentFailure("candidates_unavailable")
     candidates = tuple(
         Candidate(kind="slide", slide_id=slide.slide_id, reason="topic", score=0)
-        for slide in candidate_slides(source.analysis)
+        for slide in slides
     ) + tuple(
         Candidate(
             kind=cast(Literal["zoom_region", "highlight_region"], action.action.type),
-            slide_id=slide.slide_id,
+            slide_id=source.current,
             action_id=action.action.instance_id,
             reason="purpose",
             score=0,
         )
-        for slide in candidate_slides(source.analysis)
-        if slide.slide_id == source.current
-        for action in slide.actions
-        if candidate_action_eligible(action)
+        for action in actions
     )
     targets, descriptions = options(source, candidates, max_options=255)
     return candidates, targets, descriptions
