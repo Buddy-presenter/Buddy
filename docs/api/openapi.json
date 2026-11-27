@@ -9400,7 +9400,7 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Sign-in required"
           },
           "403": {
             "content": {
@@ -9410,7 +9410,7 @@
                 }
               }
             },
-            "description": "Forbidden"
+            "description": "Not the session owner"
           },
           "404": {
             "content": {
@@ -9420,7 +9420,7 @@
                 }
               }
             },
-            "description": "Not Found"
+            "description": "Session not found"
           },
           "409": {
             "content": {
@@ -9430,7 +9430,7 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "The session ended"
           },
           "413": {
             "content": {
@@ -9440,7 +9440,7 @@
                 }
               }
             },
-            "description": "Request Entity Too Large"
+            "description": "Slide image too large"
           },
           "422": {
             "content": {
@@ -9450,7 +9450,7 @@
                 }
               }
             },
-            "description": "Unprocessable Entity"
+            "description": "Unsupported slide image"
           }
         },
         "summary": "Put Slide Image",

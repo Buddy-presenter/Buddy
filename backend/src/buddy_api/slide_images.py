@@ -88,7 +88,15 @@ def slide_image_router() -> APIRouter:
     router = APIRouter(
         prefix="/api/v1/sessions",
         tags=["presentation agent"],
-        responses={code: {"model": ErrorResponse} for code in (401, 403, 404, 409, 413, 422)},
+        # Explicit descriptions: Python versions name some statuses differently (413).
+        responses={
+            401: {"model": ErrorResponse, "description": "Sign-in required"},
+            403: {"model": ErrorResponse, "description": "Not the session owner"},
+            404: {"model": ErrorResponse, "description": "Session not found"},
+            409: {"model": ErrorResponse, "description": "The session ended"},
+            413: {"model": ErrorResponse, "description": "Slide image too large"},
+            422: {"model": ErrorResponse, "description": "Unsupported slide image"},
+        },
     )
 
     @router.put("/{identifier}/slide-image", status_code=204)
