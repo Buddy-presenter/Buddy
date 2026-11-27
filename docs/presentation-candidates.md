@@ -37,8 +37,8 @@ the entire shortlist after a topic change. These query vectors are not averaged.
 The existing eight-candidate budget remains unchanged between both views. Current slide
 and no change occupy two slots. With no usable current-slide region documents, the remaining
 six slots allow up to three non-current destinations per view. When current-slide region
-documents exist, three slots remain reserved for region candidates and three slots remain
-for other slide destinations.
+documents have positive retrieval evidence, three slots remain reserved for region candidates
+and three slots remain for other slide destinations.
 Only actions on the current slide can be included in those slots because off-screen region
 actions cannot execute before navigation. This avoids spending Jev's bounded options on
 actions that the option builder would discard. Off-screen actions do not reserve candidate
