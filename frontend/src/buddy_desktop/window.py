@@ -1,8 +1,8 @@
 """Navigation and lifecycle for one desktop window and one application event loop."""
 
 import importlib
+import logging
 import sys
-import time
 from dataclasses import replace
 from uuid import UUID
 
@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 from buddy_desktop.account_widget import AccountWidget
 from buddy_desktop.auth import AccountProfile, AccountSession
 from buddy_desktop.browser_search import launch_chrome_search
-from buddy_desktop.buddy_mini import BuddyMini, mini_caption
+from buddy_desktop.buddy_mini import BuddyMini
 from buddy_desktop.config import AppConfig, ConfigurationError, validate_api_url
 from buddy_desktop.information_search_panel import InformationSearchPanel
 from buddy_desktop.information_search_service import InformationAnswer, InformationSearchService
@@ -48,6 +48,8 @@ from buddy_desktop.window_focus import (
     native_window_rect,
 )
 from buddy_identity.config import IdentityError, SessionExpired
+
+logger = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
@@ -140,7 +142,6 @@ class MainWindow(QMainWindow):
         self._mini: BuddyMini | None = None
         self._mini_session: str | None = None
         self._mini_screen: QScreen | None = None
-        self._mini_chime_paused = False
         self._mini_poll = QTimer(self, interval=100)
         self._mini_poll.timeout.connect(self._sync_mini)
         self._mini_auto_poll = QTimer(self, interval=100)
@@ -987,6 +988,7 @@ class MainWindow(QMainWindow):
             mini.setToolTip("Buddy Mini may be visible when sharing this entire screen.")
         mini.show()
         self.present.mini_active = True
+        logger.warning("presentation_mini event=entered")  # Correlate speech quality (#255).
         self.hide()
         self._mini_poll.start()
         self._sync_mini()
@@ -1036,7 +1038,6 @@ class MainWindow(QMainWindow):
         if page._powerpoint_info is None and page.fullscreen is None:
             session_id = None
         if not mini.isVisible() or session_id != self._mini_session:
-            self._mini_chime_paused = False
             mini.stop_sound()
             page.microphone.stop()
             page.agent_enabled.setChecked(False)
@@ -1062,7 +1063,6 @@ class MainWindow(QMainWindow):
         mini.sync(
             state, page.microphone_button, page.policy_undo_button, connected=bool(session_id)
         )
-        mini.set_caption(mini_caption(state, page.live_caption, time.monotonic()))
         mini.sync_automation(
             bool(session_id and page.agent_enabled.isEnabled()),
             bool(session_id and page.agent_enabled.isChecked() and page.policy_enabled.isChecked()),
@@ -1101,21 +1101,12 @@ class MainWindow(QMainWindow):
             label = f"Slide {number}"
         self._mini.completed(label)
         if page.mini_chime.isChecked() and self._mini.prepare_chime():
-            self._mini_chime_paused = (
-                page.microphone.enabled
-                and not page.microphone_pause.isChecked()
-                and not page.microphone_mute.isChecked()
-            )
-            if self._mini_chime_paused:
-                page.microphone_pause.setChecked(True)
-                page._invalidate_transcript_context()
+            # Only a sound: capture and speech context continue exactly as without Mini.
+            # Pausing here restarted capture after every move and lost the next command (#255).
             self._mini.play_chime()
 
     def _mini_chime_finished(self) -> None:
-        if self._mini_chime_paused:
-            self._mini_chime_paused = False
-            if self._mini is not None and self.present.mini_session_id() == self._mini_session:
-                self.present.microphone_pause.setChecked(False)
+        return None  # The chime no longer pauses capture, so nothing resumes here.
 
     def _mini_screen_removed(self, screen: QScreen) -> None:
         if self._mini is not None and screen == self._mini_screen:
@@ -1146,9 +1137,9 @@ class MainWindow(QMainWindow):
             return
         fullscreen = self.present.fullscreen
         stop = stop or mini.chiming or fullscreen is not None
-        self._mini_chime_paused = False
         self._mini_poll.stop()
         self.present.mini_active = False
+        logger.warning("presentation_mini event=left")
         self._mini_session = None
         self._mini_screen = None
         # Clear Mini ownership first: closing the audience window emits back into

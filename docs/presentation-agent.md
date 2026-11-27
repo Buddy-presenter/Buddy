@@ -109,10 +109,17 @@ automatic moves. Use **Enter Buddy Mini** to restart the overlay after waking.
 Listening ripples appear only to either side. Reduce motion keeps the mascot and
 listening marks still.
 
+Mini is only a visual control: capture, recognition, context and decisions are the same as
+with the main window (#255). It shows no live transcript. Because the main window is hidden,
+Windows may power-throttle Buddy, so Buddy opts out of power throttling while the microphone
+is on, and up to about two seconds of audio (was 0.4 s) can wait for the GUI thread before the
+oldest is dropped. The desktop log records `presentation_mini event=entered|left`,
+`presentation_speech event=audio_gap dropped_packets_total=…`, and
+`presentation_speech event=recognition_restart reason=…`, so lost speech can be traced.
+
 Enable **Buddy Mini completion sound** in Present before entering Mini to hear a
-short chime after completed automatic moves. Capture pauses during playback and
-the audio tail, and the prior speech context is discarded. A muted or stopped
-microphone is not started by the chime.
+short chime after completed automatic moves. Listening and the speech context continue
+during the chime, exactly as without Mini (#255).
 
 ## HTTP and tool contract
 
