@@ -21,6 +21,7 @@ from PySide6.QtGui import (
     QColor,
     QGuiApplication,
     QHideEvent,
+    QImage,
     QMouseEvent,
     QPainter,
     QPaintEvent,
@@ -85,6 +86,7 @@ from buddy_desktop.services import ServiceError
 from buddy_desktop.session_events import SessionEvent, SessionEventStream
 from buddy_desktop.slide_contract import ContractError, Region, parse_action
 from buddy_desktop.slide_executor import Completion, SlideExecutor
+from buddy_desktop.slide_image_service import SlideImageService, slide_jpeg
 from buddy_desktop.slide_surface import SlideSurface
 from buddy_desktop.speech import SpeechController
 from buddy_desktop.tasks import TaskRunner
@@ -314,6 +316,10 @@ class PresentWidget(Page):
         self._microphone_pdf_deadline.timeout.connect(self._microphone_pdf_unverified)
         self.powerpoint = PowerPointAutomation()
         self.powerpoint_runner = TaskRunner(self)
+        # The slide on screen, uploaded once per slide change for Jev's decisions (#259).
+        self.slide_image_runner = TaskRunner(self)
+        self._slide_image_sent: tuple[str, str] | None = None
+        self._powerpoint_frame: tuple[str | None, bytes] | None = None
         self.powerpoint_runner.succeeded.connect(self._powerpoint_succeeded)
         self.powerpoint_runner.failed.connect(self._powerpoint_failed)
         self.powerpoint_runner.idle.connect(self._powerpoint_idle)
@@ -906,6 +912,36 @@ class PresentWidget(Page):
             self._invalidate_transcript_context()
 
     @Slot()
+    def _sync_slide_image(self, session: PresentationSession, slide_id: str) -> None:
+        """Send the slide on screen to the session once per slide change (#259)."""
+        key = (session.id, slide_id)
+        access = self._session_access
+        if key == self._slide_image_sent or access is None or self.slide_image_runner.busy:
+            return
+        image: QImage | None = None
+        if self._powerpoint_info is not None:
+            frame = self._powerpoint_frame
+            if frame is None or frame[0] != slide_id:
+                return  # Wait for PowerPoint's preview of this slide.
+            image = QImage.fromData(frame[1])
+        else:
+            manifest = self.executor.manifest
+            slide = next(
+                (item for item in getattr(manifest, "slides", ()) if item.slide_id == slide_id),
+                None,
+            )
+            if manifest is None or slide is None:
+                return
+            image = self.executor._cached_image(self.executor._cache_key(manifest, slide))
+            if image is None:
+                return  # Not rendered yet; the next update tries again.
+        self._slide_image_sent = key
+        jpeg = slide_jpeg(image)
+        if jpeg is None:
+            return
+        service = SlideImageService(self.config)
+        self.slide_image_runner.submit(lambda: service.upload(access, session.id, slide_id, jpeg))
+
     def _update_agent(self) -> None:
         session = self._session if isinstance(self._session, PresentationSession) else None
         identifier = session.id if session is not None else None
@@ -929,6 +965,13 @@ class PresentWidget(Page):
         live = connected and session is not None and local_state is not None
         decision_session = replace(session, state=local_state) if live and session else session
         self.agent_enabled.setEnabled(connected)
+        if (
+            live
+            and session is not None
+            and local_state is not None
+            and self.agent_enabled.isChecked()
+        ):
+            self._sync_slide_image(session, local_state.active_slide_id)
         # A temporary connection/verification gap pauses proposals, but it must not
         # silently revoke the presenter's opt-in. Session identity changes below reset
         # consent for a genuinely new presentation.
@@ -3611,6 +3654,8 @@ class PresentWidget(Page):
                 self._powerpoint_lost()
         elif action == "preview" and isinstance(result, PowerPointFrame):
             self.powerpoint_controls.set_frame(result)
+            state = self._current_local_state()
+            self._powerpoint_frame = (state.active_slide_id if state else None, result.png)
         elif action == "command" and isinstance(result, PowerPointActionResult):
             self._attach_powerpoint_info(result.info)
             self.powerpoint_controls.completed(result)

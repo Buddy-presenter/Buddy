@@ -729,3 +729,39 @@ def test_window_tells_the_agent_while_the_search_panel_is_on_screen(present):
     assert page.agent_service.search_panel_open is True
     window._information_search_panel().hide()
     assert page.agent_service.search_panel_open is False
+
+
+def test_current_slide_image_is_uploaded_once_per_slide(qapp):
+    # #259: Jev sees the slide on screen; one upload per slide change, never a repeat.
+    from types import SimpleNamespace
+
+    from PySide6.QtGui import QColor, QImage
+
+    from buddy_desktop.config import AppConfig
+    from buddy_desktop.present_widget import PresentWidget
+
+    image = QImage(1280, 720, QImage.Format.Format_RGB32)
+    image.fill(QColor("white"))
+    slides = [SimpleNamespace(slide_id="s1"), SimpleNamespace(slide_id="s2")]
+    jobs = []
+    page = SimpleNamespace(
+        config=AppConfig("http://127.0.0.1:9"),
+        executor=SimpleNamespace(
+            manifest=SimpleNamespace(slides=slides),
+            _cache_key=lambda manifest, slide: slide.slide_id,
+            _cached_image=lambda key: image,
+        ),
+        slide_image_runner=SimpleNamespace(busy=False, submit=jobs.append),
+        _session_access=lambda: "token",
+        _powerpoint_info=None,
+        _powerpoint_frame=None,
+        _slide_image_sent=None,
+    )
+    session = SimpleNamespace(id="00000000-0000-0000-0000-000000000001")
+    for slide_id in ("s1", "s1", "s2"):
+        PresentWidget._sync_slide_image(page, session, slide_id)
+    assert len(jobs) == 2
+    # PowerPoint waits for its own preview of the current slide.
+    page._powerpoint_info, page._powerpoint_frame = SimpleNamespace(), ("s2", b"unused")
+    PresentWidget._sync_slide_image(page, session, "s3")
+    assert len(jobs) == 2

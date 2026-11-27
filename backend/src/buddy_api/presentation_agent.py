@@ -386,6 +386,27 @@ async def read_input(
         )
 
 
+def region_position(
+    analysis: AnalysisResult | PowerPointAnalysisResult, slide_id: str, region: Region | None
+) -> str | None:
+    """Where a saved region sits on its slide, in words: "top left", "middle right", ..."""
+    if region is None:
+        return None
+    manifest = getattr(getattr(analysis, "inputs", None), "manifest", None)
+    plane = next(
+        (s.source for s in getattr(manifest, "slides", ()) if s.slide_id == slide_id), None
+    )
+    if plane is None or plane.width <= 0 or plane.height <= 0:
+        return None
+    x = (region.x + region.width / 2) / plane.width
+    y = (region.y + region.height / 2) / plane.height
+    row = "top" if y < 1 / 3 else "bottom" if y > 2 / 3 else "middle"
+    column = "left" if x < 1 / 3 else "right" if x > 2 / 3 else "center"
+    if row == "middle" and column == "center":
+        return "center"
+    return f"{row} {column}"
+
+
 def options(
     source: AgentInput, candidates: tuple[Candidate, ...], *, max_options: int = 10
 ) -> tuple[tuple[Target, ...], list[dict[str, object]]]:
@@ -457,6 +478,10 @@ def options(
             )
             if shown:
                 content += f"\nShows: {shown[:256]}"
+            where = region_position(source.analysis, slide.slide_id, target.region)
+            if where:
+                # Links what Jev sees on the slide image to this option (#259).
+                content += f"\nPosition: {where}"
         if target in targets:
             continue
         descriptions.append(
@@ -1025,6 +1050,12 @@ def agent_router() -> APIRouter:
                         else:
                             begin_phase("selection")
                             passage = decision_passage(source, values, descriptions)
+                            image = request.app.state.slide_images.get(
+                                identifier, principal.id, source.current
+                            )
+                            if image is not None and direct:
+                                # The slide on screen, uploaded by the desktop (#259).
+                                passage["slide_image"] = (image.format, image.data)
                             provider = runtime.provider_for(values.decision_model)
                             if decision_diagnostics is not None:
                                 decision_diagnostics["provider_passage"] = passage
