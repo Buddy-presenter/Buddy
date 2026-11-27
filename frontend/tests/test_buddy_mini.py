@@ -183,7 +183,8 @@ def test_auto_mini_waits_for_the_requested_saved_deck(desktop_window, monkeypatc
     window.present._session = None
 
 
-def test_completion_chime_pauses_capture_until_the_sound_finishes(desktop_window, monkeypatch):
+def test_completion_chime_never_pauses_capture_or_clears_context(desktop_window, monkeypatch):
+    # #255: Mini is only visual; back-to-back voice moves must work as without Mini.
     window = desktop_window()
     window.navigation.setCurrentRow(3)
     page = window.present
@@ -198,12 +199,13 @@ def test_completion_chime_pauses_capture_until_the_sound_finishes(desktop_window
     monkeypatch.setattr(type(page.microphone), "enabled", property(lambda _: True))
     events = []
     monkeypatch.setattr(page.microphone, "set_paused", events.append)
+    monkeypatch.setattr(page, "_invalidate_transcript_context", lambda: events.append("cleared"))
     monkeypatch.setattr(mini, "prepare_chime", lambda: True)
     monkeypatch.setattr(mini, "play_chime", lambda: events.append("play"))
     window._mini_completed({"target": {"tool": "next_slide"}})
-    assert events == [True, "play"]
     mini.chime_finished.emit()
-    assert events == [True, "play", False]
+    assert events == ["play"]
+    assert not page.microphone_pause.isChecked()
     window._leave_mini()
     page.fullscreen = None
 

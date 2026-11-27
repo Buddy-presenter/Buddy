@@ -118,9 +118,8 @@ oldest is dropped. The desktop log records `presentation_mini event=entered|left
 `presentation_speech event=recognition_restart reason=…`, so lost speech can be traced.
 
 Enable **Buddy Mini completion sound** in Present before entering Mini to hear a
-short chime after completed automatic moves. Capture pauses during playback and
-the audio tail, and the prior speech context is discarded. A muted or stopped
-microphone is not started by the chime.
+short chime after completed automatic moves. Listening and the speech context continue
+during the chime, exactly as without Mini (#255).
 
 ## HTTP and tool contract
 

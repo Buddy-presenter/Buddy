@@ -648,7 +648,7 @@ class PresentWidget(Page):
         microphone_layout.addWidget(self.mini_button, alignment=Qt.AlignmentFlag.AlignLeft)
         self.mini_chime = QCheckBox("Buddy Mini completion sound")
         self.mini_chime.setToolTip(
-            "Play a short sound after a completed move. Capture pauses briefly."
+            "Play a short sound after a completed move. Listening continues."
         )
         self.mini_chime.setChecked(
             bool(settings.value("presentation/mini_chime", False, type=bool))

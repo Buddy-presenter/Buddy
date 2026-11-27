@@ -142,7 +142,6 @@ class MainWindow(QMainWindow):
         self._mini: BuddyMini | None = None
         self._mini_session: str | None = None
         self._mini_screen: QScreen | None = None
-        self._mini_chime_paused = False
         self._mini_poll = QTimer(self, interval=100)
         self._mini_poll.timeout.connect(self._sync_mini)
         self._mini_auto_poll = QTimer(self, interval=100)
@@ -1039,7 +1038,6 @@ class MainWindow(QMainWindow):
         if page._powerpoint_info is None and page.fullscreen is None:
             session_id = None
         if not mini.isVisible() or session_id != self._mini_session:
-            self._mini_chime_paused = False
             mini.stop_sound()
             page.microphone.stop()
             page.agent_enabled.setChecked(False)
@@ -1103,21 +1101,12 @@ class MainWindow(QMainWindow):
             label = f"Slide {number}"
         self._mini.completed(label)
         if page.mini_chime.isChecked() and self._mini.prepare_chime():
-            self._mini_chime_paused = (
-                page.microphone.enabled
-                and not page.microphone_pause.isChecked()
-                and not page.microphone_mute.isChecked()
-            )
-            if self._mini_chime_paused:
-                page.microphone_pause.setChecked(True)
-                page._invalidate_transcript_context()
+            # Only a sound: capture and speech context continue exactly as without Mini.
+            # Pausing here restarted capture after every move and lost the next command (#255).
             self._mini.play_chime()
 
     def _mini_chime_finished(self) -> None:
-        if self._mini_chime_paused:
-            self._mini_chime_paused = False
-            if self._mini is not None and self.present.mini_session_id() == self._mini_session:
-                self.present.microphone_pause.setChecked(False)
+        return None  # The chime no longer pauses capture, so nothing resumes here.
 
     def _mini_screen_removed(self, screen: QScreen) -> None:
         if self._mini is not None and screen == self._mini_screen:
@@ -1148,7 +1137,6 @@ class MainWindow(QMainWindow):
             return
         fullscreen = self.present.fullscreen
         stop = stop or mini.chiming or fullscreen is not None
-        self._mini_chime_paused = False
         self._mini_poll.stop()
         self.present.mini_active = False
         logger.warning("presentation_mini event=left")
