@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import random
+import re
 import sys
 import time
 from dataclasses import replace
@@ -29,6 +30,7 @@ from tests.integration.jev_comparison_metrics import correct, summarize
 from tests.integration.jev_native_execution import NativeExecution
 
 from buddy_api.agent_provider import AgentSettings
+from buddy_api.analysis.contracts import AnalysisInput, PowerPointAnalysisInput
 from buddy_api.app import create_app, decision_providers
 from buddy_api.auth import Principal, authenticated
 from buddy_api.config import Environment, Settings
@@ -62,7 +64,24 @@ async def idle_worker(self):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--live", required=True, action="store_true")
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--cohort", default="", help="Separate named request measurements on the same fixtures"
+    )
+    parser.add_argument(
+        "--resume", type=Path, help="Resume this runner's preserved synthetic fixtures"
+    )
+    parser.add_argument(
+        "--direct-only", action="store_true", help="Run Jev-only while Cohere is blocked"
+    )
+    parser.add_argument(
+        "--keep-fixtures", action="store_true", help="Retain fixtures for another phase"
+    )
+    parser.add_argument(
+        "--native-recheck-only",
+        action="store_true",
+        help="Replay failed native checks without rerunning or rescoring models",
+    )
     parser.add_argument("--profile", default="buddy-staging-tools")
     parser.add_argument("--bucket", default="buddy-staging-549327541867-data")
     parser.add_argument("--region", default="eu-central-1")
@@ -92,6 +111,12 @@ def main():
         help="Keep this synthetic schema/S3 evidence for recovery if interrupted",
     )
     args = parser.parse_args()
+    if bool(args.resume) == bool(args.output):
+        parser.error("Provide exactly one of --output or --resume")
+    if args.cohort and not re.fullmatch(r"[a-z0-9-]{1,32}", args.cohort):
+        parser.error("Cohort names use at most 32 lowercase letters, digits and hyphens")
+    if args.native_recheck_only and not args.resume:
+        parser.error("Native rechecks require a preserved --resume run")
     if args.speech_only and not (args.audio_replay or args.also_audio):
         parser.error("--speech-only requires --audio-replay or --also-audio")
     os.environ["AWS_PROFILE"] = args.profile
@@ -110,13 +135,23 @@ def main():
         round(screen.geometry().width() * scale),
         round(screen.geometry().height() * scale),
     )
-    args.output.mkdir(parents=True, exist_ok=False)
-    folder = args.output.resolve()
+    if args.output:
+        args.output.mkdir(parents=True, exist_ok=False)
+    folder = (args.resume or args.output).resolve()
+    suffix = "-" + args.cohort if args.cohort else ""
+    record_path, summary_path = folder / f"records{suffix}.jsonl", folder / f"summary{suffix}.json"
+    resumed = json.loads((folder / "checkpoint.json").read_text()) if args.resume else None
+    if resumed and (
+        resumed["profile"] != pdf_profile or resumed["viewport"] != list(native_viewport)
+    ):
+        parser.error("Resume requires the same native display profile and viewport")
     logging.getLogger("httpx").setLevel(logging.WARNING)
     admin = DatabaseSettings(os.environ["BUDDY_TEST_DATABASE_URL"])
     if not admin.connection_url().database.endswith("_test"):
         parser.error("A disposable *_test database is required")
-    schema = "buddy_jev_" + uuid4().hex
+    schema = resumed["schema"] if resumed else "buddy_jev_" + uuid4().hex
+    if not re.fullmatch(r"buddy_jev_[0-9a-f]{32}", schema):
+        parser.error("Not an isolated synthetic comparison schema")
     database_settings = replace(admin, schema=schema)
     cloud = boto3.Session(profile_name=args.profile, region_name=args.region)
     secrets = cloud.client("secretsmanager")
@@ -128,7 +163,7 @@ def main():
     ][0]["ApplyServerSideEncryptionByDefault"]["KMSMasterKeyID"]
     upload_settings = UploadSettings(bucket=args.bucket, region=args.region, kms_key=kms)
     storage = SourceStorage(upload_settings, s3)
-    paths = sources(folder / "sources")
+    paths = {} if resumed else sources(folder / "sources")
     if args.speech_only:
         # ASR is format-independent; use a real PDF session without claiming Office readiness.
         paths = {"pdf": paths["pdf"]}
@@ -141,8 +176,36 @@ def main():
     if args.limit:
         corpus = corpus[: args.limit]
     corpus_raw = json.dumps(corpus, sort_keys=True).encode()
-    (folder / "cases.json").write_bytes(corpus_raw)
+    if resumed:
+        if (folder / "cases.json").read_bytes() != corpus_raw:
+            parser.error("Resume must use the original frozen case corpus")
+    else:
+        (folder / "cases.json").write_bytes(corpus_raw)
     owner, receipt, fixtures, records = None, [], {}, []
+    if resumed:
+        owner = UUID(resumed["owner"])
+        receipt = resumed["prefixes"]
+        for kind, value in resumed["fixtures"].items():
+            path = Path(value["path"]).resolve()
+            model = PowerPointAnalysisInput if kind == "pptx" else AnalysisInput
+            doc = model.model_validate_json(json.dumps(value["document"]))
+            if (
+                not path.is_relative_to(folder / "sources")
+                or hashlib.sha256(path.read_bytes()).hexdigest() != doc.source_sha256
+            ):
+                parser.error("Preserved synthetic source changed or escaped its run folder")
+            fixtures[kind] = {
+                **value,
+                "deck": UUID(value["deck"]),
+                "analysis_id": UUID(value["analysis_id"]),
+                "path": path,
+                "document": doc,
+            }
+        if set(receipt) != {f"sources/{owner}/{f['deck']}/" for f in fixtures.values()}:
+            parser.error("Preserved cleanup scope does not match synthetic fixtures")
+        if record_path.exists():
+            records = [json.loads(line) for line in record_path.read_text().splitlines()]
+    completed_keys = {(r["source_format"], r["case"], r["repeat"], r["mode"]) for r in records}
     succeeded = False
     native_player = None
     db = Database(database_settings)
@@ -161,7 +224,8 @@ def main():
         return identifier
 
     try:
-        owner = asyncio.run(setup())
+        if not resumed:
+            owner = asyncio.run(setup())
         config = Settings(
             Environment.TEST,
             ("testserver",),
@@ -235,130 +299,174 @@ def main():
                     job.extraction_id = extraction.id
                     return deck.id, saved.id, doc
 
-            for kind, path in paths.items():
-                deck, analysis_id, doc = client.portal.call(seed, kind, path)
-                fixtures[kind] = dict(deck=deck, analysis_id=analysis_id, document=doc, path=path)
-                if not args.native_validation and not args.speech_only:
-                    raise RuntimeError(
-                        "Native validation is required before claiming eligible actions"
+            if not resumed:
+                for kind, path in paths.items():
+                    deck, analysis_id, doc = client.portal.call(seed, kind, path)
+                    fixtures[kind] = dict(
+                        deck=deck, analysis_id=analysis_id, document=doc, path=path
                     )
-                for slide in doc.slides:
-                    for action in slide.actions:
-                        if args.speech_only:
-                            # ASR-only mode makes no action eligibility/execution claim.
-                            continue
-                        if (
-                            (args.limit or args.case_ids)
-                            and action.instance_id
-                            not in {c["expected"].get("action_id") for c in corpus}
-                            and not any(c["focus"] != "slide" for c in corpus)
-                        ):
-                            continue
-                        profile = pdf_profile
-                        request = PreflightRequest(
-                            instance_id=action.instance_id,
-                            profile=profile,
-                            viewport=(1280, 720) if kind == "pdf" else native_viewport,
-                            correct=False,
+                    if not args.native_validation and not args.speech_only:
+                        raise RuntimeError(
+                            "Native validation is required before claiming eligible actions"
                         )
-                        check = client.portal.call(
-                            app.state.preflight.request, owner, analysis_id, uuid4(), request
-                        )
-                        manifest = doc.manifest.model_dump(mode="json")
-                        snapshot = dict(
-                            owner=str(owner),
-                            source_format=kind,
-                            source_sha256=doc.source_sha256,
-                            revision=doc.source_revision,
-                            deck_id=str(deck),
-                            slides={
-                                s["slide_id"]: dict(
-                                    number=i + 1,
-                                    native_id=s["native_slide_id"],
-                                    width=s["source"]["width"],
-                                    height=s["source"]["height"],
-                                )
-                                if kind == "pptx"
-                                else {}
-                                for i, s in enumerate(manifest["slides"])
-                            },
-                            action=action.model_dump(mode="json"),
-                            model_id=config.preflight.model,
-                            profile=profile,
-                            viewport=request.viewport,
-                            correct=False,
-                        )
-                        for attempt in range(3):
-                            bundle = run_preflight(
-                                path.read_bytes(),
-                                snapshot,
-                                config.preflight,
-                                Event(),
-                                lambda attempt: None,
-                            )
-                            with (folder / "validation-attempts.jsonl").open("a") as log:
-                                log.write(
-                                    json.dumps(
-                                        dict(
-                                            source=kind,
-                                            attempt=attempt + 1,
-                                            action=action.instance_id,
-                                            report=bundle.report,
-                                        )
-                                    )
-                                    + "\n"
-                                )
-                            preflight = bundle.report.get("preflight", {})
-                            if not (
-                                bundle.report["state"] == "unavailable"
-                                and bundle.report.get("reason") == "execution_failed"
-                                and preflight.get("failed_tool_index") == 1
+                    for slide in doc.slides:
+                        for action in slide.actions:
+                            if args.speech_only:
+                                # ASR-only mode makes no action eligibility/execution claim.
+                                continue
+                            if (
+                                (args.limit or args.case_ids)
+                                and action.instance_id
+                                not in {c["expected"].get("action_id") for c in corpus}
+                                and not any(c["focus"] != "slide" for c in corpus)
                             ):
-                                break
-                            time.sleep(1)
-                        client.portal.call(app.state.preflight.publish, check.id, bundle)
-                        print(
-                            json.dumps(
-                                dict(
-                                    stage="native_validation",
-                                    source=kind,
-                                    action=action.instance_id,
-                                    state=bundle.report["state"],
-                                    reason=bundle.report.get("reason"),
+                                continue
+                            profile = pdf_profile
+                            request = PreflightRequest(
+                                instance_id=action.instance_id,
+                                profile=profile,
+                                viewport=(1280, 720) if kind == "pdf" else native_viewport,
+                                correct=False,
+                            )
+                            check = client.portal.call(
+                                app.state.preflight.request, owner, analysis_id, uuid4(), request
+                            )
+                            manifest = doc.manifest.model_dump(mode="json")
+                            snapshot = dict(
+                                owner=str(owner),
+                                source_format=kind,
+                                source_sha256=doc.source_sha256,
+                                revision=doc.source_revision,
+                                deck_id=str(deck),
+                                slides={
+                                    s["slide_id"]: dict(
+                                        number=i + 1,
+                                        native_id=s["native_slide_id"],
+                                        width=s["source"]["width"],
+                                        height=s["source"]["height"],
+                                    )
+                                    if kind == "pptx"
+                                    else {}
+                                    for i, s in enumerate(manifest["slides"])
+                                },
+                                action=action.model_dump(mode="json"),
+                                model_id=config.preflight.model,
+                                profile=profile,
+                                viewport=request.viewport,
+                                correct=False,
+                            )
+                            for attempt in range(3):
+                                bundle = run_preflight(
+                                    path.read_bytes(),
+                                    snapshot,
+                                    config.preflight,
+                                    Event(),
+                                    lambda attempt: None,
                                 )
+                                with (folder / "validation-attempts.jsonl").open("a") as log:
+                                    log.write(
+                                        json.dumps(
+                                            dict(
+                                                source=kind,
+                                                attempt=attempt + 1,
+                                                action=action.instance_id,
+                                                report=bundle.report,
+                                            )
+                                        )
+                                        + "\n"
+                                    )
+                                preflight = bundle.report.get("preflight", {})
+                                if not (
+                                    bundle.report["state"] == "unavailable"
+                                    and bundle.report.get("reason") == "execution_failed"
+                                    and preflight.get("failed_tool_index") == 1
+                                ):
+                                    break
+                                time.sleep(1)
+                            client.portal.call(app.state.preflight.publish, check.id, bundle)
+                            print(
+                                json.dumps(
+                                    dict(
+                                        stage="native_validation",
+                                        source=kind,
+                                        action=action.instance_id,
+                                        state=bundle.report["state"],
+                                        reason=bundle.report.get("reason"),
+                                    )
+                                ),
+                                flush=True,
+                            )
+                            if bundle.report["state"] != "validated":
+                                (folder / f"failed-{kind}-{action.instance_id}.json").write_text(
+                                    json.dumps(bundle.report, indent=2)
+                                )
+                                raise RuntimeError(
+                                    "Native validation did not establish a usable fixture"
+                                )
+                    session_response = client.post(
+                        "/api/v1/sessions",
+                        json=dict(
+                            deck_id=str(deck),
+                            runtime=dict(
+                                platform="win32",
+                                renderer_version=doc.renderer_version,
+                                display_profile=pdf_profile,
                             ),
-                            flush=True,
-                        )
-                        if bundle.report["state"] != "validated":
-                            (folder / f"failed-{kind}-{action.instance_id}.json").write_text(
-                                json.dumps(bundle.report, indent=2)
-                            )
-                            raise RuntimeError(
-                                "Native validation did not establish a usable fixture"
-                            )
-                session_response = client.post(
-                    "/api/v1/sessions",
-                    json=dict(
-                        deck_id=str(deck),
-                        runtime=dict(
-                            platform="win32",
-                            renderer_version=doc.renderer_version,
-                            display_profile=pdf_profile,
                         ),
-                    ),
-                )
-                assert session_response.status_code == 200, session_response.text
-                session = session_response.json()["data"]
-                autonomous = client.patch(
-                    f"/api/v1/sessions/{session['id']}/state",
-                    json={
-                        **session["state"],
-                        "autonomy_mode": "autonomous",
-                        "expected_state_version": session["state_version"],
-                    },
-                )
-                assert autonomous.status_code == 200, autonomous.text
-                fixtures[kind]["session"] = autonomous.json()["data"]
+                    )
+                    assert session_response.status_code == 200, session_response.text
+                    session = session_response.json()["data"]
+                    autonomous = client.patch(
+                        f"/api/v1/sessions/{session['id']}/state",
+                        json={
+                            **session["state"],
+                            "autonomy_mode": "autonomous",
+                            "expected_state_version": session["state_version"],
+                        },
+                    )
+                    assert autonomous.status_code == 200, autonomous.text
+                    fixtures[kind]["session"] = autonomous.json()["data"]
+            if args.native_recheck_only:
+                results = []
+                for row in records:
+                    if "execution" not in row or row["execution"]["completed"]:
+                        continue
+                    kind = row["source_format"]
+                    fixture = fixtures[kind]
+                    player = NativeExecution(
+                        gui,
+                        fixture,
+                        kind,
+                        folder / ("recheck-" + kind),
+                        pdf_profile,
+                        (1280, 720) if kind == "pdf" else native_viewport,
+                        resume=True,
+                    )
+                    try:
+                        case = next(c for c in corpus if c["id"] == row["case"])
+                        player.prepare(case)
+                        result = player.execute(
+                            client,
+                            fixture["session"],
+                            row["diagnostics"]["input"],
+                            {"target": row["target"]},
+                            row["case"] + "-" + row["mode"],
+                        )
+                        results.append(
+                            dict(
+                                case=row["case"],
+                                source_format=kind,
+                                mode=row["mode"],
+                                first_pass_error=row["execution"].get("error"),
+                                recheck=result,
+                            )
+                        )
+                    finally:
+                        player.close()
+                (folder / "native-rechecks.json").write_text(json.dumps(results, indent=2))
+                print(json.dumps(dict(stage="native_rechecks", results=results)), flush=True)
+                succeeded = True
+                return
             semantic = app.state.semantic_candidates
             baseline = app.state.presentation_agent
             direct_settings = replace(config.agent, api_key="", candidate_mode="direct_current")
@@ -376,33 +484,40 @@ def main():
                     )
 
             semantic.provider.embed = measured_embed
-            (folder / "checkpoint.json").write_text(
-                json.dumps(
-                    dict(
-                        schema=schema,
-                        owner=str(owner),
-                        prefixes=receipt,
-                        profile=pdf_profile,
-                        viewport=native_viewport,
-                        fixtures={
-                            kind: dict(
-                                deck=str(f["deck"]),
-                                analysis_id=str(f["analysis_id"]),
-                                path=str(f["path"].resolve()),
-                                session=f["session"],
-                                document=f["document"].model_dump(mode="json"),
-                            )
-                            for kind, f in fixtures.items()
-                        },
-                    ),
-                    indent=2,
+            if not resumed:
+                (folder / "checkpoint.json").write_text(
+                    json.dumps(
+                        dict(
+                            schema=schema,
+                            owner=str(owner),
+                            prefixes=receipt,
+                            profile=pdf_profile,
+                            viewport=native_viewport,
+                            fixtures={
+                                kind: dict(
+                                    deck=str(f["deck"]),
+                                    analysis_id=str(f["analysis_id"]),
+                                    path=str(f["path"].resolve()),
+                                    session=f["session"],
+                                    document=f["document"].model_dump(mode="json"),
+                                )
+                                for kind, f in fixtures.items()
+                            },
+                        ),
+                        indent=2,
+                    )
                 )
+            audio_cases = (
+                json.loads((folder / "speech.json").read_text())
+                if resumed and (folder / "speech.json").exists()
+                else {}
             )
-            audio_cases = {}
             if args.audio_replay or args.also_audio:
                 from tests.integration.jev_speech_replay import replay
 
                 for case in corpus:
+                    if case["id"] in audio_cases:
+                        continue
                     if args.also_audio and case["id"] not in {
                         "case-001",
                         "case-002",
@@ -450,7 +565,9 @@ def main():
                     diagnostics_enabled=True,
                     diagnostics_session_id=UUID(session["id"]),
                 )
-                app.state.presentation_agent, app.state.semantic_candidates = baseline, semantic
+                app.state.presentation_agent, app.state.semantic_candidates = (
+                    (direct, None) if args.direct_only else (baseline, semantic)
+                )
                 started = time.perf_counter()
                 response = client.post(f"/api/v1/sessions/{session['id']}/candidates/prepare")
                 assert response.status_code == 200, response.text
@@ -464,6 +581,7 @@ def main():
                         folder / ("execution-" + kind),
                         pdf_profile,
                         (1280, 720) if kind == "pdf" else native_viewport,
+                        resume=bool(resumed),
                     )
                 for repeat in range(args.repeats):
                     ordered = list(corpus)
@@ -472,11 +590,14 @@ def main():
                         pair_started = time.perf_counter()
                         if args.audio_replay:
                             case = {**case, "text": audio_cases[case["id"]]["text"], "earlier": []}
-                        for mode in (
+                        modes = (
                             ("semantic", "direct_current")
                             if (index + repeat) % 2 == 0
                             else ("direct_current", "semantic")
-                        ):
+                        )
+                        for mode in ("direct_current",) if args.direct_only else modes:
+                            if (kind, case["id"], repeat, mode) in completed_keys:
+                                continue
                             if (
                                 native_player is not None
                                 and repeat == 0
@@ -584,7 +705,7 @@ def main():
                                     row["execution"] = dict(
                                         completed=False, error=type(exc).__name__
                                     )
-                            with (folder / "records.jsonl").open("a", encoding="utf-8") as output:
+                            with record_path.open("a", encoding="utf-8") as output:
                                 output.write(json.dumps(row) + "\n")
                         # Pacing respects account limits and is not request latency.
                         time.sleep(
@@ -609,6 +730,7 @@ def main():
             client.portal.call(direct.aclose)
             summary = dict(
                 schema="buddy.jev-comparison.v1",
+                cohort=args.cohort or "default",
                 corpus_sha256=hashlib.sha256(corpus_raw).hexdigest(),
                 cases=len(corpus),
                 repeats=args.repeats,
@@ -621,13 +743,13 @@ def main():
                     "Cohere embeddings and Jev. Microphone and deployment not measured."
                 ),
             )
-            (folder / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+            summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
             print(json.dumps(summary), flush=True)
             succeeded = True
     finally:
         if native_player is not None:
             native_player.close()
-        if not succeeded and args.preserve_on_error:
+        if args.keep_fixtures or (not succeeded and args.preserve_on_error):
             storage.close()
             print(
                 json.dumps(dict(stage="recovery_preserved", schema=schema, prefixes=receipt)),

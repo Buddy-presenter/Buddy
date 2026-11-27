@@ -13,10 +13,10 @@ from buddy_desktop.preflight import PreflightRunner
 
 
 class NativeExecution:
-    def __init__(self, app, fixture, kind, folder, profile, viewport):
+    def __init__(self, app, fixture, kind, folder, profile, viewport, *, resume=False):
         self.document = fixture["document"]
         self.kind, self.folder = kind, Path(folder)
-        self.folder.mkdir(parents=True, exist_ok=False)
+        self.folder.mkdir(parents=True, exist_ok=resume)
         self.source = fixture["path"]
         self.source_hash = hashlib.sha256(self.source.read_bytes()).hexdigest()
         self.slides = [s.slide_id for s in self.document.slides]
@@ -100,6 +100,7 @@ class NativeExecution:
                 error=run["reason"],
                 transition_ms=checked_ms,
                 execution_ms=execution_ms,
+                native_report=run,
             )
         before, after = run["trace"][before_index]["after"], run["trace"][-1]["after"]
         pictures = [self.runner.artifact(self.owner, run["run_id"], f"{i}.png") for i in range(2)]

@@ -47,9 +47,11 @@ def report(records):
         target = row.get("target", {})
         actual_slide_number = None
         diagnostics = row.get("diagnostics", {})
-        for index, option in enumerate(diagnostics.get("option_targets", [])):
+        for index, option in enumerate(diagnostics.get("option_targets") or []):
             if option == target:
-                actual_slide_number = diagnostics["candidate_options"][index].get("slide_number")
+                actual_slide_number = (diagnostics.get("candidate_options") or [])[index].get(
+                    "slide_number"
+                )
                 break
         failures.append(
             dict(
@@ -85,7 +87,8 @@ def report(records):
                 for r in focus
                 if r["expected"]["action_id"]
                 not in {
-                    o.get("action_id") for o in r.get("diagnostics", {}).get("option_targets", [])
+                    o.get("action_id")
+                    for o in (r.get("diagnostics", {}).get("option_targets") or [])
                 }
             ]
             coverage[source + ":" + mode] = dict(focus_requests=len(focus), missing=missing)
