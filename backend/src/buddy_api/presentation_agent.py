@@ -272,6 +272,8 @@ class AgentInput:
     focus: str
     identity: str
     focus_region: Region | None = None
+    # Everything the analysis read depends on; equal snapshots read the same analysis.
+    snapshot: tuple[object, ...] = ()
 
 
 def request_focus(
@@ -302,9 +304,18 @@ def request_focus(
 
 
 async def read_input(
-    request: Request, principal: Principal, identifier: UUID, values: AgentRequest
+    request: Request,
+    principal: Principal,
+    identifier: UUID,
+    values: AgentRequest,
+    previous: AgentInput | None = None,
 ) -> AgentInput:
-    """A short authoritative transaction; no provider call while it is open."""
+    """A short authoritative transaction; no provider call while it is open.
+
+    The post-decision recheck passes ``previous``: when the session, deck, saved analysis
+    content, validation history and runtime context are all unchanged, the analysis it
+    already read is reused instead of loading it again. Any change reloads it as before.
+    """
     async with request.app.state.database.sessions() as db, db.begin():
         await db.connection(execution_options={"isolation_level": "REPEATABLE READ"})
         session = await owned_session(db, principal, identifier)
@@ -344,18 +355,34 @@ async def read_input(
                 "analysis_changed",
                 "The saved analysis changed; reopen the presentation.",
             )
-        try:
-            analysis = await request.app.state.candidate_analyses.read(
-                db, record, principal.id, session.runtime_context
-            )
-        except HTTPException as exc:
-            if exc.status_code == 409:
-                raise agent_conflict(
-                    request,
-                    "analysis_unavailable",
-                    "The saved analysis is unavailable for live suggestions.",
-                ) from None
-            raise
+        snapshot: tuple[object, ...] = (
+            session.id,
+            session.status,
+            session.deck_id,
+            session.analysis_version_id,
+            record.id,
+            record.content_sha256,
+            await request.app.state.candidate_analyses.revision(db, record, principal.id),
+            json.dumps(session.runtime_context, sort_keys=True, default=str),
+            deck.source_revision,
+            deck.source_sha256,
+            deck.source_version_id,
+        )
+        if previous is not None and record.content_sha256 and previous.snapshot == snapshot:
+            analysis = previous.analysis
+        else:
+            try:
+                analysis = await request.app.state.candidate_analyses.read(
+                    db, record, principal.id, session.runtime_context
+                )
+            except HTTPException as exc:
+                if exc.status_code == 409:
+                    raise agent_conflict(
+                        request,
+                        "analysis_unavailable",
+                        "The saved analysis is unavailable for live suggestions.",
+                    ) from None
+                raise
         # Include all validation eligibility/geometry, even if the analysis id is unchanged.
         identity = hashlib.sha256(
             (
@@ -383,6 +410,7 @@ async def read_input(
             focus_view,
             identity,
             focus_region,
+            snapshot,
         )
 
 
@@ -1073,7 +1101,9 @@ def agent_router() -> APIRouter:
                         raise AgentFailure("stale")
                     begin_phase("validation")
                     try:
-                        fresh = await read_input(request, principal, identifier, values)
+                        fresh = await read_input(
+                            request, principal, identifier, values, previous=source
+                        )
                     except HTTPException as exc:
                         if exc.status_code == 409:
                             raise AgentFailure("stale") from None

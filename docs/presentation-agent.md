@@ -17,8 +17,9 @@ this does not change the agent endpoint's proposal-only contract.
 
 Apply migrations through `0022_agent_request_window`. Set backend-only
 `BUDDY_COHERE_API_KEY` and `BUDDY_AGENT_ENABLED=true`.
-`BUDDY_AGENT_REQUESTS_PER_MINUTE` defaults to the trial model allowance of 20;
-increase it only to match the credential's actual plan (maximum 500).
+`BUDDY_AGENT_REQUESTS_PER_MINUTE` defaults to 200 (maximum 500), shared by all presenters on
+one credential. Jev decides on partial and finished sentences, so normal speech exceeds the
+earlier default of 20: on staging, 12% of decisions were refused as `paced` with it.
 There is no default Buddy monthly decision cap. An optional positive
 `BUDDY_AGENT_MONTHLY_LIMIT` sets an operator-selected monthly budget; unset it to disable
 that application budget. Usage is still counted and provider quotas still apply.

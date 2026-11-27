@@ -1157,3 +1157,28 @@ def test_region_actions_are_offered_only_for_the_slide_on_screen():
     targets, _ = options(AgentInput(analysis, "1", "slide", "hash"), candidates)
     assert [t.action_id for t in targets if t.tool == "zoom_region"] == ["chart-1"]
     assert any(t.tool == "next_slide" and t.slide_id == "2" for t in targets)
+
+
+@pytest.mark.postgres
+def test_unchanged_recheck_reuses_the_analysis_instead_of_reloading_it(agent_api):
+    # The post-decision recheck still verifies session, deck, analysis content, validation
+    # history and runtime context, but reuses the analysis it already read when unchanged.
+    client, ids, provider = agent_api
+    analyses = client.app.state.candidate_analyses
+    real_read, reads = analyses.read, []
+
+    async def counted(*args, **kwargs):
+        reads.append(1)
+        return await real_read(*args, **kwargs)
+
+    analyses.read = counted
+    try:
+        reply = client.post(
+            f"/api/v1/sessions/{ids['sessions']}/agent",
+            headers={"Authorization": "Bearer owner"},
+            json=payload(),
+        )
+    finally:
+        analyses.read = real_read
+    assert reply.status_code == 200, reply.text
+    assert len(reads) == 1
