@@ -63,6 +63,8 @@ _SEARCH = re.compile(
     r"|(?:can|could|would)\s+you\s+(?:search\s+" + _WEB + r"for|look\s+up|google)"
     r"|(?:i'd\s+like|i\s+would\s+like)\s+(?:you\s+to\s+)?(?:search\s+" + _WEB + r"for|look\s+up)"
     r"|search\s+(?:google\s+)?images?\s+(?:for|of)"
+    # "Web search images of dogs", "do a web search for electric cars".
+    r"|(?:(?:can|could|would)\s+you\s+)?(?:(?:do|run)\s+a\s+)?web\s+search(?:\s+(?:for|on))?"
     r"|google"
     r"|(?:look\s+up|lookup)"
     r"|(?:(?:can|could|would)\s+you\s+)?(?:find|show(?:\s+me)?|get\s+me|pull\s+up|look\s+for)"
@@ -174,6 +176,10 @@ _SEARCH_PREFIXES: tuple[str, ...] = (
     "look up",
     "lookup",
     "google",
+    "web search",
+    "do a web search",
+    "run a web search",
+    "can you do a web search",
 )
 # Image requests phrased with everyday verbs ("show me images of ...") are searches only
 # because they name images; the bare verbs stay with Buddy's slide commands (#250).

@@ -2,12 +2,32 @@
 
 from urllib.parse import urlsplit
 
-from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, QSize, Qt, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QKeyEvent, QPixmap, QResizeEvent
+from PySide6.QtCore import (
+    QEasingCurve,
+    QPoint,
+    QPropertyAnimation,
+    QRect,
+    QRectF,
+    QSize,
+    Qt,
+    QUrl,
+    Signal,
+)
+from PySide6.QtGui import (
+    QColor,
+    QDesktopServices,
+    QKeyEvent,
+    QPainter,
+    QPaintEvent,
+    QPen,
+    QPixmap,
+    QResizeEvent,
+)
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
@@ -22,7 +42,7 @@ from buddy_desktop.information_search_service import (
     InformationImage,
     InformationSource,
 )
-from buddy_desktop.visuals import command
+from buddy_desktop.visuals import command, icon
 
 MARGIN = 10
 SCROLLBAR = 8
@@ -41,7 +61,10 @@ class InformationSearchPanel(QFrame):
         self.setAccessibleName("Web search answer")
         self.setMinimumWidth(320)
         self.setMaximumWidth(480)
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        # The panel is its own window: paint only the rounded shape so the black background
+        # follows the rounded orange border instead of showing square corners (#250).
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         shadow = QGraphicsDropShadowEffect(self)
@@ -64,6 +87,20 @@ class InformationSearchPanel(QFrame):
             "Close (Esc). You can also say “close the panel” or “back to the presentation”."
         )
         self.close_button.clicked.connect(self.close_requested.emit)
+
+        # Search and web icons, centred at the top of the panel.
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(10)
+        header.addStretch(1)
+        for name, label in (("search", "Search"), ("globe", "Web")):
+            mark = QLabel()
+            mark.setObjectName("informationSearchMark")
+            mark.setPixmap(icon(name, "#F5843D").pixmap(22, 22))
+            mark.setAccessibleName(label)
+            header.addWidget(mark)
+        header.addStretch(1)
+        root.addLayout(header)
 
         self.state = QLabel("Searching the web…")
         self.state.setObjectName("informationSearchState")
@@ -110,11 +147,13 @@ class InformationSearchPanel(QFrame):
                     | Qt.WindowType.WindowDoesNotAcceptFocus,
                 )
                 self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+                self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
             self._owner, self._area = None, QRect(owner)
         elif self._owner is not owner:
             self.hide()
             self.setParent(owner, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
             self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
+            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
             self._owner, self._area = owner, None
         self._closing = False
         self._animation.stop()
@@ -296,6 +335,17 @@ class InformationSearchPanel(QFrame):
     def _animation_finished(self) -> None:
         if self._closing:
             self.hide()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        """Rounded black panel with a Buddy-orange border; corners stay transparent."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor("#F5843D"))
+        pen.setWidthF(2)
+        painter.setPen(pen)
+        painter.setBrush(QColor("#000000"))
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 18, 18)
+        painter.end()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)

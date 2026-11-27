@@ -26,7 +26,7 @@ DuckDuckGo's image search with safe search on and make no Cohere call.
 Examples include “search for images of cute cats,” “find photos of solar panels,” “what's
 the definition of opportunity cost,” “what does amortization mean,” “look up the
 definition of compound interest,” “search online for electric cars,” and “Google the Eiffel
-Tower.” A search must include a concrete query. Incomplete commands wait briefly for the
+Tower,” “web search images of dogs” and “do a web search for …”. A search must include a concrete query. Incomplete commands wait briefly for the
 rest of the phrase.
 
 Only unmistakable search phrasings start a search. Everyday presenting phrases such as “show

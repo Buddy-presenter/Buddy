@@ -408,3 +408,10 @@ def test_scroll_the_panel_by_voice():
     for phrase in ("Scroll up", "go up", "Go back up", "back to the top"):
         assert parse_voice_command(phrase) == ScrollPanel(-1), phrase
     assert parse_voice_command("Go back") is None  # slide navigation stays with Buddy
+
+
+def test_web_search_phrasings():
+    assert parse_voice_command("Web search images of dogs") == WebSearch("dogs", images=True)
+    assert parse_voice_command("web search dogs") == WebSearch("dogs")
+    assert parse_voice_command("Do a web search for electric cars") == WebSearch("electric cars")
+    assert parse_voice_command("Can you do a web search on EBITDA") == WebSearch("EBITDA")

@@ -28,7 +28,7 @@ QLabel#caption { color: #A4A4AF; font-size: 12px; }
 QLabel#connectionStatus { color: #A4A4AF; font-size: 12px; }
 QLabel#badge { color: #8ED5B6; font-size: 12px; }
 QLabel#voiceCommandFeedback { color: #F3F0E9; background: #1E1E1E; border: 1px solid #FF9F61; border-radius: 8px; padding: 8px 12px; }
-QFrame#informationSearchPanel { background: #000000; border: 2px solid #F5843D; border-radius: 18px; }
+QFrame#informationSearchPanel { background: transparent; border: 0; }
 QFrame#informationSearchPanel QLabel { background: transparent; }
 QWidget#informationSearchContent { background: #000000; }
 QWidget#informationSearchImages { background: #000000; }
@@ -42,6 +42,7 @@ QPushButton#informationSearchSourceLink { background: transparent; border: 0; pa
 QPushButton#informationSearchSourceLink:hover { color: #FFC9A3; text-decoration: underline; }
 QPushButton#informationSearchSourceLink:focus { border: 0; text-decoration: underline; }
 QLabel#informationSearchSourceSnippet { color: #B8B8C0; font-size: 12px; }
+QLabel#informationSearchMark { background: transparent; padding: 2px 0 0 0; }
 QPushButton#informationSearchClose { background: #000000; border: 1px solid #3A3A3A; border-radius: 14px; padding: 0; }
 QPushButton#informationSearchClose:hover { border-color: #F5843D; }
 QScrollArea#informationSearchScroll QScrollBar:vertical { background: transparent; width: 8px; margin: 30px 0 2px 0; border: 0; }

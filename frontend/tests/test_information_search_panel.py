@@ -74,3 +74,11 @@ def test_panel_scrolls_its_results(qtbot):
     assert bar.value() > 0
     panel.scroll_by(-1)
     assert bar.value() == 0
+
+
+def test_panel_window_is_translucent_outside_its_rounded_shape(qtbot):
+    from PySide6.QtCore import Qt
+
+    panel = InformationSearchPanel(reduce_motion=True)
+    qtbot.addWidget(panel)
+    assert panel.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
