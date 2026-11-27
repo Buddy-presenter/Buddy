@@ -1,6 +1,7 @@
 """Nonblocking Qt speech connection. No provider credentials live on the desktop."""
 
 import json
+import logging
 import math
 import struct
 import time
@@ -14,6 +15,8 @@ from PySide6.QtWebSockets import QWebSocket
 from buddy_desktop.config import AppConfig
 from buddy_desktop.library_service import AccessProvider, LibraryAccessExpired, access_provider
 from buddy_desktop.services import ServiceError
+
+logger = logging.getLogger(__name__)
 
 ERRORS = {
     "audio_backlog": "The speech connection fell behind; queued audio was discarded.",
@@ -245,6 +248,13 @@ class SpeechController(QObject):
     def _fail(self, message: str, retryable: bool) -> None:
         if not self._active:
             return
+        # Content-free: the message is one of Buddy's own fixed strings (#255).
+        logger.warning(
+            "presentation_speech event=recognition_restart retryable=%s attempt=%d reason=%s",
+            retryable,
+            self._attempts + 1,
+            message.split(";")[0].rstrip("."),
+        )
         self._detach()
         if retryable and self._attempts < 3:
             self._attempts += 1

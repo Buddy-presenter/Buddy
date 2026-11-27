@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 from PySide6.QtCore import QByteArray, QPoint, Qt
 from PySide6.QtGui import QGuiApplication
+from PySide6.QtWidgets import QPushButton
 from shiboken6 import isValid
 
 import buddy_desktop.buddy_mini as mini_module
@@ -279,44 +280,9 @@ def test_windows_sleep_restores_workspace_and_stops_capture(
     page.fullscreen = None
 
 
-def test_live_caption_shows_speech_dots_for_silence_and_hides_when_not_listening():
-    caption = mini_module.mini_caption
-    assert caption("Mic off", ("hello", 10.0), 10.5) is None
-    assert caption("Muted", ("hello", 10.0), 10.5) is None
-    assert caption("Listening", None, 10.0) == ""
-    assert caption("Listening", ("our revenue", 10.0), 11.0) == "our revenue"
-    assert caption("Listening", ("our revenue", 10.0), 14.0) == ""
-
-
-def test_mini_caption_is_one_short_line_and_lifts_buddy_only_while_shown(qtbot):
-    from PySide6.QtWidgets import QPushButton
-
-    mini = mini_module.BuddyMini(QPushButton("Stop microphone"), QPushButton("Undo"))
+def test_mini_is_only_visual_and_shows_no_live_transcript(qtbot):
+    # #255: Mini must behave exactly like the full window; it no longer redraws speech.
+    mini = mini_module.BuddyMini(QPushButton("Start microphone"), QPushButton("Undo"))
     qtbot.addWidget(mini)
-    mini.set_top_corner(False)
-    resting = mini.mascot.y()
-    assert mini.caption_rect() is None
-    mini.set_caption("")
-    assert mini.mascot.y() == resting - mini._caption_lift
-    assert mini.caption_text() == "• • •"
-    dots = mini.caption_rect()
-    assert dots is not None and dots.bottom() < mini.height()
-    long = "this year our revenue reached forty eight million dollars across every region"
-    mini.set_caption(long)
-    shown = mini.caption_text()
-    assert long.endswith(shown) and shown != long and "\n" not in shown
-    rect = mini.caption_rect()
-    assert rect is not None and rect.width() <= mini._caption_max_width
-    assert rect.height() == mini._caption_height and rect.top() > mini.mascot.geometry().bottom()
-    # The caption stays visible while the hover controls are open.
-    mini._set_controls(True)
-    assert mini.caption_rect() == rect
-    # In a top corner the controls fan out below Buddy, so the caption moves under them.
-    mini.set_top_corner(True)
-    below = mini.caption_rect()
-    assert below is not None and below.bottom() < mini.height()
-    assert all(below.top() > button.geometry().bottom() for button in mini.buttons)
-    mini.set_top_corner(False)
-    mini._set_controls(False)
-    mini.set_caption(None)
-    assert mini.caption_rect() is None and mini.mascot.y() == resting
+    assert not hasattr(mini, "set_caption") and not hasattr(mini_module, "mini_caption")
+    assert mini.height() == 174
