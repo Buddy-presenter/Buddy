@@ -25,7 +25,6 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QFrame,
-    QGraphicsDropShadowEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -67,11 +66,8 @@ class InformationSearchPanel(QFrame):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(34)
-        shadow.setOffset(-8, 0)
-        shadow.setColor(QColor(0, 0, 0, 180))
-        self.setGraphicsEffect(shadow)
+        # No drop shadow: Qt draws it as a rectangle, which shows outside the rounded
+        # corners. The orange border alone outlines the panel (#250).
 
         # Results fill the panel: no logo, title, query echo or footer. The close button
         # floats over the top-right corner (#250).

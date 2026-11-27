@@ -48,10 +48,10 @@ def test_search_self_corrections_replace_the_query_without_losing_search_mode():
 
 def test_parses_definition_questions_and_common_image_search_phrasings():
     for phrase, expected in (
-        ("What's the definition of opportunity cost", "definition of opportunity cost"),
-        ("What does amortization mean", "definition of amortization"),
+        ("Buddy, what's the definition of opportunity cost", "definition of opportunity cost"),
+        ("Buddy, what does amortization mean", "definition of amortization"),
         ("Lookup the definition of compound interest", "definition of compound interest"),
-        ("What is meant by machine learning", "definition of machine learning"),
+        ("Buddy, what is meant by machine learning", "definition of machine learning"),
         ("Define gross domestic product", "definition of gross domestic product"),
     ):
         assert parse_voice_command(phrase) == WebSearch(expected)
@@ -75,7 +75,7 @@ def test_incomplete_definition_question_waits_for_its_subject_and_meaning(monkey
     monkeypatch.setattr(voice_commands, "monotonic", lambda: now[0])
     router = VoiceCommandRouter()
     pending = router.handle(
-        {"text": "What does inflation", "segment_id": "question", "final": True}
+        {"text": "Buddy, what does inflation", "segment_id": "question", "final": True}
     )
     continuation = router.handle({"text": "mean", "segment_id": "ending", "final": True})
 
@@ -415,3 +415,47 @@ def test_web_search_phrasings():
     assert parse_voice_command("web search dogs") == WebSearch("dogs")
     assert parse_voice_command("Do a web search for electric cars") == WebSearch("electric cars")
     assert parse_voice_command("Can you do a web search on EBITDA") == WebSearch("EBITDA")
+
+
+def test_questions_search_only_when_addressed_to_buddy():
+    # #250: "So what does EBITDA mean? It's ..." is usually rhetorical.
+    for phrase in (
+        "So what does EBITDA mean?",
+        "What does EBITDA mean",
+        "How tall is the Eiffel Tower?",
+        "What is meant by churn",
+    ):
+        assert parse_voice_command(phrase) is None, phrase
+    assert parse_voice_command("Buddy, what does EBITDA mean?") == WebSearch("definition of EBITDA")
+    assert parse_voice_command("Buddy, who invented the telephone?") == WebSearch(
+        "who invented the telephone"
+    )
+    assert parse_voice_command("Buddy, how tall is the Eiffel Tower?") == WebSearch(
+        "how tall is the Eiffel Tower"
+    )
+    # Commands need no wake word.
+    assert parse_voice_command("Define churn") == WebSearch("definition of churn")
+    assert parse_voice_command("Look up the definition of churn") == WebSearch(
+        "definition of churn"
+    )
+
+
+def test_buddy_requests_to_act_are_not_web_searches():
+    for phrase in (
+        "Buddy, can you show me the revenue chart?",
+        "Buddy, could you go to the next slide?",
+        "Buddy, can you find the margin?",
+        "Buddy, next slide",
+        "Buddy, zoom into the table",
+    ):
+        assert parse_voice_command(phrase) is None, phrase
+
+
+def test_unaddressed_questions_are_not_held_back_from_slide_decisions():
+    router = VoiceCommandRouter()
+    assert not router.handle(
+        {"text": "So what does", "segment_id": "a", "final": False}
+    ).suppress_agent
+    assert router.handle(
+        {"text": "Buddy, what does", "segment_id": "b", "final": False}
+    ).suppress_agent

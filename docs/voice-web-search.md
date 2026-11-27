@@ -29,6 +29,14 @@ definition of compound interest,” “search online for electric cars,” and �
 Tower,” “web search images of dogs” and “do a web search for …”. A search must include a concrete query. Incomplete commands wait briefly for the
 rest of the phrase.
 
+Questions open a search only when addressed to Buddy, because presenters often ask them
+rhetorically (“So what does EBITDA mean? It's …”): “Buddy, what does EBITDA mean?”, “Buddy,
+who invented the telephone?” and “Buddy, how tall is the Eiffel Tower?” search the web and
+show a short answer, while the same questions without “Buddy” are ignored. A request to act
+(“Buddy, can you show me the revenue chart?”) stays with Buddy's slide commands. Commands
+such as “search for”, “web search”, “look up”, “define” and “show me images of” need no
+wake word.
+
 Only unmistakable search phrasings start a search. Everyday presenting phrases such as “show
 me the revenue chart,” “find the margin,” or “pull up the cost table” belong to Buddy's own
 slide commands and the live suggestion path: “show/find/pull up/look for …” searches only

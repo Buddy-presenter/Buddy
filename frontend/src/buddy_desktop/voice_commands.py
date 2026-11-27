@@ -265,6 +265,37 @@ def _clean_text(text: str) -> str:
     return " ".join(text.replace("’", "'").split()).strip(" \t\r\n.,!?;:")
 
 
+# Questions are often rhetorical ("So what does EBITDA mean? It's ..."), so a question opens
+# a search only when it is addressed to Buddy: "Buddy, what does EBITDA mean?" Commands
+# ("search for", "look up", "define", "show me images of") need no wake word (#250).
+_QUESTION_START = re.compile(
+    r"^(?:what|what's|whats|who|who's|whom|whose|when|where|why|how|which|is|are|was|"
+    r"were|can|could|would|will|does|do|did|should|tell\s+me)\b",
+    re.IGNORECASE,
+)
+# "Buddy, can you show me the revenue chart?" asks Buddy to do something, not look it up.
+_ACTION_REQUEST = re.compile(
+    r"^(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|please\s+)"
+    r"(?:show|zoom|highlight|go|move|open|pull|bring|take|switch|display|put|scroll|close|"
+    r"return|remove|clear|reset|enlarge|magnify|focus|start|stop|pause|mute|unmute|skip|"
+    r"jump|navigate|turn|play|next|previous|get|find)\b",
+    re.IGNORECASE,
+)
+_QUESTION_PREFIXES = tuple(
+    prefix
+    for prefix in _INFORMATION_PREFIXES
+    if prefix.startswith(("what", "can you", "tell me what"))
+)
+
+
+def _has_wake_word(text: str) -> bool:
+    return re.match(r"^buddy(?:[\s,]+)", _clean_text(text), flags=re.IGNORECASE) is not None
+
+
+def _is_question_pattern(pattern: re.Pattern[str]) -> bool:
+    return pattern.pattern.startswith((r"^(?:what", r"^what", r"^can\s+you", r"^tell\s+me\s+what"))
+
+
 def _remove_wake_word(text: str) -> str:
     return re.sub(r"^buddy(?:[\s,]+)", "", text, count=1, flags=re.IGNORECASE).strip()
 
@@ -312,10 +343,13 @@ def _has_concrete_content(query: str) -> bool:
 
 def _search_parts(text: str) -> tuple[bool, str, bool] | None:
     """Return (image search, query text, ends in an unfinished correction)."""
+    woke = _has_wake_word(text)
     normalized = _remove_wake_word(_clean_text(text))
     raw_query = ""
     images = False
     for pattern in _INFORMATION_QUERIES:
+        if _is_question_pattern(pattern) and not woke:
+            continue
         info_match = pattern.fullmatch(normalized)
         if info_match is not None:
             raw_query = "definition of " + _clean_text(info_match.group("query"))
@@ -351,8 +385,13 @@ def _search_parts(text: str) -> tuple[bool, str, bool] | None:
         if any(
             normalized_folded == prefix or normalized_folded.startswith(prefix + " ")
             for prefix in _INFORMATION_PREFIXES
+            if woke or prefix not in _QUESTION_PREFIXES
         ):
             return False, "", False
+        if woke and _QUESTION_START.match(normalized) and not _ACTION_REQUEST.match(normalized):
+            # "Buddy, who invented the telephone?" searches the whole question.
+            query, was_corrected = _corrected_query(normalized)
+            return False, query, was_corrected and not query
         return None
     query, was_corrected = _corrected_query(raw_query)
     correction_incomplete = was_corrected and not query
@@ -361,7 +400,10 @@ def _search_parts(text: str) -> tuple[bool, str, bool] | None:
 
 def _information_query_seed(text: str) -> str | None:
     """Return the already spoken subject for a definition question still in progress."""
+    woke = _has_wake_word(text)
     normalized = _remove_wake_word(_clean_text(text)).casefold()
+    if not woke and normalized.startswith(("what", "can you")):
+        return None
     for prefix in (
         "what does",
         "what is the definition of",
@@ -413,6 +455,7 @@ def _correction_fragment(text: str) -> str | None:
 
 def _is_explicit_command_prefix(text: str) -> bool:
     """Recognize an in-progress command so its partial text is not sent to the LLM."""
+    woke = _has_wake_word(text)
     normalized = _remove_wake_word(_clean_text(text)).casefold()
     if len(normalized) < 4:
         return False
@@ -424,7 +467,14 @@ def _is_explicit_command_prefix(text: str) -> bool:
     info_prefix = any(
         normalized == prefix or normalized.startswith(prefix + " ")
         for prefix in _INFORMATION_PREFIXES
-    ) or any(pattern.fullmatch(normalized) for pattern in _INFORMATION_QUERIES)
+        if woke or prefix not in _QUESTION_PREFIXES
+    ) or any(
+        pattern.fullmatch(normalized)
+        for pattern in _INFORMATION_QUERIES
+        if woke or not _is_question_pattern(pattern)
+    )
+    # A question addressed to Buddy is held back from slide decisions while spoken.
+    info_prefix = info_prefix or (woke and _QUESTION_START.match(normalized) is not None)
     # The words “go back to” are also used for deterministic slide navigation.
     # Do not claim that speech until it explicitly names the presentation.
     return_prefix = any(
@@ -456,7 +506,7 @@ def parse_voice_command(text: str) -> VoiceCommand | None:
         return ScrollPanel(-1 if scroll.group("way") == "up" or scroll.group("back") else 1)
     if _is_slide_command(normalized):
         return None
-    parts = _search_parts(normalized)
+    parts = _search_parts(_clean_text(text))  # keeps the wake word for questions
     if parts is None:
         return None
     images, query, correction_incomplete = parts
