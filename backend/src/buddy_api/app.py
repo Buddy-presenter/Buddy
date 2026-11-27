@@ -91,6 +91,10 @@ def decision_providers(
     Jev decides by default; Cohere stays selectable. Without a Jev key only Cohere exists,
     so every choice decides with Cohere.
     """
+    if settings.candidate_mode == "direct_current":
+        assert settings.jev_api_key is not None
+        jev_only = JevDecisionProvider(settings.jev_api_key, threshold=settings.jev_confidence)
+        return jev_only, {"jev": jev_only}
     cohere = CohereDecisionProvider(
         settings, client=semantic.provider.client if semantic is not None else None
     )
@@ -247,7 +251,9 @@ def create_app(
     app.state.speech_provider = DeepgramProvider(config.speech) if config.speech else None
     app.state.semantic_candidates = (
         SemanticCandidates(database, CohereEmbeddings(config.embeddings))
-        if database is not None and config.embeddings is not None
+        if database is not None
+        and config.embeddings is not None
+        and not (config.agent and config.agent.candidate_mode == "direct_current")
         else None
     )
     app.state.uploads = uploads

@@ -165,6 +165,7 @@ class Settings:
                     values.get("BUDDY_DECISION_PROVIDER", "jev"),
                     values.get("BUDDY_AGENT_DIAGNOSTICS", "false") == "true",
                     UUID(diagnostic_session) if diagnostic_session else None,
+                    values.get("BUDDY_AGENT_CANDIDATE_MODE", "semantic"),
                 )
             except ValueError:
                 raise ConfigurationError(

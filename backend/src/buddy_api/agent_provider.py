@@ -50,7 +50,8 @@ class AgentFailure(Exception):
 
 
 class Selection(Model):
-    choice: Literal["c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9"]
+    # Jev accepts at most 255 choices. The normal Cohere shortlist still uses c0-c9.
+    choice: str = Field(pattern=r"^c(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$")
     reason: Literal["explicit", "topic", "correction", "stay", "uncertain"]
     confidence: float = Field(ge=0, le=1, strict=True)
     evidence: tuple[int, ...] = Field(max_length=8)
@@ -76,8 +77,15 @@ class AgentSettings:
     decision_provider: str = "jev"
     diagnostics_enabled: bool = False
     diagnostics_session_id: UUID | None = None
+    candidate_mode: str = "semantic"
 
     def __post_init__(self) -> None:
+        if self.candidate_mode not in {"semantic", "direct_current"}:
+            raise ValueError("Invalid candidate mode")
+        if self.candidate_mode == "direct_current" and (
+            not self.jev_api_key or self.decision_provider != "jev"
+        ):
+            raise ValueError("Direct-current prototype requires Jev without a chat fallback")
         if self.jev_api_key is not None and (
             not self.jev_api_key
             or len(self.jev_api_key) > 4096
@@ -90,7 +98,9 @@ class AgentSettings:
             raise ValueError("Decision provider must be jev, cohere or jev+cohere")
         if self.diagnostics_enabled != (self.diagnostics_session_id is not None):
             raise ValueError("Decision diagnostics require exactly one session id")
-        if not self.api_key or len(self.api_key) > 4096 or any(c.isspace() for c in self.api_key):
+        if (not self.api_key and self.candidate_mode != "direct_current") or (
+            len(self.api_key) > 4096 or any(c.isspace() for c in self.api_key)
+        ):
             raise ValueError("Invalid agent credentials")
         if self.monthly_limit is not None and (
             type(self.monthly_limit) is not int or self.monthly_limit < 1
@@ -364,6 +374,8 @@ class JevDecisionProvider:
     async def select(self, passage: dict[str, object]) -> Selection:
         try:
             state, criteria = jev_request(passage)
+            if not 1 <= len(criteria) <= 255 or len(json.dumps(criteria).encode()) > 256 * 1024:
+                raise AgentFailure("candidates_unavailable")
             provider_payload = {
                 "model": JEV_MODEL,
                 "state": state,
