@@ -837,11 +837,8 @@ def test_unclear_figures_defer_to_the_server(player, text):
     assert page._local_navigation_proposal(page._session, current[0]) is None
 
 
-def test_decision_model_choice_is_sent_and_remembered(player):
-    # #245: the presenter picks Jev (default) or Cohere in Present.
+def test_there_is_no_decider_choice_jev_alone_decides(player):
+    # Cohere was removed from slide decisions: Present offers no Jev/Cohere setting.
     page = player[0]
-    assert page.decision_model.currentData() == "jev"
-    assert page.agent_service.decision_model == "jev"
-    page.decision_model.setCurrentIndex(page.decision_model.findData("cohere"))
-    assert page.agent_service.decision_model == "cohere"
-    assert page.settings.value("presentation/decision_model") == "cohere"
+    assert not hasattr(page, "decision_model")
+    assert not hasattr(page.agent_service, "decision_model")

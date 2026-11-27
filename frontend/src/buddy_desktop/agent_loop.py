@@ -99,6 +99,20 @@ class AgentLoop(QObject):
             self.proposed.emit(None)
             self.status.emit("Listening for a clear phrase…" if enabled else "Suggestions off")
 
+    def cancel_pending_decision(self) -> None:
+        """Invalidate in-flight model work without erasing prior presenter context."""
+        self._generation += 1
+        self._last_revision = None
+        self._deferred_revision = None
+        self._deferrals = 0
+        self._pending_update = False
+        self._submitted = None
+        self._submitted_at_ns = None
+        self._submitted_capture_end_ns = None
+        self.proposed.emit(None)
+        if self.enabled:
+            self.status.emit("Listening for a clear phrase…")
+
     def update(
         self,
         access: AccessProvider | str | None,
@@ -292,7 +306,11 @@ class AgentLoop(QObject):
             and self._request_generation == self._generation
             and submitted is not None
             and current is not None
-            and submitted.matches_decision(current)
+            # A request to look something up stays valid as the presenter talks on.
+            and (
+                (isinstance(result, dict) and bool(result.get("search") or result.get("panel")))
+                or submitted.matches_decision(current)
+            )
         )
         age_ms = (
             max(0, (time.monotonic_ns() - submitted_at_ns) // 1_000_000)
@@ -337,7 +355,12 @@ class AgentLoop(QObject):
             )
         if self._pending_update and isinstance(result, dict):
             target = result.get("target")
-            if isinstance(target, dict) and target.get("tool") == "no_action":
+            if (
+                isinstance(target, dict)
+                and target.get("tool") == "no_action"
+                # A search or panel request is never superseded.
+                and not (result.get("search") or result.get("panel"))
+            ):
                 logger.warning("presentation_speech event=decision_superseded_by_newer_speech")
                 return
             if (

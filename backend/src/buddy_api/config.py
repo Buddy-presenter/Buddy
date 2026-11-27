@@ -165,10 +165,17 @@ class Settings:
                     values.get("BUDDY_DECISION_PROVIDER", "jev"),
                     values.get("BUDDY_AGENT_DIAGNOSTICS", "false") == "true",
                     UUID(diagnostic_session) if diagnostic_session else None,
+                    # Jev decides from every slide and current-slide action whenever a
+                    # Jev key is configured: Cohere takes no part in slide decisions.
+                    values.get(
+                        "BUDDY_AGENT_CANDIDATE_MODE",
+                        "direct_current" if values.get("BUDDY_JEV_API_KEY") else "semantic",
+                    ),
                 )
             except ValueError:
                 raise ConfigurationError(
-                    "Agent requires a Cohere key, optional positive monthly budget, "
+                    "Semantic agent requires a Cohere key; direct_current requires Jev only. "
+                    "Agent accepts an optional positive monthly budget, "
                     "rate from 1 to 500 requests per minute, an optional Jev key with "
                     "confidence from 0.5 to 1, and a decision provider of jev, cohere or "
                     "jev+cohere."

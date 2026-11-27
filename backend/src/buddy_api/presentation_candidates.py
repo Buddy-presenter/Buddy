@@ -841,7 +841,9 @@ def candidate_router() -> APIRouter:
     ) -> dict[str, str | bool]:
         response.headers["Cache-Control"] = "no-store"
         semantic: SemanticCandidates | None = request.app.state.semantic_candidates
-        if semantic is None:
+        agent = request.app.state.presentation_agent
+        direct = agent is not None and agent.settings.candidate_mode == "direct_current"
+        if semantic is None and not direct:
             raise HTTPException(503, "Semantic retrieval is not configured.")
         try:
             async with request.app.state.database.sessions() as db, db.begin():
@@ -858,6 +860,9 @@ def candidate_router() -> APIRouter:
                 analysis = await request.app.state.candidate_analyses.read(
                     db, record, principal.id, session.runtime_context
                 )
+            if direct:
+                return {"ready": True, "created": False, "resolver_version": "direct-current-v1"}
+            assert semantic is not None
             created = await semantic.prepare(analysis, principal.id)
             return {"ready": True, "created": created, "resolver_version": "cohere-embed5-v4"}
         except EmbeddingFailure:

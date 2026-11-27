@@ -46,7 +46,7 @@ from PySide6.QtWidgets import (
 )
 
 from buddy_desktop.agent_loop import AgentLoop
-from buddy_desktop.agent_service import DECISION_MODELS, AgentService
+from buddy_desktop.agent_service import AgentService
 from buddy_desktop.config import AppConfig
 from buddy_desktop.fullscreen import FullscreenPresentation
 from buddy_desktop.library_service import (
@@ -104,6 +104,12 @@ from buddy_desktop.transition_policy import (
 )
 from buddy_desktop.views import Page, StatusLabel
 from buddy_desktop.visuals import BuddyMark, command
+from buddy_desktop.voice_commands import (
+    ReturnToPresentation,
+    ScrollPanel,
+    VoiceCommandRouter,
+    WebSearch,
+)
 
 logger = logging.getLogger(__name__)
 NAVIGATION_TOOLS = {"next_slide", "previous_slide", "go_to_slide"}
@@ -218,6 +224,12 @@ class PresentWidget(Page):
     transition_observed = Signal(object)
     mini_requested = Signal()
     fullscreen_exited = Signal()
+    web_search_requested = Signal(str, bool, bool)
+    # Jev decided the presenter asked Buddy to look something up: the finished
+    # sentence, the sentence before it, and whether pictures were asked for.
+    spoken_search_requested = Signal(str, str, bool)
+    return_to_presentation_requested = Signal()
+    scroll_panel_requested = Signal(int)
 
     def __init__(self, config: AppConfig, settings: QSettings) -> None:
         super().__init__("Present", "")
@@ -256,10 +268,9 @@ class PresentWidget(Page):
         self._stream_snapshot: PresentationSession | None = None
         self.microphone = MicrophoneController(self)
         self.speech = SpeechController(self)
+        self.voice_commands = VoiceCommandRouter()
         self.transcript_context = TranscriptContext()
         self.agent_service = AgentService(config)
-        saved_model = str(settings.value("presentation/decision_model", "jev"))
-        self.agent_service.decision_model = saved_model if saved_model in DECISION_MODELS else "jev"
         self.agent = AgentLoop(
             self.agent_service,
             self,
@@ -549,6 +560,23 @@ class PresentWidget(Page):
         self.speech_status.setWordWrap(True)
         self.speech_status.setAccessibleName("Speech recognition status and privacy")
         microphone_layout.addWidget(self.speech_status)
+        self.voice_command_status = QLabel()
+        self.voice_command_status.setWordWrap(True)
+        self.voice_command_status.setObjectName("muted")
+        self.voice_command_status.setAccessibleName("Voice command status")
+        self.voice_command_status.hide()
+        microphone_layout.addWidget(self.voice_command_status)
+        self._voice_command_status_timer = QTimer(self)
+        self._voice_command_status_timer.setSingleShot(True)
+        self._voice_command_status_timer.timeout.connect(self._clear_voice_command_status)
+        self._pending_voice_search: WebSearch | None = None
+        # Jev's search decision on a sentence still being spoken waits for its final words.
+        self._pending_spoken_search: tuple[str, bool] | None = None
+        self._searched_segments: list[str] = []
+        self._voice_search_dispatch_timer = QTimer(self)
+        self._voice_search_dispatch_timer.setSingleShot(True)
+        self._voice_search_dispatch_timer.setInterval(500)
+        self._voice_search_dispatch_timer.timeout.connect(self._dispatch_voice_search)
         # Latest recognized words for the Buddy Mini caption (text, monotonic time).
         self.live_caption: tuple[str, float] | None = None
         self.speech_text = QPlainTextEdit()
@@ -569,7 +597,9 @@ class PresentWidget(Page):
         self.agent_enabled.toggled.connect(self._suggestions_toggled)
         microphone_layout.addWidget(self.agent_enabled)
         agent_privacy = QLabel(
-            "When enabled, recognized speech and slide summaries are sent to Cohere. "
+            "When enabled, ordinary speech and slide summaries are sent to the model chosen "
+            "below (Jev or Cohere). Spoken web searches are handled separately: their search "
+            "terms go to Buddy's web search and results show in a panel over the slides. "
             "Suggestions leave slide changes manual unless you enable automatic transitions."
         )
         agent_privacy.setWordWrap(True)
@@ -596,24 +626,6 @@ class PresentWidget(Page):
         )
         self.policy_enabled.toggled.connect(self._policy_toggled)
         microphone_layout.addWidget(self.policy_enabled)
-        decision_row = QHBoxLayout()
-        decision_label = QLabel("Suggestions decided by")
-        decision_row.addWidget(decision_label)
-        self.decision_model = QComboBox()
-        self.decision_model.addItem("Jev (fast, default)", "jev")
-        self.decision_model.addItem("Cohere", "cohere")
-        self.decision_model.setAccessibleName("Model that decides automatic suggestions")
-        self.decision_model.setToolTip(
-            "Jev answers in about a quarter of a second. Cohere is the earlier, slower model."
-        )
-        decision_label.setBuddy(self.decision_model)
-        self.decision_model.setCurrentIndex(
-            max(0, self.decision_model.findData(self.agent_service.decision_model))
-        )
-        self.decision_model.currentIndexChanged.connect(self._decision_model_changed)
-        decision_row.addWidget(self.decision_model)
-        decision_row.addStretch()
-        microphone_layout.addLayout(decision_row)
         self.policy_pause_button = QPushButton("Resume automatic moves")
         self.policy_pause_button.setAccessibleName("Resume automatic moves")
         self.policy_pause_button.setToolTip("Resume automatic moves (Ctrl+Shift+P)")
@@ -807,13 +819,6 @@ class PresentWidget(Page):
             if isinstance(identifier, bytes):
                 self.microphone.start(identifier)
         self._refresh()
-
-    @Slot(int)
-    def _decision_model_changed(self, _index: int) -> None:
-        model = self.decision_model.currentData()
-        if model in DECISION_MODELS:
-            self.agent_service.decision_model = model
-            self.settings.setValue("presentation/decision_model", model)
 
     @Slot(bool)
     def _microphone_compatibility_changed(self, enabled: bool) -> None:
@@ -2514,6 +2519,22 @@ class PresentWidget(Page):
 
     @Slot(object)
     def _agent_proposed(self, result: object) -> None:
+        if isinstance(result, dict) and result.get("search") in {"web", "images"}:
+            self._spoken_search_decided(result)
+        if isinstance(result, dict) and result.get("panel") in {
+            "close",
+            "scroll_down",
+            "scroll_up",
+        }:
+            self._panel_action_decided(result)
+        if (
+            isinstance(result, dict)
+            and self.agent_service.search_panel_open
+            and isinstance(result.get("target"), dict)
+            and result["target"].get("tool") in {"next_slide", "previous_slide", "go_to_slide"}
+        ):
+            # Moving to another slide means the presenter has moved on from the results.
+            self.return_to_presentation_requested.emit()
         if not isinstance(result, dict):
             # AgentLoop emits None while `_update_agent` deliberately marks its
             # context stale during session synchronization. Keep the proposal
@@ -2591,9 +2612,86 @@ class PresentWidget(Page):
         self.agent_proposal.setText(message)
         self._consider_policy(result)
 
+    def _spoken_search_decided(self, result: dict[str, object]) -> None:
+        """Search once per spoken sentence, with its final words."""
+        context = result.get("_client_context")
+        segments = getattr(context, "decision_segments", ())
+        if not segments:
+            return
+        segment = segments[-1]
+        if segment.segment_id in self._searched_segments:
+            return
+        images = result.get("search") == "images"
+        if not segment.final:
+            self._pending_spoken_search = (segment.segment_id, images)
+            return
+        earlier = segments[-2].text if len(segments) > 1 else ""
+        self._emit_spoken_search(segment.segment_id, segment.text, earlier, images)
+
+    def _panel_action_decided(self, result: dict[str, object]) -> None:
+        """Close or scroll the search panel once per spoken sentence."""
+        context = result.get("_client_context")
+        segments = getattr(context, "decision_segments", ())
+        if not segments:
+            return
+        key = "panel:" + segments[-1].segment_id
+        if key in self._searched_segments:
+            return
+        self._searched_segments = [*self._searched_segments[-31:], key]
+        action = result["panel"]
+        if action == "close":
+            self.return_to_presentation_requested.emit()
+        else:
+            self.scroll_panel_requested.emit(1 if action == "scroll_down" else -1)
+
+    def _emit_spoken_search(self, segment_id: str, text: str, earlier: str, images: bool) -> None:
+        self._pending_spoken_search = None
+        self._searched_segments = [*self._searched_segments[-31:], segment_id]
+        if text.strip():
+            self.spoken_search_requested.emit(text.strip(), earlier.strip(), images)
+
+    def _finish_pending_spoken_search(self) -> None:
+        pending = self._pending_spoken_search
+        if pending is None:
+            return
+        segment_id, images = pending
+        segments = self.transcript_context.snapshot().segments
+        for index, segment in enumerate(segments):
+            if segment.segment_id == segment_id and segment.final:
+                earlier = segments[index - 1].text if index > 0 else ""
+                self._emit_spoken_search(segment_id, segment.text, earlier, images)
+                return
+
     @Slot(object)
     def _speech_transcript(self, event: dict[str, object]) -> None:
-        if (
+        command = self.voice_commands.handle(event)
+        if command.search_pending:
+            self._voice_search_dispatch_timer.stop()
+            self._pending_voice_search = None
+        if command.correction_pending and self._pending_voice_search is not None:
+            # Keep the query replaceable for the full correction window. In
+            # particular, don't launch Chrome before an immediately spoken
+            # correction can update the pending query.
+            self._voice_search_dispatch_timer.start(3000)
+        if command.suppress_agent:
+            # Explicit external commands stay local. Also invalidate older model
+            # work so it cannot run while Chrome is foregrounded or on return.
+            self.agent.cancel_pending_decision()
+            self.policy.clear_pending()
+            self._pending_spoken_search = None
+            if isinstance(command.command, WebSearch):
+                self._pending_voice_search = command.command
+                # Leave a correction window before opening Chrome, which cannot be
+                # taken back. Buddy's panel (answers and images) starts at once: a
+                # later “I mean …” sends a new query that replaces its results (#250).
+                self._voice_search_dispatch_timer.start(3000 if command.command.browser else 0)
+            elif isinstance(command.command, ReturnToPresentation):
+                self._voice_search_dispatch_timer.stop()
+                self._pending_voice_search = None
+                self.return_to_presentation_requested.emit()
+            elif isinstance(command.command, ScrollPanel):
+                self.scroll_panel_requested.emit(command.command.direction)
+        elif (
             self._session is not None
             and self._context_connected
             and self._session_pending_state is None
@@ -2605,6 +2703,7 @@ class PresentWidget(Page):
                 str(self.speech_language.currentData()),
             )
             self.transcript_context.accept(event)
+            self._finish_pending_spoken_search()
             self._revoke_native_guard_if_speech_changed()
             # Process each recognized update as soon as Qt receives it. The 100 ms
             # timer remains a recovery path for session/state changes, not a speech
@@ -2627,6 +2726,28 @@ class PresentWidget(Page):
         ):
             self._native_guard.clear()
             self._native_policy_context = None
+
+    def powerpoint_slideshow_window(self) -> int | None:
+        """The live PowerPoint slideshow window when presenting PowerPoint, else None."""
+        binding = self._powerpoint_binding
+        return binding.window_id if binding is not None and binding.window_id > 0 else None
+
+    def show_voice_command_status(self, message: str, timeout_ms: int = 5000) -> None:
+        self._voice_command_status_timer.stop()
+        self.voice_command_status.setText(message)
+        self.voice_command_status.setVisible(bool(message))
+        if message and timeout_ms > 0:
+            self._voice_command_status_timer.start(timeout_ms)
+
+    @Slot()
+    def _dispatch_voice_search(self) -> None:
+        search, self._pending_voice_search = self._pending_voice_search, None
+        if search is not None:
+            self.web_search_requested.emit(search.query, search.images, search.browser)
+
+    def _clear_voice_command_status(self) -> None:
+        self.voice_command_status.clear()
+        self.voice_command_status.hide()
 
     @Slot()
     def _verify_microphone_pdf_session(self) -> None:

@@ -481,3 +481,31 @@ def test_fullscreen_moves_audience_surface_without_changing_slide_state(qtbot: Q
 
     fullscreen.close()
     qtbot.waitUntil(lambda: owner_layout.indexOf(surface) >= 0)
+
+
+def test_fullscreen_voice_feedback_is_visible_over_the_slide(qtbot: QtBot) -> None:
+    owner = QWidget()
+    owner_layout = QVBoxLayout(owner)
+    surface = SlideSurface()
+    owner_layout.addWidget(surface)
+    fullscreen = FullscreenPresentation(
+        surface,
+        owner_layout,
+        lambda _kind: None,
+        lambda: None,
+        lambda: None,
+        lambda: None,
+        owner,
+        QGuiApplication.primaryScreen(),
+    )
+    qtbot.addWidget(owner)
+    qtbot.addWidget(fullscreen)
+    fullscreen.showFullScreen()
+    qtbot.waitUntil(fullscreen.isVisible)
+
+    fullscreen.show_voice_feedback("Returned to the presentation.", timeout_ms=0)
+
+    assert fullscreen.voice_feedback.isVisible()
+    assert fullscreen.voice_feedback.text() == "Returned to the presentation."
+
+    fullscreen.close()

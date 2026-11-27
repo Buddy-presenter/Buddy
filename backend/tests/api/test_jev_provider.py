@@ -1,6 +1,7 @@
 """Jev decides by default; Cohere stays selectable (#243)."""
 
 import asyncio
+import contextlib
 import json
 
 import httpx
@@ -247,3 +248,107 @@ def test_presenter_choice_selects_the_decider():
     runtime = AgentRuntime(settings, default, choices)
     assert isinstance(runtime.provider_for("jev"), CohereDecisionProvider)
     asyncio.run(runtime.aclose())
+
+
+def test_jev_search_options_only_when_the_desktop_asks():
+    # Jev decides "search the web" alongside the slide options, never for old clients.
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content)["questions"]["action"]["criteria"])
+        return answer("c0", 0.9)
+
+    provider = jev(handler)
+    asyncio.run(provider.select(PASSAGE))
+    asyncio.run(provider.select({**PASSAGE, "web_search": True}))
+    assert "search_web" not in seen[0] and "search_images" not in seen[0]
+    assert {"search_web", "search_images"} <= set(seen[1])
+    assert set(seen[1]) - {"search_web", "search_images"} == set(seen[0])
+
+
+@pytest.mark.parametrize(
+    ("choice", "probability", "presenting", "search", "reason"),
+    [
+        ("search_web", 0.9, 0.9, "web", "stay"),
+        ("search_images", 0.8, 0.9, "images", "stay"),
+        # A search request is not "presenting" a slide; the slide guard must not block it.
+        ("search_web", 0.9, 0.05, "web", "stay"),
+        ("search_web", 0.55, 0.9, None, "uncertain"),
+    ],
+)
+def test_jev_search_choice_returns_no_slide_action(choice, probability, presenting, search, reason):
+    provider = jev(lambda request: answer(choice, probability, presenting))
+    selection = asyncio.run(provider.select({**PASSAGE, "web_search": True}))
+    assert (selection.choice, selection.search, selection.reason) == ("c0", search, reason)
+    assert selection.evidence == ()
+
+
+def test_cohere_never_sees_the_search_flag():
+    seen = {}
+
+    def handler(request):
+        seen.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "finish_reason": "COMPLETE",
+                "message": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "choice": "c0",
+                                    "reason": "stay",
+                                    "confidence": 0.9,
+                                    "evidence": [],
+                                }
+                            ),
+                        }
+                    ]
+                },
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = CohereDecisionProvider(AgentSettings("test-key"), client=client)
+    with contextlib.suppress(AgentFailure):  # Only the request matters here.
+        asyncio.run(provider.select({**PASSAGE, "web_search": True}))
+    assert "Revenue came in" in seen["messages"][-1]["content"]
+    assert "web_search" not in seen["messages"][-1]["content"]
+
+
+def test_panel_options_only_while_the_search_panel_is_open():
+    seen = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        seen.append((body["questions"]["action"], body["state"]))
+        return answer("c0", 0.9)
+
+    provider = jev(handler)
+    asyncio.run(provider.select({**PASSAGE, "web_search": True}))
+    asyncio.run(provider.select({**PASSAGE, "web_search": True, "search_panel_open": True}))
+    closed, opened = seen
+    assert not {"panel_close", "panel_scroll_down"} & set(closed[0]["criteria"])
+    assert "on_screen" not in closed[1]
+    assert {"panel_close", "panel_scroll_down", "panel_scroll_up"} <= set(opened[0]["criteria"])
+    assert "search results panel" in opened[1]["on_screen"]
+    assert "search results panel" in opened[0]["instructions"]
+
+
+@pytest.mark.parametrize(
+    ("choice", "probability", "panel"),
+    [
+        ("panel_close", 0.9, "close"),
+        ("panel_scroll_down", 0.8, "scroll_down"),
+        ("panel_scroll_up", 0.7, "scroll_up"),
+        ("panel_close", 0.4, None),
+    ],
+)
+def test_panel_choice_returns_no_slide_action(choice, probability, panel):
+    provider = jev(lambda request: answer(choice, probability, 0.05))
+    selection = asyncio.run(
+        provider.select({**PASSAGE, "web_search": True, "search_panel_open": True})
+    )
+    assert (selection.choice, selection.panel, selection.search) == ("c0", panel, None)
