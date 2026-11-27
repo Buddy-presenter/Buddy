@@ -98,10 +98,13 @@ def balanced_shortlist(
     items: tuple[Document, ...], similarities: tuple[tuple[float, ...], ...], current: str
 ) -> tuple[list[tuple[float, Document]], set[str]]:
     """Share available slide slots between views within the eight-candidate budget."""
-    # Current slide and no change occupy two slots. Reserve two more only when
-    # the index actually contains usable region actions; otherwise use all six
-    # remaining slots for slide destinations, rather than discarding evidence.
-    other_slides = 4 if any(doc.action_id is not None for doc in items) else 6
+    # Current slide and no change occupy two slots. Reserve three action slots
+    # only when the current slide has usable region actions; actions on other
+    # slides cannot execute yet and should not reduce the navigation shortlist.
+    current_has_actions = any(
+        doc.action_id is not None and doc.slide_id == current for doc in items
+    )
+    other_slides = 3 if current_has_actions else 6
     per_view = other_slides // len(similarities)
     rankings = [
         sorted(
