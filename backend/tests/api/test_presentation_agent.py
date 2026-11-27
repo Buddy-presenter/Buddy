@@ -124,7 +124,7 @@ def test_jev_search_decision_reaches_the_desktop(agent_api):
     assert reply.json()["search"] == "web"
     assert reply.json()["target"]["tool"] == "no_action"
     assert provider.calls[-1]["web_search"] is True
-    old = client.post(path, headers=headers, json=payload(sequence=2))
+    old = client.post(path, headers=headers, json=payload())  # A new stream, as an older app sends.
     assert old.status_code == 200, old.text
     assert "web_search" not in provider.calls[-1]
     assert "search" not in old.json()
