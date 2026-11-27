@@ -38,6 +38,7 @@ from buddy_api.contracts import (
 )
 from buddy_api.embeddings import CohereEmbeddings, EmbeddingFailure
 from buddy_api.handoff import HandoffLimitMiddleware, handoff_router
+from buddy_api.information_search import InformationSearchService, information_search_router
 from buddy_api.library import library_router
 from buddy_api.middleware import RequestContextMiddleware
 from buddy_api.persistence.database import Database, DatabaseProbe
@@ -262,6 +263,20 @@ def create_app(
         if config.agent
         else None
     )
+
+    async def reserve_information_search_call() -> None:
+        if database is not None and app.state.presentation_agent is not None:
+            await app.state.presentation_agent.reserve(database)
+
+    app.state.information_search = (
+        InformationSearchService(
+            config.agent,
+            app.state.presentation_agent.provider.client,
+            reserve_model_call=reserve_information_search_call,
+        )
+        if config.agent is not None and app.state.presentation_agent is not None
+        else None
+    )
     app.state.validator = validator
     app.state.preflight = preflight
     app.state.visual_qa = visual_qa
@@ -281,6 +296,7 @@ def create_app(
     app.include_router(validation_router())
     app.include_router(preflight_router())
     app.include_router(processing_router())
+    app.include_router(information_search_router())
 
     @app.exception_handler(UploadError)
     async def upload_error(request: Request, exc: UploadError) -> JSONResponse:

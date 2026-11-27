@@ -70,6 +70,66 @@ def test_agent_response_echoes_local_slide_only_for_new_clients():
     assert current.model_dump(mode="json", exclude_unset=True)["active_slide_id"] == "slide-a"
 
 
+def test_search_is_sent_only_when_jev_decided_it_and_never_with_a_slide_action():
+    # old desktops never see the new field; a search never moves a slide.
+    common = {
+        "protocol": "presentation-agent.v1",
+        "decision_id": uuid4(),
+        "session_id": uuid4(),
+        "analysis_id": uuid4(),
+        "state_version": 4,
+        "context_epoch": 1,
+        "stream_id": uuid4(),
+        "sequence": 1,
+        "input_sha256": "a" * 64,
+        "target": Target(tool="no_action", slide_id="slide-a"),
+        "decision_source": "model",
+        "reason": "stay",
+        "confidence": 0.9,
+        "evidence": (),
+        "elapsed_ms": 1,
+        "retry_after_ms": None,
+    }
+    plain = AgentProposal.model_validate(common).model_dump(mode="json", exclude_unset=True)
+    assert "search" not in plain
+    found = AgentProposal.model_validate({**common, "search": "images"})
+    assert found.model_dump(mode="json", exclude_unset=True)["search"] == "images"
+    for change in (
+        {"decision_source": "navigation"},
+        {"target": Target(tool="next_slide", slide_id="slide-b"), "evidence": (0,)},
+    ):
+        with pytest.raises(ValueError):
+            AgentProposal.model_validate({**common, **change, "search": "web"})
+    assert AgentRequest.model_validate(payload(web_search=True)).web_search
+    closing = AgentProposal.model_validate({**common, "panel": "close"})
+    assert closing.model_dump(mode="json", exclude_unset=True)["panel"] == "close"
+    with pytest.raises(ValueError):
+        AgentProposal.model_validate({**common, "panel": "close", "search": "web"})
+    with pytest.raises(ValueError):
+        AgentProposal.model_validate({**common, "decision_source": "navigation", "panel": "close"})
+    assert AgentRequest.model_validate(payload(search_panel_open=True)).search_panel_open
+    assert not AgentRequest.model_validate(payload()).web_search
+
+
+@pytest.mark.postgres
+def test_jev_search_decision_reaches_the_desktop(agent_api):
+    client, ids, provider = agent_api
+    provider.answer = Selection(
+        choice="c0", reason="stay", confidence=0.9, evidence=(), search="web"
+    )
+    path = f"/api/v1/sessions/{ids['sessions']}/agent"
+    headers = {"Authorization": "Bearer owner"}
+    reply = client.post(path, headers=headers, json=payload(web_search=True))
+    assert reply.status_code == 200, reply.text
+    assert reply.json()["search"] == "web"
+    assert reply.json()["target"]["tool"] == "no_action"
+    assert provider.calls[-1]["web_search"] is True
+    old = client.post(path, headers=headers, json=payload(sequence=2))
+    assert old.status_code == 200, old.text
+    assert "web_search" not in provider.calls[-1]
+    assert "search" not in old.json()
+
+
 def test_request_focus_never_reuses_focus_from_another_slide():
     saved_region = {"x": 10, "y": 20, "width": 30, "height": 40}
     assert request_focus(

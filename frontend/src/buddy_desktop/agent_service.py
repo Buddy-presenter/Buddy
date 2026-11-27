@@ -4,6 +4,7 @@ import http.client
 import io
 import json
 import math
+import os
 import re
 import ssl
 import threading
@@ -164,16 +165,35 @@ def conflict_error(exc: HTTPError) -> ServiceError:
 DECISION_MODELS = ("jev", "cohere")
 
 
+def _agent_base(config: AppConfig) -> str:
+    """The API deciding live suggestions: the app's API, or a local developer server.
+
+    `BUDDY_AGENT_URL` lets a developer test decision changes against a local server while
+    everything else keeps using the configured Buddy API. Only HTTPS or a loopback HTTP
+    address is accepted.
+    """
+    override = os.environ.get("BUDDY_AGENT_URL", "").rstrip("/")
+    if override:
+        parts = urlsplit(override)
+        loopback = parts.scheme == "http" and parts.hostname in {"127.0.0.1", "localhost"}
+        if (parts.scheme == "https" or loopback) and parts.hostname and not parts.username:
+            return override
+    return config.api_url
+
+
 class AgentService:
     def __init__(self, config: AppConfig):
         self.config = config
         # Which model decides suggestions, chosen in Present (#245). Jev is the default.
         self.decision_model = "jev"
+        # Set on the GUI thread while Buddy's search panel is on screen: Jev may then also
+        # close or scroll it.
+        self.search_panel_open = False
         self._connection: KeptConnection | None = None
         self._connection_url = ""
 
     def _kept(self) -> KeptConnection:
-        url = self.config.api_url
+        url = _agent_base(self.config)
         if self._connection is None or self._connection_url != url:
             self._connection, self._connection_url = KeptConnection(url), url
         return self._connection
@@ -244,6 +264,10 @@ class AgentService:
         ]
         if self.decision_model in DECISION_MODELS:
             payload["decision_model"] = self.decision_model
+        # Let Jev also decide that the presenter asked Buddy to look something up.
+        payload["web_search"] = True
+        if self.search_panel_open:
+            payload["search_panel_open"] = True
         try:
             raw = self._kept().post(
                 f"/api/v1/sessions/{UUID(session.id)}/agent",
@@ -258,6 +282,15 @@ class AgentService:
             # Session-scoped server diagnostics are returned only for an explicit
             # operator capture. Keep them out of the presenter/UI proposal contract.
             if "diagnostics" in result and not isinstance(result.pop("diagnostics"), dict):
+                raise ValueError
+            search = result.pop("search", None)
+            panel = result.pop("panel", None)
+            if (
+                search not in {None, "web", "images"}
+                or panel not in {None, "close", "scroll_down", "scroll_up"}
+                or (search is not None and panel is not None)
+                or (panel is not None and not payload.get("search_panel_open"))
+            ):
                 raise ValueError
             if set(result) != {
                 "protocol",
@@ -379,6 +412,16 @@ class AgentService:
                 session.state is None or target["slide_id"] != session.state.active_slide_id
             ):
                 raise ValueError
+            if search is not None or panel is not None:
+                # A request to look something up, or to close or scroll the panel, stays
+                # valid while the presenter keeps talking: it changes no slide.
+                if target["tool"] != "no_action" or result["decision_source"] != "model":
+                    raise ValueError
+                if search is not None:
+                    result["search"] = search
+                else:
+                    result["panel"] = panel
+                return result
             if (
                 not context.matches_decision(current_context())
                 or time.monotonic_ns() - context.segments[-1].capture_end_ns > 5_000_000_000
