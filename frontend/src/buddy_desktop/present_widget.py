@@ -578,7 +578,6 @@ class PresentWidget(Page):
         self._voice_search_dispatch_timer.setInterval(500)
         self._voice_search_dispatch_timer.timeout.connect(self._dispatch_voice_search)
         # Latest recognized words for the Buddy Mini caption (text, monotonic time).
-        self.live_caption: tuple[str, float] | None = None
         self.speech_text = QPlainTextEdit()
         self.speech_text.setReadOnly(True)
         self.speech_text.setMaximumHeight(88)
@@ -649,7 +648,7 @@ class PresentWidget(Page):
         microphone_layout.addWidget(self.mini_button, alignment=Qt.AlignmentFlag.AlignLeft)
         self.mini_chime = QCheckBox("Buddy Mini completion sound")
         self.mini_chime.setToolTip(
-            "Play a short sound after a completed move. Capture pauses briefly."
+            "Play a short sound after a completed move. Listening continues."
         )
         self.mini_chime.setChecked(
             bool(settings.value("presentation/mini_chime", False, type=bool))
@@ -2709,9 +2708,6 @@ class PresentWidget(Page):
             # timer remains a recovery path for session/state changes, not a speech
             # dispatch delay.
             self._update_agent()
-        text = str(event["text"]).strip()
-        if text:
-            self.live_caption = (text, time.monotonic())
         kind = "Final" if event["final"] else "Partial"
         start = float(cast(float, event["start_seconds"]))
         end = float(cast(float, event["end_seconds"]))

@@ -115,9 +115,13 @@ def test_microphone_stops_when_identity_or_deck_changes(desktop_window, monkeypa
 
 
 def test_audio_queue_is_bounded_and_cleared_on_stop(qapp, qtbot):
+    from buddy_desktop.microphone import QUEUED_PACKETS
+
+    # About two seconds of 50 ms packets may wait for a busy GUI thread (#255).
+    assert QUEUED_PACKETS == 40
     mic = MicrophoneController()
     try:
-        for index in range(8):
+        for index in range(QUEUED_PACKETS):
             mic.frames.put_nowait(bytes([index]))
         assert mic.frames.full()
         mic.stop()
@@ -486,3 +490,27 @@ def test_pdf_verification_expired_session_stops_capture_and_clears_access(
     page._session_succeeded(1, ("expired", None, "Sign in again"))
     assert not page.microphone.enabled
     assert page._session is None and page._session_access is None
+
+
+def test_dropped_audio_is_counted_and_logged(qapp, caplog):
+    # A full queue drops the oldest packet, counts it and logs a content-free gap (#255).
+    import logging
+
+    from buddy_desktop import microphone
+
+    frames = Queue(maxsize=2)
+    worker = microphone._CaptureWorker(frames, Event(), Lock())
+    worker.accepting.set()
+    gaps = []
+    worker.gap.connect(gaps.append)
+    worker._queue_pcm(bytes(1) * 1600 * 3, worker.generation)
+    assert worker.dropped_packets == 1 and gaps == [worker.generation]
+    mic = MicrophoneController()
+    try:
+        mic.worker.dropped_packets = 7
+        mic.accepting.set()
+        with caplog.at_level(logging.WARNING, logger="buddy_desktop.microphone"):
+            mic._audio_gap(mic._generation)
+        assert "event=audio_gap dropped_packets_total=7" in caplog.text
+    finally:
+        mic.shutdown()
