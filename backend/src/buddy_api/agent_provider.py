@@ -1,11 +1,13 @@
 """Replaceable, bounded selection provider; no executable tools or provider-written targets."""
 
 import asyncio
+import base64
 import json
+from collections.abc import Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 from pydantic import Field
@@ -223,7 +225,7 @@ class CohereDecisionProvider:
                         {
                             k: v
                             for k, v in passage.items()
-                            if k not in {"web_search", "search_panel_open"}
+                            if k not in {"web_search", "search_panel_open", "slide_image"}
                         },
                         ensure_ascii=False,
                     ),
@@ -407,6 +409,9 @@ def jev_request(passage: dict[str, object]) -> tuple[dict[str, object], dict[str
                 f"{verb} this item on the current slide: {lines.get('Action purpose', '')}. "
                 f"It shows: {lines.get('Shows', '')}."
             )
+            if lines.get("Position"):
+                # Ties the option to what Jev sees on the slide image (#259).
+                text += f" It is at the {lines['Position']} of the slide."
         else:
             where = {"next_slide": "the next slide", "previous_slide": "the previous slide"}.get(
                 tool, f"slide {option.get('slide_number')}"
@@ -500,11 +505,31 @@ class JevDecisionProvider:
                 },
             }
             record_decision_trace(provider_request=provider_payload)
+            headers = {"Authorization": "Bearer " + self._api_key}
+            sent: Mapping[str, object] = provider_payload
+            image = passage.get("slide_image")
+            if isinstance(image, tuple) and len(image) == 2:
+                # The slide on screen (#259), added to a copy so the diagnostics trace never
+                # holds the image bytes; TypeSafe requires the image opt-in header.
+                reference = f"slide-{uuid4()}"
+                current = dict(state["current_slide"])  # type: ignore[call-overload]
+                sent = {
+                    **provider_payload,
+                    "state": {**state, "current_slide": {**current, "image": reference}},
+                    "assets": {
+                        reference: {
+                            "type": "image",
+                            "format": image[0],
+                            "data_base64": base64.b64encode(image[1]).decode(),
+                        }
+                    },
+                }
+                headers["TypeSafe-Danger-Zone-Images"] = "true"
             async with asyncio.timeout(self.deadline):
                 response = await self.client.post(
                     "https://api.typesafe.ai/v1/systemone",
-                    headers={"Authorization": "Bearer " + self._api_key},
-                    json=provider_payload,
+                    headers=headers,
+                    json=sent,
                 )
             if response.status_code == 429:
                 raise AgentFailure("rate_limited")

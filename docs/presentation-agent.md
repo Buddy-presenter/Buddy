@@ -247,6 +247,29 @@ Measured with the real Jev:
 - future-plan sentences: 13/14 (was 1/14);
 - the 1,020-sentence set: unchanged at 892, with 7 false actions before and after.
 
+**The slide on screen (#259).** With live suggestions on, the desktop uploads the current
+slide once per slide change to `PUT /api/v1/sessions/{id}/slide-image?slide_id=...`:
+- **Source:** the rendered PDF page, or PowerPoint's exported preview.
+- **Format:** a JPEG of at most 1280 px.
+- **Limits:** the server accepts only a still PNG or JPEG between 280 and 1568 px per side, up
+  to 1.5 MB, for the session's own owner.
+- **Storage:** the server keeps only the latest image per session, in memory for up to four
+  hours, never on disk.
+
+Jev receives it as an image asset (`TypeSafe-Danger-Zone-Images: true`) with every decision
+on that slide. Diagnostics never contain the image. Each zoom or highlight option also says
+where its item is on the slide ("top left"), from the saved region and slide size.
+
+Measured with the real Jev:
+- Visual references ("the red one", "the box on the far left", "the biggest number") went
+  from 18–20 to 84 of 85 correct.
+- Ordinary sentences were unchanged, with no new false actions.
+- The p50 decision time rose by about 25–35 ms, at about $0.0002 per decision.
+
+If the image is missing (upload failed, another server replica, a new slide not yet rendered),
+Jev decides from text as before. Slide images are sent to TypeSafe in the US, and TypeSafe
+labels image input not yet production-ready.
+
 **How Jev is asked.** Jev returns probabilities rather than text. One request sends the latest
 sentence, the earlier sentences and the current slide summary, and asks two typed questions:
 

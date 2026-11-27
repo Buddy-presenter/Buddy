@@ -57,6 +57,7 @@ from buddy_api.session_events import (
     cleanup_events,
     session_event_router,
 )
+from buddy_api.slide_images import SlideImages, slide_image_router
 from buddy_api.speech import DeepgramProvider, speech_router
 from buddy_api.uploads.contracts import UploadError
 from buddy_api.uploads.router import UploadMetadataLimitMiddleware, upload_router
@@ -258,6 +259,7 @@ def create_app(
         else None
     )
     app.state.uploads = uploads
+    app.state.slide_images = SlideImages()
     app.state.presentation_agent = (
         AgentRuntime(config.agent, *decision_providers(config.agent, app.state.semantic_candidates))
         if config.agent
@@ -291,6 +293,7 @@ def create_app(
     app.include_router(session_router())
     app.include_router(candidate_router())
     app.include_router(agent_router())
+    app.include_router(slide_image_router())
     app.include_router(speech_router(config.allowed_hosts))
     app.include_router(upload_router())
     app.include_router(validation_router())

@@ -383,3 +383,57 @@ def test_future_plans_count_as_presenting_but_later_talk_previews_do_not():
     assert "launching the new website in January" in JEV_PRESENTING_NOW
     assert "we'll get to that later" in JEV_PRESENTING_NOW
     assert "previews of later parts of this talk" in JEV_INSTRUCTIONS
+
+
+def test_slide_image_is_sent_as_an_asset_but_never_traced():
+    # #259: the slide on screen goes to Jev; diagnostics never hold the image bytes.
+    seen = {}
+
+    def handler(request):
+        seen["headers"] = dict(request.headers)
+        seen["body"] = json.loads(request.content)
+        return answer("c0", 0.9)
+
+    trace = {}
+    token = DECISION_TRACE.set(trace)
+    try:
+        asyncio.run(jev(handler).select({**PASSAGE, "slide_image": ("png", b"\x89PNG-bytes")}))
+    finally:
+        DECISION_TRACE.reset(token)
+    reference = seen["body"]["state"]["current_slide"]["image"]
+    asset = seen["body"]["assets"][reference]
+    assert asset["format"] == "png" and asset["data_base64"] == "iVBORy1ieXRlcw=="
+    assert seen["headers"]["typesafe-danger-zone-images"] == "true"
+    assert "assets" not in trace["provider_request"]
+    assert "image" not in trace["provider_request"]["state"]["current_slide"]
+
+
+def test_no_image_means_no_asset_or_opt_in_header():
+    seen = {}
+
+    def handler(request):
+        seen["headers"] = dict(request.headers)
+        seen["body"] = json.loads(request.content)
+        return answer("c0", 0.9)
+
+    asyncio.run(jev(handler).select(PASSAGE))
+    assert "assets" not in seen["body"]
+    assert "typesafe-danger-zone-images" not in seen["headers"]
+
+
+def test_option_text_says_where_the_item_is():
+    from buddy_api.agent_provider import jev_request
+
+    passage = {
+        **PASSAGE,
+        "options": [
+            *PASSAGE["options"][:1],
+            {
+                "id": "c1",
+                "tool": "zoom_region",
+                "slide_number": 4,
+                "content": "Action purpose: Revenue chart\nShows: $48M\nPosition: top left",
+            },
+        ],
+    }
+    assert jev_request(passage)[1]["c1"].endswith("It is at the top left of the slide.")
