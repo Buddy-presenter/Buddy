@@ -352,3 +352,34 @@ def test_panel_choice_returns_no_slide_action(choice, probability, panel):
         provider.select({**PASSAGE, "web_search": True, "search_panel_open": True})
     )
     assert (selection.choice, selection.panel, selection.search) == ("c0", panel, None)
+
+
+def test_reset_has_its_own_wording_and_jev_knows_what_is_focused():
+    # #257: reset read as "go to the slide already shown", so Jev never chose it.
+    passage = {
+        **PASSAGE,
+        "current_view": {
+            "slide_number": 4,
+            "summary": "Q4 results",
+            "focus": "zoom_region",
+            "focused_purpose": "Show the revenue chart",
+        },
+        "options": [
+            *PASSAGE["options"],
+            {"id": "c3", "tool": "reset_view", "slide_number": 4, "content": "Q4 results"},
+        ],
+    }
+    state, criteria = jev_request(passage)
+    assert criteria["c3"].startswith("Zoom back out and remove the highlight")
+    assert "Go to" not in criteria["c3"]
+    assert state["current_view"] == "zoomed into Show the revenue chart"
+    assert jev_request(PASSAGE)[0]["current_view"] == "the whole slide"
+
+
+def test_future_plans_count_as_presenting_but_later_talk_previews_do_not():
+    # #257: "we're launching the new website in January" was vetoed as a preview.
+    from buddy_api.agent_provider import JEV_INSTRUCTIONS, JEV_PRESENTING_NOW
+
+    assert "launching the new website in January" in JEV_PRESENTING_NOW
+    assert "we'll get to that later" in JEV_PRESENTING_NOW
+    assert "previews of later parts of this talk" in JEV_INSTRUCTIONS

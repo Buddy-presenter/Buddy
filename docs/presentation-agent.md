@@ -242,6 +242,18 @@ on contextual sentences, about 244 ms against 480 ms per decision, and 0 errors 
 decisions; accuracy held from 40 to 120 slides. See
 [the Jev-only decision guide](jev-direct-current-prototype.md).
 
+**Reset and future plans (#257).** While a region is zoomed or highlighted, reset has its own
+option text (zoom back out, remove the highlight, show the whole slide) and Jev's state names
+what is on screen (`current_view`, for example "zoomed into Show the revenue chart"). The
+presenting-now question treats plans, goals and decided future events stated as fact ("we're
+launching the new website in January") as presenting, while conditionals and previews of later
+parts of the talk ("by the end we'll have covered...", "we'll get to that later") stay blocked.
+Measured with the real Jev:
+
+- reset requests: 16/16 correct (was 1/16);
+- future-plan sentences: 13/14 (was 1/14);
+- the 1,020-sentence set: unchanged at 892, with 7 false actions before and after.
+
 **How Jev is asked.** Jev returns probabilities rather than text. One request sends the latest
 sentence, the earlier sentences and the current slide summary, and asks two typed questions:
 
