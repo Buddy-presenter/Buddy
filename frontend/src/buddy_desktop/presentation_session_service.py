@@ -5,6 +5,7 @@ import json
 import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, build_opener
 from uuid import UUID, uuid4
@@ -19,6 +20,10 @@ AUTONOMY_MODES = {"manual", "assisted", "autonomous"}
 
 class SessionConflict(ServiceError):
     """The server has a newer state version; fetch it before writing again."""
+
+
+class SessionAccessDenied(ServiceError):
+    """This presentation session is forbidden; account authentication may still be valid."""
 
 
 @dataclass(frozen=True)
@@ -189,9 +194,12 @@ class PresentationSessionService:
         except HTTPError as exc:
             status = exc.code
             exc.close()
-            if status in {401, 403}:
-                raise LibraryAccessExpired(
-                    "Sign in again to access the presentation session."
+            if status == 401:
+                raise LibraryAccessExpired("Buddy sign-in expired. Please sign in again.") from None
+            if status == 403:
+                raise SessionAccessDenied(
+                    "This account no longer has access to the presentation session. "
+                    "Buddy sign-in is still active."
                 ) from None
             if status == 409:
                 if method == "PATCH" or path.endswith(("/end", "/sync/commands")):
@@ -224,9 +232,14 @@ class PresentationSessionService:
         except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
             raise ServiceError("The server returned an invalid session response.") from None
 
-    def start(self, access: str, deck_id: str) -> PresentationSession:
+    def start(
+        self, access: str, deck_id: str, *, runtime: dict[str, Any] | None = None
+    ) -> PresentationSession:
         session = self.request(
-            access, "/api/v1/sessions", method="POST", body={"deck_id": str(UUID(deck_id))}
+            access,
+            "/api/v1/sessions",
+            method="POST",
+            body={"deck_id": str(UUID(deck_id)), **({"runtime": runtime} if runtime else {})},
         )
         if (
             session.deck_id != str(UUID(deck_id))

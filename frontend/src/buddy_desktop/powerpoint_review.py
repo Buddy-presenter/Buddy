@@ -7,8 +7,14 @@ from pathlib import Path
 from threading import Event, RLock
 
 from buddy_desktop.powerpoint import PowerPointAutomation, canonical_path
-from buddy_desktop.powerpoint_contract import PowerPointAction, PowerPointError, PowerPointFrame
+from buddy_desktop.powerpoint_contract import (
+    PowerPointAction,
+    PowerPointError,
+    PowerPointFrame,
+    same_slide_size,
+)
 from buddy_desktop.powerpoint_generated import generated_action
+from buddy_desktop.powerpoint_session_binding import PowerPointSessionBinding
 from buddy_desktop.review_service import ReviewAction, ReviewAnalysis, ReviewSlide
 
 
@@ -20,6 +26,7 @@ class PowerPointReviewSession:
         self.folder: tempfile.TemporaryDirectory[str] | None = None
         self.path: Path | None = None
         self.source_hash: str | None = None
+        self.binding: PowerPointSessionBinding | None = None
 
     def open(self, content: bytes, analysis: ReviewAnalysis, index: int) -> PowerPointFrame:
         with self.lock:
@@ -44,7 +51,9 @@ class PowerPointReviewSession:
                 assert self.path is not None
                 if first_open or self.automation.status(self.path) is None:
                     self.automation.launch(self.path)
-                return self.show(index, analysis.slides[index])
+                frame = self.show(index, analysis.slides[index])
+                self.binding = PowerPointSessionBinding.create(analysis, content, frame.info)
+                return frame
             except Exception:
                 if first_open:
                     self.close()
@@ -68,18 +77,22 @@ class PowerPointReviewSession:
             info = self.automation.status(self.path)
             if info is None:
                 raise PowerPointError("The saved PowerPoint slideshow ended. Open it again.")
+            if self.binding is not None:
+                self.binding.slide_id(info)
             # Review browsing always restores the full view, including on the same slide.
             info = self.automation.execute(PowerPointAction("reset_zoom", info)).info
             if info.slide_index != index + 1:
                 info = self.automation.execute(
                     PowerPointAction("go_to_slide", info, slide_number=index + 1)
                 ).info
-            if (
-                info.slide_id != slide.native_slide_id
-                or abs(info.slide_width - slide.width) > 0.01
-                or abs(info.slide_height - slide.height) > 0.01
+            if info.slide_id != slide.native_slide_id or not same_slide_size(
+                info.slide_width, info.slide_height, slide.width, slide.height
             ):
                 raise PowerPointError("The live PowerPoint geometry differs from this analysis.")
+            if self.binding is not None and self.binding.slide_id(info) != slide.slide_id:
+                raise PowerPointError(
+                    "The live PowerPoint slide no longer matches its saved session."
+                )
             return self.automation.preview(info)
 
     def reset_zoom(self, index: int, slide: ReviewSlide) -> PowerPointFrame:
@@ -161,3 +174,4 @@ class PowerPointReviewSession:
             if self.folder is not None:
                 self.folder.cleanup()
             self.path = self.folder = None
+            self.binding = None

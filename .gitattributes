@@ -1,2 +1,4 @@
 # Keep PDF fixture offsets and checksums identical on Windows and macOS.
 *.pdf binary
+# Replay manifests hash raw bytes; preserve them across Git/platform line endings.
+tests/fixtures/replay/*.json -text

@@ -161,7 +161,10 @@ def test_stream_access_failure_is_terminal_and_sanitized(qtbot, event_server, co
     )
     try:
         qtbot.waitUntil(lambda: len(errors) == 1)
-        assert errors[0][2] is True
+        expected_reason = {401: "auth_expired", 403: "session_forbidden", 404: "session_missing"}[
+            code
+        ]
+        assert errors[0][2] == expected_reason
         assert "private upstream" not in errors[0][1]
         assert len(event_server.requests) == 1
     finally:
@@ -185,7 +188,98 @@ def test_repeated_unavailable_frames_exhaust_reconnect_budget(qtbot, event_serve
     try:
         qtbot.waitUntil(lambda: len(errors) == 1)
         assert len(event_server.requests) == 9
-        assert errors[0][2] is False  # Transient provider failure must not sign the account out.
+        assert errors[0][2] == "disconnected"  # A transient failure never signs the account out.
+    finally:
+        stream.stop()
+        stream._thread.join(timeout=3)
+
+
+def test_each_reconnect_uses_a_current_token_from_the_provider(qtbot, event_server):
+    # #230: the server re-checks the token on every poll, and access tokens can last
+    # only minutes. A reconnect must never reuse the token taken when the stream bound.
+    raw = snapshot()
+    first = envelope(raw)
+    final = json.loads(json.dumps(first))
+    final["sequence"] = 1
+    final["state_version"] = 5
+    final["payload"]["snapshot"].update(status="ended", state_version=5)
+    event_server.respond = lambda number: wire(first if number == 1 else final)
+    tokens = iter(["first-token", "refreshed-token"])
+    stream = SessionEventStream()
+    received = []
+
+    def acknowledge(generation, event):
+        received.append(event)
+        stream.acknowledge()
+
+    stream.received.connect(acknowledge)
+    stream.bind(
+        AppConfig(f"http://127.0.0.1:{event_server.server_port}"),
+        lambda: next(tokens),
+        parse_snapshot(raw),
+    )
+    try:
+        qtbot.waitUntil(lambda: len(received) == 2, timeout=5000)
+        assert [request[1] for request in event_server.requests] == [
+            "Bearer first-token",
+            "Bearer refreshed-token",
+        ]
+    finally:
+        stream.stop()
+        stream._thread.join(timeout=3)
+
+
+def test_expired_sign_in_from_provider_ends_stream_without_a_request(qtbot, event_server):
+    from buddy_desktop.library_service import LibraryAccessExpired
+
+    def expired() -> str:
+        raise LibraryAccessExpired("Buddy sign-in expired. Please sign in again.")
+
+    stream = SessionEventStream()
+    errors = []
+    stream.failed.connect(lambda *args: errors.append(args))
+    stream.bind(
+        AppConfig(f"http://127.0.0.1:{event_server.server_port}"),
+        expired,
+        parse_snapshot(snapshot()),
+    )
+    try:
+        qtbot.waitUntil(lambda: len(errors) == 1)
+        assert errors[0][2] == "auth_expired"
+        assert event_server.requests == []
+    finally:
+        stream.stop()
+        stream._thread.join(timeout=3)
+
+
+def test_transient_refresh_failure_retries_instead_of_signing_out(qtbot, event_server, monkeypatch):
+    from buddy_desktop import session_events
+    from buddy_desktop.services import ServiceError
+
+    monkeypatch.setattr(session_events, "RETRY_DELAYS", (0,) * 8)
+    raw = snapshot()
+    final = envelope(raw)
+    final["payload"]["snapshot"].update(status="ended")
+    event_server.respond = lambda _: wire(final)
+    calls = []
+
+    def flaky() -> str:
+        calls.append(1)
+        if len(calls) == 1:
+            raise ServiceError("Account service is unreachable.")
+        return "refreshed-token"
+
+    stream = SessionEventStream()
+    received, errors = [], []
+    stream.received.connect(lambda generation, event: received.append(event))
+    stream.failed.connect(lambda *args: errors.append(args))
+    stream.bind(
+        AppConfig(f"http://127.0.0.1:{event_server.server_port}"), flaky, parse_snapshot(raw)
+    )
+    try:
+        qtbot.waitUntil(lambda: len(received) == 1)
+        assert errors == []
+        assert [request[1] for request in event_server.requests] == ["Bearer refreshed-token"]
     finally:
         stream.stop()
         stream._thread.join(timeout=3)

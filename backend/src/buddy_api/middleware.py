@@ -1,7 +1,10 @@
 """ASGI request context, explicit host validation, and redacted failures."""
 
+import json
 import logging
 import os
+import re
+import sys
 import time
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -20,6 +23,38 @@ logger = logging.getLogger(__name__)
 def error_response(code: str, message: str, request_id: str, status: int) -> JSONResponse:
     body = ErrorResponse(error=ErrorData(code=code, message=message), request_id=request_id)
     return JSONResponse(body.model_dump(), status_code=status)
+
+
+_PRODUCT = re.compile(r"[A-Za-z][A-Za-z0-9._-]{0,39}(?:/[A-Za-z0-9._-]{1,20})?")
+
+
+def client_product(user_agent: str | None) -> str:
+    """The first product token of a User-Agent ("Python-urllib/3.14"), nothing else."""
+    match = _PRODUCT.match(user_agent or "")
+    return match.group(0) if match else "unknown"
+
+
+def report_request(scope: Scope, request_id: str, status: int | None, started_at: float) -> None:
+    """One content-free line per HTTP request, so CloudWatch shows every call within seconds.
+
+    It records the matched route template rather than the URL, so no identifiers,
+    query strings, tokens, headers or client addresses are written.
+    """
+    route = getattr(scope.get("route"), "path", None)
+    line = {
+        "event": "api_request",
+        "request_id": request_id,
+        "method": str(scope.get("method", ""))[:10],
+        "route": route if isinstance(route, str) else "unmatched",
+        "status": status if status is not None else 0,
+        "duration_ms": round((time.perf_counter() - started_at) * 1000, 1),
+        "client": client_product(Headers(scope=scope).get("user-agent")),
+    }
+    try:
+        sys.stdout.write(json.dumps(line, separators=(",", ":")) + "\n")
+        sys.stdout.flush()
+    except OSError:
+        pass  # Request logging must never fail a request.
 
 
 class RequestContextMiddleware:
@@ -101,22 +136,25 @@ class RequestContextMiddleware:
             )
         except ValueError:
             valid_host = False
-        if not valid_host:
-            response = error_response(
-                "invalid_host", "Request host is not allowed.", request_id, 400
-            )
-            await response(scope, receive, send_response)
-            return
         try:
-            await self.app(scope, receive, send_response)
-            report_upload()
-        except Exception:
-            logger.error("Unexpected API failure request_id=%s", request_id)
-            if started:
-                # Cannot safely replace a streamed response already sent to the client.
-                raise
-            response = error_response(
-                "internal_error", "An unexpected error occurred.", request_id, 500
-            )
-            await response(scope, receive, send_response)
-            report_upload()
+            if not valid_host:
+                response = error_response(
+                    "invalid_host", "Request host is not allowed.", request_id, 400
+                )
+                await response(scope, receive, send_response)
+                return
+            try:
+                await self.app(scope, receive, send_response)
+                report_upload()
+            except Exception:
+                logger.error("Unexpected API failure request_id=%s", request_id)
+                if started:
+                    # Cannot safely replace a streamed response already sent to the client.
+                    raise
+                response = error_response(
+                    "internal_error", "An unexpected error occurred.", request_id, 500
+                )
+                await response(scope, receive, send_response)
+                report_upload()
+        finally:
+            report_request(scope, request_id, response_status, started_at)

@@ -244,6 +244,34 @@ automated-backup retention instead of seven days; production remains 35 days. Th
 isolated restore drill and retained snapshot are recorded in the
 [deployment evidence](staging-deployment-evidence.md).
 
+### Load-balancer access logs
+
+With `enable_lb_access_logs = true` (staging), the load balancer writes one line per
+request, including requests it answers with 503 while staging is asleep, to the private
+`<name>-<account>-lb-logs` bucket under `api/`. Logs arrive in 5-minute files, use
+SSE-S3 (the only encryption load-balancer logs support) and expire after 7 days.
+Use them to time a wake exactly: the first 503 line is the first request, and the ECS
+event "registered 1 targets" is when requests are served again.
+
+### Idle scale-to-zero
+
+With `idle_scale_to_zero = true` (staging only; production rejects it), the API and worker
+stop after `idle_minutes` (default 30) with no load-balancer requests and no queued or
+in-flight upload jobs, and start again on the next request or queued upload job. While
+no task runs, the load balancer answers requests itself with 503; CloudWatch counts
+those as `HTTPCode_ELB_503_Count`, not `RequestCount`, so both alarms count both. Two
+CloudWatch alarms drive ECS step scaling between zero and one task; there is no extra
+compute or Lambda. While staging is waking (measured 1 min 18 s to 3 min 33 s from the
+first request, mostly CloudWatch's 2–3 minute metric delay), the load balancer answers
+503 and the desktop app reports that the server is unreachable; retry after about 4 minutes.
+Releases and rollbacks suspend this scaling for the services while they run and restore
+each target's previous suspension state afterwards (`backend/scripts/release/deploy.py`),
+because a scale change mid-release would look like drift and roll the release back.
+Requests from anything reaching the load balancer, including scanners, also wake it.
+The database, load balancer, WAF and data are unaffected. Apply only these resources
+with a targeted plan when the operator variables are not current:
+`terraform plan -target=module.environment.aws_appautoscaling_target.idle -target=module.environment.aws_appautoscaling_policy.wake -target=module.environment.aws_appautoscaling_policy.sleep -target=module.environment.aws_cloudwatch_metric_alarm.wake -target=module.environment.aws_cloudwatch_metric_alarm.sleep -out=idle.tfplan`.
+
 ## GitHub immutable OIDC subjects and staging recovery (#98)
 
 The repository uses GitHub's immutable subject format. Read the public configuration

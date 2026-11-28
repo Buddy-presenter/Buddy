@@ -6,7 +6,12 @@ from typing import Any
 
 from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 
-from buddy_desktop.powerpoint_contract import PowerPointAction, PowerPointError, PresentationInfo
+from buddy_desktop.powerpoint_contract import (
+    PowerPointAction,
+    PowerPointError,
+    PresentationInfo,
+    same_slide_size,
+)
 from buddy_desktop.slide_contract import Region
 
 
@@ -30,10 +35,8 @@ def generated_action(
         raise PowerPointError("The saved action does not match the PowerPoint catalog.") from None
     if (raw["deck_id"], raw["render_id"], raw["slide_id"]) != (deck_id, render_id, slide_id):
         raise PowerPointError("The saved PowerPoint action belongs to another revision.")
-    if (
-        target.slide_id != native_slide_id
-        or abs(target.slide_width - width) > 0.01
-        or abs(target.slide_height - height) > 0.01
+    if target.slide_id != native_slide_id or not same_slide_size(
+        target.slide_width, target.slide_height, width, height
     ):
         raise PowerPointError("The connected PowerPoint slide does not match the saved analysis.")
     params = raw["params"]

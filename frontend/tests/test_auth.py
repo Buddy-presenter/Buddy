@@ -66,6 +66,21 @@ def session(monkeypatch):
     return session, requests, identifier
 
 
+def test_fresh_access_returns_the_access_token_and_refreshes_only_near_expiry(session):
+    client, requests, identifier = session
+    assert client.sign_in("signin") == identifier
+    requests.clear()
+    # Plenty of time left: reuse the current token without a refresh.
+    assert client.fresh_access(margin=60) == "access-private"
+    assert requests == []
+    # About to expire: refresh with the saved (rotated) refresh token, and still
+    # return the access token, never the account id that resume() returns.
+    client.tokens = replace(client.tokens, expires=time.monotonic() + 30)
+    assert client.fresh_access(margin=60) == "access-private"
+    assert [r.full_url.rsplit("/", 1)[-1] for r in requests] == ["token", "me"]
+    assert client.tokens.expires > time.monotonic() + 200
+
+
 @pytest.mark.parametrize("action", ["signin", "signup", "recovery"])
 def test_supported_browser_flows_use_pkce_and_no_tokens_in_urls(session, monkeypatch, action):
     client, requests, identifier = session

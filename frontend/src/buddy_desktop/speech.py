@@ -1,7 +1,9 @@
 """Nonblocking Qt speech connection. No provider credentials live on the desktop."""
 
 import json
+import logging
 import math
+import struct
 import time
 from collections.abc import Callable
 from uuid import UUID
@@ -11,8 +13,13 @@ from PySide6.QtNetwork import QNetworkRequest
 from PySide6.QtWebSockets import QWebSocket
 
 from buddy_desktop.config import AppConfig
+from buddy_desktop.library_service import AccessProvider, LibraryAccessExpired, access_provider
+from buddy_desktop.services import ServiceError
+
+logger = logging.getLogger(__name__)
 
 ERRORS = {
+    "audio_backlog": "The speech connection fell behind; queued audio was discarded.",
     "speech_unconfigured": "Speech recognition is not configured on this server.",
     "provider_configuration": "The server's speech provider credentials need attention.",
     "provider_unavailable": "The speech provider is temporarily unavailable.",
@@ -46,10 +53,11 @@ class SpeechController(QObject):
         self._ready = False
         self._generation = 0
         self._attempts = 0
-        self._access = ""
+        self._access: AccessProvider | None = None
         self._url = ""
         self._session = ""
         self._sample_rate = 0
+        self._audio_boundary_ns = 0
         self._language = "en-US"
         self._stream = ""
         self._sequence = 0
@@ -63,7 +71,12 @@ class SpeechController(QObject):
         self._retry.timeout.connect(self._connect)
 
     def start(
-        self, config: AppConfig, access: str, session: str, sample_rate: int, language: str
+        self,
+        config: AppConfig,
+        access: AccessProvider | str,
+        session: str,
+        sample_rate: int,
+        language: str,
     ) -> None:
         self.stop()
         UUID(session)
@@ -72,14 +85,23 @@ class SpeechController(QObject):
             if config.api_url.startswith("https:")
             else "ws" + config.api_url[4:]
         ) + f"/api/v1/sessions/{session}/speech"
-        self._access, self._session = access, session
+        self._access, self._session = access_provider(access), session
         self._sample_rate, self._language = sample_rate, language
         self._active = True
         self._attempts = 0
         self._connect()
 
     def _connect(self) -> None:
-        if not self._active:
+        if not self._active or self._access is None:
+            return
+        try:
+            # Reconnects can happen long after start; use a current token every time.
+            token = self._access()
+        except LibraryAccessExpired:
+            self._fail(ERRORS["session_401"], False)
+            return
+        except ServiceError:
+            self._fail("Speech sign-in refresh failed.", True)
             return
         self._generation += 1
         generation = self._generation
@@ -109,9 +131,7 @@ class SpeechController(QObject):
             lambda _error: current(lambda: self._fail("Speech connection failed.", True))
         )
         request = QNetworkRequest(QUrl(self._url))
-        request.setRawHeader(
-            QByteArray(b"Authorization"), QByteArray(("Bearer " + self._access).encode())
-        )
+        request.setRawHeader(QByteArray(b"Authorization"), QByteArray(("Bearer " + token).encode()))
         self.status_changed.emit("Connecting speech recognition…")
         self._deadline.start(20000)
         socket.open(request)
@@ -146,6 +166,7 @@ class SpeechController(QObject):
                 self._sequence, self._final_end = 0, 0.0
                 self._final_start = -1.0
                 self._ready = True
+                self._audio_boundary_ns = time.monotonic_ns()
                 self._deadline.stop()
                 self.status_changed.emit(
                     "Transcribing • audio sent to Deepgram (EU); "
@@ -183,6 +204,9 @@ class SpeechController(QObject):
             now = time.monotonic_ns()
             if type(stamp) is not int or not 0 < stamp <= now or now - stamp > 30_000_000_000:
                 raise ValueError
+            if now - stamp > 5_000_000_000:
+                self._fail("Speech recognition fell behind; old audio was discarded.", True)
+                return
             self._sequence = sequence
             if data["final"]:
                 self._final_end = end
@@ -195,6 +219,13 @@ class SpeechController(QObject):
     def send(self, packet: bytes) -> None:
         if not self._active or not self._ready or self.socket is None:
             return  # Never replay audio captured during connection/reconnection gaps.
+        if not 10 <= len(packet) <= 8200 or len(packet) % 2 or self._sample_rate <= 0:
+            self._fail("Microphone returned invalid audio. Restart capture.", False)
+            return
+        capture_end = struct.unpack(">Q", packet[:8])[0]
+        capture_start = capture_end - round((len(packet) - 8) * 1e9 / (2 * self._sample_rate))
+        if capture_start <= self._audio_boundary_ns:
+            return  # Includes filter-delayed audio captured before this connection.
         if self.socket.bytesToWrite() > 32768:
             self._fail("Speech connection is too slow; audio was discarded.", True)
             return
@@ -217,6 +248,13 @@ class SpeechController(QObject):
     def _fail(self, message: str, retryable: bool) -> None:
         if not self._active:
             return
+        # Content-free: the message is one of Buddy's own fixed strings (#255).
+        logger.warning(
+            "presentation_speech event=recognition_restart retryable=%s attempt=%d reason=%s",
+            retryable,
+            self._attempts + 1,
+            message.split(";")[0].rstrip("."),
+        )
         self._detach()
         if retryable and self._attempts < 3:
             self._attempts += 1
@@ -224,11 +262,11 @@ class SpeechController(QObject):
             self._retry.start(1000 * 2 ** (self._attempts - 1))
         else:
             self._active = False
-            self._access = ""
+            self._access = None
             self.status_changed.emit(message + " Stop and restart the microphone to retry.")
 
     def stop(self) -> None:
         self._active = False
         self._retry.stop()
         self._detach()
-        self._access = ""
+        self._access = None

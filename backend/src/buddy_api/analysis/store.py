@@ -35,6 +35,7 @@ from buddy_api.analysis.contracts import (
 from buddy_api.extraction.contracts import Extraction
 from buddy_api.persistence.errors import PersistenceConflict, PersistenceUnavailable, RecordNotFound
 from buddy_api.persistence.models import (
+    ActionCheck,
     ActionValidation,
     AnalysisSlide,
     AnalysisVersion,
@@ -57,7 +58,7 @@ def summary(record: AnalysisVersion | AnalysisSlide) -> Summary:
 
 def action_is_usable(source_format: str, state: str, semantic_verified: bool) -> bool:
     """Apply the canonical format-specific gate used by analysis and session reads."""
-    return state == "validated" and (source_format == "pptx" or semantic_verified)
+    return state == "validated" and semantic_verified
 
 
 def check_validation_evidence(
@@ -65,19 +66,45 @@ def check_validation_evidence(
 ) -> None:
     """Ensure stored evidence is bound to the immutable analysis/action/profile."""
     provenance = value.provenance or {}
+    visual = evidence.validation_kind == "visual"
+    preflight = visual and evidence.validator_version == "desktop-preflight-1"
+    original_hash = evidence.original_action_sha256 or evidence.action_sha256
+    if evidence.executed_action is not None:
+        candidate = evidence.executed_action.model_dump(mode="json")
+        if (
+            candidate["instance_id"] != action.instance_id
+            or candidate["type"] != action.action_type
+            or candidate["purpose"] != action.purpose
+            or candidate["deck_id"] != str(value.deck_id)
+            or candidate["render_id"] != provenance.get("manifest", {}).get("render_id")
+            or {k: v for k, v in candidate["params"].items() if k != "region"}
+            != {k: v for k, v in action.parameters.items() if k != "region"}
+        ):
+            raise PersistenceConflict("Corrected action changed its target identity.")
     if (
         evidence.analysis_id != value.id
         or evidence.source_format != value.source_format
         or action.source_format != value.source_format
         or evidence.analysis_sha256 != value.content_sha256
         or evidence.instance_id != action.instance_id
-        or evidence.action_sha256 != action.content_sha256
+        or original_hash != action.content_sha256
         or any(
             getattr(evidence, key) != provenance.get(key)
-            for key in ("renderer_version", "display_profile")
+            for key in (
+                ("renderer_version",) if preflight else ("renderer_version", "display_profile")
+            )
         )
+        or (preflight and evidence.display_profile not in {"wide-1x", "wide-2x"})
         or (
             evidence.validator_version != provenance.get("validator_version")
+            and not (
+                visual
+                and evidence.validator_version == "desktop-preflight-1"
+                and (
+                    evidence.state != "validated"
+                    or evidence.runtime_platform in {"win32", "darwin"}
+                )
+            )
             and not (
                 action.source_format == "pptx"
                 and action.action_type == "zoom_region"
@@ -124,6 +151,21 @@ class Analyses:
         if value is None:
             raise RecordNotFound("Owned deck analysis was not found.")
         return value
+
+    async def lock_current_revision(self, deck_id: UUID, *, owner_id: UUID) -> AnalysisVersion:
+        """Lock the deck against publishing a newer revision while a result is committed."""
+        deck = await self.session.scalar(
+            select(Deck)
+            .where(
+                Deck.id == deck_id,
+                Deck.owner_id == owner_id,
+                Deck.deletion_requested_at.is_(None),
+            )
+            .with_for_update()
+        )
+        if deck is None:
+            raise RecordNotFound("Owned deck was not found.")
+        return await self.latest_for_deck(deck_id, owner_id=owner_id)
 
     async def list(self, *, owner_id: UUID, limit: int = 100) -> list[AnalysisVersion]:
         if not 1 <= limit <= 100:
@@ -388,6 +430,11 @@ class Analyses:
                     raise ValueError("Action digest mismatch.")
                 if evidence is not None:
                     check_validation_evidence(value, action, evidence)
+                    if (
+                        evidence.executed_action is not None
+                        and evidence.executed_action.slide_id != slide.slide_id
+                    ):
+                        raise ValueError("Corrected action changed its source slide.")
                     if stored is None or stored.state != evidence.state:
                         raise ValueError("Validation state mismatch.")
                 state = evidence.state if evidence else "candidate"
@@ -435,6 +482,21 @@ class Analyses:
             or (inputs.extraction_id != value.extraction_id or inputs.job_id != value.job_id)
         ):
             raise ValueError("Analysis digest/lineage mismatch.")
+        # Preserve immutable input/graph digests. Only trusted, versioned visual
+        # evidence may supply the effective execution geometry in result actions.
+        results = [
+            s.model_copy(
+                update={
+                    "actions": tuple(
+                        a.model_copy(update={"action": a.validation.executed_action})
+                        if a.validation and a.validation.executed_action is not None
+                        else a
+                        for a in s.actions
+                    )
+                }
+            )
+            for s in results
+        ]
         if isinstance(inputs, PowerPointAnalysisInput):
             return PowerPointAnalysisResult(
                 id=value.id,
@@ -468,7 +530,11 @@ class Analyses:
         )
 
     async def record_validation(
-        self, *, owner_id: UUID, result: ValidationInput
+        self,
+        *,
+        owner_id: UUID,
+        result: ValidationInput,
+        evidence_source_validation_id: UUID | None = None,
     ) -> AnalysisResult | PowerPointAnalysisResult:
         """Trusted validator boundary only. There is intentionally no HTTP write endpoint."""
         result = ValidationInput.model_validate(result.model_dump(mode="json"))
@@ -495,6 +561,23 @@ class Analyses:
         if action is None:
             raise RecordNotFound("Owned action was not found.")
         check_validation_evidence(value, action, result)
+        if evidence_source_validation_id is not None:
+            source_check = await self.session.scalar(
+                select(ActionCheck).where(
+                    ActionCheck.id == evidence_source_validation_id,
+                    ActionCheck.owner_id == owner_id,
+                    ActionCheck.deck_id == value.deck_id,
+                    ActionCheck.status == "complete",
+                )
+            )
+            if source_check is None:
+                raise RecordNotFound("Copied validation evidence was not found.")
+            expected_evidence = {
+                (str(item["id"]), item["kind"], item["sha256"]) for item in source_check.artifacts
+            }
+            supplied_evidence = {(str(item.id), item.kind, item.sha256) for item in result.evidence}
+            if not expected_evidence or supplied_evidence != expected_evidence:
+                raise PersistenceConflict("Copied evidence does not match its source validation.")
         existing = await self.session.get(ActionValidation, result.validation_id)
         document = result.model_dump(mode="json")
         if existing is not None:
@@ -502,6 +585,7 @@ class Analyses:
                 existing.owner_id != owner_id
                 or existing.action_id != action.id
                 or existing.document != document
+                or existing.evidence_source_validation_id != evidence_source_validation_id
             ):
                 raise PersistenceConflict("Validation ID already has different content.")
             return await self.read(value.id, owner_id=owner_id)
@@ -527,6 +611,7 @@ class Analyses:
                 sequence=sequence,
                 state=result.state,
                 document=document,
+                evidence_source_validation_id=evidence_source_validation_id,
             )
         )
         await self.session.flush()

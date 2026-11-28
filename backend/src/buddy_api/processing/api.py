@@ -7,11 +7,19 @@ from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
+from buddy_api.analysis.contracts import AnalysisResult
+from buddy_api.analysis.provider import ModelSummary, parse_model_output
+from buddy_api.analysis.store import Analyses
 from buddy_api.auth import Principal, authenticated
 from buddy_api.contracts import ErrorResponse
-from buddy_api.persistence.models import ProcessingJob
+from buddy_api.persistence.models import (
+    AnalysisVersion,
+    Deck,
+    PDFProcessingCheckpoint,
+    ProcessingJob,
+)
 from buddy_api.processing import store
-from buddy_api.processing.contracts import JobResponse
+from buddy_api.processing.contracts import JobResponse, PDFPageSummary, PDFProcessingSummaries
 from buddy_api.uploads.contracts import UploadError
 
 
@@ -81,6 +89,97 @@ def processing_router() -> APIRouter:
         except (SQLAlchemyError, OSError, TimeoutError):
             raise UploadError(
                 503, "processing_unavailable", "Processing is temporarily unavailable.", 15
+            ) from None
+
+    @router.get("/jobs/{identifier}/pdf-summaries", response_model=PDFProcessingSummaries)
+    async def pdf_summaries(
+        identifier: UUID,
+        request: Request,
+        response: Response,
+        principal: Annotated[Principal, Depends(authenticated)],
+    ) -> PDFProcessingSummaries:
+        response.headers["Cache-Control"] = "no-store"
+        if request.app.state.database is None:
+            raise UploadError(503, "processing_unavailable", "Processing is unavailable.")
+        try:
+            async with request.app.state.database.sessions() as session, session.begin():
+                job = await store.owned(session, principal.id, identifier)
+                row = await session.get(PDFProcessingCheckpoint, identifier)
+                deck = await session.get(Deck, job.deck_id)
+                if (
+                    deck is None
+                    or deck.source_format != "pdf"
+                    or deck.source_revision != job.source_revision
+                ):
+                    raise UploadError(
+                        409, "source_changed", "Saved PDF summaries are no longer current."
+                    )
+                if row is None:
+                    record = await session.scalar(
+                        select(AnalysisVersion)
+                        .where(
+                            AnalysisVersion.job_id == job.id,
+                            AnalysisVersion.owner_id == principal.id,
+                            AnalysisVersion.deck_id == deck.id,
+                            AnalysisVersion.extraction_id == job.extraction_id,
+                        )
+                        .order_by(AnalysisVersion.version.desc())
+                        .limit(1)
+                    )
+                    if record is None:
+                        raise UploadError(
+                            409, "summaries_pending", "PDF summaries are not saved yet."
+                        )
+                    saved = await Analyses(session).read(record.id, owner_id=principal.id)
+                    if (
+                        not isinstance(saved, AnalysisResult)
+                        or saved.inputs is None
+                        or saved.inputs.source_revision != deck.source_revision
+                        or saved.inputs.source_sha256 != deck.source_sha256
+                    ):
+                        raise UploadError(
+                            409, "source_changed", "Saved PDF summaries are no longer current."
+                        )
+                    summary = saved.inputs.presentation_summary
+                    return PDFProcessingSummaries(
+                        job_id=job.id,
+                        source_revision=saved.inputs.source_revision,
+                        presentation=ModelSummary(text=summary.text, reason=summary.reason),
+                        slides=tuple(
+                            PDFPageSummary(
+                                number=n,
+                                summary=ModelSummary(text=s.summary.text, reason=s.summary.reason),
+                            )
+                            for n, s in enumerate(saved.slides, 1)
+                        ),
+                        grounded_pages=tuple(range(1, len(saved.slides) + 1)),
+                    )
+                if (
+                    deck.source_revision != row.source_revision
+                    or deck.source_sha256 != row.source_sha256
+                    or row.owner_id != principal.id
+                    or row.deck_id != job.deck_id
+                    or row.extraction_id != job.extraction_id
+                ):
+                    raise UploadError(
+                        409, "source_changed", "Saved PDF summaries are no longer current."
+                    )
+                generated = parse_model_output(row.generated)
+                return PDFProcessingSummaries(
+                    job_id=job.id,
+                    source_revision=row.source_revision,
+                    presentation=generated.presentation,
+                    slides=tuple(
+                        PDFPageSummary(
+                            number=s.number, summary=ModelSummary(text=s.text, reason=s.reason)
+                        )
+                        for s in generated.slides
+                    ),
+                    grounded_pages=tuple(sorted(int(n) for n in row.pages)),
+                )
+        except (SQLAlchemyError, OSError, TimeoutError, ValueError):
+            raise UploadError(
+                503, "processing_unavailable", "Saved PDF summaries are temporarily unavailable."
             ) from None
 
     @router.get("/jobs/{identifier}", response_model=JobResponse)

@@ -1,0 +1,139 @@
+"""Run visual QA on one saved action from a trusted, local owner snapshot."""
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+
+from botocore.config import Config  # type: ignore[import-untyped]
+from botocore.session import get_session  # type: ignore[import-untyped]
+
+from buddy_api.preflight.judge import SYSTEM_PROMPT
+from buddy_desktop.correction_qa import CORRECTION_SCHEMA, inspect_with_corrections
+from buddy_desktop.preflight import PreflightRunner
+from buddy_desktop.visual_qa import VERDICT_SCHEMA, inspect_action
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--snapshot", type=Path, required=True)
+    parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--action", required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--region", required=True)
+    parser.add_argument("--correct", action="store_true")
+    args = parser.parse_args()
+    if args.output.exists():
+        parser.error("Choose a fresh private output directory.")
+    with args.snapshot.open("rb") as stream:
+        raw = stream.read(1024 * 1024 + 1)
+    if len(raw) > 1024 * 1024:
+        parser.error("Snapshot exceeds 1 MiB.")
+    snapshot = json.loads(raw)
+    with args.source.open("rb") as stream:
+        source = stream.read(64 * 1024 * 1024 + 1)
+    if len(source) > 64 * 1024 * 1024:
+        parser.error("Source exceeds 64 MiB.")
+    if hashlib.sha256(source).hexdigest() != snapshot["source_sha256"]:
+        parser.error("Source bytes do not match the snapshot.")
+    action = snapshot["catalog"][args.action]
+    if args.action != action["instance_id"]:
+        parser.error("Action key must match the saved instance ID.")
+    aws = get_session()
+    client = None
+    schema = CORRECTION_SCHEMA if args.correct else VERDICT_SCHEMA
+
+    def judge(target: dict[str, object], before: bytes, after: bytes) -> object:
+        nonlocal client
+        if client is None:
+            client = aws.create_client(
+                "bedrock-runtime",
+                region_name=args.region,
+                config=Config(
+                    connect_timeout=5, read_timeout=45, retries={"total_max_attempts": 1}
+                ),
+            )
+        response = client.converse(
+            modelId=args.model,
+            system=[
+                {
+                    "text": SYSTEM_PROMPT
+                    + (
+                        " A correction context may give source-measured target bounds and current "
+                        "coordinates. If rejected and a safe region adjustment can help, "
+                        "propose only x,y,width,height in the same source coordinates, keeping the "
+                        "same target. Padding is clamped to 15 percent of target size. "
+                        "Never change action type, target text or source identity. Do not propose "
+                        "a correction when remaining_attempts is zero. Return correction=null for "
+                        "validated actions, absent source bounds, or when no safe fix exists."
+                        if args.correct
+                        else ""
+                    )
+                }
+            ],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"text": json.dumps(target)},
+                        {"image": {"format": "png", "source": {"bytes": before}}},
+                        {"image": {"format": "png", "source": {"bytes": after}}},
+                    ],
+                }
+            ],
+            inferenceConfig={"maxTokens": 700, "temperature": 0},
+            toolConfig={
+                "tools": [
+                    {
+                        "toolSpec": {
+                            "name": "visual_verdict",
+                            "description": "Record the verdict and any visual issue.",
+                            "inputSchema": {"json": schema},
+                        }
+                    }
+                ],
+                "toolChoice": {"tool": {"name": "visual_verdict"}},
+            },
+        )
+        calls = [
+            item["toolUse"]
+            for item in response["output"]["message"]["content"]
+            if "toolUse" in item
+        ]
+        if (
+            response["stopReason"] != "tool_use"
+            or len(calls) != 1
+            or calls[0]["name"] != "visual_verdict"
+        ):
+            raise ValueError("Unexpected visual verdict response")
+        return calls[0]["input"]
+
+    owner = snapshot["owner"]
+    try:
+        with PreflightRunner(owner) as runner:
+            inspect = inspect_with_corrections if args.correct else inspect_action
+            report = inspect(
+                runner,
+                owner,
+                source=source,
+                source_format=snapshot["source_format"],
+                deck_id=snapshot["deck_id"],
+                revision=snapshot["revision"],
+                slides=snapshot["slides"],
+                action=action,
+                model_id=args.model,
+                judge=judge,
+                output=args.output,
+                profile=snapshot.get("profile", "wide-1x"),
+                viewport=tuple(snapshot["viewport"]) if "viewport" in snapshot else None,
+            )
+    finally:
+        if client is not None:
+            client.close()
+    print(json.dumps({key: report[key] for key in ("state", "reason", "confidence")}))
+    return 0 if report["state"] == "validated" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -4,6 +4,20 @@ import sys
 
 if "--pdf-worker" in sys.argv:
     from buddy_desktop.pdf_worker import main
+elif "--preflight-operator" in sys.argv:
+    # Desktop action checks: the isolated operator and its player child (#53).
+    from pathlib import Path
+
+    from buddy_desktop.preflight_operator import run
+
+    def main() -> int:
+        if sys.stdin.buffer.read(1) != b"1":
+            return 1
+        run(Path(sys.argv[-1]).resolve())
+        return 0
+
+elif "--preflight-worker" in sys.argv:
+    from buddy_desktop.preflight_worker import main
 elif "--smoke-test" in sys.argv:
     from frontend.scripts.smoke_desktop import main
 

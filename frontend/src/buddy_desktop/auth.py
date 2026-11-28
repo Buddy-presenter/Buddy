@@ -11,7 +11,7 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from threading import Event
+from threading import Event, RLock
 from typing import Any, Protocol, cast
 from urllib.parse import urlencode
 from urllib.request import Request
@@ -228,6 +228,22 @@ class AccountSession:
         self.tokens: Tokens | None = None
         self.pending_revocation: str | None = None
         self.cancelled = Event()
+        # Refresh tokens rotate: two concurrent refreshes would spend the same one.
+        self._refresh_lock = RLock()
+
+    def fresh_access(self, margin: float = 60) -> str:
+        """Return a current access token, refreshing it first if it is about to expire.
+
+        Safe from any thread. If another thread refreshed meanwhile, its token is reused.
+        """
+        with self._refresh_lock:
+            tokens = self.tokens
+            if tokens is None or time.monotonic() >= tokens.expires - margin:
+                self.resume()
+                tokens = self.tokens
+            if tokens is None:
+                raise SessionExpired("Please sign in again.")
+            return tokens.access
 
     def token_request(self, values: dict[str, str]) -> Tokens:
         result = request_json(
@@ -362,6 +378,10 @@ class AccountSession:
         )
 
     def resume(self) -> str:
+        with self._refresh_lock:
+            return self._resume()
+
+    def _resume(self) -> str:
         refresh = self.store.read()
         if not refresh:
             raise SessionExpired("No saved session. Please sign in.")

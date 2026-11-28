@@ -72,6 +72,44 @@ def test_valid_result_emits_measured_latency_and_stop_clears(controller):
     assert cleared and not controller._active and not controller._access
 
 
+def test_valid_but_delayed_transcript_discards_context_and_reconnects(controller):
+    updates, cleared = [], []
+    controller.transcript_received.connect(updates.append)
+    controller.cleared.connect(lambda: cleared.append(True))
+    controller._message(
+        json.dumps(event(controller, capture_end_ns=time.monotonic_ns() - 6_000_000_000))
+    )
+    assert not updates and cleared
+    assert controller._active and not controller._ready and controller._retry.isActive()
+    assert controller._attempts == 1
+
+
+def test_filter_delayed_packets_from_connection_gap_are_not_replayed(controller):
+    sent = []
+
+    class Socket:
+        def bytesToWrite(self):
+            return 0
+
+        def sendBinaryMessage(self, packet):
+            sent.append(bytes(packet))
+
+        def abort(self):
+            pass
+
+        def deleteLater(self):
+            pass
+
+    controller.socket = Socket()
+    controller._sample_rate = 16000
+    boundary = controller._audio_boundary_ns
+    # 50 ms of audio: before ready, straddling ready, then wholly after ready.
+    for end in (boundary - 1, boundary + 25_000_000, boundary + 100_000_000):
+        controller.send(struct.pack(">Q", end) + b"\0" * 1600)
+    assert len(sent) == 1
+    assert struct.unpack(">Q", sent[0][:8])[0] == boundary + 100_000_000
+
+
 @pytest.mark.parametrize(
     "change",
     [
@@ -196,3 +234,46 @@ def test_malformed_server_diagnostic_reference_is_omitted(controller):
         "The speech service encountered an internal error. "
         "Stop and restart the microphone to retry."
     )
+
+
+def test_every_connection_uses_a_current_token(qapp, monkeypatch):
+    # #230: speech reconnects can happen long after the microphone started.
+    from buddy_desktop import speech
+    from buddy_desktop.config import AppConfig
+
+    opened = []
+    monkeypatch.setattr(
+        speech.QWebSocket,
+        "open",
+        lambda self, request: opened.append(request.rawHeader("Authorization").data().decode()),
+    )
+    tokens = iter(["first-token", "refreshed-token"])
+    control = SpeechController()
+    try:
+        control.start(
+            AppConfig("http://127.0.0.1:9"), lambda: next(tokens), str(uuid4()), 16000, "en-US"
+        )
+        control._connect()
+        assert opened == ["Bearer first-token", "Bearer refreshed-token"]
+    finally:
+        control.stop()
+
+
+def test_expired_sign_in_stops_speech_without_retrying(qapp, monkeypatch):
+    from buddy_desktop import speech
+    from buddy_desktop.config import AppConfig
+    from buddy_desktop.library_service import LibraryAccessExpired
+
+    opened = []
+    monkeypatch.setattr(speech.QWebSocket, "open", lambda self, request: opened.append(request))
+
+    def expired() -> str:
+        raise LibraryAccessExpired("Buddy sign-in expired. Please sign in again.")
+
+    control = SpeechController()
+    statuses = []
+    control.status_changed.connect(statuses.append)
+    control.start(AppConfig("http://127.0.0.1:9"), expired, str(uuid4()), 16000, "en-US")
+    assert opened == []
+    assert not control._active and not control._retry.isActive()
+    assert "Sign in again" in statuses[-1]

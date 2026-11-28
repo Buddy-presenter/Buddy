@@ -36,6 +36,24 @@ def detail_payload(row, *, title=None):
     }
 
 
+def test_details_preserve_visual_check_progress(backend):
+    row = payload()["data"]["items"][0]
+    value = detail_payload(row)
+    value["data"]["processing"]["checks"] = {
+        "total": 8,
+        "checked": 5,
+        "ready": 3,
+        "available": True,
+        "active": True,
+        "mode": "server",
+    }
+    backend.body = json.dumps(value).encode()
+    service = LibraryService(AppConfig(f"http://127.0.0.1:{backend.server_port}"))
+    checks = service.deck_details("test-token", UUID(row["id"])).processing.checks
+    assert checks is not None
+    assert (checks.total, checks.checked, checks.ready, checks.mode) == (8, 5, 3, "server")
+
+
 def test_details_and_normalized_rename_use_owned_http_contract(backend):
     row = payload()["data"]["items"][0]
     backend.body = json.dumps(detail_payload(row)).encode()

@@ -111,6 +111,11 @@ jobs:
           python scripts/test.py api
           python scripts/test.py database
           python scripts/test.py worker
+      - name: Frozen replay corpus and deterministic agent gates
+        run: |
+          python scripts/check_replay_freeze.py
+          python -m buddy_api.replay tests/fixtures/replay/development-v6.json --gates tests/fixtures/replay/development-v6-gates.json --output replay-artifacts/development-v6
+          python -m buddy_api.replay tests/fixtures/replay/holdout-v6.json --gates tests/fixtures/replay/holdout-v6-gates.json --output replay-artifacts/holdout-v6
       - name: Install Qt runtime libraries for desktop integration tests
         shell: bash
         run: |
@@ -143,6 +148,8 @@ jobs:
               exit 1
             fi
           fi
+      - name: Capture actual PDF and native-adapter policy completions
+        run: python -m pytest tests/integration/test_policy_replay_capture.py -q
       - name: Cross-component desktop, API and PostgreSQL integration
         run: python scripts/test.py integration
       - run: python -m build backend

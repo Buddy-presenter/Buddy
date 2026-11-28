@@ -20,9 +20,11 @@ from buddy_api.analysis.grounding import (
     _tagged_content_ids,
     _target_kind_is_consistent,
     ground_actions,
+    limit_grounded_actions,
 )
 from buddy_api.analysis.provider import ModelAction, ModelOutput, ModelSlide, ModelSummary
 from buddy_api.analysis.rendering import render_manifest
+from buddy_api.extraction.contracts import ExtractionError
 from buddy_api.extraction.runner import extract_pdf
 from buddy_api.processing.stage import _configure_child_resource_limits, execute_grounding
 
@@ -81,6 +83,23 @@ def _load(path: Path):
     extraction = extract_pdf(BytesIO(content), source_revision="grounding-test")
     manifest = render_manifest(content, extraction, str(uuid4()))
     return content, extraction, manifest
+
+
+def test_checkpointed_pages_preserve_whole_deck_geometry_and_absolute_page_numbers():
+    content, extraction, manifest = _load(GEOMETRY_PDF)
+    proposed = _output(extraction, {0: (_action(),), 1: (_action(),)})
+    whole = ground_actions(content, extraction, manifest, proposed)
+    pages = [
+        ground_actions(content, extraction, manifest, proposed, page_number=n)
+        for n in range(1, len(extraction.slides) + 1)
+    ]
+    assert [p.slides[0].number for p in pages] == list(range(1, len(extraction.slides) + 1))
+    combined = limit_grounded_actions(
+        proposed.model_copy(update={"slides": tuple(p.slides[0] for p in pages)})
+    )
+    assert combined == whole
+    with pytest.raises(ExtractionError, match="grounding_page_limit"):
+        ground_actions(content, extraction, manifest, proposed, page_number=0)
 
 
 def _two_column_pdf(phrase=b"caf\xe9 results", *, with_visual=False) -> bytes:
@@ -144,7 +163,7 @@ def test_highlight_is_rebuilt_from_pdfium_glyph_positions_not_model_box():
     assert action.y + action.height <= page.height
 
 
-def test_source_inventory_adds_visuals_but_not_every_text_line():
+def test_source_inventory_adds_visuals_and_complete_text_entities():
     content = _two_column_pdf(with_visual=True)
     extraction, manifest = _load_bytes(content)
 
@@ -154,17 +173,22 @@ def test_source_inventory_adds_visuals_but_not_every_text_line():
     actions = [action for slide in result.slides for action in slide.actions]
     assert actions
     assert any(action.grounding_trace for action in actions)
-    assert all(action.type == "zoom_region" for action in actions)
+    assert any(action.type == "zoom_region" for action in actions)
+    assert any(action.type == "highlight_region" for action in actions)
 
 
-def test_source_inventory_does_not_turn_text_only_page_lines_into_actions():
+def test_source_inventory_turns_text_only_page_entities_into_actions():
     content = _two_column_pdf()
     extraction, manifest = _load_bytes(content)
 
     generated = _output(extraction, {}).model_copy(update={"source_inventory_enabled": True})
     result = ground_actions(content, extraction, manifest, generated)
 
-    assert result.slides[0].actions == ()
+    assert len(result.slides[0].actions) == 2
+    assert [action.target_text for action in result.slides[0].actions] == [
+        "café results",
+        "café results",
+    ]
 
 
 def test_line_fragment_key_sentence_is_removed_before_analysis_is_saved():
@@ -258,7 +282,7 @@ def test_repeated_unicode_quote_in_columns_uses_hint_only_to_disambiguate_source
     assert grounded.height < manifest.slides[0].source.height * 0.05
 
 
-def test_repeated_quote_with_equally_plausible_hint_is_declined_without_line_inventory():
+def test_repeated_text_entities_are_kept_as_distinct_measured_targets():
     content = _two_column_pdf()
     extraction, manifest = _load_bytes(content)
     action = _action(
@@ -272,7 +296,8 @@ def test_repeated_quote_with_equally_plausible_hint_is_declined_without_line_inv
     result = ground_actions(content, extraction, manifest, generated)
 
     repeated = [item for item in result.slides[0].actions if item.target_text == "café results"]
-    assert repeated == []
+    assert len(repeated) == 2
+    assert repeated[0].grounding_trace.target_id != repeated[1].grounding_trace.target_id
 
 
 def test_ligature_quote_maps_back_to_the_original_source_glyph():

@@ -64,8 +64,8 @@ resource "aws_ecs_task_definition" "service" {
     mountPoints            = each.key != "migration" ? [{ sourceVolume = "upload-scratch", containerPath = "/var/lib/buddy-upload", readOnly = false }] : [],
     volumesFrom            = [],
     systemControls         = [],
-    environment            = concat(local.environment, each.key == "worker" ? [{ name = "BUDDY_WORKER_TEXT_TARGETING", value = var.worker_text_targeting }] : []),
-    secrets                = concat([{ name = "BUDDY_DATABASE_URL", valueFrom = "${aws_secretsmanager_secret.database[each.key].arn}:url::" }], each.key == "api" && var.enable_speech ? [{ name = "BUDDY_DEEPGRAM_API_KEY", valueFrom = aws_secretsmanager_secret.speech[0].arn }] : []),
+    environment            = concat(local.environment, each.key == "api" ? [{ name = "BUDDY_AGENT_ENABLED", value = tostring(var.enable_presentation_agent) }] : [], each.key == "worker" ? [{ name = "BUDDY_WORKER_TEXT_TARGETING", value = var.worker_text_targeting }] : []),
+    secrets                = concat([{ name = "BUDDY_DATABASE_URL", valueFrom = "${aws_secretsmanager_secret.database[each.key].arn}:url::" }], each.key == "api" && var.enable_speech ? [{ name = "BUDDY_DEEPGRAM_API_KEY", valueFrom = aws_secretsmanager_secret.speech[0].arn }] : [], each.key == "api" && var.enable_semantic_candidates ? [{ name = "BUDDY_COHERE_API_KEY", valueFrom = aws_secretsmanager_secret.cohere[0].arn }] : [], each.key == "api" && var.enable_jev_decisions ? [{ name = "BUDDY_JEV_API_KEY", valueFrom = aws_secretsmanager_secret.jev[0].arn }] : []),
     logConfiguration = { logDriver = "awslogs", options = {
       awslogs-group  = aws_cloudwatch_log_group.service[each.key].name,
       awslogs-region = var.region, awslogs-stream-prefix = each.key

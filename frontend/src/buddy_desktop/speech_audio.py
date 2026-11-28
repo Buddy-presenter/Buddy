@@ -1,7 +1,44 @@
-"""Streaming native-format downmix to mono PCM16, without resampling or files."""
+"""Streaming native-format downmix and speech-rate conversion, without audio files."""
 
+import importlib
 import math
 import struct
+from types import ModuleType
+from typing import Any
+
+SPEECH_SAMPLE_RATE = 16000
+
+
+class PCM16Resampler:
+    """Bounded, anti-aliased streaming conversion; discarded on stop, never flushed late."""
+
+    def __init__(self, native_rate: int):
+        if not 8000 <= native_rate <= 96000:
+            raise ValueError("Unsupported microphone sample rate.")
+        self.numpy: ModuleType | None = None
+        self.stream: Any = None
+        if native_rate != SPEECH_SAMPLE_RATE:
+            # Created on the capture worker, keeping native library startup off
+            # the GUI thread. Native 16 kHz packets need no conversion at all.
+            self.numpy = importlib.import_module("numpy")
+            soxr = importlib.import_module("soxr")
+            self.stream = soxr.ResampleStream(
+                native_rate, SPEECH_SAMPLE_RATE, 1, dtype="int16", quality="HQ"
+            )
+
+    def encode(self, pcm: bytes) -> bytes:
+        if len(pcm) % 2:
+            raise ValueError("Incomplete PCM16 sample.")
+        if self.stream is None or self.numpy is None:
+            return pcm
+        samples = self.numpy.frombuffer(pcm, dtype="<i2")
+        return bytes(self.stream.resample_chunk(samples).tobytes())
+
+    @property
+    def delay_ns(self) -> int:
+        if self.stream is None:
+            return 0
+        return round(float(self.stream.delay()) * 1_000_000_000 / SPEECH_SAMPLE_RATE)
 
 
 class PCM16Encoder:

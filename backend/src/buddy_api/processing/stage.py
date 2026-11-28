@@ -123,12 +123,15 @@ def execute_grounding(
     manifest: Manifest,
     generated: ModelOutput,
     seconds: float = 120,
+    *,
+    page_number: int | None = None,
 ) -> ModelOutput:
     """Resolve model targets inside the bounded PDFium/Tesseract child process."""
     with tempfile.TemporaryDirectory(prefix="stage-ground-") as directory:
         request = json.dumps(
             {
                 "operation": "ground_actions",
+                "page_number": page_number,
                 "content": base64.b64encode(content).decode("ascii"),
                 "extraction": extraction.model_dump(mode="json"),
                 "manifest": manifest.model_dump(mode="json"),
@@ -246,7 +249,9 @@ def main() -> int:
             extraction = Extraction.model_validate(request["extraction"])
             manifest = Manifest.model_validate(request["manifest"])
             output = parse_model_output(request["output"])
-            result = ground_actions(content, extraction, manifest, output).model_dump_json()
+            result = ground_actions(
+                content, extraction, manifest, output, page_number=request.get("page_number")
+            ).model_dump_json()
         else:
             source = (
                 PowerPointSource.model_validate(request["source"])

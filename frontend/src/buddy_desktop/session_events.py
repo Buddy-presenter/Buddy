@@ -14,7 +14,7 @@ from uuid import UUID
 from PySide6.QtCore import QObject, Signal
 
 from buddy_desktop.config import AppConfig
-from buddy_desktop.library_service import LibraryAccessExpired
+from buddy_desktop.library_service import AccessProvider, LibraryAccessExpired, access_provider
 from buddy_desktop.presentation_session_service import PresentationSession, parse_snapshot
 from buddy_desktop.services import NoRedirects, ServiceError
 
@@ -129,7 +129,7 @@ def read_frames(stream: BinaryIO, stopped: Event) -> Iterator[list[str]]:
 
 class SessionEventStream(QObject):
     received = Signal(int, object)
-    failed = Signal(int, str, bool)
+    failed = Signal(int, str, str)
     connection_changed = Signal(int, str)
 
     def __init__(self, parent: QObject | None = None):
@@ -138,7 +138,7 @@ class SessionEventStream(QObject):
         self._ack = Event()
         self._thread: Thread | None = None
         self._generation = 0
-        self._key: tuple[str, str, str] | None = None
+        self._key: tuple[str, AccessProvider | str, str] | None = None
         if parent is not None:
             parent.destroyed.connect(self.stop)
 
@@ -147,8 +147,12 @@ class SessionEventStream(QObject):
         return self._generation
 
     def bind(
-        self, config: AppConfig, access: str | None, session: PresentationSession | None
+        self,
+        config: AppConfig,
+        access: AccessProvider | str | None,
+        session: PresentationSession | None,
     ) -> None:
+        # Callers pass the same provider for an unchanged sign-in; a new one restarts.
         key = (config.api_url, access, session.id) if access and session else None
         if key == self._key:
             return
@@ -178,20 +182,34 @@ class SessionEventStream(QObject):
     def _run(
         self,
         config: AppConfig,
-        key: tuple[str, str, str],
+        key: tuple[str, AccessProvider | str, str],
         generation: int,
         stopped: Event,
         ack: Event,
     ) -> None:
-        _, access, identifier = key
+        _, source, identifier = key
+        access = access_provider(source)
         cursor: int | None = None
         state_version = -1
         failures = 0
         while not stopped.is_set():
-            headers = {"Authorization": "Bearer " + access, "Accept": "text/event-stream"}
+            try:
+                # Every connection gets a current token. The server re-checks it on each
+                # poll of a stream lasting minutes, so a copy taken at bind time expires.
+                token = access()
+            except LibraryAccessExpired:
+                if not stopped.is_set():
+                    message, reason = self._access_failure(401)
+                    self.failed.emit(generation, message, reason)
+                return
+            except ServiceError:
+                token = None  # Transient refresh failure: back off below and retry.
+            headers = {"Authorization": "Bearer " + (token or ""), "Accept": "text/event-stream"}
             if cursor is not None:
                 headers["Last-Event-ID"] = str(cursor)
             try:
+                if token is None:
+                    raise ServiceError("Sign-in refresh is unavailable.")
                 request = Request(
                     config.api_url + f"/api/v1/sessions/{UUID(identifier)}/sync/events",
                     headers=headers,
@@ -206,9 +224,19 @@ class SessionEventStream(QObject):
                     for frame in read_frames(cast(BinaryIO, response), stopped):
                         event_type = next((s[7:] for s in frame if s.startswith("event: ")), "")
                         if event_type == "access_closed":
-                            raise LibraryAccessExpired(
-                                "Session access ended. Sign in and sync again."
-                            )
+                            data = [line[6:] for line in frame if line.startswith("data: ")]
+                            if len(data) != 1:
+                                raise ValueError
+                            payload = json.loads(data[0])
+                            if not isinstance(payload, dict) or set(payload) != {"status"}:
+                                raise ValueError
+                            status = payload["status"]
+                            if type(status) is not int:
+                                raise ValueError
+                            message, reason = self._access_failure(status)
+                            if not stopped.is_set():
+                                self.failed.emit(generation, message, reason)
+                            return
                         if event_type == "unavailable":
                             raise ServiceError("Session updates are reconnecting.")
                         if event_type != "session_event":
@@ -252,20 +280,17 @@ class SessionEventStream(QObject):
                 exc.close()
                 if status in {401, 403, 404}:
                     if not stopped.is_set():
-                        self.failed.emit(
-                            generation, "Session access ended. Sign in and sync again.", True
-                        )
+                        message, reason = self._access_failure(status)
+                        self.failed.emit(generation, message, reason)
                     return
                 if status == 409:
                     cursor = None
-            except LibraryAccessExpired as exc:
-                if not stopped.is_set():
-                    self.failed.emit(generation, str(exc), True)
-                return
             except (ValueError, TypeError, KeyError, AttributeError):
                 if not stopped.is_set():
                     self.failed.emit(
-                        generation, "Session updates returned an invalid response.", False
+                        generation,
+                        "Session updates returned an invalid response.",
+                        "protocol_error",
                     )
                 return
             except (ServiceError, URLError, OSError, http.client.HTTPException):
@@ -274,9 +299,29 @@ class SessionEventStream(QObject):
             if failures > len(RETRY_DELAYS):
                 if not stopped.is_set():
                     self.failed.emit(
-                        generation, "Session updates disconnected. Retry session sync.", False
+                        generation,
+                        "Session updates disconnected. Retry session sync.",
+                        "disconnected",
                     )
                 return
             if not stopped.is_set():
                 self.connection_changed.emit(generation, "reconnecting")
             stopped.wait(RETRY_DELAYS[failures - 1])
+
+    @staticmethod
+    def _access_failure(status: int) -> tuple[str, str]:
+        if status == 401:
+            return "Buddy sign-in expired. Please sign in again.", "auth_expired"
+        if status == 403:
+            return (
+                "This account no longer has access to the presentation session. "
+                "Buddy sign-in is still active.",
+                "session_forbidden",
+            )
+        if status == 404:
+            return (
+                "The presentation session no longer exists. Start a new session. "
+                "Buddy sign-in is still active.",
+                "session_missing",
+            )
+        return "Presentation session access failed. Retry the session.", "session_error"

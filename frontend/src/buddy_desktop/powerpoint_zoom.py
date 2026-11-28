@@ -6,6 +6,7 @@ import ctypes
 import importlib
 import math
 import sys
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from typing import Any
@@ -94,6 +95,11 @@ class WindowsPowerPointZoom:
             if self.gui.GetForegroundWindow() != info.window_id:
                 with suppress(Exception):
                     self.uia.ElementFromHandle(info.window_id).SetFocus()
+        # UI Automation focus is asynchronous. Give Windows a bounded interval
+        # to finish activation, without accepting an occluded or different window.
+        deadline = time.monotonic() + 0.5
+        while self.gui.GetForegroundWindow() != info.window_id and time.monotonic() < deadline:
+            time.sleep(0.025)
         self._guard(info)
 
     def zoom(self, info: PresentationInfo, region: Region, validate: Callable[[], Any]) -> None:

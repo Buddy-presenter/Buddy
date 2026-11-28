@@ -1,0 +1,335 @@
+# Presentation candidates (#19)
+
+## Semantic retrieval with Cohere Embed 5
+
+Richer-PDF preparation is also repaired on this issue branch: private provider/page
+checkpoints prevent a whole-deck grounding timeout from discarding successful AI work.
+See [resumable PDF processing](pdf-workers.md#resumable-pdf-region-processing). Migration
+`0020_pdf_checkpoints` follows the embedding migration; both require the reviewed rollout.
+Pending-summary inspection does not bypass the candidate route's completed-analysis gates.
+
+When the backend has `BUDDY_COHERE_API_KEY`, retrieval uses `cohere-embed5-v4`.
+Without it, the lexical resolver remains available and identifies itself as
+`summary-overlap-2`; it must not be described as semantic understanding. A configured
+semantic service never silently downgrades after provider failure.
+
+Call `CandidateService.prepare(access, session)` off the GUI thread before live
+queries, or POST `/api/v1/sessions/{id}/candidates/prepare` with the bearer header.
+Preparation embeds available slide summaries and currently usable action descriptions
+with `embed-v5.0-pro`, saving normalized 512-dimensional vectors in the database. An
+action description includes its purpose, action type, up to 400 characters of its slide
+summary, and exact text inside the target when available. This gives visual actions the
+same slide-topic context that the selector sees, while preserving text-target grounding.
+The index binds analysis, deck, owner, model space and document fingerprint. Repeated
+preparation of unchanged content makes no model calls. Changes in summaries, action
+eligibility, or the retrieval-description format require preparation again. Stale vectors
+cannot enable actions. The richer action description changes the document fingerprint,
+so each existing analysis is re-embedded once when preparation next runs. The existing
+resolver response version remains v4 for compatibility with already-installed desktop
+clients; no API protocol or database schema changes are needed.
+
+Live queries use `embed-v5.0-fast` with two independent retrieval views batched in
+one HTTP call: the coherent recent passage and the newest completed segment. Identical
+inputs are embedded once. Each input is bounded to 4096 characters. The passage preserves
+references across sentences; the newest view prevents an earlier topic from occupying
+the entire shortlist after a topic change. These query vectors are not averaged.
+
+The existing eight-candidate budget remains unchanged between both views. Current slide
+and no change occupy two slots. With no usable current-slide region documents, the remaining
+six slots allow up to three non-current destinations per view. When current-slide region
+documents have positive retrieval evidence, three slots remain reserved for region candidates
+and three slots remain for other slide destinations.
+Only actions on the current slide can be included in those slots because off-screen region
+actions cannot execute before navigation. This avoids spending Jev's bounded options on
+actions that the option builder would discard. Off-screen actions do not reserve candidate
+slots.
+Identical views use one ranking. It fills remaining slide slots using reciprocal-rank fusion (sum of 1 / one-based document rank for
+positive-cosine evidence). Current slide and no change remain present. Region eligibility
+is unchanged. The shortlist expresses competing evidence, not a final interpretation of
+negation, correction or audience intent. No keyword-based topic detector or extra language
+model is used. Latest utterance still drives whole-utterance navigation independently.
+
+Desktop callers send as many contiguous completed segments as fit the 4096-character
+budget within the existing 30-second memory window; there is no four-segment cutoff,
+post-final 200 ms delay or pause-triggered reset. The server bounds older clients' text,
+avoiding a partial leading word when whitespace permits. The embedding model and vector
+dimensions are unchanged. The enriched document text changes the index fingerprint and
+requires one-time re-preparation; live query inputs and provider-call counts are unchanged.
+
+Document indexing uses `search_document`; queries use `search_query`.
+Positive-cosine matches form a ranked shortlist of at
+most seven slide destinations including current (five when region slots are reserved),
+plus eligible region options and no change,
+with eight candidates maximum. Similarity is a ranking signal, not a calibrated
+confidence probability. Clear leading next/previous and numbered slide/page commands keep
+a validated no-model fast path while allowing the presenter to continue with an
+explanation (for example, “Go to slide 7, and then we can review the results”). Negated,
+conditional, quoted, corrected, or merely discussed commands remain outside that fast
+path. Numbered destinations support digits and English cardinal words across the 500-slide
+deck limit. Invalid or already-current destinations return no change rather than falling
+through to semantic matching.
+#20 owns decisions, abstention and execution policy.
+
+### Limits and usage accounting
+
+- Prepare: at most 1500 documents and two million characters, batches of 64, two
+  simultaneous preparations per process, one per owner, 120-second deadline.
+- Queries: one concurrent request per owner, 16 concurrent owners total. No fixed
+  interval is imposed between completed queries. A bounded 128-entry memory cache may
+  reuse identical query vectors for five seconds. Speech vectors are never persisted.
+- Provider: fixed HTTPS endpoint, no redirects, persistent connection pool, bounded
+  responses, strict finite/nonzero 512-dimensional vectors, two-second query and
+  20-second document-call deadlines. There are no automatic rate-limit retries.
+- PostgreSQL counts attempted calls per API-key hash per UTC calendar month, shared
+  across API replicas and restarts. There is no default 750-call Buddy cap. An explicit
+  adapter call budget remains available to operators. Preparation batches and query
+  calls both count; failed attempts count conservatively. Provider monthly/input/rate
+  limits still apply, including usage outside this database. Agent admission separately
+  enforces its configured rolling Chat allowance before starting retrieval.
+
+### Setup, deployment and privacy
+
+Apply migration `0019_candidate_indexes` before upgrading API/workers. Both services
+use strict schema readiness; use the normal reviewed compatibility-bridge and
+paused-worker rollout. The additive index has an analysis/deck/owner foreign key
+and cascades with analysis deletion. Vectors remain private database data subject
+to the existing encryption and backup policies. No database extension is needed.
+
+Terraform `enable_semantic_candidates` defaults false. Enabling it creates an
+operator-populated `embeddings/cohere` Secrets Manager secret and grants only the
+API execution role access to inject `BUDDY_COHERE_API_KEY`. No secret value belongs
+in Terraform, Git, desktop settings, logs or command arguments. Worker and migration
+containers do not receive it. This implementation applies no infrastructure itself.
+For local development, load the DPAPI-protected key only into the backend process,
+configure database/identity normally, and remove its process variable after shutdown.
+
+The standard Cohere API receives summaries/action purposes during preparation and
+latest/recent transcript text during queries. No audio is sent to Cohere. This is
+additional processing beyond Deepgram and Buddy's journal. Retention and training
+controls depend on the account; the requester explicitly authorized training-enabled
+trial use and provider retention for this development. This is not EU-only or
+zero-retention processing. Before a wider automatic agent/microphone rollout,
+disclose Cohere processing in the product's consent/status flow. See
+[Cohere data commitments](https://cohere.com/enterprise-data-commitments).
+
+### Verification and limitations
+
+Tests cover preparation caching, persistent indexes, temporary query caching,
+cross-owner denial, atomic concurrent quota reservation, restart budget persistence,
+malformed/nonfinite vectors, rate limits and no-model navigation. Paid provider
+checks are explicit; CI substitutes the external provider boundary.
+
+Actual CH8 SOL analysis was replayed through local HTTP and isolated PostgreSQL
+with real Pro/Fast calls. Totient and simultaneous-congruence references rank the
+intended page first. The correct page for “question two” is in the shortlist but
+ranks behind page 2: embeddings do not solve every reference. There are zero usable
+region actions in that deck, so no positive region-accuracy claim is made. Initial
+semantic HTTP requests took about 0.85–1.3 seconds before connection pooling. Two
+follow-up requests with pooling took 501 and 486 ms; this small sample does not
+demonstrate the 500 ms P95 target. This is not deployed or microphone evidence.
+
+## Legacy lexical protocol and behavior
+
+Issue #19 uses the current persisted slide summaries and validated action purposes,
+as agreed for the PDF-first analysis design. It does not reintroduce the historical
+semantic graph or add a model/provider request. Candidate retrieval proposes targets;
+#20 owns choosing an action and subsequent policy/executor checks still apply.
+
+`POST /api/v1/sessions/{id}/candidates` is authenticated, owner-scoped and read-only.
+The API checks the active session, current deck/source/job and pinned analysis. New
+clients send their current local slide ID, which is validated against the pinned analysis
+and used as the request origin. Older clients must match the expected persisted state
+version and use the saved slide. It reads the actual typed analysis and current validation
+state in one repeatable-read transaction. Stale analysis returns 409;
+missing/foreign identity follows existing 401/403/404 behavior. Invalid input is a
+redacted 422; oversized input is 413; dependency errors are recoverable 503 responses.
+Responses are no-store. Request bodies and speech are never added to ordinary logs
+or persisted by this route. Existing speech journal retention is unchanged.
+
+To avoid reconstructing hundreds of unavailable regions on every live request, the API
+may keep up to eight region-free typed analysis reads in memory for 30 seconds since
+their last verified use. Active reads refresh this idle TTL after authorization and
+validation-revision checks, avoiding a periodic heavy rebuild during speech. Each
+request still rechecks identity/ownership, active session/state, current source/job and
+pinned analysis in PostgreSQL. The cache also binds the immutable content hash and the
+append-only validation-history count in the same repeatable-read snapshot; a new check
+invalidates the cached eligibility. Analyses containing any usable region always take
+the canonical evidence-validation read path. This cache contains presentation data only,
+never speech, and cannot cache an authorization decision or enable a region.
+
+## Protocol and freshness
+
+The versioned request `presentation-candidates.v1` carries expected_state_version,
+an optional `active_slide_id` for current desktop clients, context_epoch, stream_id,
+sequence, an aware sent_at timestamp and at most 8192
+characters of recent text. The optional `latest_utterance` preserves the final
+recognition segment separately (at most 4096 characters); when supplied it must
+be the whole text or an exact final segment suffix. It is also omitted from reprs.
+Older clients may omit it, retaining whole-window command matching. Bodies are limited to 64 KiB even with chunked transfer;
+body receipt and the database operation each have five-second deadlines. Timestamps
+older than five seconds or more than two seconds in the future are rejected. Clients
+must keep wall clocks synchronized. This timestamp bounds request transit, not proof
+of audio capture; the live desktop capture clock owns capture freshness.
+
+`CandidateService.resolve` accepts #18's actual ContextSnapshot and saved session,
+checks capture freshness/window and session/version before network access, rechecks
+capture age/window before returning a response, sends the
+bearer token only as a header and validates the bounded response. Call it outside the
+GUI thread. The caller must recheck the live session/version/epoch against the result
+before using it; a frozen snapshot or returned candidate cannot authorize an action.
+The current local slide is sent with the request so automatic moves do not depend on
+round-trip persistence of the session's recovery position.
+This service is the callable boundary for #20. Present's agent loop (#20/#21) uses it
+for live suggestions; see [speech-triggered actions](speech-actions.md) for how speech
+selects and runs verified saved actions (#202). Action candidates match the spoken
+words against both the action's purpose and the slide text it targets. That text comes
+from the action itself for PowerPoint highlights, from the analysis grounding record for
+PDF actions, and from the saved extraction's shape text for PowerPoint zooms, which frame
+a whole shape. The same text appears to the agent as "Shows: …" on each option. Visually
+grounded PDF regions (charts, images) have no quoted text and keep their purpose alone.
+
+The service refuses partial latest segments, but completed input is immediately eligible.
+Freshness checks run before and after network access. Supply `current_context` to detect
+speech changes during retrieval, and compare `snapshot.matches(current)` again before
+using a result. A correction or new partial invalidates an older result even when the
+presentation state/epoch is unchanged. #20 owns off-thread scheduling, newest-pending-input
+coalescing under the existing two-second provider pacing, and final decision/execution.
+This PR does not start that automatic loop.
+
+Earlier v2 five-passage replay ranked all five intended slides first, but a broader
+sequence test exposed a missed privacy topic after an attack-tree explanation. This
+motivated v3's independent newest/contextual shortlist. See the natural-sequence results
+below; older v2 latency/accuracy figures are historical, not v3 acceptance evidence.
+
+The response binds session/analysis/state version, epoch, stream, revision sequence,
+resolver version and SHA-256 of the exact request. Identical requests against identical
+saved analysis/validation produce the same result. No transcript is echoed. Target
+records contain kind, existing slide_id, optional validated action_id, bounded score
+and a finite reason code. Region parameters remain in the authoritative action record;
+clients cannot propose rectangles or assert usability through this API.
+
+## Retrieval and bounds
+
+Resolver `summary-overlap-2` normalizes Unicode (NFKC/casefold), tokenizes letters/numbers
+and removes a small English stop-word set. It scans at most the validated 500-slide map
+and the bounded saved action list. Scoring counts distinct overlapping words in available
+summaries and usable action purposes. A unique highest positive match may propose an
+earlier/later slide; a tie abstains from non-linear navigation. Current-slide and explicit
+no-change candidates are always present. Whole-utterance English next/previous and
+numbered slide/page commands from `latest_utterance` (or the full text for older requests)
+produce an authoritative target. Numbered commands support digits and English cardinal
+words; out-of-range/current slides return no change. Quoted, questioned, negated,
+conditional or embedded command phrases are not interpreted as navigation commands. At
+most two matching usable region views from the shortlisted slides are included, with
+stable ordering and at most eight
+candidates overall. PDF actions require validated, usable and semantic-verified results.
+No rejected, pending or execution-only region action becomes eligible.
+
+This first resolver is deliberately lexical: it does not guarantee synonym, pronoun,
+translation or conceptual inference. Unicode topic matching works in other languages
+when words agree, but explicit navigation phrases and stop words are English in v1.
+Missing/ambiguous evidence returns conservative choices, including no change. Future
+semantic retrieval can replace this versioned implementation if replay evaluation
+shows a concrete need, without expanding the executable action contract.
+
+## Verification
+
+Run backend/tests/api/test_presentation_candidates.py with a disposable PostgreSQL
+*_test database for real authorization, persisted session/source/analysis checks,
+staleness, repeatability, read-only behavior, bounds and privacy. Replay tests cover
+current, adjacent and earlier topics, ambiguous speech, validated views and 500 slides.
+frontend/tests/test_candidates.py uses actual local HTTP for response binding, malformed
+responses and stale-context refusal. tests/integration/test_speech_stream.py's deterministic
+case exercises the production Qt speech parser, live context, candidate client, HTTP API
+and PostgreSQL together. Only identity/speech-provider boundaries are substituted. No paid
+provider or human microphone recording is required. These tests are local evidence,
+not a claim of deployed or human-language accuracy acceptance.
+
+Recognition segment boundaries are preserved rather than inferred from punctuation
+or substring search. Thus an earlier topic followed by a separate "next slide"
+segment can propose the next slide, while "do not go to the next slide" in that
+same latest segment cannot. A segment is the existing speech provider segment,
+not a new linguistic sentence detector; words split across provider segments are
+not combined into an invented command. The full rolling text still drives topic
+retrieval. Desktop clients accept resolver versions 1 through 4 during upgrades; the
+server now reports version 4 so exact-request replay comparisons name the algorithm.
+
+
+### Natural presentation sequence acceptance (2026-11-14)
+
+A fixed seven-scenario replay used the saved 61-page Threat Modeling analysis, the actual
+native context builder and HTTP client, local API/PostgreSQL, and real Cohere Pro/Fast.
+Recognition events and capture clocks were synthesized to test timing without asking a
+person to repeat a pitch. Identity and source metadata were mirrored locally; no new
+Bedrock generation or microphone capture was involved. Targets were fixed before calls.
+
+| Scenario | Expected slide | v3 rank |
+| --- | --- | --- |
+| Payment confirmation, six-second pause, then “Its signature needs checking” | 25 | 2 |
+| Assets explained in eight short recognition chunks | 20 | 2 |
+| Correct “steal payment details” to stopping dinner service by exhausting capacity | 50 | 1 |
+| Attack-tree explanation followed by a switch to identifying people from location traces | 55 | 4 |
+| Audience detour into availability, then return to payment callback signatures | 25 | 1 |
+| Return from attack goals to customer profiles, tokens, locations and refunds | 20 | 1 |
+| OR/AND attack-tree explanation, twenty-second pause, then refer to “that” | 40 or 41 | 1 |
+
+All seven intended targets were shortlisted; four ranked first. V2 missed the privacy
+switch entirely in this same sequence set. V3 preserves alternatives instead of claiming
+to resolve every correction/intent itself. Six requests took 414–626 ms and one took
+1,454 ms; no extra 200 ms desktop delay remains. This small sample is not general accuracy,
+a P95 guarantee, staging acceptance or evidence of automatic slide decisions.
+
+Automated regressions also cover immediate final eligibility, partial refusal, incoming
+corrections/partials invalidating in-flight HTTP results, silence freshness without
+clearing context, the unchanged 30-second memory expiry, many short chunks, whole-segment
+budget trimming, two-view slot reservation despite duplicate region documents, query
+cache separation by focused text, batched-call accounting and identical-input deduplication.
+
+
+### Speech-path diagnosis and candidate capacity
+
+The microphone acceptance did not pass: one stream produced 14–24 second recognition
+delays and reconnected; a short repeat disconnected without a transcript. These attempts
+cannot establish #19 real-voice accuracy. The four speech/capture source modules are
+byte-identical on main bc8b78d and the PR after main merge 1a38aa0. Controlled generated
+playback through each checkout's actual Qt client, API/PostgreSQL and Deepgram returned
+all four repetitions at both 16 and 48 kHz. Delay ranges were 164–961 / 220–612 ms on main
+and 174–561 / 379–1424 ms on the PR, respectively. Packet age at API ingress was at most
+2 ms and sampled provider-send awaits at most 1 ms. This does not establish the exact
+cause of the intermittent microphone failure or prove sample rate is responsible.
+
+A generated natural-speech replay through real Deepgram and Cohere separately exposed a
+candidate capacity bug: the correct privacy slide ranked third in the coherent view,
+but v3 discarded it while reserving two unavailable region slots. V4 uses those slots
+for slide alternatives while preserving the eight-candidate response ceiling and region
+eligibility. No keywords, model change, extra provider calls or audio resampling were
+added. The delayed-final/reconnect regression also verifies that stale recognized speech
+cannot trigger candidate retrieval, and that old input cannot survive a stream reset.
+
+
+After the capacity repair, the same three generated natural phrases were replayed at
+16 kHz through the actual Qt speech client, Deepgram, rolling context, candidate HTTP
+client, API/PostgreSQL and Cohere. All three intended slides were shortlisted: payment
+signature (page 25, rank 1), corrected dinner-service availability goal (50, rank 1), and
+privacy identification (55, rank 5). Retrieval took 400, 487 and 1079 ms. Speech-result
+delays ranged from 151 to 1030 ms. This validates candidate recall through real providers
+with generated audio, not human-microphone or staging acceptance. An additional 48 kHz
+replay produced growing recognition delays up to 7.1 seconds; freshness checks refused
+the stale requests rather than acting on them. The intermittent streaming gap remains
+tracked separately in [#180](https://github.com/Buddy-presenter/Buddy/issues/180).
+
+
+The unchanged seven-scenario typed narration set was also replayed through the native
+context/client, local API/PostgreSQL and real Cohere with v4. All seven intended slides
+were shortlisted, four ranked first, with 505–1087 ms HTTP requests. A preceding replay
+had stopped on a recoverable 503; the final seven-request run succeeded without automatic
+retries. These are small acceptance samples, not service-availability or P95 guarantees.
+
+
+The speech reliability repair from PR #181 is merged into this branch. Combined testing
+also exposed an integration edge: immediate queue rejection treated a short healthy
+socket burst as a stalled provider. The relay now permits a bounded 250 ms drain wait,
+while rejecting packets queued over 500 ms and preserving disconnect responsiveness.
+The regression sends a 24-packet, 480 ms burst through a healthy provider; it previously
+restarted the stream and now drains completely. Sustained/stalled bandwidth regressions
+continue to reject backlog. No queue-size, freshness or retry-budget increase was made.

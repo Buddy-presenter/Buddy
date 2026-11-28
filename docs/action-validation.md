@@ -30,8 +30,10 @@ and is not runtime-usable by itself. An independent visual-QA result may use
 viewport; only that validated combination is usable. `rejected` covers bad catalog parameters, stale IDs,
 unknown slides, unsupported actions or an unexpected execution/image result.
 `needs-review` covers crashes, resource limits, cancellation or an unsupported runtime.
-Every non-passing result has machine-readable reasons. `semantic_verified` is always
-false: a correctly executed highlight may still refer to the wrong content.
+Every non-passing result has machine-readable reasons. A visual result also retains the bounded
+model confidence and observation, evaluator version/model ID, and owner-scoped before/after
+evidence references. Legacy execution-only records remain readable but never acquire semantic
+verification from their old `validated` state.
 
 The trusted analysis worker can pass internal line-precision and duplicate-candidate hints to
 the isolated process; public clients cannot set these hints. A generated highlight uses line
@@ -138,6 +140,27 @@ network request, account or personal profile. PDF scripts/forms/links are not ex
 Resource/process containment is not a general native-code security sandbox. The container
 smoke also exercises the packaged worker with no networking, a read-only root and dropped
 capabilities, proving it requires neither a display server nor network access.
+
+## Independent visual QA and bounded correction (#135)
+
+`POST /api/v1/analyses/{analysis_id}/actions/{instance_id}/visual-qa` accepts one
+`Idempotency-Key`; it accepts no client-supplied verdict or geometry. The API loads the
+owner's current immutable analysis/action, executes that exact saved action using the existing
+isolated validator, loads checksum-verified before/after captures, and sends only those captures
+plus the bounded action purpose/type/target to the independent structured visual judge. A
+strict response schema rejects ambiguous or contradictory judgments. Model/runtime errors,
+missing captures, stale analysis and unsupported Office execution remain `needs-review` or
+conflict; they cannot make an action usable. The versioned validation document stores the
+confidence, observation, evaluator/model identifiers, reasons and references to private proof.
+Actions of either source format require both deterministic execution and semantic visual proof.
+
+The deployed API role receives `bedrock:InvokeModel` only for the existing EU Claude Sonnet
+4.6 inference profile and its regional destination resources. This is separate from the worker's
+existing permission. PowerPoint remains dependent on an available licensed Windows Office
+runtime. The production Linux API cannot validate Office actions; it returns the existing
+unsupported-runtime result, never a pass. The Windows source QA operator may propose only a
+bounded region correction; Review saves that region as a new analysis revision, then the server
+reruns execution and visual QA against that new saved action before it can become usable.
 
 Apply the reviewed migration and task template, then promote the reviewed API image using
 the existing staging release procedure. Local/CI container verification is not a live AWS

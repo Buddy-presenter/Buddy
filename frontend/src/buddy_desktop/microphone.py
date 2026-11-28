@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import struct
 import sys
 import time
@@ -25,7 +26,13 @@ from PySide6.QtCore import (
 )
 from PySide6.QtMultimedia import QAudio, QAudioDevice, QAudioSource, QMediaDevices
 
-from buddy_desktop.speech_audio import PCM16Encoder
+from buddy_desktop.speech_audio import SPEECH_SAMPLE_RATE, PCM16Encoder, PCM16Resampler
+from buddy_desktop.windows_power import keep_full_speed
+
+logger = logging.getLogger(__name__)
+# 50 ms packets. About 2 s of audio may wait for the GUI thread before the oldest is dropped
+# (was 0.4 s, which a hidden, power-throttled window in Buddy Mini could exceed, #255).
+QUEUED_PACKETS = 40
 
 if TYPE_CHECKING:
     from buddy_desktop.windows_microphone import WindowsInput
@@ -56,7 +63,9 @@ class _CaptureWorker(QObject):
         self.monitor: QTimer | None = None
         self.generation = 0
         self.last_capture_ns = 0
+        self.dropped_packets = 0  # Audio lost because the GUI thread fell behind (#255).
         self.encoder: PCM16Encoder | None = None
+        self.resampler: PCM16Resampler | None = None
         self.compatibility: WindowsInput | None = None
 
     @Slot(object, int, bool)
@@ -91,12 +100,13 @@ class _CaptureWorker(QObject):
                     lambda pcm: self._queue_pcm(pcm, generation),
                     lambda: self.gap.emit(generation),
                 )
+                self.resampler = PCM16Resampler(self.compatibility.sample_rate)
                 self.compatibility.start()
                 self.monitor = QTimer(self)
                 self.monitor.setInterval(250)
                 self.monitor.timeout.connect(self._check_error)
                 self.monitor.start()
-                self.formatted.emit(generation, self.compatibility.sample_rate)
+                self.formatted.emit(generation, SPEECH_SAMPLE_RATE)
                 self.changed.emit(generation, "Microphone on")
                 return
             audio_format = device.preferredFormat()
@@ -105,8 +115,9 @@ class _CaptureWorker(QObject):
             )
             if not 8000 <= audio_format.sampleRate() <= 96000:
                 raise ValueError("Unsupported microphone sample rate.")
+            self.resampler = PCM16Resampler(audio_format.sampleRate())
             source = QAudioSource(device, audio_format, self)
-            source.setBufferSize(16384)
+            source.setBufferSize(65536)  # ~0.3 s at 48 kHz stereo; was 16 KiB (#255).
             self.source = source
             self.stream = source.start()
         except Exception:
@@ -129,7 +140,7 @@ class _CaptureWorker(QObject):
         self.monitor.setInterval(250)
         self.monitor.timeout.connect(self._check_error)
         self.monitor.start()
-        self.formatted.emit(generation, audio_format.sampleRate())
+        self.formatted.emit(generation, SPEECH_SAMPLE_RATE)
         self.changed.emit(generation, "Microphone on")
 
     @Slot()
@@ -148,26 +159,34 @@ class _CaptureWorker(QObject):
             self._queue_pcm(pcm, generation)
 
     def _queue_pcm(self, pcm: bytes, generation: int) -> None:
-        dropped = False
+        dropped = 0
         with self.frame_lock:
             if not self.accepting.is_set() or generation != self.generation:
                 return
-            # Timestamp in the same critical section as FIFO insertion. Capture
-            # callbacks may overlap during device transitions; a correction of
-            # one nanosecond handles equal-resolution clock readings without
-            # weakening the server's strict increasing-timestamp validation.
-            stamp = max(time.monotonic_ns(), self.last_capture_ns + 1)
-            packet = struct.pack(">Q", stamp) + pcm
-            try:
-                self.frames.put_nowait(packet)
-            except Full:
-                dropped = True
-                with suppress(Empty):
-                    self.frames.get_nowait()
-                with suppress(Full):
+            capture_end = time.monotonic_ns()
+            if self.resampler is not None:
+                pcm = self.resampler.encode(pcm)
+                capture_end -= self.resampler.delay_ns
+            # Sinc filter delay belongs to capture time, not recognition latency.
+            # Split any output burst into <=50 ms packets with their own end time.
+            for start in range(0, len(pcm), 1600):
+                chunk = pcm[start : start + 1600]
+                trailing_ns = round(
+                    (len(pcm) - start - len(chunk)) * 1e9 / (2 * SPEECH_SAMPLE_RATE)
+                )
+                stamp = max(capture_end - trailing_ns, self.last_capture_ns + 1)
+                packet = struct.pack(">Q", stamp) + chunk
+                try:
                     self.frames.put_nowait(packet)
-            self.last_capture_ns = stamp
+                except Full:
+                    dropped += 1
+                    with suppress(Empty):
+                        self.frames.get_nowait()
+                    with suppress(Full):
+                        self.frames.put_nowait(packet)
+                self.last_capture_ns = stamp
         if dropped:
+            self.dropped_packets += dropped
             self.gap.emit(generation)
         self.received.emit(len(pcm))
 
@@ -200,6 +219,7 @@ class _CaptureWorker(QObject):
             source.stop()
             source.deleteLater()
         with self.frame_lock:
+            self.resampler = None
             _clear_frames(self.frames)
 
     @Slot()
@@ -224,7 +244,7 @@ class MicrophoneController(QObject):
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
-        self.frames: Queue[bytes] = Queue(maxsize=8)
+        self.frames: Queue[bytes] = Queue(maxsize=QUEUED_PACKETS)
         self.accepting = Event()
         self._frame_lock = Lock()
         self._capture_thread = QThread(self)
@@ -259,6 +279,11 @@ class MicrophoneController(QObject):
     @Slot(int)
     def _audio_gap(self, generation: int) -> None:
         if generation == self._generation and self.accepting.is_set():
+            # Content-free evidence for diagnosing lost speech (#255).
+            logger.warning(
+                "presentation_speech event=audio_gap dropped_packets_total=%d",
+                self.worker.dropped_packets,
+            )
             self.audio_gap.emit()
 
     @property
@@ -275,6 +300,8 @@ class MicrophoneController(QObject):
         if message == "Microphone on" and (not self._enabled or self._muted or self._paused):
             return
         if message.startswith(("Microphone unavailable", "Microphone stopped")):
+            if self._enabled:
+                keep_full_speed(False)
             self.accepting.clear()
             self._enabled = False
             self._stop_worker.emit()
@@ -323,6 +350,7 @@ class MicrophoneController(QObject):
             return
         self._enabled = True
         self._muted = self._paused = False
+        keep_full_speed(True)  # Hidden windows (Buddy Mini) must not slow capture (#255).
         self.accepting.set()
         self._start_worker.emit(bytes(device.id().data()), self._generation, self._compatibility)
 
@@ -355,6 +383,8 @@ class MicrophoneController(QObject):
         self._start_worker.emit(bytes(device.id().data()), self._generation, self._compatibility)
 
     def stop(self) -> None:
+        if self._enabled:
+            keep_full_speed(False)
         self._generation += 1
         self._enabled = self._muted = self._paused = False
         self._device_id = None

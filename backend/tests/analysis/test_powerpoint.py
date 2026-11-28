@@ -166,6 +166,9 @@ def test_fitted_zoom_proof_is_only_accepted_for_powerpoint_zoom():
         validator_version="powerpoint-executor-3",
         renderer_version="desktop-powerpoint-2",
         display_profile="windows-powerpoint-2",
+        validation_kind="execution",
+        original_action_sha256=None,
+        executed_action=None,
     )
     check_validation_evidence(analysis, action, proof)
     proof.validator_version = "powerpoint-executor-4"

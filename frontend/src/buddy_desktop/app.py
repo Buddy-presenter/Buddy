@@ -7,6 +7,7 @@ import sys
 from contextlib import suppress
 from dataclasses import replace
 from importlib.resources import files
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from PySide6.QtCore import QSettings
@@ -90,7 +91,7 @@ def run_application(
         return 2
     if environment_override is None:
         environment_override = "BUDDY_API_URL" in os.environ
-    logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
+    _configure_logging()
     if QApplication.instance() is not None:
         print("Buddy already has a Qt application instance.", file=sys.stderr)
         return 1
@@ -143,4 +144,50 @@ def run_application(
         window.review.cleanup_runner.wait_for_shutdown()
         window.present.executor.wait_for_shutdown()
         window.present.powerpoint_runner.wait_for_shutdown()
+        window.present.agent.wait_for_shutdown()
+        window.present.policy_runner.wait_for_shutdown()
+        window.present.generated_runner.wait_for_shutdown()
         activation.close()
+
+
+def _configure_logging() -> None:
+    """Keep bounded, privacy-safe desktop diagnostics available in packaged builds."""
+    if logging.getLogger().handlers:
+        return
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stderr)]
+    state_root = (
+        Path(os.environ["LOCALAPPDATA"])
+        if os.name == "nt" and os.environ.get("LOCALAPPDATA")
+        else Path(os.environ["XDG_STATE_HOME"])
+        if os.environ.get("XDG_STATE_HOME")
+        else Path.home() / ".local" / "state"
+    )
+    try:
+        log_dir = state_root / "Buddy" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        handlers.append(
+            RotatingFileHandler(
+                log_dir / "desktop.log",
+                maxBytes=1_000_000,
+                backupCount=2,
+                encoding="utf-8",
+            )
+        )
+    except OSError:
+        # Logging must never prevent the presenter from opening Buddy.
+        pass
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        handlers=handlers,
+    )
+    # Keep performance events available in packaged desktop logs without turning on
+    # INFO output from unrelated application components.
+    for name in (
+        "buddy_desktop.agent_loop",
+        "buddy_desktop.preflight_service",
+        "buddy_desktop.present_widget",
+        "buddy_desktop.review_widget",
+        "buddy_desktop.slide_executor",
+    ):
+        logging.getLogger(name).setLevel(logging.INFO)

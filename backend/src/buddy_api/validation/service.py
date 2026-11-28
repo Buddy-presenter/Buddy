@@ -15,7 +15,7 @@ from uuid import UUID, uuid4, uuid5
 
 from sqlalchemy import select
 
-from buddy_api.persistence.models import ActionCheck, Deck
+from buddy_api.persistence.models import ActionCheck, ActionValidation, Deck
 from buddy_api.uploads.contracts import UploadError
 from buddy_api.uploads.service import UploadService, blocking
 from buddy_api.validation.config import ValidatorSettings
@@ -87,6 +87,7 @@ class ValidationService:
                 .where(
                     ActionCheck.id == identifier,
                     ActionCheck.owner_id == owner,
+                    ActionCheck.check_kind == "execution",
                     Deck.deletion_requested_at.is_(None),
                 )
             )
@@ -98,36 +99,17 @@ class ValidationService:
         return self.public(await self.owned(owner, identifier))
 
     async def evidence(self, owner: UUID, identifier: UUID, artifact: UUID) -> tuple[bytes, str]:
-        row = await self.owned(owner, identifier)
-        if row.status != "complete":
-            raise UploadError(404, "not_found", "Evidence not found.")
-        value = next((item for item in row.artifacts if item["id"] == str(artifact)), None)
-        if value is None:
-            raise UploadError(404, "not_found", "Evidence not found.")
+        origin_id, value = await self._evidence_source(owner, identifier, artifact)
         mime = KINDS[value["kind"]][1]
         async with self.uploads.parser_slot:
             # The first lookup provides a fast failure, but this request may have
             # waited behind another parser/validator operation. A deck can be
             # tombstoned during that wait, so reauthorize against current state
             # before allowing any private evidence bytes to be read.
-            async with self.uploads.transaction() as session:
-                current = await session.scalar(
-                    select(ActionCheck)
-                    .join(Deck, Deck.id == ActionCheck.deck_id)
-                    .where(
-                        ActionCheck.id == identifier,
-                        ActionCheck.owner_id == owner,
-                        Deck.deletion_requested_at.is_(None),
-                    )
-                )
-                if current is None or current.status != "complete":
-                    raise UploadError(404, "not_found", "Evidence not found.")
-                current_value = next(
-                    (item for item in current.artifacts if item["id"] == str(artifact)), None
-                )
-                if current_value is None:
-                    raise UploadError(404, "not_found", "Evidence not found.")
-                row, value = current, current_value
+            current_id, current_value = await self._evidence_source(owner, identifier, artifact)
+            if current_id != origin_id or current_value != value:
+                raise UploadError(404, "not_found", "Evidence not found.")
+            row = await self.owned(owner, origin_id)
             content = await blocking(
                 lambda: self.uploads.storage.read(
                     self.key(row, value["kind"]),
@@ -140,6 +122,73 @@ class ValidationService:
                 )
             )
         return content, mime
+
+    async def _evidence_source(
+        self, owner: UUID, identifier: UUID, artifact: UUID
+    ) -> tuple[UUID, dict[str, Any]]:
+        """Resolve immutable copied proof to its original private ActionCheck artifact."""
+        async with self.uploads.transaction() as session:
+            direct = await session.scalar(
+                select(ActionCheck)
+                .join(Deck, Deck.id == ActionCheck.deck_id)
+                .where(
+                    ActionCheck.id == identifier,
+                    ActionCheck.owner_id == owner,
+                    Deck.deletion_requested_at.is_(None),
+                )
+            )
+            if direct is not None:
+                value = next(
+                    (item for item in direct.artifacts if item.get("id") == str(artifact)), None
+                )
+                if direct.status != "complete" or value is None:
+                    raise UploadError(404, "not_found", "Evidence not found.")
+                return direct.id, value
+
+            validation = await session.scalar(
+                select(ActionValidation).where(
+                    ActionValidation.id == identifier,
+                    ActionValidation.owner_id == owner,
+                )
+            )
+            if validation is None:
+                raise UploadError(404, "not_found", "Evidence not found.")
+            evidence_source_id = validation.evidence_source_validation_id
+            document = validation.document
+            claimed = next(
+                (
+                    item
+                    for item in (document or {}).get("evidence", [])
+                    if item.get("id") == str(artifact)
+                ),
+                None,
+            )
+            if evidence_source_id is None or claimed is None:
+                raise UploadError(404, "not_found", "Evidence not found.")
+            source = await session.scalar(
+                select(ActionCheck)
+                .join(Deck, Deck.id == ActionCheck.deck_id)
+                .where(
+                    ActionCheck.id == evidence_source_id,
+                    ActionCheck.owner_id == owner,
+                    ActionCheck.deck_id == validation.deck_id,
+                    ActionCheck.status == "complete",
+                    Deck.deletion_requested_at.is_(None),
+                )
+            )
+            value = (
+                next((item for item in source.artifacts if item.get("id") == str(artifact)), None)
+                if source is not None
+                else None
+            )
+            if (
+                value is None
+                or value.get("kind") != claimed.get("kind")
+                or value.get("sha256") != claimed.get("sha256")
+            ):
+                raise UploadError(404, "not_found", "Evidence not found.")
+            assert source is not None
+            return source.id, value
 
     async def validate(
         self,
@@ -412,11 +461,12 @@ class ValidationService:
                 await session.scalars(
                     select(ActionCheck.id)
                     .where(
+                        ActionCheck.check_kind == "execution",
                         (ActionCheck.status == "cleanup")
                         | (
                             (ActionCheck.status == "pending")
                             & (ActionCheck.expires_at <= datetime.now(UTC))
-                        )
+                        ),
                     )
                     .limit(16)
                 )

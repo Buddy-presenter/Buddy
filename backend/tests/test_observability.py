@@ -98,7 +98,11 @@ def test_upload_middleware_emits_success_and_rejection_without_path_identifiers(
     assert [
         message["status"] for message in messages if message["type"] == "http.response.start"
     ] == [status]
-    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    requests = [line for line in lines if line.get("event") == "api_request"]
+    assert [(line["status"], line["route"]) for line in requests] == [(status, "unmatched")]
+    assert scope["path"].split("/")[4] not in json.dumps(requests)
+    events = [line for line in lines if line.get("event") != "api_request"]
     if expected is None:
         assert events == []
         return

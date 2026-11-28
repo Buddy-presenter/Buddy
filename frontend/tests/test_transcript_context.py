@@ -70,6 +70,198 @@ def test_silence_expires_without_new_events(monkeypatch):
     assert not context.snapshot().text
 
 
+def test_pause_preserves_references_without_new_decisions(monkeypatch):
+    context, clock = setup(monkeypatch)
+    context.accept(event(clock, final=True, text="The provider sends payment confirmations."))
+    before = context.snapshot()
+    clock[0] += 7_000_000_000
+    assert not context.snapshot().fresh
+    assert context.snapshot().text == before.text
+    context.accept(
+        event(
+            clock,
+            sequence=2,
+            segment_id="b",
+            start_seconds=7,
+            end_seconds=7.1,
+            final=True,
+            text="Its signature must be verified.",
+        )
+    )
+    after = context.snapshot()
+    assert after.epoch == before.epoch and after.fresh
+    assert after.text == before.text + " Its signature must be verified."
+    assert len(after.candidate_segments) == 2
+
+
+def test_long_pause_still_obeys_memory_retention(monkeypatch):
+    context, clock = setup(monkeypatch)
+    context.accept(event(clock, final=True))
+    epoch = context.snapshot().epoch
+    clock[0] += 31_000_000_000
+    assert not context.snapshot().text
+    context.accept(event(clock, sequence=2, segment_id="new", final=True, text="Fresh topic."))
+    assert context.snapshot().text == "Fresh topic."
+    assert context.snapshot().epoch == epoch
+
+
+def test_candidate_passage_keeps_only_recent_contiguous_completed_segments(monkeypatch):
+    context, clock = setup(monkeypatch)
+    for n in range(6):
+        clock[0] += 200_000_000
+        context.accept(
+            event(
+                clock,
+                segment_id=str(n),
+                sequence=n + 1,
+                start_seconds=n * 0.2,
+                end_seconds=n * 0.2 + 0.1,
+                final=True,
+                text=f"Sentence {n}.",
+            )
+        )
+    assert [s.text for s in context.snapshot().candidate_segments] == [
+        f"Sentence {n}." for n in range(6)
+    ]
+    clock[0] += 200_000_000
+    context.accept(
+        event(clock, segment_id="partial", sequence=7, start_seconds=1.2, end_seconds=1.3)
+    )
+    assert not context.snapshot().candidate_segments
+    clock[0] += 200_000_000
+    context.accept(
+        event(
+            clock,
+            segment_id="after",
+            sequence=8,
+            start_seconds=1.4,
+            end_seconds=1.5,
+            final=True,
+            text="Completed after partial.",
+        )
+    )
+    assert [s.text for s in context.snapshot().candidate_segments] == ["Completed after partial."]
+
+
+def test_candidate_passage_drops_whole_old_segments_at_character_bound(monkeypatch):
+    context, clock = setup(monkeypatch)
+    for n in range(4):
+        clock[0] += 200_000_000
+        context.accept(event(clock, sequence=n + 1, segment_id=str(n), final=True, text="x" * 1500))
+    selected = context.snapshot().candidate_segments
+    assert [s.segment_id for s in selected] == ["2", "3"]
+    assert len(" ".join(s.text for s in selected)) <= 4096
+    assert all(len(s.text) == 1500 for s in selected)
+
+
+def test_interim_stable_prefix_is_bounded_and_revisions_revoke_it(monkeypatch):
+    context, clock = setup(monkeypatch)
+    phrase = "Let's now have a look at the table of contents"
+    context.accept(event(clock, text=phrase))
+    first = context.snapshot()
+    assert not first.decision_segments
+    clock[0] += 100_000_000
+    context.accept(event(clock, sequence=2, text=phrase + " where we explain"))
+    stable = context.snapshot()
+    assert stable.decision_segments[-1].text == phrase
+    assert not stable.decision_segments[-1].final
+    assert not stable.matches(first)
+    clock[0] += 100_000_000
+    context.accept(event(clock, sequence=3, text=phrase + " where we explain the sections"))
+    extended = context.snapshot()
+    assert extended.decision_segments[-1].text.startswith(phrase)
+    assert stable.matches_decision(extended)
+    assert stable.decision_mismatch_reason(extended) is None
+    clock[0] += 100_000_000
+    context.accept(
+        event(
+            clock,
+            sequence=4,
+            text=phrase + " where we explain the sections, actually the sales chart",
+        )
+    )
+    clock[0] += 100_000_000
+    context.accept(
+        event(
+            clock,
+            sequence=5,
+            text=phrase + " where we explain the sections, actually the sales chart",
+        )
+    )
+    assert not stable.matches_decision(context.snapshot())
+    assert stable.decision_mismatch_reason(context.snapshot()) == "interim_prefix_corrected"
+    clock[0] += 100_000_000
+    context.accept(event(clock, sequence=6, text="Let's now have a look at the sales chart"))
+    corrected = context.snapshot()
+    assert not stable.matches_decision(corrected)
+    assert stable.decision_mismatch_reason(corrected) == "interim_prefix_corrected"
+    assert corrected.decision_segments[-1].text != stable.decision_segments[-1].text
+
+
+def test_finalizing_interim_decision_preserves_it_but_new_final_supersedes(monkeypatch):
+    context, clock = setup(monkeypatch)
+    phrase = "Let's look at the table of contents"
+    context.accept(event(clock, text=phrase))
+    clock[0] += 100_000_000
+    context.accept(event(clock, sequence=2, text=phrase + " and the different sections"))
+    submitted = context.snapshot()
+    clock[0] += 100_000_000
+    context.accept(
+        event(clock, sequence=3, text=phrase + " and the different sections", final=True)
+    )
+    finalized = context.snapshot()
+    assert submitted.matches_decision(finalized)
+    clock[0] += 100_000_000
+    context.accept(
+        event(
+            clock,
+            sequence=4,
+            segment_id="next",
+            start_seconds=1,
+            end_seconds=1.2,
+            final=True,
+            text="And now we will review the different sections.",
+        )
+    )
+    continuing = context.snapshot()
+    assert submitted.matches_decision(continuing)
+    clock[0] += 100_000_000
+    context.accept(
+        event(
+            clock,
+            sequence=5,
+            segment_id="correction",
+            start_seconds=1.3,
+            end_seconds=1.5,
+            final=True,
+            text="Actually, go to the summary instead.",
+        )
+    )
+    assert not submitted.matches_decision(context.snapshot())
+
+
+def test_decision_match_allows_unchanged_history_omitted_by_bounded_window():
+    from buddy_desktop.transcript_context import ContextSegment, ContextSnapshot
+
+    now = 10_000_000_000
+    snapshot = ContextSnapshot(
+        "session",
+        1,
+        1,
+        "stream",
+        "en-US",
+        (
+            ContextSegment("older", 1, "x" * 4096, True, 0.0, 1.0, now),
+            ContextSegment("latest", 2, "Go to slide 8", True, 1.1, 1.2, now),
+        ),
+        now,
+        True,
+    )
+
+    assert [segment.segment_id for segment in snapshot.decision_segments] == ["latest"]
+    assert snapshot.matches_decision(snapshot)
+
+
 def test_reconnect_clear_and_privacy(monkeypatch):
     context, clock = setup(monkeypatch)
     context.accept(event(clock))
@@ -138,7 +330,7 @@ def test_presenter_consumes_live_results_and_clears_on_sync_gap(qtbot, tmp_path,
         widget.speech.transcript_received.emit(event(clock, sequence=3, latency_ms=10))
         assert widget.transcript_context.snapshot().text
         widget._session_stream_failed(
-            widget.session_events.generation, "Session updates stopped.", False
+            widget.session_events.generation, "Session updates stopped.", "disconnected"
         )
         assert not widget._context_connected
         assert not widget.transcript_context.snapshot().text
@@ -217,3 +409,120 @@ def test_accepted_long_utterance_expires_from_capture_start(monkeypatch):
     assert not snapshot.text
     assert not snapshot.fresh
     assert not context._segments
+
+
+def test_natural_correction_and_topic_change_invalidate_pending_results(monkeypatch):
+    context, clock = setup(monkeypatch)
+    phrases = [
+        "We considered storing passwords directly.",
+        "But we rejected that; we store only salted password hashes.",
+        "An audience member asks how refunds work.",
+        "Returning to authentication, a leaked database must not expose passwords.",
+        "Now let's discuss privacy: combining location traces can identify a person.",
+    ]
+    pending = None
+    for n, phrase in enumerate(phrases):
+        clock[0] += 1_000_000_000
+        context.accept(
+            event(
+                clock,
+                sequence=n + 1,
+                segment_id=str(n),
+                start_seconds=n,
+                end_seconds=n + 0.1,
+                text=phrase,
+                final=True,
+            )
+        )
+        latest = context.snapshot()
+        if pending:
+            assert not pending.matches(latest)
+        assert latest.matches(context.snapshot())
+        assert latest.candidate_segments[-1].text == phrase
+        pending = latest
+    # More than four provider chunks still form the actual bounded passage.
+    assert len(context.snapshot().candidate_segments) == 5
+    clock[0] += 6_000_000_000
+    assert not pending.matches(context.snapshot())
+
+
+def test_different_recognition_chunk_sizes_preserve_same_passage(monkeypatch):
+    words = [
+        "The",
+        "provider",
+        "confirms",
+        "payments",
+        "and",
+        "we",
+        "check",
+        "its",
+        "signature",
+        "before",
+        "accepting",
+        "the",
+        "message",
+    ]
+    context, clock = setup(monkeypatch)
+    for n, word in enumerate(words):
+        clock[0] += 100_000_000
+        context.accept(
+            event(
+                clock,
+                sequence=n + 1,
+                segment_id=str(n),
+                start_seconds=n * 0.1,
+                end_seconds=(n + 1) * 0.1,
+                text=word,
+                final=True,
+            )
+        )
+    assert " ".join(s.text for s in context.snapshot().candidate_segments) == " ".join(words)
+
+
+def test_snapshot_match_checks_all_bindings_and_expiration(monkeypatch):
+    from dataclasses import replace
+
+    context, clock = setup(monkeypatch)
+    context.accept(event(clock, final=True))
+    snapshot = context.snapshot()
+    assert snapshot.matches(replace(snapshot, observed_ns=snapshot.observed_ns + 1))
+    for changes in (
+        {"session_id": "other"},
+        {"state_version": 2},
+        {"epoch": snapshot.epoch + 1},
+        {"stream_id": "other"},
+        {"language": "ar"},
+        {"fresh": False},
+        {"segments": ()},
+    ):
+        assert not snapshot.matches(replace(snapshot, **changes))
+
+
+def test_decision_survives_bounded_eviction_of_immutable_final_speech():
+    from buddy_desktop.transcript_context import ContextSegment, ContextSnapshot
+
+    submitted_at = 10_000_000_000
+    submitted_segment = ContextSegment(
+        "target", 7, "Go back to the first slide", True, 7.0, 7.5, submitted_at
+    )
+    submitted = ContextSnapshot(
+        "session", 1, 2, "stream", "en-US", (submitted_segment,), submitted_at, True
+    )
+    current = ContextSnapshot(
+        "session",
+        1,
+        2,
+        "stream",
+        "en-US",
+        (
+            ContextSegment(
+                "newer-1", 8, "and this slide covers the timeline", True, 8, 8.5, submitted_at
+            ),
+            ContextSegment(
+                "newer-2", 9, "we will compare the forecast", True, 9, 9.5, submitted_at
+            ),
+        ),
+        submitted_at + 100_000_000,
+        True,
+    )
+    assert submitted.matches_decision(current)

@@ -12,8 +12,11 @@ cleared. Stop microphone releases the input device.
 Changing decks, leaving Present, signing out, losing account access, ending the session,
 disconnecting or changing the connected PowerPoint show, or closing Buddy stops capture.
 While PDF capture is active, Buddy periodically verifies the saved session; if it ends remotely or cannot be verified, capture stops.
-When a PowerPoint status check fails or cannot be refreshed for five seconds, capture
-stops until the presenter explicitly starts it again after verification resumes. Slideshow
+A single failed PowerPoint status check (Office is often briefly busy, for example while
+drawing an action) keeps capture running but blocks actions until a check succeeds. When
+no status check succeeds for five seconds, capture stops until the presenter explicitly
+starts it again after verification resumes; the log records
+`presentation_microphone event=stopped reason=powerpoint_unverified`. Slideshow
 exit is normally detected by the existing half-second poll. If the selected input
 disappears, capture stops and another device can be
 chosen explicitly. Reconnecting a device never starts listening automatically. A denied
@@ -36,13 +39,20 @@ authenticated backend to Deepgram (EU). The provider key remains server-side. Lo
 PowerPoint capture is not transmitted. Audio is not written to disk. A bounded in-memory
 queue holds at most eight PCM16 packets and is cleared when capture stops or is
 muted/paused. Overflow invalidates the speech stream rather than silently joining speech
-across a gap. The native sample rate is preserved; supported sample formats are downmixed
-to mono PCM16. macOS bundles declare microphone usage and an audio-input entitlement.
+across a gap. Hardware capture keeps its native rate; supported sample formats are downmixed to mono
+PCM16, then normalized to 16 kHz on the capture worker with pinned SoXR/NumPy. Native
+16 kHz input is passed through exactly. Anti-aliasing is applied before downsampling;
+the stream keeps filter state across chunks. Filter delay is reflected in capture
+end timestamps instead of hiding it in the latency measurement. Output packets cover
+at most 50 ms of audio, remain bounded in memory, and the filter/queue are discarded
+on stop, mute, pause or a device transition. Audio captured before or straddling a
+new speech connection is discarded, including delayed filter output. No filter tail
+is flushed after stopping. macOS bundles declare microphone usage and an audio-input entitlement.
 
 For a real-device test, sign in, open a saved PDF from Library, and wait for its
 presentation session to connect. A current PDF with partial analysis can start a session
 when its source and complete slide map are intact; actions still require their own usable
-validation before they can be accepted. Select the USB microphone and start capture. Verify the
+validation before they can be accepted. Select the intended microphone and start capture. Verify the
 status changes to Microphone on. Mute, unmute, pause, resume, and stop should update the
 status; disconnecting the device should stop capture. End the session or sign out and
 confirm that microphone access is no longer active. Saved session support must be deployed
@@ -53,3 +63,10 @@ from Present. Start the microphone and verify mute, pause, resume and stop. Disc
 Buddy, or end the slideshow in PowerPoint, and confirm capture stops. Reconnecting the
 slideshow must not restart the microphone automatically. PowerPoint uses its live local
 connection; it does not create a saved PDF backend session.
+
+
+Speech normalization reduces 48 kHz mono PCM payload from 96 kB/s to 32 kB/s. It mitigates
+backlog on constrained connections; it does not establish that sample rate was the sole
+cause of an external-provider stall. Local PowerPoint audio remains local. Frozen package
+smoke tests execute the compiled resampler, and packaging explicitly includes its native
+libraries. See [speech recovery](speech-recognition.md) for backlog/freshness behavior.

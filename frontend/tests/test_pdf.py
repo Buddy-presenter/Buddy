@@ -32,6 +32,12 @@ def test_pdf_navigation_zoom_highlight_reset_and_private_clear(desktop_window, q
     qtbot.waitUntil(lambda: not page.executor.busy, timeout=10000)
     assert page.executor.manifest is not None, page.feedback.text()
     assert page.counter.text() == "Slide 1 of 3"
+    manifest = page.executor.manifest
+    assert manifest is not None
+    assert all(
+        page.executor._cache_key(manifest, slide) in page.executor._image_cache
+        for slide in manifest.slides
+    )
     page.send("zoom_region", {"region": {"x": 96, "y": 410, "width": 480, "height": 240}})
     page.send("highlight_region", {"region": {"x": 100, "y": 450, "width": 100, "height": 40}})
     assert page.surface.highlight == Region(100, 450, 100, 40)
@@ -49,6 +55,115 @@ def test_pdf_navigation_zoom_highlight_reset_and_private_clear(desktop_window, q
     window._private_presentation = True
     window._clear_private_pdf()
     assert page.executor.manifest is None and page.surface.slide is None
+
+
+def test_selected_pdf_destination_is_prefetched_and_reused(desktop_window, qtbot, monkeypatch):
+    import buddy_desktop.slide_executor as slide_executor
+
+    window = desktop_window()
+    page = window.present
+    page.load_pdf(FIXTURE)
+    qtbot.waitUntil(lambda: not page.executor.busy, timeout=10000)
+    manifest = page.executor.manifest
+    assert manifest is not None and len(manifest.slides) > 1
+    target = manifest.slides[1]
+    key = page.executor._cache_key(manifest, target)
+
+    page.executor.prefetch_slide(target.slide_id)
+    qtbot.waitUntil(
+        lambda: (
+            page.executor._prefetch_worker is None
+            and page.executor.prefetch_pool.activeThreadCount() == 0
+        ),
+        timeout=10000,
+    )
+    assert key in page.executor._image_cache
+    assert 0 < page.executor._image_cache_bytes <= slide_executor._IMAGE_CACHE_LIMIT_BYTES
+
+    def unexpected_render(*_args, **_kwargs):
+        pytest.fail("accepted navigation should reuse its prefetched page")
+
+    monkeypatch.setattr(slide_executor, "load_image", unexpected_render)
+    page.send("go_to_slide", {"target_slide_id": target.slide_id})
+    assert page.executor.current_index == 1
+    assert page.counter.text() == "Slide 2 of 3"
+
+
+def test_prefetch_result_is_discarded_after_presentation_is_cleared(
+    desktop_window, qtbot, monkeypatch
+):
+    from threading import Event
+
+    import buddy_desktop.slide_executor as slide_executor
+
+    window = desktop_window()
+    page = window.present
+    page.load_pdf(FIXTURE)
+    qtbot.waitUntil(lambda: not page.executor.busy, timeout=10000)
+    manifest = page.executor.manifest
+    assert manifest is not None and len(manifest.slides) > 1
+    # Full-page warmup now caches every eligible page, so clear the cache to
+    # make this regression exercise an in-flight lazy prefetch result.
+    page.executor._image_cache.clear()
+    page.executor._image_cache_bytes = 0
+    release = Event()
+    original = slide_executor.load_image
+
+    def delayed_render(current_manifest, slide):
+        assert release.wait(5)
+        return original(current_manifest, slide)
+
+    monkeypatch.setattr(slide_executor, "load_image", delayed_render)
+    page.executor.prefetch_slide(manifest.slides[1].slide_id)
+    qtbot.waitUntil(lambda: page.executor._prefetch_worker is not None)
+    page.executor.clear()
+    release.set()
+    qtbot.waitUntil(
+        lambda: (
+            page.executor._prefetch_worker is None
+            and page.executor.prefetch_pool.activeThreadCount() == 0
+        ),
+        timeout=10000,
+    )
+    assert page.executor.manifest is None
+    assert not page.executor._image_cache
+    assert page.executor._image_cache_bytes == 0
+
+
+def test_clearing_saved_pdf_cancels_warmup_and_restores_open_control(
+    desktop_window, qtbot, monkeypatch
+):
+    from threading import Event
+
+    import buddy_desktop.slide_executor as slide_executor
+
+    window = desktop_window()
+    page = window.present
+    release = Event()
+    original = slide_executor.load_image
+
+    def delayed_render(manifest, slide):
+        assert release.wait(5)
+        return original(manifest, slide)
+
+    monkeypatch.setattr(slide_executor, "load_image", delayed_render)
+    page.load_pdf(FIXTURE)
+    qtbot.waitUntil(
+        lambda: page._pdf_warming and bool(page.executor._warmup_workers), timeout=10000
+    )
+    assert not page.open_button.isEnabled()
+
+    try:
+        window._private_presentation = True
+        window._clear_private_pdf()
+        assert page.executor.manifest is None
+        assert not page._pdf_warming
+        assert page.open_button.isEnabled()
+        assert not page.pdf_warmup_progress_bar.isVisible()
+    finally:
+        release.set()
+
+    qtbot.waitUntil(lambda: page.executor.prefetch_pool.activeThreadCount() == 0, timeout=10000)
 
 
 @pytest.mark.parametrize("content", [b"not a PDF", b"%PDF-1.7\nbroken"])

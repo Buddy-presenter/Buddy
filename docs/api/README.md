@@ -68,6 +68,7 @@ or logging sensitive URLs. Configure trusted ingress deliberately in the deploym
 | `GET /api/v1/health` | Liveness: running request handler returns `{"data":{"status":"ok"},"request_id":"..."}`. |
 | `GET /api/v1/ready` | 200 only after startup and all registered dependency probes succeed. Returns explicit dependency statuses. Failures/timeouts return 503 with redacted reasons. |
 | `GET /api/v1/version?api_version=v1` | Actual installed service version and API version. An unsupported version query returns validated 422. |
+| `POST /api/v1/analyses/{analysis_id}/actions/{instance_id}/visual-qa` | Re-executes one owner's saved action, independently judges the real before/after player captures, and persists a versioned visual verdict. Requires one `Idempotency-Key`; callers cannot submit a verdict. |
 
 Each response receives a server-generated UUID in `X-Request-ID`; success/error bodies
 carry the same ID. Incoming IDs are not trusted. Success bodies use `data`/`request_id`

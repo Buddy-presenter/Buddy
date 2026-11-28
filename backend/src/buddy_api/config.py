@@ -7,8 +7,12 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+from uuid import UUID
 
+from buddy_api.agent_provider import AgentSettings
+from buddy_api.embeddings import EmbeddingSettings
 from buddy_api.persistence.settings import DatabaseConfigurationError, DatabaseSettings
+from buddy_api.preflight.config import PreflightSettings
 from buddy_api.processing.config import WorkerSettings
 from buddy_api.speech import SpeechSettings
 from buddy_api.uploads.config import UploadSettings
@@ -55,6 +59,9 @@ class Settings:
     validator: ValidatorSettings | None = None
     worker: WorkerSettings | None = None
     speech: SpeechSettings | None = field(default=None, repr=False)
+    embeddings: EmbeddingSettings | None = field(default=None, repr=False)
+    agent: AgentSettings | None = field(default=None, repr=False)
+    preflight: PreflightSettings | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.environment, Environment):
@@ -131,6 +138,68 @@ class Settings:
             speech = SpeechSettings.from_environment(values)
         except ValueError as exc:
             raise ConfigurationError(str(exc)) from None
+        if values.get("BUDDY_AGENT_ENABLED", "false") not in {"true", "false"}:
+            raise ConfigurationError("BUDDY_AGENT_ENABLED must be true or false.")
+        if values.get("BUDDY_AGENT_DIAGNOSTICS", "false") not in {"true", "false"}:
+            raise ConfigurationError("BUDDY_AGENT_DIAGNOSTICS must be true or false.")
+        diagnostic_session = values.get("BUDDY_AGENT_DIAGNOSTICS_SESSION_ID")
+        if values.get("BUDDY_AGENT_DIAGNOSTICS") == "true" and not diagnostic_session:
+            raise ConfigurationError(
+                "BUDDY_AGENT_DIAGNOSTICS_SESSION_ID is required when diagnostics are enabled."
+            )
+        if values.get("BUDDY_AGENT_DIAGNOSTICS") != "true" and diagnostic_session:
+            raise ConfigurationError(
+                "BUDDY_AGENT_DIAGNOSTICS_SESSION_ID requires diagnostics to be enabled."
+            )
+        agent = None
+        if values.get("BUDDY_AGENT_ENABLED") == "true":
+            try:
+                agent = AgentSettings(
+                    values.get("BUDDY_COHERE_API_KEY", ""),
+                    int(values["BUDDY_AGENT_MONTHLY_LIMIT"])
+                    if values.get("BUDDY_AGENT_MONTHLY_LIMIT")
+                    else None,
+                    int(values.get("BUDDY_AGENT_REQUESTS_PER_MINUTE", "200")),
+                    values.get("BUDDY_JEV_API_KEY") or None,
+                    float(values.get("BUDDY_JEV_CONFIDENCE", "0.5")),
+                    float(values.get("BUDDY_JEV_PRESENTING_FLOOR", "0.4")),
+                    values.get("BUDDY_DECISION_PROVIDER", "jev"),
+                    values.get("BUDDY_AGENT_DIAGNOSTICS", "false") == "true",
+                    UUID(diagnostic_session) if diagnostic_session else None,
+                    # Jev decides from every slide and current-slide action whenever a
+                    # Jev key is configured: Cohere takes no part in slide decisions.
+                    values.get(
+                        "BUDDY_AGENT_CANDIDATE_MODE",
+                        "direct_current" if values.get("BUDDY_JEV_API_KEY") else "semantic",
+                    ),
+                )
+            except ValueError:
+                raise ConfigurationError(
+                    "Semantic agent requires a Cohere key; direct_current requires Jev only. "
+                    "Agent accepts an optional positive monthly budget, "
+                    "rate from 1 to 500 requests per minute, an optional Jev key with "
+                    "confidence from 0.5 to 1, presenting-now floor from 0 to 1, and a "
+                    "decision provider of jev, cohere or "
+                    "jev+cohere."
+                ) from None
+        preflight = None
+        if values.get("BUDDY_PREFLIGHT_ENABLED", "false") not in {"true", "false"}:
+            raise ConfigurationError("BUDDY_PREFLIGHT_ENABLED must be true or false.")
+        if values.get("BUDDY_PREFLIGHT_ENABLED") == "true":
+            try:
+                preflight = PreflightSettings.model_validate(
+                    dict(
+                        python=values["BUDDY_PREFLIGHT_PYTHON"],
+                        region=values.get("BUDDY_AWS_REGION", "eu-central-1"),
+                        profile=values.get("BUDDY_PREFLIGHT_PROFILE", "wide-1x"),
+                        viewport_width=int(values.get("BUDDY_PREFLIGHT_WIDTH", "1280")),
+                        viewport_height=int(values.get("BUDDY_PREFLIGHT_HEIGHT", "720")),
+                    )
+                )
+            except (ValueError, KeyError):
+                raise ConfigurationError(
+                    "Preflight requires an approved installed Python executable."
+                ) from None
         return cls(
             environment,
             hosts,
@@ -143,4 +212,9 @@ class Settings:
             validator,
             WorkerSettings.from_environment(values),
             speech,
+            EmbeddingSettings(values["BUDDY_COHERE_API_KEY"])
+            if values.get("BUDDY_COHERE_API_KEY")
+            else None,
+            agent,
+            preflight,
         )

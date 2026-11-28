@@ -1,0 +1,547 @@
+"""Real child-process PDF sessions plus access, bounds and fail-closed contracts."""
+
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+from threading import Event
+
+import pytest
+
+from buddy_desktop.pdf_document import open_pdf
+from buddy_desktop.preflight import PreflightRunner, check_tools
+from buddy_desktop.preflight_powerpoint import safe_source
+from buddy_desktop.slide_contract import ContractError
+from buddy_desktop.visual_qa import inspect_action
+
+FIXTURE = Path(__file__).resolve().parents[2] / "tests/fixtures/slides/Buddy_PDF_Geometry.pdf"
+
+
+@pytest.fixture
+def snapshot():
+    source = FIXTURE.read_bytes()
+    manifest, _ = open_pdf(source, deck_id="test-deck", revision="test-revision")
+    action = dict(
+        version="1.1",
+        instance_id="zoom",
+        purpose="Preflight test",
+        deck_id="test-deck",
+        render_id=manifest.render_id,
+        slide_id=manifest.slides[0].slide_id,
+        type="zoom_region",
+        params={"region": {"x": 96, "y": 410, "width": 480, "height": 240}},
+    )
+    return dict(
+        source=source,
+        source_format="pdf",
+        deck_id="test-deck",
+        revision="test-revision",
+        slides={s.slide_id: {} for s in manifest.slides},
+        catalog={"zoom": action},
+    )
+
+
+@pytest.mark.parametrize(
+    "tools",
+    [
+        [{"op": "shell", "command": "whoami"}],
+        [{"op": "capture", "path": "../other.png"}],
+        [{"op": "apply_action", "action_id": "unknown"}],
+        [{"op": "load_slide", "slide_id": "unknown"}],
+        [{"op": "capture"}] * 5,
+        [{"op": "read_state"}] * 17,
+        [{"op": []}],
+        [{"op": "apply_action", "action_id": []}],
+    ],
+)
+def test_tool_allowlist_rejects_arbitrary_operations(tools):
+    with pytest.raises(ContractError):
+        check_tools(tools, {}, {})
+
+
+@pytest.fixture
+def native_profile(qapp):
+    screen = qapp.primaryScreen()
+    return "wide-2x" if screen is not None and screen.devicePixelRatio() == 2 else "wide-1x"
+
+
+def test_real_pdf_process_capture_and_deterministic_action_baselines(snapshot, native_profile):
+    with PreflightRunner("owner") as runner:
+        root = runner._root
+        report = runner.run(
+            "owner",
+            **snapshot,
+            profile=native_profile,
+            tools=[
+                {"op": "capture"},
+                {"op": "apply_action", "action_id": "zoom"},
+                {"op": "read_state"},
+                {"op": "capture"},
+                {"op": "apply_action", "action_id": "zoom"},
+                {"op": "reset"},
+                {"op": "capture"},
+            ],
+        )
+        if sys.platform not in {"win32", "darwin"}:
+            assert report["reason"] == "unsupported_desktop_runtime"
+            return
+        # macOS screen recording may be denied on managed CI hosts; never pass a fake capture.
+        if sys.platform == "darwin" and report["reason"] == "desktop_capture_unavailable":
+            pytest.skip("Native capture unsupported by this host's screen-recording permission")
+        if (
+            sys.platform == "darwin"
+            and os.environ.get("GITHUB_ACTIONS") == "true"
+            and report["reason"] == "audience_viewport_occluded"
+        ):
+            assert report["state"] == "needs-review" and report["semantic_verified"] is False
+            pytest.skip(
+                "Managed Mac cannot verify an unobstructed audience; native acceptance pending"
+            )
+        assert report["state"] == "completed", (
+            report.get("reason"),
+            report.get("actual_display_scale"),
+        )
+        assert report["semantic_verified"] is False
+        assert report["qt_settings_private"] is True
+        assert report["viewport"] == [1280, 720]
+        trace = report["trace"]
+        assert trace[1]["baseline"] == trace[4]["baseline"]
+        assert trace[1]["after"] == trace[4]["after"]
+        assert trace[1]["after"] != trace[1]["baseline"]
+        images = [runner.artifact("owner", report["run_id"], f"{i}.png") for i in range(3)]
+        assert images[0] == images[2] and images[0] != images[1]
+        assert all(i.startswith(b"\x89PNG") for i in images)
+        assert not (root / report["run_id"] / "source.pdf").exists()
+        stored = json.loads(runner.artifact("owner", report["run_id"], "report.json"))
+        assert stored["source_sha256"] == hashlib.sha256(snapshot["source"]).hexdigest()
+        with pytest.raises(PermissionError):
+            runner.artifact("other", report["run_id"], "0.png")
+        with pytest.raises(FileNotFoundError):
+            runner.artifact("owner", report["run_id"], "../request.json")
+        if os.name != "nt":
+            assert root.stat().st_mode & 0o077 == 0
+    assert not root.exists()
+    with pytest.raises(PermissionError):
+        runner.run("owner", **snapshot, tools=[{"op": "read_state"}])
+
+
+def test_cancelled_run_can_retry_without_reusing_partial_state(snapshot):
+    cancelled = Event()
+    cancelled.set()
+    with PreflightRunner("owner") as runner:
+        report = runner.run("owner", **snapshot, tools=[{"op": "read_state"}], cancelled=cancelled)
+        assert report["state"] == "needs-review" and report["reason"] == "cancelled"
+        retry = runner.run("owner", **snapshot, tools=[{"op": "read_state"}])
+        assert retry["run_id"] != report["run_id"]
+        assert retry["state"] == (
+            "completed" if sys.platform in {"win32", "darwin"} else "needs-review"
+        )
+
+
+def test_processed_catalog_larger_than_action_object_limit_loads_in_real_child(snapshot):
+    action = snapshot["catalog"]["zoom"]
+    snapshot["catalog"] = {str(i): {**action, "instance_id": f"action-{i}"} for i in range(20)}
+    with PreflightRunner("owner") as runner:
+        report = runner.run("owner", **snapshot, tools=[{"op": "read_state"}])
+        assert report["state"] == (
+            "completed" if sys.platform in {"win32", "darwin"} else "needs-review"
+        ), report
+        if sys.platform not in {"win32", "darwin"}:
+            assert report["reason"] == "unsupported_desktop_runtime"
+
+
+def test_load_slide_tool_uses_the_source_pages_coordinate_system(snapshot):
+    second_slide = list(snapshot["slides"])[1]
+    with PreflightRunner("owner") as runner:
+        report = runner.run(
+            "owner",
+            **snapshot,
+            tools=[
+                {"op": "load_slide", "slide_id": second_slide},
+                {"op": "read_state"},
+                {"op": "reset"},
+            ],
+        )
+        if sys.platform not in {"win32", "darwin"}:
+            assert report["reason"] == "unsupported_desktop_runtime"
+            return
+        assert report["state"] == "completed", report
+        assert all(step["after"]["slide_id"] == second_slide for step in report["trace"])
+        assert report["trace"][0]["after"]["region"] == dict(x=0, y=0, width=1000, height=600)
+
+
+def test_authorization_and_bad_catalog_fail_before_launch(snapshot, monkeypatch):
+    with PreflightRunner("owner") as runner:
+        monkeypatch.setattr(runner, "_launch", lambda *args: pytest.fail("must not launch"))
+        with pytest.raises(PermissionError):
+            runner.run("foreign", **snapshot, tools=[{"op": "read_state"}])
+        snapshot["catalog"]["zoom"]["deck_id"] = "foreign"
+        with pytest.raises(ContractError):
+            runner.run("owner", **snapshot, tools=[{"op": "read_state"}])
+
+
+def test_worker_failure_is_not_visual_approval_and_source_is_cleaned(snapshot, monkeypatch):
+    with PreflightRunner("owner") as runner:
+        monkeypatch.setattr(runner, "_launch", lambda *args: "worker_failed")
+        report = runner.run("owner", **snapshot, tools=[{"op": "read_state"}])
+        assert report["state"] == "needs-review" and report["semantic_verified"] is False
+        assert set(p.name for p in (runner._root / report["run_id"]).iterdir()) == {"report.json"}
+
+
+@pytest.mark.parametrize("reason", ["worker_failed", "cancelled", "time_limit", "storage_limit"])
+def test_failed_launch_discards_partial_captures(snapshot, monkeypatch, reason):
+    def failed_launch(folder, *args):
+        (folder / "0.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+        return reason
+
+    with PreflightRunner("owner") as runner:
+        monkeypatch.setattr(runner, "_launch", failed_launch)
+        report = runner.run("owner", **snapshot, tools=[{"op": "capture"}])
+        assert report["reason"] == reason
+        assert report["artifacts"] == []
+        with pytest.raises(FileNotFoundError):
+            runner.artifact("owner", report["run_id"], "0.png")
+
+
+@pytest.mark.parametrize("state,verified", [("completed", False), ([], False), ("completed", True)])
+def test_worker_cannot_replace_host_identity_or_approve_actions(
+    snapshot, monkeypatch, state, verified
+):
+    def result(folder, *args):
+        (folder / "result.json").write_text(
+            json.dumps(
+                dict(
+                    source_sha256=hashlib.sha256(snapshot["source"]).hexdigest(),
+                    state=state,
+                    semantic_verified=verified,
+                    run_id="foreign",
+                    schema_version="foreign",
+                    source_revision="foreign",
+                    source_format="pptx",
+                )
+            )
+        )
+
+    with PreflightRunner("owner") as runner:
+        monkeypatch.setattr(runner, "_launch", result)
+        report = runner.run("owner", **snapshot, tools=[{"op": "read_state"}])
+        assert report["run_id"] != "foreign"
+        assert report["schema_version"] == "buddy.preflight.v1"
+        assert report["source_revision"] == snapshot["revision"]
+        assert report["source_format"] == "pdf"
+        assert report["semantic_verified"] is False
+        assert report["state"] == (
+            "completed" if state == "completed" and not verified else "needs-review"
+        )
+        assert json.loads(runner.artifact("owner", report["run_id"], "report.json")) == report
+
+
+@pytest.mark.parametrize("invalid_capture", ["oversized", "bad-header", "unexpected-name"])
+def test_rejected_captures_are_deleted_and_unreadable(snapshot, monkeypatch, invalid_capture):
+    def capture(folder, *args):
+        (folder / "result.json").write_text(
+            json.dumps(
+                dict(
+                    source_sha256=hashlib.sha256(snapshot["source"]).hexdigest(),
+                    state="completed",
+                    artifacts=[{"name": "0.png", "sha256": "untrusted"}],
+                )
+            )
+        )
+        # Include a valid capture first, so a later rejection cannot retain a
+        # partially validated set that the report does not list.
+        (folder / "0.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+        rejected_name = "extra.png" if invalid_capture == "unexpected-name" else "1.png"
+        content = b"not a PNG" if invalid_capture == "bad-header" else b"\x89PNG\r\n\x1a\n"
+        with (folder / rejected_name).open("wb") as image:
+            image.write(content)
+            if invalid_capture == "oversized":
+                image.truncate(16 * 1024 * 1024 + 8)
+
+    with PreflightRunner("owner") as runner:
+        monkeypatch.setattr(runner, "_launch", capture)
+        report = runner.run("owner", **snapshot, tools=[{"op": "capture"}] * 2)
+        assert report["state"] == "needs-review"
+        assert report["reason"] == "invalid_worker_result"
+        assert report["artifacts"] == []
+        stored = json.loads(runner.artifact("owner", report["run_id"], "report.json"))
+        assert stored == report
+        assert {p.name for p in (runner._root / report["run_id"]).iterdir()} == {"report.json"}
+        for name in ("0.png", "1.png", "extra.png"):
+            with pytest.raises(FileNotFoundError):
+                runner.artifact("owner", report["run_id"], name)
+
+
+def test_passive_powerpoint_package_and_external_content_rejection():
+    import io
+    import zipfile
+
+    safe_source((Path(__file__).parent / "fixtures/slide_actions/wide.pptx").read_bytes())
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w") as archive:
+        archive.writestr(
+            "ppt/_rels/presentation.xml.rels",
+            '<Relationships><Relationship TargetMode="External" Target="https://example.com"/></Relationships>',
+        )
+    with pytest.raises(ContractError, match="unsafe_office_content"):
+        safe_source(stream.getvalue())
+
+
+def test_office_dialog_cannot_be_accepted_as_an_audience_capture():
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QColor, QImage, QPainter
+
+    from buddy_desktop.powerpoint_zoom_evidence import distance
+    from buddy_desktop.preflight_powerpoint import office_reference
+
+    source = QImage(1280, 720, QImage.Format.Format_RGB32)
+    source.fill(QColor("#101820"))
+    clean = office_reference(source, 1280, 720, [1920, 1080], None)
+    obstructed = clean.copy()
+    painter = QPainter(obstructed)
+    painter.fillRect(QRect(290, 130, 700, 450), QColor("#282828"))
+    painter.end()
+    assert distance(source, clean) < 0.001
+    assert distance(obstructed, clean) > 0.015
+
+
+def test_real_child_crash_stays_unapproved_and_cleans_job(snapshot, monkeypatch):
+    import buddy_desktop.preflight as module
+
+    popen = module.subprocess.Popen
+
+    def crash(command, **kwargs):
+        return popen(
+            [command[0], "-c", "import sys; sys.stdin.buffer.read(1); sys.exit(7)"], **kwargs
+        )
+
+    monkeypatch.setattr(module.subprocess, "Popen", crash)
+    with PreflightRunner("owner") as runner:
+        report = runner.run("owner", **snapshot, tools=[{"op": "read_state"}])
+        assert report["state"] == "needs-review"
+        assert report["reason"] == "worker_failed"
+        assert report["semantic_verified"] is False
+
+
+@pytest.mark.parametrize("source_format", ["pdf", "pptx"])
+def test_native_profile_dependency_does_not_inherit_application_credentials(
+    tmp_path, monkeypatch, source_format
+):
+    import buddy_desktop.preflight as module
+
+    profiles = {
+        name: str(tmp_path / "licensed-user" / name.lower())
+        for name in ("USERPROFILE", "APPDATA", "LOCALAPPDATA")
+    }
+    for name, value in profiles.items():
+        monkeypatch.setenv(name, value)
+    for name in (
+        "AWS_SECRET_ACCESS_KEY",
+        "BUDDY_API_TOKEN",
+        "BUDDY_DATABASE_URL",
+        "OPENAI_API_KEY",
+    ):
+        monkeypatch.setenv(name, "must-not-reach-child")
+    captured = {}
+    popen = module.subprocess.Popen
+
+    def inspect_environment(command, **kwargs):
+        captured.update(kwargs["env"])
+        return popen(
+            [command[0], "-c", "import sys; sys.stdin.buffer.read(1); sys.exit(7)"], **kwargs
+        )
+
+    monkeypatch.setattr(module.subprocess, "Popen", inspect_environment)
+    assert PreflightRunner._launch(tmp_path, "wide-1x", None, source_format) == "worker_failed"
+    for name in (
+        "AWS_SECRET_ACCESS_KEY",
+        "BUDDY_API_TOKEN",
+        "BUDDY_DATABASE_URL",
+        "OPENAI_API_KEY",
+    ):
+        assert name not in captured
+    for name in ("HOME", "TEMP", "TMP", "QML_DISK_CACHE_PATH", "QT_SHADER_CACHE_DIR"):
+        assert Path(captured[name]).is_relative_to(tmp_path)
+    if sys.platform == "win32" and source_format == "pptx":
+        assert all(captured[name] == value for name, value in profiles.items())
+    else:
+        assert all(captured[name] != value for name, value in profiles.items())
+
+
+def test_real_hung_child_is_stopped_at_deadline(snapshot, monkeypatch):
+    import itertools
+    import time
+    from types import SimpleNamespace
+
+    import buddy_desktop.preflight as module
+
+    popen = module.subprocess.Popen
+    children = []
+
+    def hang(command, **kwargs):
+        child = popen(
+            [command[0], "-c", "import sys,time; sys.stdin.buffer.read(1); time.sleep(300)"],
+            **kwargs,
+        )
+        children.append(child)
+        return child
+
+    ticks = itertools.count(step=100)
+    monkeypatch.setattr(
+        module, "time", SimpleNamespace(monotonic=lambda: next(ticks), sleep=time.sleep)
+    )
+    monkeypatch.setattr(module.subprocess, "Popen", hang)
+    with PreflightRunner("owner") as runner:
+        report = runner.run("owner", **snapshot, tools=[{"op": "read_state"}])
+        assert report["reason"] == "time_limit"
+        assert report["state"] == "needs-review"
+        assert children[0].poll() is not None
+
+
+def test_retention_expires_runs_and_caps_private_evidence(snapshot, monkeypatch):
+    with PreflightRunner("owner") as runner:
+        monkeypatch.setattr(runner, "_launch", lambda *args: "worker_failed")
+        first = runner.run("owner", **snapshot, tools=[{"op": "read_state"}])
+        for _ in range(8):
+            runner.run("owner", **snapshot, tools=[{"op": "read_state"}])
+        assert len(runner._runs) == 8
+        with pytest.raises(FileNotFoundError):
+            runner.artifact("owner", first["run_id"], "report.json")
+        latest = next(reversed(runner._runs))
+        runner._runs[latest] -= 3601
+        with pytest.raises(FileNotFoundError):
+            runner.artifact("owner", latest, "report.json")
+
+
+@pytest.mark.parametrize(
+    ("verdict", "state", "reason"),
+    [
+        ({"verdict": "validated", "confidence": 0.97, "issue": None}, "validated", None),
+        (
+            {"verdict": "rejected", "confidence": 0.95, "issue": "wrong_target"},
+            "rejected",
+            "wrong_target",
+        ),
+        (
+            {"verdict": "validated", "confidence": 0.61, "issue": None},
+            "validated",
+            None,
+        ),
+        (
+            {"verdict": "validated", "confidence": 1, "issue": "clipped"},
+            "unavailable",
+            "conflicting_verdict",
+        ),
+        (
+            {"verdict": "validated", "confidence": True, "issue": None},
+            "unavailable",
+            "visual_verdict_unavailable",
+        ),
+        (
+            {"verdict": "rejected", "confidence": 0.92, "issue": "partial_target"},
+            "rejected",
+            "partial_target",
+        ),
+        (
+            {"verdict": "rejected", "confidence": 0.5, "issue": "uncertain"},
+            "rejected",
+            "uncertain",
+        ),
+        (None, "unavailable", "visual_verdict_unavailable"),
+        (
+            {
+                "verdict": "validated",
+                "confidence": 0.95,
+                "issue": None,
+                "observation": "The intended target remains readable. " * 14,
+            },
+            "validated",
+            None,
+        ),
+        (
+            {"verdict": "validated", "confidence": 0.95, "issue": None, "observation": "x" * 1201},
+            "unavailable",
+            "visual_verdict_unavailable",
+        ),
+    ],
+)
+def test_visual_qa_binds_real_pdf_captures_and_persists_verdict(
+    snapshot,
+    tmp_path,
+    verdict,
+    state,
+    reason,
+    native_profile,
+):
+    action = snapshot.pop("catalog")["zoom"]
+    received = []
+
+    def judge(target, before, after):
+        assert target["purpose"] == action["purpose"]
+        assert before != after
+        received.extend((before, after))
+        if verdict is None:
+            raise TimeoutError("synthetic provider timeout")
+        return {"observation": "The viewport changed around the intended region.", **verdict}
+
+    with PreflightRunner("owner") as runner:
+        with pytest.raises(PermissionError):
+            inspect_action(
+                runner,
+                "other",
+                **snapshot,
+                action=action,
+                model_id="test",
+                output=tmp_path / "foreign",
+                judge=judge,
+            )
+        assert not (tmp_path / "foreign").exists()
+        report = inspect_action(
+            runner,
+            "owner",
+            **snapshot,
+            action=action,
+            model_id="test",
+            output=tmp_path / "report",
+            judge=judge,
+            profile=native_profile,
+        )
+    if sys.platform not in {"win32", "darwin"} or (
+        sys.platform == "darwin"
+        and report["reason"] in {"desktop_capture_unavailable", "audience_viewport_occluded"}
+    ):
+        assert report["state"] == "unavailable" and not received
+        return
+    assert report["state"] == state, report
+    assert report["reason"] == reason
+    assert report["semantic_verified"] is (state == "validated")
+    assert report["preflight"]["semantic_verified"] is False
+    if report["model_verdict"] is not None:
+        assert report["model_verdict"]["confidence"] == verdict["confidence"]
+        assert report["model_verdict"]["observation"]
+    result = tmp_path / "report"
+    assert json.loads((result / "report.json").read_text(encoding="utf-8")) == report
+    for role, content in zip(("before", "after"), received, strict=True):
+        assert (result / f"{role}.png").read_bytes() == content
+        assert report["evidence"][role]["sha256"] == hashlib.sha256(content).hexdigest()
+
+
+def test_visual_qa_cancelled_attempt_persists_safe_fallback(snapshot, tmp_path):
+    action = snapshot.pop("catalog")["zoom"]
+    cancelled = Event()
+    cancelled.set()
+    with PreflightRunner("owner") as runner:
+        report = inspect_action(
+            runner,
+            "owner",
+            **snapshot,
+            action=action,
+            model_id="test",
+            output=tmp_path / "cancelled",
+            judge=lambda *_: pytest.fail("must not run"),
+            cancelled=cancelled,
+        )
+    assert report["state"] == "unavailable"
+    assert report["reason"] == "cancelled"
+    assert not report["evidence"] and not report["semantic_verified"]

@@ -119,8 +119,10 @@ class ActionCheck(OwnedRecord):
             ["deck_id", "owner_id"], ["decks.id", "decks.owner_id"], ondelete="RESTRICT"
         ),
         UniqueConstraint("owner_id", "retry_key"),
+        UniqueConstraint("id", "owner_id", name="uq_action_checks_owner_identity"),
         CheckConstraint("status IN ('pending','complete','cleanup','failed')", name="status"),
         CheckConstraint("storage_bytes >= 0 AND storage_bytes <= 33554432", name="storage_bytes"),
+        CheckConstraint("check_kind IN ('execution','preflight')", name="check_kind"),
     )
     deck_id: Mapped[UUID] = mapped_column(index=True)
     retry_key: Mapped[UUID] = mapped_column()
@@ -130,6 +132,8 @@ class ActionCheck(OwnedRecord):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     result: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     artifacts: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, server_default="[]")
+    check_kind: Mapped[str] = mapped_column(String(16), server_default="execution")
+    request_data: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
 
 class DeckExtraction(OwnedRecord):
@@ -190,6 +194,33 @@ class ProcessingJob(OwnedRecord):
     not_before: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     error_code: Mapped[str | None] = mapped_column(String(64))
     extraction_id: Mapped[UUID | None] = mapped_column()
+
+
+class PDFProcessingCheckpoint(Base):
+    """Private, lease-fenced provider output and completed grounding pages."""
+
+    __tablename__ = "pdf_processing_checkpoints"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["job_id", "deck_id", "owner_id"],
+            ["processing_jobs.id", "processing_jobs.deck_id", "processing_jobs.owner_id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["extraction_id", "deck_id", "owner_id"],
+            ["deck_extractions.id", "deck_extractions.deck_id", "deck_extractions.owner_id"],
+            ondelete="RESTRICT",
+        ),
+    )
+    job_id: Mapped[UUID] = mapped_column(primary_key=True)
+    deck_id: Mapped[UUID] = mapped_column()
+    owner_id: Mapped[UUID] = mapped_column(index=True)
+    extraction_id: Mapped[UUID] = mapped_column()
+    source_revision: Mapped[str] = mapped_column(String(128))
+    source_sha256: Mapped[str] = mapped_column(String(64))
+    binding: Mapped[str] = mapped_column(String(64))
+    generated: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    pages: Mapped[dict[str, Any]] = mapped_column(JSONB)
 
 
 class JobOutbox(Base):
@@ -371,6 +402,12 @@ class ActionValidation(OwnedRecord):
             ondelete="RESTRICT",
         ),
         UniqueConstraint("action_id", "sequence"),
+        ForeignKeyConstraint(
+            ["evidence_source_validation_id", "owner_id"],
+            ["action_checks.id", "action_checks.owner_id"],
+            name="fk_action_validations_evidence_source_owner",
+            ondelete="RESTRICT",
+        ),
         CheckConstraint("sequence >= 0", name="sequence"),
         CheckConstraint(
             "state IN ('candidate','validated','rejected','needs-review')", name="state"
@@ -382,6 +419,40 @@ class ActionValidation(OwnedRecord):
     sequence: Mapped[int] = mapped_column()
     state: Mapped[str] = mapped_column(String(16))
     document: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    evidence_source_validation_id: Mapped[UUID | None] = mapped_column(nullable=True)
+
+
+class AnalysisCorrection(OwnedRecord):
+    """Owner-authored, append-only changes that produce a later analysis revision."""
+
+    __tablename__ = "analysis_corrections"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["source_analysis_id", "deck_id", "owner_id"],
+            ["analysis_versions.id", "analysis_versions.deck_id", "analysis_versions.owner_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["result_analysis_id", "deck_id", "owner_id"],
+            ["analysis_versions.id", "analysis_versions.deck_id", "analysis_versions.owner_id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("owner_id", "request_id"),
+        CheckConstraint("operation IN ('set_region','disable')", name="operation"),
+        CheckConstraint("result_version > source_version", name="version_order"),
+    )
+    deck_id: Mapped[UUID] = mapped_column(index=True)
+    source_analysis_id: Mapped[UUID] = mapped_column(index=True)
+    result_analysis_id: Mapped[UUID] = mapped_column(index=True)
+    source_version: Mapped[int] = mapped_column()
+    result_version: Mapped[int] = mapped_column()
+    action_instance_id: Mapped[str] = mapped_column(String(128))
+    operation: Mapped[str] = mapped_column(String(16))
+    source_action_sha256: Mapped[str] = mapped_column(String(64))
+    result_action_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    request_id: Mapped[UUID] = mapped_column()
+    request_sha256: Mapped[str] = mapped_column(String(64))
+    document: Mapped[dict[str, Any]] = mapped_column(JSONB)
 
 
 class PresentationSession(OwnedRecord):
@@ -436,6 +507,7 @@ class PresentationSession(OwnedRecord):
     )
     autonomy_mode: Mapped[str] = mapped_column(String(16), server_default="manual")
     last_accepted_action_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    runtime_context: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
 
 class SessionEvent(Base):
@@ -456,3 +528,42 @@ class SessionEvent(Base):
     command_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     document: Mapped[dict[str, Any]] = mapped_column(JSONB)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class CandidateIndex(Base):
+    """Derived presentation vectors only; never speech/query text or vectors."""
+
+    __tablename__ = "candidate_indexes"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["analysis_id", "deck_id", "owner_id"],
+            ["analysis_versions.id", "analysis_versions.deck_id", "analysis_versions.owner_id"],
+            ondelete="CASCADE",
+        ),
+    )
+    analysis_id: Mapped[UUID] = mapped_column(primary_key=True)
+    space: Mapped[str] = mapped_column(String(64), primary_key=True)
+    deck_id: Mapped[UUID] = mapped_column()
+    owner_id: Mapped[UUID] = mapped_column(index=True)
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    vectors: Mapped[list[Any]] = mapped_column(JSONB)
+
+
+class EmbeddingQuota(Base):
+    __tablename__ = "embedding_quotas"
+    key_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    month: Mapped[str] = mapped_column(String(7), primary_key=True)
+    calls: Mapped[int] = mapped_column(default=0)
+
+
+class AgentQuota(Base):
+    """Provider attempts only; no transcripts, presentation content or raw credentials."""
+
+    __tablename__ = "agent_quotas"
+    __table_args__ = (CheckConstraint("calls >= 0", name="calls_nonnegative"),)
+    key_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    month: Mapped[str] = mapped_column(String(7))
+    calls: Mapped[int] = mapped_column(default=0)
+    last_called_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    request_times: Mapped[list[float]] = mapped_column(JSONB, default=list, server_default="[]")
+    blocked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
