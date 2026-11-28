@@ -1,5 +1,9 @@
 # Security baseline
 
+For the current cross-component course threat model, regression evidence and residual
+risks, see [the course security and privacy baseline](course-threat-model.md). The
+pipeline-specific sections below retain their original implementation/deployment context.
+
 This document records controls currently implemented in Buddy's PDF analysis path and
 separates them from future policy, residency, and retention work. Issue #36 is cancelled;
 privacy settings, policy acknowledgements, and a provider-retention approval workflow are

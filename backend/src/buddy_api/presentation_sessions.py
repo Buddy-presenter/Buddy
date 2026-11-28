@@ -471,12 +471,10 @@ def session_router() -> APIRouter:
                 return SessionResponse(data=snapshot(record), request_id=request.state.request_id)
         except HTTPException:
             raise
-        except IntegrityError as exc:
-            constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
-            logger.exception(
-                "Presentation session start violated a database integrity constraint (%s).",
-                constraint or "unknown",
-            )
+        except IntegrityError:
+            # SQLAlchemy exceptions include SQL parameters, which can contain private
+            # presentation state. Do not log driver details or a traceback.
+            logger.warning("Presentation session start conflicted with persisted state.")
             raise HTTPException(
                 409, "The session changed concurrently. Refresh and retry."
             ) from None
