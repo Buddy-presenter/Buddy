@@ -14,6 +14,27 @@ from buddy_desktop.powerpoint_contract import (
 )
 from buddy_desktop.slide_contract import Region
 
+SAVED_ACTION_TYPES = frozenset(
+    {
+        "highlight_region",
+        "zoom_region",
+        "draw_rectangle",
+        "draw_oval",
+        "draw_underline",
+        "draw_arrow",
+        "callout",
+        "draw_line",
+        "filled_rectangle",
+        "filled_oval",
+        "text_box",
+        "draw_rounded_rectangle",
+        "draw_diamond",
+        "draw_triangle",
+        "draw_hexagon",
+        "draw_star",
+    }
+)
+
 
 def generated_action(
     raw: dict[str, Any],

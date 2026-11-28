@@ -45,6 +45,9 @@ Uploaded PPTX analysis and saved action review are documented in
 [PowerPoint analysis](powerpoint-analysis.md), including the separate Office validator
 runtime, migration, catalog boundaries and real six-action acceptance command.
 
+See [saved actions in Present](present-actions.md) for supported native action types,
+recovery and the generated-deck Windows/Office acceptance command for #153.
+
 ## API and database
 
 Install the API separately in the same environment:

@@ -366,6 +366,7 @@ def saved_analysis(page, **action_changes):
         usable=True,
         state="validated",
         semantic_verified=True,
+        validation_kind="visual",
         reasons=(),
     )
     for key, value in action_changes.items():
@@ -761,6 +762,7 @@ def four_highlights(page):
             usable=True,
             state="validated",
             semantic_verified=True,
+            validation_kind="visual",
             reasons=(),
         )
 
