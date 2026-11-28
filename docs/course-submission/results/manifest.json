@@ -15,9 +15,11 @@
     "dependencies": {
       "pydantic": "2.14.1",
       "httpx": "0.28.1",
-      "pytest": "9.1.1"
+      "pytest": "9.1.1",
+      "PySide6-Essentials": "6.12.0",
+      "PySide6-Addons": "6.12.0"
     },
-    "execution_note": "Existing backend virtual environment; PYTHONPATH explicitly selected this worktree backend/src, frontend/src and shared/src. Replay module path verified. No native/desktop/provider run performed."
+    "execution_note": "Existing development virtual environment; PYTHONPATH explicitly selected this worktree backend/src, frontend/src and shared/src. Replay module path verified. Qt shell smoke and deterministic desktop regressions ran offscreen. No new interactive native Office, real provider, or microphone run."
   },
   "scope": "synthetic_contract / agent_proposals / legacy Cohere adapter; not current live Jev accuracy",
   "paid_provider_calls": 0,
@@ -85,6 +87,29 @@
     {
       "check": "Local Markdown destinations and corpus/gate/report/historical source hashes",
       "result": "59 local links resolve; all recorded hashes verified"
+    },
+    {
+      "command": "python scripts/quality.py all check",
+      "exit_code": 0,
+      "result": "461 formatted files; lint passes; strict typing passes for 170 source files"
+    },
+    {
+      "command": "python frontend/scripts/smoke_desktop.py",
+      "environment": {
+        "QT_QPA_PLATFORM": "offscreen"
+      },
+      "exit_code": 0,
+      "scope": "Shell and resampler startup, not interactive layout or native Office acceptance"
+    },
+    {
+      "command": "python -m pytest frontend/tests/test_saved_actions.py frontend/tests/test_powerpoint_review.py frontend/tests/test_powerpoint_present.py frontend/tests/test_transition_player.py frontend/tests/test_agent.py -q",
+      "environment": {
+        "QT_QPA_PLATFORM": "offscreen"
+      },
+      "exit_code": 0,
+      "passed": 196,
+      "skipped": 0,
+      "scope": "Deterministic desktop contracts with substituted external/Office boundaries"
     }
   ],
   "historical_evidence": [
