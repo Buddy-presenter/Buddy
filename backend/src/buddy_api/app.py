@@ -38,6 +38,7 @@ from buddy_api.contracts import (
 )
 from buddy_api.embeddings import CohereEmbeddings, EmbeddingFailure
 from buddy_api.handoff import HandoffLimitMiddleware, handoff_router
+from buddy_api.information_search import InformationSearchService, information_search_router
 from buddy_api.library import library_router
 from buddy_api.middleware import RequestContextMiddleware
 from buddy_api.persistence.database import Database, DatabaseProbe
@@ -56,6 +57,7 @@ from buddy_api.session_events import (
     cleanup_events,
     session_event_router,
 )
+from buddy_api.slide_images import SlideImages, slide_image_router
 from buddy_api.speech import DeepgramProvider, speech_router
 from buddy_api.uploads.contracts import UploadError
 from buddy_api.uploads.router import UploadMetadataLimitMiddleware, upload_router
@@ -91,6 +93,10 @@ def decision_providers(
     Jev decides by default; Cohere stays selectable. Without a Jev key only Cohere exists,
     so every choice decides with Cohere.
     """
+    if settings.candidate_mode == "direct_current":
+        assert settings.jev_api_key is not None
+        jev_only = JevDecisionProvider(settings.jev_api_key, threshold=settings.jev_confidence)
+        return jev_only, {"jev": jev_only}
     cohere = CohereDecisionProvider(
         settings, client=semantic.provider.client if semantic is not None else None
     )
@@ -251,13 +257,30 @@ def create_app(
     app.state.speech_provider = DeepgramProvider(config.speech) if config.speech else None
     app.state.semantic_candidates = (
         SemanticCandidates(database, CohereEmbeddings(config.embeddings))
-        if database is not None and config.embeddings is not None
+        if database is not None
+        and config.embeddings is not None
+        and not (config.agent and config.agent.candidate_mode == "direct_current")
         else None
     )
     app.state.uploads = uploads
+    app.state.slide_images = SlideImages()
     app.state.presentation_agent = (
         AgentRuntime(config.agent, *decision_providers(config.agent, app.state.semantic_candidates))
         if config.agent
+        else None
+    )
+
+    async def reserve_information_search_call() -> None:
+        if database is not None and app.state.presentation_agent is not None:
+            await app.state.presentation_agent.reserve(database)
+
+    app.state.information_search = (
+        InformationSearchService(
+            config.agent,
+            app.state.presentation_agent.provider.client,
+            reserve_model_call=reserve_information_search_call,
+        )
+        if config.agent is not None and app.state.presentation_agent is not None
         else None
     )
     app.state.validator = validator
@@ -274,11 +297,13 @@ def create_app(
     app.include_router(session_router())
     app.include_router(candidate_router())
     app.include_router(agent_router())
+    app.include_router(slide_image_router())
     app.include_router(speech_router(config.allowed_hosts))
     app.include_router(upload_router())
     app.include_router(validation_router())
     app.include_router(preflight_router())
     app.include_router(processing_router())
+    app.include_router(information_search_router())
 
     @app.exception_handler(UploadError)
     async def upload_error(request: Request, exc: UploadError) -> JSONResponse:

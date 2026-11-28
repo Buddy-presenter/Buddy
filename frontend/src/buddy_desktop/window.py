@@ -1,12 +1,13 @@
 """Navigation and lifecycle for one desktop window and one application event loop."""
 
 import importlib
+import logging
 import sys
-import time
 from dataclasses import replace
 from uuid import UUID
 
-from PySide6.QtCore import QByteArray, QSettings, QSize, Qt, QTimer, Slot
+import shiboken6
+from PySide6.QtCore import QByteArray, QRect, QSettings, QSize, Qt, QTimer, Slot
 from PySide6.QtGui import QAction, QCloseEvent, QGuiApplication, QIcon, QKeySequence, QScreen
 from PySide6.QtWidgets import (
     QDialog,
@@ -24,8 +25,11 @@ from PySide6.QtWidgets import (
 
 from buddy_desktop.account_widget import AccountWidget
 from buddy_desktop.auth import AccountProfile, AccountSession
-from buddy_desktop.buddy_mini import BuddyMini, mini_caption
+from buddy_desktop.browser_search import launch_chrome_search
+from buddy_desktop.buddy_mini import BuddyMini
 from buddy_desktop.config import AppConfig, ConfigurationError, validate_api_url
+from buddy_desktop.information_search_panel import InformationSearchPanel
+from buddy_desktop.information_search_service import InformationAnswer, InformationSearchService
 from buddy_desktop.library_service import AccessProvider, LibraryAccessExpired
 from buddy_desktop.library_widget import LibraryWidget
 from buddy_desktop.present_widget import PresentWidget
@@ -37,7 +41,15 @@ from buddy_desktop.slide_executor import Completion
 from buddy_desktop.tasks import TaskRunner
 from buddy_desktop.views import HomePage, SettingsPage, divider
 from buddy_desktop.visuals import BuddyMark, app_icon, command, icon
+from buddy_desktop.window_focus import (
+    activate_native_window,
+    activate_qt_window,
+    allow_current_process_foreground,
+    native_window_rect,
+)
 from buddy_identity.config import IdentityError, SessionExpired
+
+logger = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
@@ -62,6 +74,18 @@ class MainWindow(QMainWindow):
         self.runner.succeeded.connect(self._health_succeeded)
         self.runner.failed.connect(self._health_failed)
         self.runner.idle.connect(self._task_idle)
+        self.information_search_runner = TaskRunner(self)
+        self.information_search_runner.succeeded.connect(self._information_search_succeeded)
+        self.information_search_runner.failed.connect(self._information_search_failed)
+        self.information_search_runner.idle.connect(self._information_search_idle)
+        self._information_search_generation = 0
+        self._information_search_task: int | None = None
+        self._information_search_task_generation: int | None = None
+        self._queued_information_search: (
+            tuple[int, str, bool, AccessProvider, str | None] | None
+        ) = None
+        self._reduce_motion = bool(settings.value("appearance/reduce_motion", False, type=bool))
+        self._search_panel: InformationSearchPanel | None = None
         self.setWindowTitle("Buddy")
         self.setMinimumSize(800, 600)
         self.resize(1200, 800)
@@ -111,10 +135,13 @@ class MainWindow(QMainWindow):
         self.library = LibraryWidget(config, self.account)
         self.review = ReviewWidget(config, self.account)
         self.present = PresentWidget(config, settings)
+        self.present.web_search_requested.connect(self._open_voice_search)
+        self.present.spoken_search_requested.connect(self._open_spoken_search)
+        self.present.return_to_presentation_requested.connect(self._return_to_presentation_by_voice)
+        self.present.scroll_panel_requested.connect(self._scroll_information_search)
         self._mini: BuddyMini | None = None
         self._mini_session: str | None = None
         self._mini_screen: QScreen | None = None
-        self._mini_chime_paused = False
         self._mini_poll = QTimer(self, interval=100)
         self._mini_poll.timeout.connect(self._sync_mini)
         self._mini_auto_poll = QTimer(self, interval=100)
@@ -123,6 +150,7 @@ class MainWindow(QMainWindow):
         self._mini_auto_deck: str | None = None
         self.present.mini_requested.connect(self._toggle_mini)
         self.present.fullscreen_exited.connect(self._mini_fullscreen_exited)
+        self.present.fullscreen_exited.connect(self._close_information_search)
         self.present.transition_observed.connect(self._mini_completed)
         app = QGuiApplication.instance()
         if isinstance(app, QGuiApplication):
@@ -520,6 +548,8 @@ class MainWindow(QMainWindow):
         if 0 <= index < self.pages.count():
             if index != 3:
                 self._mini_auto_poll.stop()
+                if self._information_search_panel().isVisible():
+                    self._close_information_search()
             previous = self.pages.currentIndex()
             self.pages.setCurrentIndex(index)
             self.route_title.setText(
@@ -720,6 +750,196 @@ class MainWindow(QMainWindow):
             self._mini_auto_attempts = 0
             self._mini_auto_poll.start()
 
+    @Slot(str, bool)
+    @Slot(str, str, bool)
+    def _open_spoken_search(self, sentence: str, context: str, images: bool) -> None:
+        """Jev decided the presenter asked Buddy to look something up."""
+        self._open_voice_search(sentence, images, spoken_context=context)
+
+    def _open_voice_search(
+        self,
+        query: str,
+        images: bool,
+        browser: bool = False,
+        *,
+        spoken_context: str | None = None,
+    ) -> None:
+        self._information_search_generation += 1
+        generation = self._information_search_generation
+        self._queued_information_search = None
+        if browser:
+            self._information_search_panel().close_panel()
+            # Windows grants the current foreground process a narrow foreground
+            # handoff before Chrome takes focus. No shell command is constructed.
+            allow_current_process_foreground()
+            result = launch_chrome_search(query, images=images)
+            if not result.opened:
+                self._show_voice_command_feedback(result.message, 10000)
+            return
+
+        fullscreen_owner = self.present.fullscreen
+        owner: QWidget | QRect = self
+        slideshow_area = self._powerpoint_slideshow_area()
+        if slideshow_area is not None:
+            owner = slideshow_area
+        elif fullscreen_owner is not None and fullscreen_owner.isVisible():
+            owner = fullscreen_owner
+        elif not self.isVisible() or self.isMinimized():
+            # Buddy Mini hides the workspace: show the panel on the screen in use.
+            screen = self.screen() or QGuiApplication.primaryScreen()
+            if screen is not None:
+                owner = screen.availableGeometry()
+        self._information_search_panel().present(owner, query, images=images)
+        session = self.account.session
+        if session is None or not self.account.account_id:
+            self._information_search_panel().show_error(
+                "Sign in to Buddy to search the web from your presentation."
+            )
+            return
+        access = self._access_provider(session)
+        if self.information_search_runner.busy:
+            self._queued_information_search = (generation, query, images, access, spoken_context)
+            return
+        self._submit_information_search(generation, query, images, access, spoken_context)
+
+    def _information_search_panel(self) -> InformationSearchPanel:
+        """The search panel, recreated if anything ever deleted it (#250)."""
+        panel = self._search_panel
+        if panel is None or not shiboken6.isValid(panel):
+            panel = InformationSearchPanel(reduce_motion=self._reduce_motion)
+            panel.close_requested.connect(self._close_information_search)
+            panel.shown_changed.connect(self._search_panel_shown)
+            self._search_panel = panel
+        return panel
+
+    @Slot(bool)
+    def _search_panel_shown(self, shown: bool) -> None:
+        # Read by the live-suggestion worker: a plain flag, never a Qt call off the GUI thread.
+        self.present.agent_service.search_panel_open = shown
+
+    def _powerpoint_slideshow_area(self) -> QRect | None:
+        """The screen area of a live PowerPoint slideshow in Qt coordinates (#250).
+
+        Windows reports physical pixels; Qt places windows in scaled pixels. A slideshow
+        fills one monitor, so use the monitor whose physical area contains its centre.
+        """
+        slideshow = self.present.powerpoint_slideshow_window()
+        rect = native_window_rect(slideshow) if slideshow is not None else None
+        if rect is None:
+            return None
+        left, top, right, bottom = rect
+        centre_x, centre_y = (left + right) // 2, (top + bottom) // 2
+        for screen in QGuiApplication.screens():
+            area, ratio = screen.geometry(), screen.devicePixelRatio()
+            physical = QRect(
+                area.x(),
+                area.y(),
+                round(area.width() * ratio),
+                round(area.height() * ratio),
+            )
+            if physical.contains(centre_x, centre_y):
+                return area
+        primary = QGuiApplication.primaryScreen()
+        return primary.geometry() if primary is not None else None
+
+    @Slot()
+    def _return_to_presentation_by_voice(self) -> None:
+        self._information_search_generation += 1
+        self._queued_information_search = None
+        had_information_panel = self._information_search_panel().isVisible()
+        if had_information_panel:
+            self._information_search_panel().close_panel()
+        slideshow = self.present.powerpoint_slideshow_window()
+        if slideshow is not None:
+            # PowerPoint presents in its own slideshow window, not in Buddy (#236).
+            if activate_native_window(slideshow):
+                if not had_information_panel:
+                    self._show_voice_command_feedback("Returned to the PowerPoint slideshow.", 4000)
+            else:
+                self._show_voice_command_feedback(
+                    "Windows did not focus the PowerPoint slideshow. "
+                    "Say “return to the presentation” again.",
+                    10000,
+                )
+            return
+        fullscreen = self.present.fullscreen
+        target = fullscreen if fullscreen is not None and fullscreen.isVisible() else self
+        if activate_qt_window(target):
+            if not had_information_panel:
+                self._show_voice_command_feedback("Returned to the presentation.", 4000)
+        else:
+            self._show_voice_command_feedback(
+                "Windows did not focus Buddy. Say “return to the presentation” again.",
+                10000,
+            )
+
+    @Slot(int)
+    def _scroll_information_search(self, direction: int) -> None:
+        if self._information_search_panel().isVisible():
+            self._information_search_panel().scroll_by(direction)
+
+    def _close_information_search(self) -> None:
+        self._information_search_generation += 1
+        self._queued_information_search = None
+        self._information_search_panel().close_panel()
+
+    def _submit_information_search(
+        self,
+        generation: int,
+        query: str,
+        images: bool,
+        access: AccessProvider,
+        spoken_context: str | None = None,
+    ) -> None:
+        if generation != self._information_search_generation or self._closing:
+            return
+        self._information_search_task_generation = generation
+        self._information_search_task = self.information_search_runner.submit(
+            lambda: InformationSearchService(self.config).answer(
+                access, query, images=images, spoken_context=spoken_context
+            )
+        )
+
+    @Slot(int, object)
+    def _information_search_succeeded(self, identifier: int, result: object) -> None:
+        if (
+            identifier != self._information_search_task
+            or self._information_search_task_generation != self._information_search_generation
+            or self._closing
+            or not isinstance(result, InformationAnswer)
+            or not self._information_search_panel().isVisible()
+        ):
+            return
+        self._information_search_panel().show_answer(result)
+
+    @Slot(int, str)
+    def _information_search_failed(self, identifier: int, message: str) -> None:
+        if (
+            identifier != self._information_search_task
+            or self._information_search_task_generation != self._information_search_generation
+            or self._closing
+            or not self._information_search_panel().isVisible()
+        ):
+            return
+        self._information_search_panel().show_error(message)
+
+    @Slot()
+    def _information_search_idle(self) -> None:
+        self._information_search_task = None
+        self._information_search_task_generation = None
+        queued, self._queued_information_search = self._queued_information_search, None
+        if queued is not None and not self._closing:
+            self._submit_information_search(*queued)
+        if self._closing:
+            self.close()
+
+    def _show_voice_command_feedback(self, message: str, timeout_ms: int) -> None:
+        fullscreen = self.present.fullscreen
+        if fullscreen is not None and fullscreen.isVisible():
+            fullscreen.show_voice_feedback(message, timeout_ms)
+        else:
+            self.present.show_voice_command_status(message, timeout_ms)
+
     def _maybe_auto_mini(self) -> None:
         self._mini_auto_attempts += 1
         if self._closing or self._mini is not None or self._mini_auto_attempts > 150:
@@ -768,6 +988,7 @@ class MainWindow(QMainWindow):
             mini.setToolTip("Buddy Mini may be visible when sharing this entire screen.")
         mini.show()
         self.present.mini_active = True
+        logger.warning("presentation_mini event=entered")  # Correlate speech quality (#255).
         self.hide()
         self._mini_poll.start()
         self._sync_mini()
@@ -817,7 +1038,6 @@ class MainWindow(QMainWindow):
         if page._powerpoint_info is None and page.fullscreen is None:
             session_id = None
         if not mini.isVisible() or session_id != self._mini_session:
-            self._mini_chime_paused = False
             mini.stop_sound()
             page.microphone.stop()
             page.agent_enabled.setChecked(False)
@@ -843,7 +1063,6 @@ class MainWindow(QMainWindow):
         mini.sync(
             state, page.microphone_button, page.policy_undo_button, connected=bool(session_id)
         )
-        mini.set_caption(mini_caption(state, page.live_caption, time.monotonic()))
         mini.sync_automation(
             bool(session_id and page.agent_enabled.isEnabled()),
             bool(session_id and page.agent_enabled.isChecked() and page.policy_enabled.isChecked()),
@@ -882,21 +1101,12 @@ class MainWindow(QMainWindow):
             label = f"Slide {number}"
         self._mini.completed(label)
         if page.mini_chime.isChecked() and self._mini.prepare_chime():
-            self._mini_chime_paused = (
-                page.microphone.enabled
-                and not page.microphone_pause.isChecked()
-                and not page.microphone_mute.isChecked()
-            )
-            if self._mini_chime_paused:
-                page.microphone_pause.setChecked(True)
-                page._invalidate_transcript_context()
+            # Only a sound: capture and speech context continue exactly as without Mini.
+            # Pausing here restarted capture after every move and lost the next command (#255).
             self._mini.play_chime()
 
     def _mini_chime_finished(self) -> None:
-        if self._mini_chime_paused:
-            self._mini_chime_paused = False
-            if self._mini is not None and self.present.mini_session_id() == self._mini_session:
-                self.present.microphone_pause.setChecked(False)
+        return None  # The chime no longer pauses capture, so nothing resumes here.
 
     def _mini_screen_removed(self, screen: QScreen) -> None:
         if self._mini is not None and screen == self._mini_screen:
@@ -927,9 +1137,9 @@ class MainWindow(QMainWindow):
             return
         fullscreen = self.present.fullscreen
         stop = stop or mini.chiming or fullscreen is not None
-        self._mini_chime_paused = False
         self._mini_poll.stop()
         self.present.mini_active = False
+        logger.warning("presentation_mini event=left")
         self._mini_session = None
         self._mini_screen = None
         # Clear Mini ownership first: closing the audience window emits back into
@@ -967,9 +1177,12 @@ class MainWindow(QMainWindow):
             or self.present.powerpoint_runner.busy
             or self.present.policy_runner.busy
             or self.present.generated_runner.busy
+            or self.information_search_runner.busy
         ):
             self._closing = True
             self.runner.stop()
+            self.information_search_runner.stop()
+            self._information_search_panel().close_panel()
             central = self.centralWidget()
             if central is not None:
                 central.setEnabled(False)

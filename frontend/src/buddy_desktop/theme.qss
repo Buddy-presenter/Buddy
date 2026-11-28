@@ -27,6 +27,29 @@ QLabel#muted, QLabel#pageDescription { color: #A4A4AF; }
 QLabel#caption { color: #A4A4AF; font-size: 12px; }
 QLabel#connectionStatus { color: #A4A4AF; font-size: 12px; }
 QLabel#badge { color: #8ED5B6; font-size: 12px; }
+QLabel#voiceCommandFeedback { color: #F3F0E9; background: #1E1E1E; border: 1px solid #FF9F61; border-radius: 8px; padding: 8px 12px; }
+QFrame#informationSearchPanel { background: transparent; border: 0; }
+QFrame#informationSearchPanel QLabel { background: transparent; }
+QWidget#informationSearchContent { background: #000000; }
+QWidget#informationSearchImages { background: #000000; }
+QToolButton#informationSearchImage { background: #000000; border: 0; border-radius: 8px; padding: 0; }
+QToolButton#informationSearchImage:hover { border-color: #F5843D; }
+QLabel#informationSearchState { color: #C7C7CF; padding: 10px 2px; }
+QLabel#informationSearchAnswer { font-family: __FONT_TEXT__; font-size: 16px; color: #F3F0E9; padding: 4px 2px 10px; }
+QLabel#informationSearchSourcesTitle { __FONT_STRONG__; color: #FF9F61; font-size: 13px; padding-top: 4px; }
+QWidget#informationSearchSource { background: #000000; border: 1px solid #2A2A2A; border-radius: 10px; }
+QPushButton#informationSearchSourceLink { background: transparent; border: 0; padding: 0; color: #FFB27F; text-align: left; __FONT_STRONG__; }
+QPushButton#informationSearchSourceLink:hover { color: #FFC9A3; text-decoration: underline; }
+QPushButton#informationSearchSourceLink:focus { border: 0; text-decoration: underline; }
+QLabel#informationSearchSourceSnippet { color: #B8B8C0; font-size: 12px; }
+QLabel#informationSearchMark { background: transparent; padding: 2px 0 0 0; }
+QPushButton#informationSearchClose { background: #000000; border: 1px solid #3A3A3A; border-radius: 14px; padding: 0; }
+QPushButton#informationSearchClose:hover { border-color: #F5843D; }
+QScrollArea#informationSearchScroll QScrollBar:vertical { background: transparent; width: 8px; margin: 30px 0 2px 0; border: 0; }
+QScrollArea#informationSearchScroll QScrollBar::handle:vertical { background: #F5843D; min-height: 28px; border-radius: 4px; }
+QScrollArea#informationSearchScroll QScrollBar::handle:vertical:hover { background: #FF9F61; }
+QScrollArea#informationSearchScroll QScrollBar::add-line:vertical, QScrollArea#informationSearchScroll QScrollBar::sub-line:vertical { height: 0; border: 0; background: transparent; }
+QScrollArea#informationSearchScroll QScrollBar::add-page:vertical, QScrollArea#informationSearchScroll QScrollBar::sub-page:vertical { background: transparent; }
 
 /* Surfaces */
 QWidget#statePanel { background: transparent; }

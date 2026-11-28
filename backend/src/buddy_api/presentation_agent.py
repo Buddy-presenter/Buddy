@@ -8,7 +8,7 @@ import sys
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -73,6 +73,10 @@ class AgentRequest(Model):
     provisional: bool = False
     # The presenter's choice in the desktop app (#245); None keeps the server default.
     decision_model: Literal["jev", "cohere"] | None = None
+    # Desktop clients with the search panel let Jev also decide "search the web".
+    web_search: bool = False
+    # Buddy's search panel is open: Jev may also close or scroll it.
+    search_panel_open: bool = False
 
     @model_validator(mode="after")
     def coherent(self) -> "AgentRequest":
@@ -85,6 +89,8 @@ class AgentRequest(Model):
                         "focus_view",
                         "focus_region",
                         "decision_model",
+                        "web_search",
+                        "search_panel_open",
                     }
                 ),
                 "protocol": "presentation-candidates.v1",
@@ -229,6 +235,11 @@ class AgentProposal(Model):
     evidence: tuple[int, ...] = ()
     elapsed_ms: int = Field(ge=0)
     retry_after_ms: int | None = Field(default=None, ge=1, le=5000)
+    # Jev decided the presenter asked Buddy to look something up. The target is
+    # then "no_action"; the desktop writes the search from the spoken sentence.
+    search: Literal["web", "images"] | None = None
+    # Jev decided the presenter wants the open search panel closed or scrolled.
+    panel: Literal["close", "scroll_down", "scroll_up"] | None = None
 
     @model_validator(mode="after")
     def consistent_outcome(self) -> "AgentProposal":
@@ -245,6 +256,12 @@ class AgentProposal(Model):
             "go_to_slide",
         }:
             raise ValueError("Deterministic navigation cannot select another tool")
+        if (self.search is not None or self.panel is not None) and (
+            self.decision_source != "model" or self.target.tool != "no_action"
+        ):
+            raise ValueError("Only a model decision without a slide action can search")
+        if self.search is not None and self.panel is not None:
+            raise ValueError("A decision either searches or acts on the panel")
         return self
 
 
@@ -255,6 +272,8 @@ class AgentInput:
     focus: str
     identity: str
     focus_region: Region | None = None
+    # Everything the analysis read depends on; equal snapshots read the same analysis.
+    snapshot: tuple[object, ...] = ()
 
 
 def request_focus(
@@ -285,9 +304,18 @@ def request_focus(
 
 
 async def read_input(
-    request: Request, principal: Principal, identifier: UUID, values: AgentRequest
+    request: Request,
+    principal: Principal,
+    identifier: UUID,
+    values: AgentRequest,
+    previous: AgentInput | None = None,
 ) -> AgentInput:
-    """A short authoritative transaction; no provider call while it is open."""
+    """A short authoritative transaction; no provider call while it is open.
+
+    The post-decision recheck passes ``previous``: when the session, deck, saved analysis
+    content, validation history and runtime context are all unchanged, the analysis it
+    already read is reused instead of loading it again. Any change reloads it as before.
+    """
     async with request.app.state.database.sessions() as db, db.begin():
         await db.connection(execution_options={"isolation_level": "REPEATABLE READ"})
         session = await owned_session(db, principal, identifier)
@@ -327,18 +355,34 @@ async def read_input(
                 "analysis_changed",
                 "The saved analysis changed; reopen the presentation.",
             )
-        try:
-            analysis = await request.app.state.candidate_analyses.read(
-                db, record, principal.id, session.runtime_context
-            )
-        except HTTPException as exc:
-            if exc.status_code == 409:
-                raise agent_conflict(
-                    request,
-                    "analysis_unavailable",
-                    "The saved analysis is unavailable for live suggestions.",
-                ) from None
-            raise
+        snapshot: tuple[object, ...] = (
+            session.id,
+            session.status,
+            session.deck_id,
+            session.analysis_version_id,
+            record.id,
+            record.content_sha256,
+            await request.app.state.candidate_analyses.revision(db, record, principal.id),
+            json.dumps(session.runtime_context, sort_keys=True, default=str),
+            deck.source_revision,
+            deck.source_sha256,
+            deck.source_version_id,
+        )
+        if previous is not None and record.content_sha256 and previous.snapshot == snapshot:
+            analysis = previous.analysis
+        else:
+            try:
+                analysis = await request.app.state.candidate_analyses.read(
+                    db, record, principal.id, session.runtime_context
+                )
+            except HTTPException as exc:
+                if exc.status_code == 409:
+                    raise agent_conflict(
+                        request,
+                        "analysis_unavailable",
+                        "The saved analysis is unavailable for live suggestions.",
+                    ) from None
+                raise
         # Include all validation eligibility/geometry, even if the analysis id is unchanged.
         identity = hashlib.sha256(
             (
@@ -366,11 +410,33 @@ async def read_input(
             focus_view,
             identity,
             focus_region,
+            snapshot,
         )
 
 
+def region_position(
+    analysis: AnalysisResult | PowerPointAnalysisResult, slide_id: str, region: Region | None
+) -> str | None:
+    """Where a saved region sits on its slide, in words: "top left", "middle right", ..."""
+    if region is None:
+        return None
+    manifest = getattr(getattr(analysis, "inputs", None), "manifest", None)
+    plane = next(
+        (s.source for s in getattr(manifest, "slides", ()) if s.slide_id == slide_id), None
+    )
+    if plane is None or plane.width <= 0 or plane.height <= 0:
+        return None
+    x = (region.x + region.width / 2) / plane.width
+    y = (region.y + region.height / 2) / plane.height
+    row = "top" if y < 1 / 3 else "bottom" if y > 2 / 3 else "middle"
+    column = "left" if x < 1 / 3 else "right" if x > 2 / 3 else "center"
+    if row == "middle" and column == "center":
+        return "center"
+    return f"{row} {column}"
+
+
 def options(
-    source: AgentInput, candidates: tuple[Candidate, ...]
+    source: AgentInput, candidates: tuple[Candidate, ...], *, max_options: int = 10
 ) -> tuple[tuple[Target, ...], list[dict[str, object]]]:
     slides = list(candidate_slides(source.analysis))
     positions = {s.slide_id: i for i, s in enumerate(slides)}
@@ -440,6 +506,10 @@ def options(
             )
             if shown:
                 content += f"\nShows: {shown[:256]}"
+            where = region_position(source.analysis, slide.slide_id, target.region)
+            if where:
+                # Links what Jev sees on the slide image to this option (#259).
+                content += f"\nPosition: {where}"
         if target in targets:
             continue
         descriptions.append(
@@ -475,9 +545,51 @@ def options(
             }
         )
         targets.append(target)
-    if len(targets) > 10:
+    if len(targets) > max_options or len(targets) > 255:
         raise AgentFailure("candidates_unavailable")
     return tuple(targets), descriptions
+
+
+# Web search (2) and search-panel (3) options Jev may also receive with the slide menu.
+JEV_EXTRA_OPTIONS = 5
+
+
+def direct_current_options(
+    source: AgentInput,
+) -> tuple[tuple[Candidate, ...], tuple[Target, ...], list[dict[str, object]]]:
+    """Prototype: every eligible current-slide action and every slide, without retrieval.
+
+    Reuse the same descriptions, exact saved geometry, and server-owned target mapping.
+    Fail closed when the complete menu exceeds Jev's limit; never silently truncate it.
+    """
+    slides = tuple(candidate_slides(source.analysis))
+    actions = tuple(
+        action
+        for slide in slides
+        if slide.slide_id == source.current
+        for action in slide.actions
+        if candidate_action_eligible(action)
+    )
+    # Bound the complete menu before the existing option builder performs lookups.
+    # One no-action + every other slide + eligible actions + an optional reset, plus up to
+    # five web-search and search-panel options added for Jev: never above its 255 choices.
+    if len(slides) + len(actions) + (source.focus != "slide") + JEV_EXTRA_OPTIONS > 255:
+        raise AgentFailure("candidates_unavailable")
+    candidates = tuple(
+        Candidate(kind="slide", slide_id=slide.slide_id, reason="topic", score=0)
+        for slide in slides
+    ) + tuple(
+        Candidate(
+            kind=cast(Literal["zoom_region", "highlight_region"], action.action.type),
+            slide_id=source.current,
+            action_id=action.action.instance_id,
+            reason="purpose",
+            score=0,
+        )
+        for action in actions
+    )
+    targets, descriptions = options(source, candidates, max_options=255)
+    return candidates, targets, descriptions
 
 
 def checked_selection(
@@ -527,6 +639,10 @@ def decision_passage(
         },
         "options": descriptions,
     }
+    if getattr(values, "web_search", False):
+        passage["web_search"] = True
+        if getattr(values, "search_panel_open", False):
+            passage["search_panel_open"] = True
     if values.provisional:
         passage["latest_segment_status"] = "provisional stable prefix; speech is ongoing"
     return passage
@@ -599,6 +715,8 @@ class AgentRuntime:
         self.active: set[UUID] = set()
 
     def provider_for(self, choice: str | None) -> DecisionProvider:
+        # Jev-only mode has no other decider: an older app that still asks for Cohere
+        # simply gets Jev.
         return self.choices.get(choice, self.provider) if choice else self.provider
 
     async def aclose(self) -> None:
@@ -608,7 +726,7 @@ class AgentRuntime:
 
     async def reserve(self, database: Database) -> None:
         # DB clock + row lock share a rolling provider window across replicas/restarts.
-        key = hashlib.sha256(self.settings.api_key.encode()).hexdigest()
+        key = self.quota_key()
         async with database.sessions() as db, db.begin():
             await db.execute(
                 insert(AgentQuota)
@@ -643,7 +761,7 @@ class AgentRuntime:
     async def provider_limited(self, database: Database) -> None:
         # Other users of the credential and provider-specific windows are outside
         # our counter. A real 429 wins; do not hammer the service on new finals.
-        key = hashlib.sha256(self.settings.api_key.encode()).hexdigest()
+        key = self.quota_key()
         async with database.sessions() as db, db.begin():
             row = await db.scalar(
                 select(AgentQuota).where(AgentQuota.key_hash == key).with_for_update()
@@ -652,6 +770,15 @@ class AgentRuntime:
             now = await db.scalar(select(func.clock_timestamp()))
             assert now is not None
             row.blocked_until = now + timedelta(seconds=60)
+
+    def quota_key(self) -> str:
+        credential = (
+            self.settings.jev_api_key
+            if self.settings.candidate_mode == "direct_current"
+            else self.settings.api_key
+        )
+        assert credential
+        return hashlib.sha256(credential.encode()).hexdigest()
 
 
 def agent_router() -> APIRouter:
@@ -878,7 +1005,10 @@ def agent_router() -> APIRouter:
                         finish_phase()
                         begin_phase("retrieval")
                         semantic = request.app.state.semantic_candidates
-                        if semantic is not None and decision_diagnostics is not None:
+                        direct = runtime.settings.candidate_mode == "direct_current"
+                        if direct:
+                            candidates, targets, descriptions = direct_current_options(source)
+                        elif semantic is not None and decision_diagnostics is not None:
                             candidates = await semantic.retrieve(
                                 source.analysis,
                                 principal.id,
@@ -902,17 +1032,22 @@ def agent_router() -> APIRouter:
                                 values.text,
                                 values.latest_utterance,
                             )
-                        targets, descriptions = options(source, candidates)
+                        if not direct:
+                            targets, descriptions = options(source, candidates)
                         if decision_diagnostics is not None:
                             decision_diagnostics.update(
-                                route="semantic_retrieval"
+                                route="direct_current"
+                                if direct
+                                else "semantic_retrieval"
                                 if semantic is not None
                                 else "lexical_retrieval",
                                 candidate_retrieval=[c.model_dump(mode="json") for c in candidates],
                                 candidate_options=descriptions,
                                 option_targets=[t.model_dump(mode="json") for t in targets],
                                 resolver_version=(
-                                    "cohere-embed5-v4"
+                                    "direct-current-v1"
+                                    if direct
+                                    else "cohere-embed5-v4"
                                     if semantic is not None
                                     else "summary-overlap-2"
                                 ),
@@ -925,7 +1060,7 @@ def agent_router() -> APIRouter:
                                 len(values.segments),
                                 semantic=semantic is not None,
                             )
-                            if topic_navigation_intent(values.latest_utterance)
+                            if not direct and topic_navigation_intent(values.latest_utterance)
                             else None
                         )
                         if fast_topic is not None:
@@ -943,6 +1078,12 @@ def agent_router() -> APIRouter:
                         else:
                             begin_phase("selection")
                             passage = decision_passage(source, values, descriptions)
+                            image = request.app.state.slide_images.get(
+                                identifier, principal.id, source.current
+                            )
+                            if image is not None and direct:
+                                # The slide on screen, uploaded by the desktop (#259).
+                                passage["slide_image"] = (image.format, image.data)
                             provider = runtime.provider_for(values.decision_model)
                             if decision_diagnostics is not None:
                                 decision_diagnostics["provider_passage"] = passage
@@ -960,7 +1101,9 @@ def agent_router() -> APIRouter:
                         raise AgentFailure("stale")
                     begin_phase("validation")
                     try:
-                        fresh = await read_input(request, principal, identifier, values)
+                        fresh = await read_input(
+                            request, principal, identifier, values, previous=source
+                        )
                     except HTTPException as exc:
                         if exc.status_code == 409:
                             raise AgentFailure("stale") from None
@@ -1047,6 +1190,21 @@ def agent_router() -> APIRouter:
             "elapsed_ms": round((time.monotonic() - started) * 1000),
             "retry_after_ms": retry_after_ms,
         }
+        if (
+            values.web_search
+            and selection is not None
+            and selection.search is not None
+            and decision_source == "model"
+        ):
+            proposal_values["search"] = selection.search
+        if (
+            values.web_search
+            and values.search_panel_open
+            and selection is not None
+            and selection.panel is not None
+            and decision_source == "model"
+        ):
+            proposal_values["panel"] = selection.panel
         if values.active_slide_id is not None:
             proposal_values["active_slide_id"] = source.current
         proposal = AgentProposal.model_validate(proposal_values)
@@ -1057,6 +1215,8 @@ def agent_router() -> APIRouter:
             "decision_id": str(proposal.decision_id),
             "request_id": request.state.request_id,
             "tool": proposal.target.tool,
+            "search": proposal.search,
+            "panel": proposal.panel,
             "reason": proposal.reason,
             "elapsed_ms": proposal.elapsed_ms,
             "model": DECIDED_BY.get() if runtime else "disabled",

@@ -219,16 +219,10 @@ class CandidateAnalyses:
             tuple[UUID, UUID, str, int], tuple[float, AnalysisResult | PowerPointAnalysisResult]
         ] = OrderedDict()
 
-    async def read(
-        self,
-        db: AsyncSession,
-        record: AnalysisVersion,
-        owner: UUID,
-        runtime_context: dict[str, Any] | None = None,
-    ) -> AnalysisResult | PowerPointAnalysisResult:
-        # Both callers use REPEATABLE READ. Validation history is append-only:
-        # its count identifies the same eligibility snapshot as the canonical read.
-        revision = int(
+    @staticmethod
+    async def revision(db: AsyncSession, record: AnalysisVersion, owner: UUID) -> int:
+        """Validation history is append-only: its count identifies one eligibility snapshot."""
+        return int(
             await db.scalar(
                 select(func.count())
                 .select_from(ActionValidation)
@@ -239,6 +233,16 @@ class CandidateAnalyses:
             )
             or 0
         )
+
+    async def read(
+        self,
+        db: AsyncSession,
+        record: AnalysisVersion,
+        owner: UUID,
+        runtime_context: dict[str, Any] | None = None,
+    ) -> AnalysisResult | PowerPointAnalysisResult:
+        # Both callers use REPEATABLE READ.
+        revision = await self.revision(db, record, owner)
         key = (owner, record.id, record.content_sha256 or "", revision)
         now = time.monotonic()
         self._entries = OrderedDict(
@@ -841,7 +845,9 @@ def candidate_router() -> APIRouter:
     ) -> dict[str, str | bool]:
         response.headers["Cache-Control"] = "no-store"
         semantic: SemanticCandidates | None = request.app.state.semantic_candidates
-        if semantic is None:
+        agent = request.app.state.presentation_agent
+        direct = agent is not None and agent.settings.candidate_mode == "direct_current"
+        if semantic is None and not direct:
             raise HTTPException(503, "Semantic retrieval is not configured.")
         try:
             async with request.app.state.database.sessions() as db, db.begin():
@@ -858,6 +864,9 @@ def candidate_router() -> APIRouter:
                 analysis = await request.app.state.candidate_analyses.read(
                     db, record, principal.id, session.runtime_context
                 )
+            if direct:
+                return {"ready": True, "created": False, "resolver_version": "direct-current-v1"}
+            assert semantic is not None
             created = await semantic.prepare(analysis, principal.id)
             return {"ready": True, "created": created, "resolver_version": "cohere-embed5-v4"}
         except EmbeddingFailure:

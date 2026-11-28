@@ -17,8 +17,9 @@ this does not change the agent endpoint's proposal-only contract.
 
 Apply migrations through `0022_agent_request_window`. Set backend-only
 `BUDDY_COHERE_API_KEY` and `BUDDY_AGENT_ENABLED=true`.
-`BUDDY_AGENT_REQUESTS_PER_MINUTE` defaults to the trial model allowance of 20;
-increase it only to match the credential's actual plan (maximum 500).
+`BUDDY_AGENT_REQUESTS_PER_MINUTE` defaults to 200 (maximum 500), shared by all presenters on
+one credential. Jev decides on partial and finished sentences, so normal speech exceeds the
+earlier default of 20: on staging, 12% of decisions were refused as `paced` with it.
 There is no default Buddy monthly decision cap. An optional positive
 `BUDDY_AGENT_MONTHLY_LIMIT` sets an operator-selected monthly budget; unset it to disable
 that application budget. Usage is still counted and provider quotas still apply.
@@ -109,10 +110,17 @@ automatic moves. Use **Enter Buddy Mini** to restart the overlay after waking.
 Listening ripples appear only to either side. Reduce motion keeps the mascot and
 listening marks still.
 
+Mini is only a visual control: capture, recognition, context and decisions are the same as
+with the main window (#255). It shows no live transcript. Because the main window is hidden,
+Windows may power-throttle Buddy, so Buddy opts out of power throttling while the microphone
+is on, and up to about two seconds of audio (was 0.4 s) can wait for the GUI thread before the
+oldest is dropped. The desktop log records `presentation_mini event=entered|left`,
+`presentation_speech event=audio_gap dropped_packets_total=…`, and
+`presentation_speech event=recognition_restart reason=…`, so lost speech can be traced.
+
 Enable **Buddy Mini completion sound** in Present before entering Mini to hear a
-short chime after completed automatic moves. Capture pauses during playback and
-the audio tail, and the prior speech context is discarded. A muted or stopped
-microphone is not started by the chime.
+short chime after completed automatic moves. Listening and the speech context continue
+during the chime, exactly as without Mini (#255).
 
 ## HTTP and tool contract
 
@@ -210,26 +218,65 @@ Responses are bounded to 64 KiB. Chat has a 3.8-second deadline, total backend d
 work five seconds, and native HTTP six seconds; stale capture still wins over a slow
 otherwise valid result. Embeddings retain their own bounded adapter.
 
-### Decision provider: Jev by default (#243)
+### Decision provider: Jev alone (#243, #252)
 
-Presenters choose the decider in the desktop app (#245). Under **Automatic transitions** in
-Present, **Suggestions decided by** offers **Jev (fast, default)** or **Cohere**. The choice is
-saved in the app settings (`presentation/decision_model`) and sent with each `/agent` request
-as `decision_model`. The server uses the requested decider. Older clients that send no choice
-get `BUDDY_DECISION_PROVIDER`, and without a Jev key every choice decides with Cohere.
+Jev decides every slide action; Cohere takes no part in slide decisions. When
+`BUDDY_JEV_API_KEY` is set (Terraform `enable_jev_decisions` and the secret
+`<env>/agent/jev`), the candidate mode defaults to `direct_current`: Jev receives one option
+per other slide, every eligible zoom/highlight action on the current slide, do nothing, and
+reset when the view is focused, built from the saved deck analysis. There is no Cohere
+embedding index, no per-sentence Cohere shortlist and no retrieval-based topic shortcut;
+deck preparation returns ready at once. Explicit navigation ("next slide", "slide 5") keeps
+its deterministic fast path. Jev accepts at most 255 choices, five of which are reserved for
+the web-search and search-panel options, so a deck whose complete menu would exceed it
+fails closed with `candidates_unavailable` and is never silently shortened.
 
-`BUDDY_DECISION_PROVIDER` chooses who makes the decision after retrieval:
+The desktop no longer offers a decider setting. Older clients that still send
+`decision_model: "cohere"` are decided by Jev. Without a Jev key the server falls back to the
+earlier Cohere shortlist and Cohere decider (`BUDDY_AGENT_CANDIDATE_MODE=semantic`), which
+is not used on staging or production. Cohere is still used by web search to write search words
+and short answers ([voice web search](voice-web-search.md)).
 
-- `jev` (default): TypeSafe Jev (`jev-1.14.0`) alone.
-- `cohere`: Cohere Command A, unchanged.
-- `jev+cohere`: Jev first, Cohere when Jev is unsure.
+Measured on 1,020 labelled sentences (decks of 8–120 slides) against the earlier Cohere
+shortlist plus Jev: 85.0% against 65.7% correct on the same 220 sentences, 76.5% against 48.8%
+on contextual sentences, about 244 ms against 480 ms per decision, and 0 errors in 1,020
+decisions; accuracy held from 40 to 120 slides. See
+[the Jev-only decision guide](jev-direct-current-prototype.md).
 
-Jev is used only when `BUDDY_JEV_API_KEY` is set. In Terraform that means `enable_jev_decisions`
-and the secret `<env>/agent/jev`, populated by the operator. Without the key, every choice
-decides with Cohere and logs `presentation_agent event=jev_unavailable`.
+**Reset and future plans (#257).** While a region is zoomed or highlighted, reset has its own
+option text (zoom back out, remove the highlight, show the whole slide) and Jev's state names
+what is on screen (`current_view`, for example "zoomed into Show the revenue chart"). The
+presenting-now question treats plans, goals and decided future events stated as fact ("we're
+launching the new website in January") as presenting, while conditionals and previews of later
+parts of the talk ("by the end we'll have covered...", "we'll get to that later") stay blocked.
+Measured with the real Jev:
 
-Retrieval, the option list and every server and desktop check are the same for all three. The
-decision log's `model` field names the model whose answer was used.
+- reset requests: 16/16 correct (was 1/16);
+- future-plan sentences: 13/14 (was 1/14);
+- the 1,020-sentence set: unchanged at 892, with 7 false actions before and after.
+
+**The slide on screen (#259).** With live suggestions on, the desktop uploads the current
+slide once per slide change to `PUT /api/v1/sessions/{id}/slide-image?slide_id=...`:
+- **Source:** the rendered PDF page, or PowerPoint's exported preview.
+- **Format:** a JPEG of at most 1280 px.
+- **Limits:** the server accepts only a still PNG or JPEG between 280 and 1568 px per side, up
+  to 1.5 MB, for the session's own owner.
+- **Storage:** the server keeps only the latest image per session, in memory for up to four
+  hours, never on disk.
+
+Jev receives it as an image asset (`TypeSafe-Danger-Zone-Images: true`) with every decision
+on that slide. Diagnostics never contain the image. Each zoom or highlight option also says
+where its item is on the slide ("top left"), from the saved region and slide size.
+
+Measured with the real Jev:
+- Visual references ("the red one", "the box on the far left", "the biggest number") went
+  from 18–20 to 84 of 85 correct.
+- Ordinary sentences were unchanged, with no new false actions.
+- The p50 decision time rose by about 25–35 ms, at about $0.0002 per decision.
+
+If the image is missing (upload failed, another server replica, a new slide not yet rendered),
+Jev decides from text as before. Slide images are sent to TypeSafe in the US, and TypeSafe
+labels image input not yet production-ready.
 
 **How Jev is asked.** Jev returns probabilities rather than text. One request sends the latest
 sentence, the earlier sentences and the current slide summary, and asks two typed questions:

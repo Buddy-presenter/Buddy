@@ -306,6 +306,22 @@
             "title": "Input Sha256",
             "type": "string"
           },
+          "panel": {
+            "anyOf": [
+              {
+                "enum": [
+                  "close",
+                  "scroll_down",
+                  "scroll_up"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Panel"
+          },
           "protocol": {
             "const": "presentation-agent.v1",
             "default": "presentation-agent.v1",
@@ -327,6 +343,21 @@
               }
             ],
             "title": "Retry After Ms"
+          },
+          "search": {
+            "anyOf": [
+              {
+                "enum": [
+                  "web",
+                  "images"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Search"
           },
           "sequence": {
             "title": "Sequence",
@@ -1286,6 +1317,164 @@
         "minLength": 1,
         "pattern": "\\S",
         "type": "string"
+      },
+      "InformationImage": {
+        "additionalProperties": false,
+        "description": "One web image: the panel downloads only the small thumbnail.",
+        "properties": {
+          "source": {
+            "maxLength": 120,
+            "title": "Source",
+            "type": "string"
+          },
+          "source_url": {
+            "maxLength": 2048,
+            "minLength": 9,
+            "title": "Source Url",
+            "type": "string"
+          },
+          "thumbnail": {
+            "maxLength": 2048,
+            "minLength": 9,
+            "title": "Thumbnail",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 180,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "thumbnail",
+          "source_url",
+          "source"
+        ],
+        "title": "InformationImage",
+        "type": "object"
+      },
+      "InformationSearchRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "context": {
+            "anyOf": [
+              {
+                "maxLength": 600,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context"
+          },
+          "mode": {
+            "default": "web",
+            "enum": [
+              "web",
+              "images"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "query": {
+            "maxLength": 300,
+            "minLength": 2,
+            "title": "Query",
+            "type": "string"
+          },
+          "spoken": {
+            "default": false,
+            "title": "Spoken",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "InformationSearchRequest",
+        "type": "object"
+      },
+      "InformationSearchResult": {
+        "additionalProperties": false,
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "maxLength": 1200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "images": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/InformationImage"
+            },
+            "maxItems": 9,
+            "title": "Images",
+            "type": "array"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query"
+          },
+          "sources": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/InformationSource"
+            },
+            "maxItems": 4,
+            "title": "Sources",
+            "type": "array"
+          }
+        },
+        "title": "InformationSearchResult",
+        "type": "object"
+      },
+      "InformationSource": {
+        "additionalProperties": false,
+        "properties": {
+          "snippet": {
+            "maxLength": 600,
+            "title": "Snippet",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 180,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "maxLength": 2048,
+            "minLength": 9,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "url",
+          "snippet"
+        ],
+        "title": "InformationSource",
+        "type": "object"
       },
       "JobData": {
         "properties": {
@@ -8492,6 +8681,11 @@
                     "title": "Provisional",
                     "type": "boolean"
                   },
+                  "search_panel_open": {
+                    "default": false,
+                    "title": "Search Panel Open",
+                    "type": "boolean"
+                  },
                   "segments": {
                     "items": {
                       "additionalProperties": false,
@@ -8545,6 +8739,11 @@
                     "minLength": 1,
                     "title": "Text",
                     "type": "string"
+                  },
+                  "web_search": {
+                    "default": false,
+                    "title": "Web Search",
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -9143,6 +9342,120 @@
         "summary": "Resume",
         "tags": [
           "presentation sessions"
+        ]
+      }
+    },
+    "/api/v1/sessions/{identifier}/slide-image": {
+      "put": {
+        "operationId": "put_slide_image_api_v1_sessions__identifier__slide_image_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "slide_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^\\S+$",
+              "title": "Slide Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Sign-in required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not the session owner"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Session not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The session ended"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Slide image too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported slide image"
+          }
+        },
+        "summary": "Put Slide Image",
+        "tags": [
+          "presentation agent"
         ]
       }
     },
@@ -10370,6 +10683,105 @@
         "summary": "Version",
         "tags": [
           "operations"
+        ]
+      }
+    },
+    "/api/v1/web-search/answer": {
+      "post": {
+        "operationId": "answer_api_v1_web_search_answer_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InformationSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InformationSearchResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Answer",
+        "tags": [
+          "web search"
         ]
       }
     },

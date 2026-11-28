@@ -6,6 +6,29 @@ its audio-relative time range, and measured recognition delay. Recognition does 
 execute slide commands; rolling transcript context and presentation decisions remain
 in #18–#21. Recognized speech is also published to the session event channel.
 
+## Voice-controlled Chrome search
+
+While microphone transcription is active in a verified saved presentation session, Buddy
+recognizes these explicit commands locally, before sending ordinary speech to the live
+presentation agent:
+
+- “Search for images of cute cats” opens a Google Images search in Chrome.
+- “Open Chrome and search for marketing examples” opens a Google web search in Chrome.
+- “Return to the presentation” (or “go back to the presentation”) asks Windows to focus
+  the Buddy presentation window again.
+
+Only complete search commands launch a browser. Their transcript segments are withheld
+from the Cohere presentation decision, and any in-flight decision is invalidated to
+prevent an older slide action firing during the browser handoff. The spoken query is
+encoded as a Google search parameter; Buddy does not execute shell text or open an
+arbitrary spoken URL. Search terms are sent to Google in Chrome. Windows may deny a
+background window a foreground switch; Buddy reports that failure and can be asked again.
+
+This requires an installed Google Chrome browser and an active speech session. Local-only
+PowerPoint capture without a verified saved session has no transcription path and cannot
+accept these voice commands. Search and return do not require Live suggestions or
+automatic slide transitions.
+
 ## Presenter behavior
 
 Sign in, open a ready saved PDF from Library, wait for its presentation session to
