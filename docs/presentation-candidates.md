@@ -35,10 +35,14 @@ references across sentences; the newest view prevents an earlier topic from occu
 the entire shortlist after a topic change. These query vectors are not averaged.
 
 The existing eight-candidate budget remains unchanged between both views. Current slide
-and no change occupy two slots. With no usable region documents, the remaining six slots
-allow up to three non-current destinations per view. When usable region documents exist,
-two slots remain reserved for region candidates, leaving two slide destinations per view.
-This avoids discarding a third contextual hit merely to reserve unavailable actions.
+and no change occupy two slots. With no usable current-slide region documents, the remaining
+six slots allow up to three non-current destinations per view. When current-slide region
+documents have positive retrieval evidence, three slots remain reserved for region candidates
+and three slots remain for other slide destinations.
+Only actions on the current slide can be included in those slots because off-screen region
+actions cannot execute before navigation. This avoids spending Jev's bounded options on
+actions that the option builder would discard. Off-screen actions do not reserve candidate
+slots.
 Identical views use one ranking. It fills remaining slide slots using reciprocal-rank fusion (sum of 1 / one-based document rank for
 positive-cosine evidence). Current slide and no change remain present. Region eligibility
 is unchanged. The shortlist expresses competing evidence, not a final interpretation of

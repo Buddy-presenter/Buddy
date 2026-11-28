@@ -19,6 +19,7 @@ from buddy_api.semantic_candidates import (
     SemanticCandidates,
     balanced_shortlist,
     combined_context,
+    current_slide_action_documents,
 )
 
 
@@ -335,6 +336,47 @@ def test_duplicate_region_documents_cannot_consume_all_reserved_slide_slots():
     assert selected == {"current", "old", "older", "new", "newer"}
 
 
+def test_offscreen_action_documents_do_not_consume_jev_candidate_slots():
+    ranked = [
+        (0.9, Document("other-slide", "offscreen-1", "highlight_region", "Other")),
+        (0.8, Document("other-slide", "offscreen-2", "zoom_region", "Other")),
+        (0.7, Document("current", "visible-1", "highlight_region", "Target one")),
+        (0.6, Document("current", "visible-2", "zoom_region", "Target two")),
+        (0.5, Document("current", "visible-3", "highlight_region", "Target three")),
+    ]
+
+    selected = current_slide_action_documents(ranked, "current", limit=3)
+
+    assert [doc.action_id for _, doc in selected] == [
+        "visible-1",
+        "visible-2",
+        "visible-3",
+    ]
+    assert current_slide_action_documents(ranked, "current", limit=0) == ()
+
+
+def test_actions_on_other_slides_do_not_reserve_retrieval_budget():
+    items = tuple(Document(str(i), None, "slide", "Synthetic") for i in range(20)) + (
+        Document("19", "offscreen-action", "highlight_region", "Synthetic detail"),
+    )
+    similarities = (tuple(1 / (i + 1) for i in range(len(items))),)
+
+    _, selected = balanced_shortlist(items, similarities, "0")
+
+    assert len(selected) == 7
+
+
+def test_irrelevant_current_slide_actions_do_not_reserve_retrieval_budget():
+    items = tuple(Document(str(i), None, "slide", "Synthetic") for i in range(20)) + (
+        Document("0", "irrelevant-action", "highlight_region", "Unrelated detail"),
+    )
+    similarities = (tuple(1 / (i + 1) for i in range(20)) + (-0.1,),)
+
+    _, selected = balanced_shortlist(items, similarities, "0")
+
+    assert len(selected) == 7
+
+
 @pytest.mark.parametrize("usable_regions", [False, True])
 def test_current_slide_and_action_reservation_fit_eight_candidate_contract(usable_regions):
     items = tuple(Document(str(i), None, "slide", "Synthetic") for i in range(20))
@@ -345,5 +387,5 @@ def test_current_slide_and_action_reservation_fit_eight_candidate_contract(usabl
     _, selected = balanced_shortlist(items, (context, focus), "0")
     assert "0" in selected
     # Current is already indexed and must not consume a second destination.
-    assert len(selected) == (5 if usable_regions else 7)
-    assert len(selected) + 1 + (2 if usable_regions else 0) == 8
+    assert len(selected) == (4 if usable_regions else 7)
+    assert len(selected) + 1 + (3 if usable_regions else 0) == 8
