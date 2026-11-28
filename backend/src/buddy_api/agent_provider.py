@@ -611,7 +611,7 @@ class JevDecisionProvider:
             raise AgentFailure("deadline") from None
         except httpx.HTTPError:
             raise AgentFailure("provider_unavailable") from None
-        except (ValueError, KeyError, TypeError, AttributeError, IndexError):
+        except (ValueError, KeyError, TypeError, AttributeError, IndexError, RecursionError):
             raise AgentFailure("invalid_output") from None
         DECIDED_BY.set(JEV_MODEL)
         return selection

@@ -26,7 +26,9 @@ PASSAGE = {
 
 def test_session_integrity_error_does_not_log_sql_parameters_or_traceback(caplog, capsys):
     application = create_app(Settings(Environment.TEST, ("testserver",)))
-    application.dependency_overrides[authenticated] = lambda: Principal(uuid4(), "owner@example.org")
+    application.dependency_overrides[authenticated] = lambda: Principal(
+        uuid4(), "owner@example.org"
+    )
     # Exercise the actual HTTP handler's database exception path; no database service
     # is needed to demonstrate SQLAlchemy's private statement/parameter formatting.
     failure = IntegrityError("INSERT " + PRIVATE, {"state": PRIVATE}, ValueError(PRIVATE))
@@ -74,7 +76,9 @@ def test_jev_stream_failure_stops_reading_and_closes_response(
     async def run():
         def respond(request):
             assert request.url == "https://api.typesafe.ai/v1/systemone"
-            return httpx.Response(status, stream=stream, headers={"Location": "https://other.invalid"})
+            return httpx.Response(
+                status, stream=stream, headers={"Location": "https://other.invalid"}
+            )
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
             provider = JevDecisionProvider("synthetic-key", client)
@@ -103,6 +107,20 @@ def test_jev_accepts_valid_response_at_exact_body_limit():
         async with httpx.AsyncClient(
             transport=httpx.MockTransport(lambda request: httpx.Response(200, content=body))
         ) as client:
-            assert (await JevDecisionProvider("synthetic-key", client).select(PASSAGE)).choice == "c0"
+            assert (
+                await JevDecisionProvider("synthetic-key", client).select(PASSAGE)
+            ).choice == "c0"
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("body", [b"not-json", b"[" * 2000 + b"]" * 2000])
+def test_jev_malformed_or_deeply_nested_json_is_a_safe_provider_failure(body):
+    async def run():
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, content=body))
+        ) as client:
+            with pytest.raises(AgentFailure, match="invalid_output"):
+                await JevDecisionProvider("synthetic-key", client).select(PASSAGE)
 
     asyncio.run(run())
