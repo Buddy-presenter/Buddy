@@ -532,16 +532,22 @@ class JevDecisionProvider:
                 }
                 headers["TypeSafe-Danger-Zone-Images"] = "true"
             async with asyncio.timeout(self.deadline):
-                response = await self.client.post(
+                async with self.client.stream(
+                    "POST",
                     "https://api.typesafe.ai/v1/systemone",
                     headers=headers,
                     json=sent,
-                )
-            if response.status_code == 429:
-                raise AgentFailure("rate_limited")
-            if response.status_code != 200 or len(response.content) > 65536:
-                raise AgentFailure("provider_unavailable")
-            answers = response.json()["answers"]
+                ) as response:
+                    if response.status_code == 429:
+                        raise AgentFailure("rate_limited")
+                    if response.status_code != 200:
+                        raise AgentFailure("provider_unavailable")
+                    body = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        if len(body) + len(chunk) > 65536:
+                            raise AgentFailure("invalid_output")
+                        body.extend(chunk)
+            answers = json.loads(body)["answers"]
             choice = answers["action"]["choice"]
             probability = float(answers["action"]["probabilities"][choice])
             presenting = float(answers["presenting_now"]["noul"])
@@ -609,7 +615,7 @@ class JevDecisionProvider:
             raise AgentFailure("deadline") from None
         except httpx.HTTPError:
             raise AgentFailure("provider_unavailable") from None
-        except (ValueError, KeyError, TypeError, AttributeError, IndexError):
+        except (ValueError, KeyError, TypeError, AttributeError, IndexError, RecursionError):
             raise AgentFailure("invalid_output") from None
         DECIDED_BY.set(JEV_MODEL)
         return selection
