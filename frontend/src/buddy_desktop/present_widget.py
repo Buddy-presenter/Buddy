@@ -72,6 +72,7 @@ from buddy_desktop.powerpoint_contract import (
     PowerPointFrame,
 )
 from buddy_desktop.powerpoint_controls import PowerPointControls
+from buddy_desktop.powerpoint_generated import SAVED_ACTION_TYPES
 from buddy_desktop.powerpoint_present import PowerPointPresent
 from buddy_desktop.powerpoint_session_binding import PowerPointSessionBinding
 from buddy_desktop.presentation_session_service import (
@@ -125,7 +126,30 @@ LOCALLY_VERIFIED_TOOLS = NAVIGATION_TOOLS | {"zoom_region", "highlight_region", 
 def saved_action_eligible(source_format: str, action: ReviewAction) -> bool:
     """Both formats need the independent visual check (PDF on the server, PowerPoint
     captured on the owner's PC and judged by the server)."""
-    return action.usable and action.state == "validated" and action.semantic_verified
+    return saved_action_unavailable(source_format, action) is None
+
+
+def saved_action_unavailable(source_format: str, action: ReviewAction) -> str | None:
+    supported = (
+        SAVED_ACTION_TYPES
+        if source_format == "pptx"
+        else ({"zoom_region", "highlight_region"} if source_format == "pdf" else set())
+    )
+    if action.action_type not in supported:
+        return "Not supported live in this presentation"
+    if action.state == "stale" or any("stale" in reason for reason in action.reasons):
+        return "Stale — reload the analysis or reopen the saved presentation"
+    if source_format == "pptx" and "powerpoint_runtime_requires_windows_office" in action.reasons:
+        return "Needs desktop PowerPoint on Windows"
+    if action.state == "rejected":
+        return "Unavailable — the action did not pass its checks"
+    if action.state == "needs-review":
+        return "Unavailable — open Review to inspect or retry its checks"
+    if not (action.semantic_verified and action.validation_kind == "visual"):
+        return "Unavailable — waiting for visual verification"
+    if not action.usable or action.state != "validated":
+        return "Unavailable — checks do not match this presentation runtime"
+    return None
 
 
 def proposal_context(value: dict[str, Any], live: ContextSnapshot) -> ContextSnapshot | None:
@@ -294,6 +318,8 @@ class PresentWidget(Page):
         self._policy_undo_restoring = False
         self._pending_native_undo = False
         self._accepted_action_id: str | None = None
+        self._generated_pdf_action: tuple[str, str] | None = None
+        self._generated_autoload: str | None = None
         self._agent_session_id: str | None = None
         self._context_connected = False
         self._context_expiry = QTimer(self)
@@ -1745,9 +1771,11 @@ class PresentWidget(Page):
         if (
             self._closing
             or session is None
+            or session.status != "active"
             or access is None
             or state is None
             or self.generated_runner.busy
+            or (identifier is not None and (self.powerpoint_runner.busy or self.executor.busy))
         ):
             return
         self._generated_request = (
@@ -1766,21 +1794,29 @@ class PresentWidget(Page):
         self._refresh_generated()
 
     def _generated_failed(self, _request: int, message: str) -> None:
+        pending = self._generated_request
+        if pending is None or self._session is None or self._closing:
+            return
+        if pending[0] != self._session.id or self._session.status != "active":
+            self._generated_request = None
+            return
         self._generated_request = None
         self._generated_analysis = None
         self.generated_status.setText(message)
         self._refresh_generated()
 
     def _generated_loaded(self, _request: int, analysis: object) -> None:
-        pending, self._generated_request = self._generated_request, None
+        pending = self._generated_request
         session, state = self._session, self._current_local_state()
         if (
             pending is None
             or session is None
+            or session.status != "active"
             or state is None
             or self._closing
             or not isinstance(analysis, ReviewAnalysis)
         ):
+            self._generated_request = None
             return
         session_id, version, slide_id, identifier = pending
         if (
@@ -1821,8 +1857,19 @@ class PresentWidget(Page):
                 self._generated_failed(0, "The PDF source changed. Reopen it from Library.")
                 return
         self._generated_analysis = analysis
+        self._generated_request = None
+        current_slide = next(
+            (s for s in analysis.slides if s.slide_id == state.active_slide_id), None
+        )
+        eligible = (
+            sum(saved_action_eligible(analysis.source_format, a) for a in current_slide.actions)
+            if current_slide
+            else 0
+        )
         self.generated_status.setText(
             "Choose a saved action. Unavailable actions cannot be applied."
+            if eligible
+            else "No eligible saved actions for this slide. Open Review to check them."
         )
         self._refresh_generated()
         if identifier is None:
@@ -1860,14 +1907,11 @@ class PresentWidget(Page):
                 ),
             )
         else:
-            self._accepted_action_id = identifier
+            self._generated_pdf_action = (f"manual:{self._instance + 1}", identifier)
             self.send(
                 action.action_type,
                 {"region": dict(zip(("x", "y", "width", "height"), action.region, strict=True))},
             )
-            # send() clears manual accepted state; retain this exact saved identity.
-            self._accepted_action_id = identifier
-            self._queue_session_state()
 
     def _apply_generated(self) -> None:
         identifier = self.generated_actions.currentData()
@@ -1898,11 +1942,10 @@ class PresentWidget(Page):
                 )
                 for action in slide.actions if slide else ():
                     eligible = saved_action_eligible(analysis.source_format, action)
-                    label = f"{action.purpose} · {action.action_type}" + (
-                        ""
-                        if eligible
-                        else " · unavailable: " + ", ".join(action.reasons or (action.state,))
-                    )
+                    reason = saved_action_unavailable(analysis.source_format, action)
+                    label = f"{action.purpose} · {action.action_type.replace('_', ' ')}"
+                    if reason:
+                        label += " · " + reason
                     self.generated_actions.addItem(label, action.instance_id if eligible else None)
                     if not eligible:
                         item = cast(QStandardItemModel, self.generated_actions.model()).item(
@@ -1921,6 +1964,8 @@ class PresentWidget(Page):
         self.generated_apply.setEnabled(
             available
             and not self.generated_runner.busy
+            and not self.powerpoint_runner.busy
+            and not self.executor.busy
             and isinstance(self.generated_actions.currentData(), str)
         )
         # Speech can only run saved actions Buddy has loaded and verified locally,
@@ -4091,6 +4136,15 @@ class PresentWidget(Page):
 
     @Slot(object)
     def _completed(self, result: Completion) -> None:
+        saved = self._generated_pdf_action
+        if saved is not None and result.instance_id == saved[0]:
+            self._generated_pdf_action = None
+            self._accepted_action_id = saved[1] if result.status == "completed" else None
+            self.generated_status.setText(
+                "Saved action completed."
+                if result.status == "completed"
+                else "Saved action failed. Manual controls remain available; reload and retry."
+            )
         prediction = self._policy_execution
         local_navigation = False
         if prediction is not None and result.instance_id == "policy:" + prediction.decision_id:
@@ -4380,8 +4434,11 @@ class PresentWidget(Page):
         self._refresh()
 
     def clear_session_binding(self) -> None:
+        self._generated_pdf_action = None
+        self._generated_autoload = None
         self._generated_analysis = None
         self._generated_request = None
+        self.generated_status.setText("Connect a saved presentation to load its actions.")
         self._native_guard.clear()
         self._native_policy_context = None
         self.invalidate_saved_powerpoint()

@@ -64,6 +64,9 @@ packages must continue to interact through versioned contracts.
 See [development](development.md) for setup and entry points, [API operations](api/README.md)
 for backend configuration, and [deployment](deployment.md) for infrastructure and releases.
 
+[Saved actions in Present](present-actions.md) covers supported PDF/PowerPoint actions,
+source/session guards, native recovery and separate runtime evidence.
+
 Action validation follows the same component boundary: the API invokes a separately
 installed headless desktop executor process through versioned JSON, without importing
 Qt or desktop implementation. See [action validation](action-validation.md).

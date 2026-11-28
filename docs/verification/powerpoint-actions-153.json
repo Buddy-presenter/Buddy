@@ -1,0 +1,149 @@
+{
+  "scope": "synthetic_saved_action_executor",
+  "os": "Windows-11-10.0.26200-SP0",
+  "office_runtime": "16.0.20625",
+  "source_sha256": {
+    "present_widget.py": "7144209bec944e942d40e078e6ac124f79249bff74674f1d88fc12f5b4967d36",
+    "powerpoint_present.py": "94ab4290fb695c932351aa36d0770963f5640c45e845cf08048d07d078e817bf",
+    "powerpoint_generated.py": "1ef44c10e71457ac35334523583175d051f7ce98768f01db40fce823310a1fa7"
+  },
+  "substituted_boundaries": [
+    "analysis/eligibility HTTP",
+    "session transport"
+  ],
+  "server_publication_verified": false,
+  "semantic_verification_measured": false,
+  "speech_or_model_accuracy_measured": false,
+  "results": [
+    {
+      "format": "pdf",
+      "type": "highlight_region",
+      "applied": true,
+      "reset_restored": true,
+      "saved_action_id_confirmed": true
+    },
+    {
+      "format": "pdf",
+      "type": "zoom_region",
+      "applied": true,
+      "reset_restored": true,
+      "saved_action_id_confirmed": true
+    },
+    {
+      "format": "pptx",
+      "type": "callout",
+      "applied": true,
+      "reset_restored": true,
+      "saved_action_id_confirmed": true
+    },
+    {
+      "format": "pptx",
+      "type": "draw_arrow",
+      "applied": true,
+      "reset_restored": true,
+      "saved_action_id_confirmed": true
+    },
+    {
+      "format": "pptx",
+      "type": "draw_diamond",
+      "applied": true,
+      "reset_restored": true,
+      "saved_action_id_confirmed": true
+    },
+    {
+      "format": "pptx",
+      "type": "draw_hexagon",
+      "applied": true,
+      "reset_restored": true,
+      "saved_action_id_confirmed": true
+    },
+    {
+      "format": "pptx",
+      "type": "draw_line",
+      "applied": true,
+      "reset_restored": true,
+      "saved_action_id_confirmed": true
+    },
+    {
+      "format": "pptx",
+      "type": "draw_oval",
+      "applied": true,
+      "reset_restored": true,
+      "saved_action_id_confirmed": true
+    },
+    {
+      "format": "pptx",
+      "type": "draw_rectangle",
+      "applied": true,
+      "reset_restored": true,
+      "saved_action_id_confirmed": true
+    },
+    {
+      "format": "pptx",
+      "type": "draw_rounded_rectangle",
+      "applied": true,
+      "reset_restored": true,
+      "saved_action_id_confirmed": true
+    },
+    {
+      "format": "pptx",
+      "type": "draw_star",
+      "applied": true,
+      "reset_restored": true,
+      "saved_action_id_confirmed": true
+    },
+    {
+      "format": "pptx",
+      "type": "draw_triangle",
+      "applied": true,
+      "reset_restored": true,
+      "saved_action_id_confirmed": true
+    },
+    {
+      "format": "pptx",
+      "type": "draw_underline",
+      "applied": true,
+      "reset_restored": true,
+      "saved_action_id_confirmed": true
+    },
+    {
+      "format": "pptx",
+      "type": "filled_oval",
+      "applied": true,
+      "reset_restored": true,
+      "saved_action_id_confirmed": true
+    },
+    {
+      "format": "pptx",
+      "type": "filled_rectangle",
+      "applied": true,
+      "reset_restored": true,
+      "saved_action_id_confirmed": true
+    },
+    {
+      "format": "pptx",
+      "type": "highlight_region",
+      "applied": true,
+      "reset_restored": true,
+      "saved_action_id_confirmed": true
+    },
+    {
+      "format": "pptx",
+      "type": "text_box",
+      "applied": true,
+      "reset_restored": true,
+      "saved_action_id_confirmed": true
+    },
+    {
+      "format": "pptx",
+      "type": "zoom_region",
+      "applied": false,
+      "reset_restored": true,
+      "status": "blocked",
+      "reason": "PowerPoint lost focus. Return to Buddy and try zoom again."
+    }
+  ],
+  "complete": false,
+  "run_date": "2026-11-28",
+  "provenance": "Generated synthetic PDF/PPTX only; no private decks, audio or paid providers."
+}

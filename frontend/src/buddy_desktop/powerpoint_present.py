@@ -42,6 +42,8 @@ class PowerPointPresent:
             action is None
             or not action.usable
             or action.state != "validated"
+            or not action.semantic_verified
+            or action.validation_kind != "visual"
             or action.raw is None
             or not action.runtime_version
         ):
