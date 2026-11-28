@@ -70,6 +70,66 @@ def test_agent_response_echoes_local_slide_only_for_new_clients():
     assert current.model_dump(mode="json", exclude_unset=True)["active_slide_id"] == "slide-a"
 
 
+def test_search_is_sent_only_when_jev_decided_it_and_never_with_a_slide_action():
+    # old desktops never see the new field; a search never moves a slide.
+    common = {
+        "protocol": "presentation-agent.v1",
+        "decision_id": uuid4(),
+        "session_id": uuid4(),
+        "analysis_id": uuid4(),
+        "state_version": 4,
+        "context_epoch": 1,
+        "stream_id": uuid4(),
+        "sequence": 1,
+        "input_sha256": "a" * 64,
+        "target": Target(tool="no_action", slide_id="slide-a"),
+        "decision_source": "model",
+        "reason": "stay",
+        "confidence": 0.9,
+        "evidence": (),
+        "elapsed_ms": 1,
+        "retry_after_ms": None,
+    }
+    plain = AgentProposal.model_validate(common).model_dump(mode="json", exclude_unset=True)
+    assert "search" not in plain
+    found = AgentProposal.model_validate({**common, "search": "images"})
+    assert found.model_dump(mode="json", exclude_unset=True)["search"] == "images"
+    for change in (
+        {"decision_source": "navigation"},
+        {"target": Target(tool="next_slide", slide_id="slide-b"), "evidence": (0,)},
+    ):
+        with pytest.raises(ValueError):
+            AgentProposal.model_validate({**common, **change, "search": "web"})
+    assert AgentRequest.model_validate(payload(web_search=True)).web_search
+    closing = AgentProposal.model_validate({**common, "panel": "close"})
+    assert closing.model_dump(mode="json", exclude_unset=True)["panel"] == "close"
+    with pytest.raises(ValueError):
+        AgentProposal.model_validate({**common, "panel": "close", "search": "web"})
+    with pytest.raises(ValueError):
+        AgentProposal.model_validate({**common, "decision_source": "navigation", "panel": "close"})
+    assert AgentRequest.model_validate(payload(search_panel_open=True)).search_panel_open
+    assert not AgentRequest.model_validate(payload()).web_search
+
+
+@pytest.mark.postgres
+def test_jev_search_decision_reaches_the_desktop(agent_api):
+    client, ids, provider = agent_api
+    provider.answer = Selection(
+        choice="c0", reason="stay", confidence=0.9, evidence=(), search="web"
+    )
+    path = f"/api/v1/sessions/{ids['sessions']}/agent"
+    headers = {"Authorization": "Bearer owner"}
+    reply = client.post(path, headers=headers, json=payload(web_search=True))
+    assert reply.status_code == 200, reply.text
+    assert reply.json()["search"] == "web"
+    assert reply.json()["target"]["tool"] == "no_action"
+    assert provider.calls[-1]["web_search"] is True
+    old = client.post(path, headers=headers, json=payload())  # A new stream, as an older app sends.
+    assert old.status_code == 200, old.text
+    assert "web_search" not in provider.calls[-1]
+    assert "search" not in old.json()
+
+
 def test_request_focus_never_reuses_focus_from_another_slide():
     saved_region = {"x": 10, "y": 20, "width": 30, "height": 40}
     assert request_focus(
@@ -120,6 +180,11 @@ def agent_api(ready_session_api):
 
 def test_context_is_coherent_and_bounded():
     AgentRequest.model_validate(payload())
+    # The presenter's decider choice is optional and closed (#245).
+    for model in ("jev", "cohere"):
+        assert AgentRequest.model_validate(payload(decision_model=model)).decision_model == model
+    with pytest.raises(ValueError):
+        AgentRequest.model_validate(payload(decision_model="groq"))
     for changes in (
         {"text": "different"},
         {"latest_utterance": "other"},
@@ -234,6 +299,64 @@ def test_options_derive_navigation_and_only_usable_authoritative_regions():
     assert "zoom_region" not in {t.tool for t in options(source, candidates)[0]}
 
 
+def test_region_options_show_the_slide_text_they_target():
+    from buddy_api.agent_provider import SYSTEM
+    from buddy_api.analysis.contracts import Region
+
+    def option(target_text):
+        action = SimpleNamespace(
+            usable=True,
+            state="validated",
+            semantic_verified=True,
+            action=SimpleNamespace(
+                instance_id="revenue",
+                type="highlight_region",
+                purpose="Highlight the total revenue figure",
+                params=SimpleNamespace(
+                    region=Region(x=1, y=2, width=30, height=40), target_text=target_text
+                ),
+            ),
+        )
+        slide = SimpleNamespace(
+            slide_id="1",
+            summary=SimpleNamespace(
+                text=(
+                    "Market analysis: a current market-share pie chart and "
+                    "projected sales bar chart."
+                )
+            ),
+            actions=(action,),
+        )
+        candidate = Candidate(
+            kind="highlight_region", slide_id="1", action_id="revenue", reason="purpose", score=1
+        )
+        source = AgentInput(SimpleNamespace(slides=(slide,)), "1", "slide", "hash")
+        return options(source, (candidate,))[1][-1]["content"]
+
+    # Speech that states the figure ("$48 million") must visibly match the option.
+    assert option("$48 million") == (
+        "Slide context: Market analysis: a current market-share pie chart "
+        "and projected sales bar chart.\n"
+        "Action purpose: Highlight the total revenue figure\nShows: $48 million"
+    )
+    # Region options always include context, even without exact source text.
+    assert option("") == (
+        "Slide context: Market analysis: a current market-share pie chart "
+        "and projected sales bar chart.\n"
+        "Action purpose: Highlight the total revenue figure"
+    )
+    assert option(None) == (
+        "Slide context: Market analysis: a current market-share pie chart "
+        "and projected sales bar chart.\n"
+        "Action purpose: Highlight the total revenue figure"
+    )
+    # The selector is told that speech about one element selects its region action.
+    assert "zoom_region or highlight_region option" in SYSTEM
+    assert "that is enough evidence" in SYSTEM
+    assert "Prefer c0 only when that element is negated" in SYSTEM
+    assert "compare its saved action purpose and target text with the slide" in SYSTEM
+
+
 def test_natural_navigation_options_do_not_depend_on_semantic_shortlist():
     from backend.tests.api.test_presentation_candidates import analysis
 
@@ -328,6 +451,35 @@ def test_valid_reset_proposal_uses_persisted_focus_and_does_not_execute(agent_ap
     assert reply.json()["target"]["tool"] == "reset_view"
     assert reply.json()["evidence"] == [0]
     assert client.get(path, headers=headers).json()["data"] == before
+
+
+@pytest.mark.postgres
+def test_opt_in_diagnostics_capture_real_candidates_options_and_final_mapping(agent_api, capsys):
+    client, ids, provider = agent_api
+    client.app.state.presentation_agent.settings = AgentSettings(
+        "test-key", diagnostics_enabled=True, diagnostics_session_id=ids["sessions"]
+    )
+    phrase = "Let's look at the first slide now."
+    request = payload(
+        text=phrase, latest_utterance=phrase, segments=[{"sequence": 1, "text": phrase}]
+    )
+    reply = client.post(
+        f"/api/v1/sessions/{ids['sessions']}/agent",
+        headers={"Authorization": "Bearer owner"},
+        json=request,
+    )
+    assert reply.status_code == 200, reply.text
+    assert len(provider.calls) == 1
+    diagnostics = reply.json()["diagnostics"]
+    assert diagnostics["input"]["latest_utterance"] == phrase
+    assert diagnostics["candidate_retrieval"]
+    assert diagnostics["candidate_options"] == provider.calls[0]["options"]
+    assert diagnostics["provider_passage"] == provider.calls[0]
+    assert len(diagnostics["option_targets"]) == len(diagnostics["candidate_options"])
+    assert diagnostics["selection"]["choice"] == "c0"
+    assert diagnostics["selected_target"]["tool"] == "no_action"
+    assert diagnostics["final_proposal"]["decision_id"] == reply.json()["decision_id"]
+    assert phrase not in capsys.readouterr().out
 
 
 @pytest.mark.postgres
@@ -881,3 +1033,152 @@ def test_actual_provider_rate_limit_blocks_new_speech_across_instances(agent_api
         await runtime.reserve(database)
 
     client.portal.call(check)
+
+
+def test_pdf_and_powerpoint_zoom_options_show_their_slide_text():
+    """PDF actions keep quoted text in the grounding record; PowerPoint zooms frame a shape."""
+    import asyncio
+    from uuid import uuid4
+
+    from buddy_api.analysis.contracts import (
+        PowerPointActionResult,
+        PowerPointAnalysisResult,
+        PowerPointContentActionV2,
+        PowerPointParameters,
+        PowerPointSlideResultV2,
+        Region,
+    )
+    from buddy_api.presentation_candidates import with_powerpoint_shape_text
+    from buddy_api.semantic_candidates import documents
+
+    region = Region(x=1, y=2, width=30, height=40)
+    pdf_action = SimpleNamespace(
+        usable=True,
+        state="validated",
+        semantic_verified=True,
+        action=SimpleNamespace(
+            instance_id="hires",
+            type="zoom_region",
+            purpose="Show the hiring breakdown",
+            params=SimpleNamespace(region=region),
+        ),
+    )
+    pdf = SimpleNamespace(
+        slides=(
+            SimpleNamespace(
+                slide_id="1",
+                summary=SimpleNamespace(text="Team", status="available"),
+                actions=(pdf_action,),
+            ),
+        ),
+        inputs=SimpleNamespace(
+            grounding=(
+                SimpleNamespace(
+                    instance_id="hires",
+                    trace=SimpleNamespace(target_text="London 5 Beirut 4 Total 14"),
+                ),
+            )
+        ),
+    )
+    candidate = Candidate(
+        kind="zoom_region", slide_id="1", action_id="hires", reason="purpose", score=1
+    )
+    source = AgentInput(pdf, "1", "slide", "hash")
+    assert options(source, (candidate,))[1][-1]["content"] == (
+        "Slide context: Team\nAction purpose: Show the hiring breakdown\n"
+        "Shows: London 5 Beirut 4 Total 14"
+    )
+    assert documents(pdf)[-1].text.endswith("Target: London 5 Beirut 4 Total 14")
+
+    zoom = PowerPointActionResult.model_construct(
+        action=PowerPointContentActionV2.model_construct(
+            instance_id="chart",
+            purpose="Show the revenue chart",
+            slide_id="s1",
+            type="zoom_region",
+            params=PowerPointParameters(region=region, source_shape_id=7),
+        ),
+        state="validated",
+        usable=True,
+        validation=SimpleNamespace(semantic_verified=True),
+    )
+    pptx = PowerPointAnalysisResult.model_construct(
+        slides=(
+            PowerPointSlideResultV2.model_construct(
+                slide_id="s1", summary=SimpleNamespace(text="Q4"), actions=(zoom,)
+            ),
+        )
+    )
+
+    class Database:
+        async def scalar(self, _statement):
+            return {
+                "slides": [{"id": "s1", "objects": [{"source_id": 7, "text": "Revenue\n$48M  Q4"}]}]
+            }
+
+    record = SimpleNamespace(extraction_id=uuid4())
+    described = asyncio.run(with_powerpoint_shape_text(Database(), record, uuid4(), pptx))
+    assert described.slides[0].actions[0].action.params.text == "Revenue $48M Q4"
+    assert pptx.slides[0].actions[0].action.params.text == ""  # The saved analysis is untouched.
+    candidate = Candidate(
+        kind="zoom_region", slide_id="s1", action_id="chart", reason="purpose", score=1
+    )
+    source = AgentInput(described, "s1", "slide", "hash")
+    assert options(source, (candidate,))[1][-1]["content"] == (
+        "Slide context: Q4\nAction purpose: Show the revenue chart\nShows: Revenue $48M Q4"
+    )
+
+
+def test_region_actions_are_offered_only_for_the_slide_on_screen():
+    # #187: the desktop never zooms another slide, so such an option could only be dropped.
+    from buddy_api.analysis.contracts import Region
+
+    def slide(slide_id):
+        action = SimpleNamespace(
+            usable=True,
+            state="validated",
+            semantic_verified=True,
+            action=SimpleNamespace(
+                instance_id=f"chart-{slide_id}",
+                type="zoom_region",
+                purpose="Show the revenue chart",
+                params=SimpleNamespace(region=Region(x=1, y=2, width=30, height=40)),
+            ),
+        )
+        return SimpleNamespace(
+            slide_id=slide_id, summary=SimpleNamespace(text="Revenue"), actions=(action,)
+        )
+
+    analysis = SimpleNamespace(slides=(slide("1"), slide("2")))
+    candidates = tuple(
+        Candidate(kind="zoom_region", slide_id=s, action_id=f"chart-{s}", reason="purpose", score=1)
+        for s in ("1", "2")
+    )
+    targets, _ = options(AgentInput(analysis, "1", "slide", "hash"), candidates)
+    assert [t.action_id for t in targets if t.tool == "zoom_region"] == ["chart-1"]
+    assert any(t.tool == "next_slide" and t.slide_id == "2" for t in targets)
+
+
+@pytest.mark.postgres
+def test_unchanged_recheck_reuses_the_analysis_instead_of_reloading_it(agent_api):
+    # The post-decision recheck still verifies session, deck, analysis content, validation
+    # history and runtime context, but reuses the analysis it already read when unchanged.
+    client, ids, provider = agent_api
+    analyses = client.app.state.candidate_analyses
+    real_read, reads = analyses.read, []
+
+    async def counted(*args, **kwargs):
+        reads.append(1)
+        return await real_read(*args, **kwargs)
+
+    analyses.read = counted
+    try:
+        reply = client.post(
+            f"/api/v1/sessions/{ids['sessions']}/agent",
+            headers={"Authorization": "Bearer owner"},
+            json=payload(),
+        )
+    finally:
+        analyses.read = real_read
+    assert reply.status_code == 200, reply.text
+    assert len(reads) == 1

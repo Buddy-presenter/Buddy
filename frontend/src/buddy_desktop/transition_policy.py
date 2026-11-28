@@ -316,12 +316,24 @@ class TransitionPolicy:
         if now_ns < self._hold_until:
             return reject("cooldown")
         if (
-            prediction.source not in {"model", "navigation"}
+            prediction.source not in {"model", "navigation", "local_command"}
             or prediction.reason not in {"explicit", "topic", "correction"}
             or not evidence_sequences.intersection(segment.sequence for segment in segments)
         ):
             return reject("weak_evidence")
-        if prediction.source == "navigation":
+        if prediction.source == "local_command":
+            # An explicit spoken zoom/highlight/reset, or a stated figure only one saved
+            # action shows (#241), matched on this device to one saved action.
+            allowed = (
+                {"zoom_region", "highlight_region", "reset_view"}
+                if prediction.reason == "explicit"
+                else {"zoom_region", "highlight_region"}
+                if prediction.reason == "topic"
+                else set()
+            )
+            if target.tool not in allowed:
+                return reject("weak_evidence")
+        elif prediction.source == "navigation":
             if prediction.reason not in {"explicit", "topic"} or target.tool not in {
                 "next_slide",
                 "previous_slide",

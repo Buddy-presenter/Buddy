@@ -107,6 +107,11 @@ The isolated PDF action validation API, private evidence, runtime setup and test
 are documented in [action validation](action-validation.md). It uses predefined actions;
 no model generation or document text extraction is required.
 
+Bounded native desktop test-session tools and separate PDF/Office capture requirements
+are documented in [isolated preflight](preflight-runner.md). Publishing preflight results,
+the owner validation report and the gate on live actions are documented in
+[preflight publication](preflight-publication.md).
+
 Durable PDF metadata scheduling, SQS workers, owner job controls and opt-in staging
 verification are documented in [PDF workers](pdf-workers.md).
 
@@ -116,6 +121,11 @@ Microphone setup, session gating, privacy, and real-device checks are documented
 [microphone capture](microphone.md). Qt Multimedia is installed with the desktop dependencies.
 Provider setup, authenticated streaming, transcript timing, privacy, recovery, and live
 acceptance are documented in [speech recognition](speech-recognition.md).
+The separate [voice-to-slide acceptance runbook](voice-navigation-acceptance.md) covers
+real spoken commands, safe abstention, cleanup and independent PDF/PowerPoint evidence.
+
+Voice-triggered information searches, image searches, correction phrases and provider data
+handling are documented in [voice web search](voice-web-search.md).
 
 The ephemeral decision-input window and its capture-time invalidation rules are
 documented in [rolling speech context](transcript-context.md).
@@ -124,7 +134,8 @@ The versioned, owner-scoped candidate resolver is documented in
 [presentation candidates](presentation-candidates.md).
 
 The opt-in decision loop, constrained tools, provider setup and manual suggestion check
-are documented in [presentation agent](presentation-agent.md).
+are documented in [presentation agent](presentation-agent.md). How speech selects and
+runs verified saved zoom/highlight actions is in [speech-triggered actions](speech-actions.md).
 
 Presenter-owned opt-in execution, measured calibration, undo and the remaining PowerPoint
 dependency are documented in [transition policy](transition-policy.md).

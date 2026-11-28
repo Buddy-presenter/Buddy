@@ -2,9 +2,9 @@
 
 from collections.abc import Callable
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QScreen
-from PySide6.QtWidgets import QMainWindow, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QAction, QCloseEvent, QKeyEvent, QKeySequence, QScreen
+from PySide6.QtWidgets import QLabel, QMainWindow, QVBoxLayout, QWidget
 
 from buddy_desktop.slide_surface import SlideSurface
 
@@ -23,7 +23,7 @@ class FullscreenPresentation(QMainWindow):
         owner: QWidget,
         screen: QScreen | None = None,
     ) -> None:
-        super().__init__(owner.window())
+        super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowTitle("Buddy presentation — Esc to exit")
         self.surface, self.original_layout = surface, layout
@@ -31,6 +31,16 @@ class FullscreenPresentation(QMainWindow):
         self.original_index = layout.indexOf(surface)
         self.setGeometry(owner.window().geometry())
         self.setCentralWidget(surface)
+        self.voice_feedback = QLabel(self)
+        self.voice_feedback.setObjectName("voiceCommandFeedback")
+        self.voice_feedback.setAccessibleName("Voice command feedback")
+        self.voice_feedback.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.voice_feedback.setWordWrap(True)
+        self.voice_feedback.setMaximumWidth(600)
+        self.voice_feedback.hide()
+        self._voice_feedback_timer = QTimer(self)
+        self._voice_feedback_timer.setSingleShot(True)
+        self._voice_feedback_timer.timeout.connect(self.voice_feedback.hide)
         for shortcut, command in [
             ("Right", "next_slide"),
             ("Space", "next_slide"),
@@ -43,16 +53,23 @@ class FullscreenPresentation(QMainWindow):
             action.setShortcut(QKeySequence(shortcut))
             action.triggered.connect(lambda checked=False, kind=command: send(kind))
             self.addAction(action)
-        for shortcut in ("Esc", "F11"):
-            action = QAction(self)
-            action.setShortcut(QKeySequence(shortcut))
-            action.triggered.connect(self.close)
-            self.addAction(action)
         for shortcut, callback in (("Z", zoom), ("H", highlight), ("G", go_to)):
             action = QAction(self)
             action.setShortcut(QKeySequence(shortcut))
             action.triggered.connect(callback)
             self.addAction(action)
+
+    def show_voice_feedback(self, message: str, timeout_ms: int = 5000) -> None:
+        """Show brief command feedback over the audience slide surface."""
+        self._voice_feedback_timer.stop()
+        self.voice_feedback.setText(message)
+        self.voice_feedback.setVisible(bool(message))
+        self.voice_feedback.adjustSize()
+        x = max(24, (self.width() - self.voice_feedback.width()) // 2)
+        self.voice_feedback.move(x, 24)
+        self.voice_feedback.raise_()
+        if message and timeout_ms > 0:
+            self._voice_feedback_timer.start(timeout_ms)
 
     def move_to_screen(self, screen: QScreen) -> None:
         """Move the audience surface without changing its slide or focus state."""
@@ -69,6 +86,17 @@ class FullscreenPresentation(QMainWindow):
         self.setGeometry(screen.geometry())
         if self.isVisible():
             self.showFullScreen()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        # Handle exit on the audience window itself, just as Mini does. Window
+        # shortcut activation can lag focus changes between native tool windows.
+        if event.key() in (Qt.Key.Key_Escape, Qt.Key.Key_F11) and (
+            event.modifiers() == Qt.KeyboardModifier.NoModifier
+        ):
+            self.close()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         surface = self.takeCentralWidget()

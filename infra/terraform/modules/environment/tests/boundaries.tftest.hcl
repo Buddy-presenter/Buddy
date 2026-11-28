@@ -96,6 +96,22 @@ run "private_staging_before_images_exist" {
     )
     error_message = "The worker must have InvokeModel access only for the EU Claude Sonnet 4.6 profile, its regional destination model resources, and the default Bedrock project."
   }
+  assert {
+    condition = (
+      jsondecode(aws_iam_role_policy.api_bedrock_visual_qa.policy).Statement[0].Action == ["bedrock:InvokeModel"] &&
+      toset(jsondecode(aws_iam_role_policy.api_bedrock_visual_qa.policy).Statement[0].Resource) == toset([
+        "arn:aws:bedrock:eu-central-1:123456789012:inference-profile/eu.anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:eu-central-1::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:eu-north-1::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:eu-west-3::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:eu-south-1::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:eu-south-2::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:eu-west-1::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:eu-central-1:123456789012:project/default"
+      ])
+    )
+    error_message = "The API must have InvokeModel access only for the EU Claude Sonnet 4.6 profile, its regional destination model resources, and the default Bedrock project."
+  }
 }
 run "staging_cloudformation_owns_monitoring" {
   command = plan
@@ -152,6 +168,71 @@ run "staging_worker_is_provisioned_paused_for_release_promotion" {
     condition     = length(aws_ecs_service.worker) == 1 && aws_ecs_service.worker[0].desired_count == 0
     error_message = "Terraform must create the worker as a paused service so the verified release driver controls its first start."
   }
+}
+run "staging_idle_services_sleep_and_wake_on_request" {
+  command = plan
+  variables {
+    api_image          = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    worker_image       = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    start_services     = true
+    idle_scale_to_zero = true
+  }
+  assert {
+    condition = (
+      length(aws_appautoscaling_target.idle) == 2 &&
+      alltrue([for target in aws_appautoscaling_target.idle : target.min_capacity == 0 && target.max_capacity == 1])
+    )
+    error_message = "Idle staging services must be able to scale between zero and one task."
+  }
+  assert {
+    condition = (
+      aws_cloudwatch_metric_alarm.sleep[0].evaluation_periods == 6 &&
+      aws_cloudwatch_metric_alarm.sleep[0].treat_missing_data == "breaching" &&
+      aws_cloudwatch_metric_alarm.wake[0].evaluation_periods == 1
+    )
+    error_message = "Staging must sleep only after 30 quiet minutes and wake on the next request."
+  }
+  assert {
+    condition = alltrue([
+      for alarm in [aws_cloudwatch_metric_alarm.wake[0], aws_cloudwatch_metric_alarm.sleep[0]] :
+      contains([for query in alarm.metric_query : query.id], "unserved")
+    ])
+    error_message = "Requests the load balancer answers with 503 while no task runs must wake staging and keep it awake."
+  }
+}
+run "staging_load_balancer_access_logs" {
+  command = plan
+  variables {
+    enable_lb_access_logs = true
+  }
+  assert {
+    condition = (
+      length(aws_s3_bucket.lb_logs) == 1 &&
+      one(aws_lb.api.access_logs).enabled &&
+      one(aws_lb.api.access_logs).prefix == "api" &&
+      one(one(aws_s3_bucket_lifecycle_configuration.lb_logs[0].rule).expiration).days == 7
+    )
+    error_message = "Staging must record load-balancer access logs to a private bucket that expires them after 7 days."
+  }
+}
+run "idle_scaling_is_off_by_default" {
+  command = plan
+  variables {
+    api_image = "123456789012.dkr.ecr.eu-central-1.amazonaws.com/buddy-staging/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+  assert {
+    condition     = length(aws_appautoscaling_target.idle) == 0 && length(aws_cloudwatch_metric_alarm.sleep) == 0
+    error_message = "Idle scaling must only exist where it is explicitly enabled."
+  }
+}
+run "production_rejects_idle_scaling" {
+  command = plan
+  variables {
+    environment        = "production"
+    api_domain         = "api.example.com"
+    idle_scale_to_zero = true
+  }
+  expect_failures = [var.idle_scale_to_zero]
 }
 run "reject_unknown_text_targeting" {
   command = plan

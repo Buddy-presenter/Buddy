@@ -31,3 +31,30 @@ variable "enable_presentation_agent" {
     error_message = "Presentation agent requires enable_semantic_candidates for the API-only key."
   }
 }
+
+variable "enable_jev_decisions" {
+  type        = bool
+  default     = false
+  description = "Inject an operator-populated TypeSafe Jev key so the API decides with Jev first and Cohere when unsure. Jev is served from the US."
+  validation {
+    condition     = !var.enable_jev_decisions || var.enable_presentation_agent
+    error_message = "Jev decisions require enable_presentation_agent."
+  }
+}
+
+resource "aws_secretsmanager_secret" "jev" {
+  count                   = var.enable_jev_decisions ? 1 : 0
+  name                    = "${local.name}/agent/jev"
+  kms_key_id              = aws_kms_key.data.arn
+  recovery_window_in_days = 7
+}
+
+resource "aws_iam_role_policy" "jev_secret" {
+  count = var.enable_jev_decisions ? 1 : 0
+  role  = aws_iam_role.execution["api"].id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [
+    { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = aws_secretsmanager_secret.jev[0].arn },
+    { Effect = "Allow", Action = ["kms:Decrypt"], Resource = aws_kms_key.data.arn,
+    Condition = { StringEquals = { "kms:ViaService" = "secretsmanager.${var.region}.amazonaws.com" } } }
+  ] })
+}

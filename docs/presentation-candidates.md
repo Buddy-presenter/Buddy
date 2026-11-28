@@ -15,11 +15,18 @@ semantic service never silently downgrades after provider failure.
 
 Call `CandidateService.prepare(access, session)` off the GUI thread before live
 queries, or POST `/api/v1/sessions/{id}/candidates/prepare` with the bearer header.
-Preparation embeds available slide summaries and currently usable action purposes
-with `embed-v5.0-pro`, saving normalized 512-dimensional vectors in the database.
+Preparation embeds available slide summaries and currently usable action descriptions
+with `embed-v5.0-pro`, saving normalized 512-dimensional vectors in the database. An
+action description includes its purpose, action type, up to 400 characters of its slide
+summary, and exact text inside the target when available. This gives visual actions the
+same slide-topic context that the selector sees, while preserving text-target grounding.
 The index binds analysis, deck, owner, model space and document fingerprint. Repeated
-preparation of unchanged content makes no model calls. Changes in summaries or
-action eligibility require preparation again. Stale vectors cannot enable actions.
+preparation of unchanged content makes no model calls. Changes in summaries, action
+eligibility, or the retrieval-description format require preparation again. Stale vectors
+cannot enable actions. The richer action description changes the document fingerprint,
+so each existing analysis is re-embedded once when preparation next runs. The existing
+resolver response version remains v4 for compatibility with already-installed desktop
+clients; no API protocol or database schema changes are needed.
 
 Live queries use `embed-v5.0-fast` with two independent retrieval views batched in
 one HTTP call: the coherent recent passage and the newest completed segment. Identical
@@ -27,11 +34,15 @@ inputs are embedded once. Each input is bounded to 4096 characters. The passage 
 references across sentences; the newest view prevents an earlier topic from occupying
 the entire shortlist after a topic change. These query vectors are not averaged.
 
-Version 4 shares the existing eight-candidate budget between both views. Current slide
-and no change occupy two slots. With no usable region documents, the remaining six slots
-allow up to three non-current destinations per view. When usable region documents exist,
-two slots remain reserved for region candidates, leaving two slide destinations per view.
-This avoids discarding a third contextual hit merely to reserve unavailable actions.
+The existing eight-candidate budget remains unchanged between both views. Current slide
+and no change occupy two slots. With no usable current-slide region documents, the remaining
+six slots allow up to three non-current destinations per view. When current-slide region
+documents have positive retrieval evidence, three slots remain reserved for region candidates
+and three slots remain for other slide destinations.
+Only actions on the current slide can be included in those slots because off-screen region
+actions cannot execute before navigation. This avoids spending Jev's bounded options on
+actions that the option builder would discard. Off-screen actions do not reserve candidate
+slots.
 Identical views use one ranking. It fills remaining slide slots using reciprocal-rank fusion (sum of 1 / one-based document rank for
 positive-cosine evidence). Current slide and no change remain present. Region eligibility
 is unchanged. The shortlist expresses competing evidence, not a final interpretation of
@@ -41,9 +52,9 @@ model is used. Latest utterance still drives whole-utterance navigation independ
 Desktop callers send as many contiguous completed segments as fit the 4096-character
 budget within the existing 30-second memory window; there is no four-segment cutoff,
 post-final 200 ms delay or pause-triggered reset. The server bounds older clients' text,
-avoiding a partial leading word when whitespace permits. Document vectors/model space
-are unchanged, so prepared presentations do not require reindexing. Two query inputs
-increase encoded text/token usage, but consume one attempted API call in Buddy's ledger.
+avoiding a partial leading word when whitespace permits. The embedding model and vector
+dimensions are unchanged. The enriched document text changes the index fingerprint and
+requires one-time re-preparation; live query inputs and provider-call counts are unchanged.
 
 Document indexing uses `search_document`; queries use `search_query`.
 Positive-cosine matches form a ranked shortlist of at
@@ -168,8 +179,14 @@ GUI thread. The caller must recheck the live session/version/epoch against the r
 before using it; a frozen snapshot or returned candidate cannot authorize an action.
 The current local slide is sent with the request so automatic moves do not depend on
 round-trip persistence of the session's recovery position.
-This service is the callable boundary for #20; Present does not yet run an autonomous
-agent or make a provider call for each partial transcript.
+This service is the callable boundary for #20. Present's agent loop (#20/#21) uses it
+for live suggestions; see [speech-triggered actions](speech-actions.md) for how speech
+selects and runs verified saved actions (#202). Action candidates match the spoken
+words against both the action's purpose and the slide text it targets. That text comes
+from the action itself for PowerPoint highlights, from the analysis grounding record for
+PDF actions, and from the saved extraction's shape text for PowerPoint zooms, which frame
+a whole shape. The same text appears to the agent as "Shows: …" on each option. Visually
+grounded PDF regions (charts, images) have no quoted text and keep their purpose alone.
 
 The service refuses partial latest segments, but completed input is immediately eligible.
 Freshness checks run before and after network access. Supply `current_context` to detect

@@ -20,6 +20,7 @@ from buddy_api.persistence.database import Database
 from buddy_api.persistence.models import (
     ActionCheck,
     ActionValidation,
+    AnalysisCorrection,
     AnalysisSlide,
     AnalysisVersion,
     Deck,
@@ -436,6 +437,7 @@ class UploadService:
                 (SlideAction, SlideAction.deck_id == identifier),
                 (AnalysisSlide, AnalysisSlide.deck_id == identifier),
                 (LegacyAnalysisPayload, LegacyAnalysisPayload.analysis_id.in_(analysis_ids)),
+                (AnalysisCorrection, AnalysisCorrection.deck_id == identifier),
                 (AnalysisVersion, AnalysisVersion.deck_id == identifier),
                 (JobOutbox, JobOutbox.job_id.in_(job_ids)),
                 (ProcessingJob, ProcessingJob.deck_id == identifier),

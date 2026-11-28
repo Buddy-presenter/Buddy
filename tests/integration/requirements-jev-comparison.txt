@@ -1,0 +1,2 @@
+# Optional synthetic PDF fixture generator; not required by the application.
+reportlab==5.1.2

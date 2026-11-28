@@ -169,23 +169,35 @@ def test_cancel_between_chunks_stops_sending(upload_http, tmp_path):
         service.upload(source(tmp_path), uuid4())
 
 
+@pytest.mark.parametrize("identity_expired", [False, True])
 def test_navigation_does_not_hide_upload_session_expiry(
-    upload_http, desktop_window, monkeypatch, qtbot, tmp_path
+    upload_http, desktop_window, monkeypatch, qtbot, tmp_path, identity_expired
 ):
+    from buddy_identity.config import SessionExpired
+
     monkeypatch.setattr(LibraryService, "list", lambda *a, **kw: LibraryPage((), 0, 1, 20))
     window = desktop_window(f"http://127.0.0.1:{upload_http.server_port}", request_timeout=5)
     library = signed_in(window)
     qtbot.waitUntil(lambda: not library.runner.busy)
+    window.account.account_id = "same-account"
+
+    def verify_account():
+        if identity_expired:
+            raise SessionExpired("Account session expired.")
+        return "same-account"
+
+    window.account.session.account = verify_account
     upload_http.code = 401
     upload_http.reserve_release.clear()
     library.start_upload(source(tmp_path))
     qtbot.waitUntil(upload_http.reserve_entered.is_set)
     window.navigation.setCurrentRow(0)
     upload_http.reserve_release.set()
-    qtbot.waitUntil(lambda: not library.runner.busy)
-    assert window.account.session.tokens is None
+    qtbot.waitUntil(lambda: not library.runner.busy and not window.account.runner.busy)
+    assert (window.account.session.tokens is None) == identity_expired
     assert not library.upload_panel.isVisible()
-    assert not library.upload_keys
+    if identity_expired:
+        assert not library.upload_keys
 
 
 def test_upload_native_layout_and_keyboard(

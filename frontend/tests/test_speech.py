@@ -234,3 +234,46 @@ def test_malformed_server_diagnostic_reference_is_omitted(controller):
         "The speech service encountered an internal error. "
         "Stop and restart the microphone to retry."
     )
+
+
+def test_every_connection_uses_a_current_token(qapp, monkeypatch):
+    # #230: speech reconnects can happen long after the microphone started.
+    from buddy_desktop import speech
+    from buddy_desktop.config import AppConfig
+
+    opened = []
+    monkeypatch.setattr(
+        speech.QWebSocket,
+        "open",
+        lambda self, request: opened.append(request.rawHeader("Authorization").data().decode()),
+    )
+    tokens = iter(["first-token", "refreshed-token"])
+    control = SpeechController()
+    try:
+        control.start(
+            AppConfig("http://127.0.0.1:9"), lambda: next(tokens), str(uuid4()), 16000, "en-US"
+        )
+        control._connect()
+        assert opened == ["Bearer first-token", "Bearer refreshed-token"]
+    finally:
+        control.stop()
+
+
+def test_expired_sign_in_stops_speech_without_retrying(qapp, monkeypatch):
+    from buddy_desktop import speech
+    from buddy_desktop.config import AppConfig
+    from buddy_desktop.library_service import LibraryAccessExpired
+
+    opened = []
+    monkeypatch.setattr(speech.QWebSocket, "open", lambda self, request: opened.append(request))
+
+    def expired() -> str:
+        raise LibraryAccessExpired("Buddy sign-in expired. Please sign in again.")
+
+    control = SpeechController()
+    statuses = []
+    control.status_changed.connect(statuses.append)
+    control.start(AppConfig("http://127.0.0.1:9"), expired, str(uuid4()), 16000, "en-US")
+    assert opened == []
+    assert not control._active and not control._retry.isActive()
+    assert "Sign in again" in statuses[-1]

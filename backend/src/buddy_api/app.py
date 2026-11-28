@@ -1,6 +1,7 @@
 """Factory for a small real service; no private domain workflows in this increment."""
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, suppress
 from typing import Any
@@ -11,7 +12,13 @@ from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 
 from buddy_api import __version__
-from buddy_api.agent_provider import CohereDecisionProvider
+from buddy_api.agent_provider import (
+    AgentSettings,
+    CohereDecisionProvider,
+    ConfidentFirstProvider,
+    DecisionProvider,
+    JevDecisionProvider,
+)
 from buddy_api.analysis.api import analysis_router
 from buddy_api.auth import Authentication, auth_router
 from buddy_api.authorization import private_router
@@ -31,9 +38,12 @@ from buddy_api.contracts import (
 )
 from buddy_api.embeddings import CohereEmbeddings, EmbeddingFailure
 from buddy_api.handoff import HandoffLimitMiddleware, handoff_router
+from buddy_api.information_search import InformationSearchService, information_search_router
 from buddy_api.library import library_router
 from buddy_api.middleware import RequestContextMiddleware
 from buddy_api.persistence.database import Database, DatabaseProbe
+from buddy_api.preflight.api import preflight_router
+from buddy_api.preflight.service import PreflightService
 from buddy_api.presentation_agent import AgentConflict, AgentRuntime, agent_router
 from buddy_api.presentation_candidates import CandidateAnalyses, candidate_router
 from buddy_api.presentation_sessions import session_router
@@ -47,6 +57,7 @@ from buddy_api.session_events import (
     cleanup_events,
     session_event_router,
 )
+from buddy_api.slide_images import SlideImages, slide_image_router
 from buddy_api.speech import DeepgramProvider, speech_router
 from buddy_api.uploads.contracts import UploadError
 from buddy_api.uploads.router import UploadMetadataLimitMiddleware, upload_router
@@ -54,6 +65,7 @@ from buddy_api.uploads.service import UploadService
 from buddy_api.uploads.storage import SourceStorage, StorageProbe
 from buddy_api.validation.api import validation_router
 from buddy_api.validation.service import ValidationService
+from buddy_api.validation.visual_qa import VisualQAService
 
 ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     400: {"model": ErrorResponse, "description": "Malformed or disallowed request."},
@@ -68,6 +80,49 @@ ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
 def request_id(request: Request) -> str:
     identifier: str = request.state.request_id
     return identifier
+
+
+logger = logging.getLogger(__name__)
+
+
+def decision_providers(
+    settings: AgentSettings, semantic: SemanticCandidates | None
+) -> tuple[DecisionProvider, dict[str, DecisionProvider]]:
+    """The server's default decider and the ones a presenter may pick (#243, #245).
+
+    Jev decides by default; Cohere stays selectable. Without a Jev key only Cohere exists,
+    so every choice decides with Cohere.
+    """
+    if settings.candidate_mode == "direct_current":
+        assert settings.jev_api_key is not None
+        jev_only = JevDecisionProvider(settings.jev_api_key, threshold=settings.jev_confidence)
+        return jev_only, {"jev": jev_only}
+    cohere = CohereDecisionProvider(
+        settings, client=semantic.provider.client if semantic is not None else None
+    )
+    if settings.jev_api_key is None:
+        if settings.decision_provider != "cohere":
+            logger.warning("presentation_agent event=jev_unavailable decided_by=cohere")
+        return cohere, {"cohere": cohere}
+    jev = JevDecisionProvider(
+        settings.jev_api_key,
+        threshold=settings.jev_confidence,
+        presenting_floor=settings.jev_presenting_floor,
+    )
+    default: DecisionProvider = (
+        cohere
+        if settings.decision_provider == "cohere"
+        else jev
+        if settings.decision_provider == "jev"
+        else ConfidentFirstProvider(jev, cohere, settings.jev_confidence)
+    )
+    return default, {"jev": jev, "cohere": cohere}
+
+
+def decision_provider(
+    settings: AgentSettings, semantic: SemanticCandidates | None
+) -> DecisionProvider:
+    return decision_providers(settings, semantic)[0]
 
 
 def create_app(
@@ -98,6 +153,23 @@ def create_app(
     validator = (
         ValidationService(uploads, config.validator) if uploads and config.validator else None
     )
+    visual_qa = (
+        VisualQAService(uploads, validator, config.worker.region)
+        if uploads is not None and validator is not None and config.worker is not None
+        else None
+    )
+    # PDF checks run on the server (#135); PowerPoint checks are captured on the
+    # owner's desktop and judged here with the API's own Bedrock access.
+    preflight = (
+        PreflightService(
+            uploads,
+            config.preflight,
+            visual_qa=visual_qa,
+            judge_region=config.worker.region if config.worker else None,
+        )
+        if uploads
+        else None
+    )
     started = False
     queue = Queue(config.worker) if config.worker and uploads else None
     processor = (
@@ -122,12 +194,17 @@ def create_app(
                 await asyncio.sleep(30)
 
         validation_cleanup = asyncio.create_task(reconcile_validation()) if validator else None
+        preflight_worker = asyncio.create_task(preflight.run()) if preflight else None
         dispatch = asyncio.create_task(processor.dispatch()) if processor else None
         event_cleanup = asyncio.create_task(cleanup_events(database)) if database else None
         try:
             yield
         finally:
             started = False
+            if preflight_worker:
+                preflight_worker.cancel()
+                with suppress(asyncio.CancelledError):
+                    await preflight_worker
             if event_cleanup:
                 event_cleanup.cancel()
                 with suppress(asyncio.CancelledError):
@@ -153,7 +230,7 @@ def create_app(
             if semantic_provider is not None:
                 await semantic_provider.aclose()
             if _app.state.presentation_agent is not None:
-                await _app.state.presentation_agent.provider.aclose()
+                await _app.state.presentation_agent.aclose()
             if database is not None:
                 await database.close()
 
@@ -180,24 +257,35 @@ def create_app(
     app.state.speech_provider = DeepgramProvider(config.speech) if config.speech else None
     app.state.semantic_candidates = (
         SemanticCandidates(database, CohereEmbeddings(config.embeddings))
-        if database is not None and config.embeddings is not None
+        if database is not None
+        and config.embeddings is not None
+        and not (config.agent and config.agent.candidate_mode == "direct_current")
         else None
     )
     app.state.uploads = uploads
+    app.state.slide_images = SlideImages()
     app.state.presentation_agent = (
-        AgentRuntime(
-            config.agent,
-            CohereDecisionProvider(
-                config.agent,
-                client=app.state.semantic_candidates.provider.client
-                if app.state.semantic_candidates is not None
-                else None,
-            ),
-        )
+        AgentRuntime(config.agent, *decision_providers(config.agent, app.state.semantic_candidates))
         if config.agent
         else None
     )
+
+    async def reserve_information_search_call() -> None:
+        if database is not None and app.state.presentation_agent is not None:
+            await app.state.presentation_agent.reserve(database)
+
+    app.state.information_search = (
+        InformationSearchService(
+            config.agent,
+            app.state.presentation_agent.provider.client,
+            reserve_model_call=reserve_information_search_call,
+        )
+        if config.agent is not None and app.state.presentation_agent is not None
+        else None
+    )
     app.state.validator = validator
+    app.state.preflight = preflight
+    app.state.visual_qa = visual_qa
     app.state.worker_settings = config.worker
     app.include_router(auth_router(config.identity))
     app.include_router(session_event_router())
@@ -209,10 +297,13 @@ def create_app(
     app.include_router(session_router())
     app.include_router(candidate_router())
     app.include_router(agent_router())
+    app.include_router(slide_image_router())
     app.include_router(speech_router(config.allowed_hosts))
     app.include_router(upload_router())
     app.include_router(validation_router())
+    app.include_router(preflight_router())
     app.include_router(processing_router())
+    app.include_router(information_search_router())
 
     @app.exception_handler(UploadError)
     async def upload_error(request: Request, exc: UploadError) -> JSONResponse:

@@ -84,6 +84,12 @@ slow storage reads do not occupy the API connection pool.
 
 ## Real Office validation boundary
 
+> **Since #53, processing no longer executes PowerPoint actions.** Each action is
+> executed once and visually verified by the owner's desktop check (**Check on this
+> PC** in Review), with the server judging the screenshots. See
+> [action checks and live gating](preflight-publication.md). The validation worker
+> below remains for explicit validation requests.
+
 The backend invokes the separately installed desktop package's
 `buddy_desktop.powerpoint_validation_worker` using the existing isolated process runner.
 It receives only the pinned temporary source and a bounded JSON request; database,

@@ -38,8 +38,15 @@ CONFIG = IdentityConfig(
 )
 
 
-@pytest.mark.parametrize("publication", ["partial", "awaiting_validation"])
-def test_partial_pdf_session_analysis_requires_current_complete_source_map(publication):
+@pytest.mark.parametrize(
+    ("publication", "job_status"),
+    [
+        ("partial", "analysis_partial"),
+        ("awaiting_validation", "analysis_partial"),
+        ("awaiting_validation", "analysis_ready"),
+    ],
+)
+def test_partial_pdf_session_analysis_requires_current_complete_source_map(publication, job_status):
     deck_id, owner_id, job_id, analysis_id = uuid4(), uuid4(), uuid4(), uuid4()
     deck = SimpleNamespace(
         id=deck_id,
@@ -50,7 +57,7 @@ def test_partial_pdf_session_analysis_requires_current_complete_source_map(publi
         source_slide_count=2,
         source_format="pdf",
     )
-    job = SimpleNamespace(status="analysis_partial", source_revision="revision-1", id=job_id)
+    job = SimpleNamespace(status=job_status, source_revision="revision-1", id=job_id)
     slide_ids = ["slide-a", "slide-b"]
     analysis = SimpleNamespace(
         id=analysis_id,
@@ -431,6 +438,7 @@ def test_session_rejects_execution_only_pdf_action(ready_session_api):
                         owner_id=owner_id, result=execution
                     )
                     action_ids.append((slide.slide_id, action.action.instance_id))
+            # Processing is complete, but execution proof alone never enables live use (#53).
             assert result.publication == "published"
             assert all(not action.usable for slide in result.slides for action in slide.actions)
             return result.id, action_ids[0]

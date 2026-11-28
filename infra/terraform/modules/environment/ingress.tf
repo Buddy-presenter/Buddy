@@ -27,6 +27,15 @@ resource "aws_lb" "api" {
   drop_invalid_header_fields = true
   desync_mitigation_mode     = "strictest"
   idle_timeout               = 120
+  dynamic "access_logs" {
+    for_each = var.enable_lb_access_logs ? [1] : []
+    content {
+      bucket  = aws_s3_bucket.lb_logs[0].id
+      prefix  = "api"
+      enabled = true
+    }
+  }
+  depends_on = [aws_s3_bucket_policy.lb_logs]
 }
 resource "aws_lb_target_group" "api" {
   name                 = local.name

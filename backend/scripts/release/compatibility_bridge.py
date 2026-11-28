@@ -26,6 +26,8 @@ CANDIDATE_INDEX_HEAD = "0019_candidate_indexes"
 PDF_CHECKPOINT_HEAD = "0020_pdf_checkpoints"
 AGENT_QUOTA_HEAD = "0021_agent_quotas"
 AGENT_REQUEST_WINDOW_HEAD = "0022_agent_request_window"
+ANALYSIS_CORRECTIONS_HEAD = "0023_analysis_corrections"
+PREFLIGHT_PUBLICATION_HEAD = "0024_preflight_publication"
 
 
 async def check_ready(self):
@@ -55,6 +57,8 @@ async def check_ready(self):
                 {PDF_CHECKPOINT_HEAD},
                 {AGENT_QUOTA_HEAD},
                 {AGENT_REQUEST_WINDOW_HEAD},
+                {ANALYSIS_CORRECTIONS_HEAD},
+                {PREFLIGHT_PUBLICATION_HEAD},
             ):
                 raise PersistenceUnavailable("Database is outside the tested compatibility window.")
             for table in Base.metadata.sorted_tables:

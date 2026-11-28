@@ -17,8 +17,9 @@ this does not change the agent endpoint's proposal-only contract.
 
 Apply migrations through `0022_agent_request_window`. Set backend-only
 `BUDDY_COHERE_API_KEY` and `BUDDY_AGENT_ENABLED=true`.
-`BUDDY_AGENT_REQUESTS_PER_MINUTE` defaults to the trial model allowance of 20;
-increase it only to match the credential's actual plan (maximum 500).
+`BUDDY_AGENT_REQUESTS_PER_MINUTE` defaults to 200 (maximum 500), shared by all presenters on
+one credential. Jev decides on partial and finished sentences, so normal speech exceeds the
+earlier default of 20: on staging, 12% of decisions were refused as `paced` with it.
 There is no default Buddy monthly decision cap. An optional positive
 `BUDDY_AGENT_MONTHLY_LIMIT` sets an operator-selected monthly budget; unset it to disable
 that application budget. Usage is still counted and provider quotas still apply.
@@ -53,8 +54,11 @@ candidates anchored to the visible slide even when the server's saved recovery p
 is behind. The API still checks ownership, active-session status, analysis/source identity
 and that the local slide belongs to that analysis. The desktop checks again that the local
 slide has not changed while a result was in flight. Older clients without a local slide ID
-retain the state-version check. Manual position is saved in the background for recovery;
-automatic navigation does not wait for or write a server position update.
+retain the state-version check. Manual PDF position is saved in the background for active
+session versioning, but opening a PDF starts on its first locally loaded slide and does
+not restore a position from an earlier session. Active-session conflict snapshots still
+use the existing conflict handling. Automatic navigation does not wait for or write a
+server position update.
 Local PowerPoint without a saved API session is not eligible for this runtime. A
 disconnected, changed or unverified Office slideshow stops transcription and discards
 the saved-session binding. The live slide is authoritative when resuming a PowerPoint
@@ -81,6 +85,42 @@ This issue does not apply cloud infrastructure or distribute credentials. Becaus
 and workers use strict schema readiness, use the existing compatibility-bridge and
 paused-worker rollout for the additive table. Never downgrade the live database as an
 automatic rollback step. The table contains credential hashes/counts/timestamps only.
+
+## Buddy Mini
+
+On a synced saved PDF or PowerPoint session, click **Enter Buddy Mini** in Present.
+PDF opens its slideshow if needed. Buddy floats in its own window while the main
+workspace is hidden. With two displays, Mini stays off the slideshow display.
+With one display, the overlay can be visible in whole-screen shares. In Settings >
+Buddy Mini, choose the fixed screen corner or enable automatic entry when opening
+a saved deck from the library. Mini starts once the saved session is connected.
+
+Hover or click the mascot to reveal icon buttons for microphone, live suggestions
+and automatic moves together, undo,
+Settings, and Open Buddy. Click the mascot or focus it and press Space, then Tab
+through the controls. Open Buddy or Escape restores the workspace. Closing Mini,
+opening Settings, ending the show, or losing the saved session stops capture.
+For PDFs, Escape in either the audience window or Mini, Open Buddy, and closing
+Mini also close the audience window and return the slide to Present. Capture and
+live suggestions stop; enter Mini again to resume presenting.
+Mini remains visible in standby when an Office slideshow or session disconnects. Its
+voice controls become available again when a verified show is connected.
+On Windows, sleep returns Buddy to the main workspace and stops capture and
+automatic moves. Use **Enter Buddy Mini** to restart the overlay after waking.
+Listening ripples appear only to either side. Reduce motion keeps the mascot and
+listening marks still.
+
+Mini is only a visual control: capture, recognition, context and decisions are the same as
+with the main window (#255). It shows no live transcript. Because the main window is hidden,
+Windows may power-throttle Buddy, so Buddy opts out of power throttling while the microphone
+is on, and up to about two seconds of audio (was 0.4 s) can wait for the GUI thread before the
+oldest is dropped. The desktop log records `presentation_mini event=entered|left`,
+`presentation_speech event=audio_gap dropped_packets_total=…`, and
+`presentation_speech event=recognition_restart reason=…`, so lost speech can be traced.
+
+Enable **Buddy Mini completion sound** in Present before entering Mini to hear a
+short chime after completed automatic moves. Listening and the speech context continue
+during the chime, exactly as without Mini (#255).
 
 ## HTTP and tool contract
 
@@ -144,6 +184,21 @@ This prevents a saved zoom or highlight on an older slide from being treated as 
 view after automatic navigation. Older clients without these fields retain the persisted
 focus behavior; a changed local slide defaults to full-slide focus.
 
+### Temporary decision diagnostics
+
+For a controlled evaluation only, set `BUDDY_AGENT_DIAGNOSTICS=true` and
+`BUDDY_AGENT_DIAGNOSTICS_SESSION_ID=<session UUID>` on the API. Both values are required
+together; traces are emitted only for that exact session. The resulting
+no-store API response includes the utterance/segments, retrieved candidates and scores, the
+exact option descriptions and target mapping, embedding query views with per-document cosine
+scores and per-slide ranks, the shortlist/fusion evidence, the provider request and structured
+response (including Jev's per-option/action and `presenting_now` probabilities), and Buddy's
+validated proposal. The normal server log remains content-free, and the desktop strips the
+diagnostics before the proposal reaches the UI. Capture the response in the authorized test
+harness, keep it in the private local evaluation artifact, and turn both settings off when
+the test ends. This is sensitive speech and presentation content; do not commit or upload
+the captured artifact. With diagnostics disabled, the response contract is unchanged.
+
 ## Provider, scheduling and limits
 
 `DecisionProvider` separates the selection contract from its replaceable adapter.
@@ -159,97 +214,105 @@ prompt injection resistance is not a substitute for the deterministic allowlist/
 
 The supported Cohere schema subset omits numeric/array ranges; Buddy still validates
 confidence in [0,1], finite values and at most eight unique valid evidence indexes.
-Responses are bounded to 64 KiB. Chat has a three-second deadline, total backend decision
-work 4.5 seconds, and native HTTP six seconds; stale capture still wins over a slow
+Responses are bounded to 64 KiB. Chat has a 3.8-second deadline, total backend decision
+work five seconds, and native HTTP six seconds; stale capture still wins over a slow
 otherwise valid result. Embeddings retain their own bounded adapter.
 
-The Qt scheduler runs off the GUI thread, with one in-flight operation, newest-only
-coalescing, no queue of old transcripts and no fixed post-final wait. The server admits
-model work immediately while its rolling 60-second provider window has capacity,
-rather than spacing requests 3.2 seconds apart. Unspent admission deferrals
-follow the server wait for that revision only. New completed speech can be checked
-immediately, so a navigation command does not inherit an earlier model admission wait.
-New stable interim checkpoints and completed revisions can trigger requests; only one
-operation is in flight and newer evidence is coalesced rather than queued. The same
-revision is not automatically retried after a provider failure. A `paced` response
-includes bounded `retry_after_ms`: since no provider attempt was spent, the latest
-still-fresh revision can be deferred at most twice without entering a FIFO. Expired or
-changed input is discarded rather than retried. A pending result survives ordinary
-continuation only while the submitted stable prefix remains unchanged; a corrected prefix,
-explicit correction/negation, or session/view change supersedes it. Preparation has its existing 125-second client bound and
-stays off the GUI thread; shutdown waits for bounded work after the event loop exits.
+### Decision provider: Jev alone (#243, #252)
 
-An atomic PostgreSQL row per API-key hash shares the rolling provider window and any
-explicit operator budget across API replicas/restarts. The DB clock sets UTC month
-boundaries and window expiration; at most 500 timestamps are retained. Lowering the rate
-does not forget prior reservations. A real Chat 429 causes a shared 60-second cooldown,
-including across restarts; no automatic provider retry is issued. External uses of the
-key and provider-specific enforcement windows remain outside Buddy's accounting, so
-local admission cannot guarantee provider acceptance. The provider's limits win.
-Unambiguous whole-utterance next/previous commands reuse the validated deterministic path,
-including no action at deck boundaries, without spending Chat/embedding allowance.
-Other admission reserves before embeddings too, so a caller beyond the model allowance
-cannot spend query calls. Failed admitted attempts count conservatively, even if Chat is never
-reached. At most one decision per owner and sixteen owners are in flight per process.
-The former default 100-decision and 750-embedding monthly caps are removed. This does
-not remove Cohere's trial monthly allowance, token/input limits or rate enforcement.
-The two-second per-owner embedding interval is also removed; in-flight concurrency
-and identical-input caching remain. These changes remove scheduling delays, not the
-network/model processing time of a single decision.
+Jev decides every slide action; Cohere takes no part in slide decisions. When
+`BUDDY_JEV_API_KEY` is set (Terraform `enable_jev_decisions` and the secret
+`<env>/agent/jev`), the candidate mode defaults to `direct_current`: Jev receives one option
+per other slide, every eligible zoom/highlight action on the current slide, do nothing, and
+reset when the view is focused, built from the saved deck analysis. There is no Cohere
+embedding index, no per-sentence Cohere shortlist and no retrieval-based topic shortcut;
+deck preparation returns ready at once. Explicit navigation ("next slide", "slide 5") keeps
+its deterministic fast path. Jev accepts at most 255 choices, five of which are reserved for
+the web-search and search-panel options, so a deck whose complete menu would exceed it
+fails closed with `candidates_unavailable` and is never silently shortened.
 
-Migration 0022 is additive and preserves usage counts. Because the old row has no
-complete request window, existing credentials are conservatively blocked until 60 seconds
-after their last recorded call during upgrade; inactive keys are unaffected. Use the
-existing compatibility-bridge/worker rollout for the new schema head, not a live schema
-downgrade. No cloud deployment is performed by this change.
+The desktop no longer offers a decider setting. Older clients that still send
+`decision_model: "cohere"` are decided by Jev. Without a Jev key the server falls back to the
+earlier Cohere shortlist and Cohere decider (`BUDDY_AGENT_CANDIDATE_MODE=semantic`), which
+is not used on staging or production. Cohere is still used by web search to write search words
+and short answers ([voice web search](voice-web-search.md)).
 
-The deterministic navigation path accepts complete next/previous instructions and
-numbered destinations such as “go to slide 8”, “show me page twenty-one” and “take me to
-slide 125”. It supports every numbered destination within Buddy's 500-slide deck limit,
-using digits or English cardinal words. Numbered commands outside the deck or for the
-current slide safely propose no action; they never fall through to a potentially unrelated
-semantic match. Quoted, negated, conditional, question and embedded-command forms are not
-treated as navigation. Exact navigation commands bypass embedding and chat provider calls.
-Other natural phrasing and content-driven matching still use semantic retrieval and the
-model. The model receives the current page number and deck size and is instructed to
-prioritize the latest navigation intent over old topics.
+Measured on 1,020 labelled sentences (decks of 8–120 slides) against the earlier Cohere
+shortlist plus Jev: 85.0% against 65.7% correct on the same 220 sentences, 76.5% against 48.8%
+on contextual sentences, about 244 ms against 480 ms per decision, and 0 errors in 1,020
+decisions; accuracy held from 40 to 120 slides. See
+[the Jev-only decision guide](jev-direct-current-prototype.md).
 
-## Privacy and decision traces
+**Reset and future plans (#257).** While a region is zoomed or highlighted, reset has its own
+option text (zoom back out, remove the highlight, show the whole slide) and Jev's state names
+what is on screen (`current_view`, for example "zoomed into Show the revenue chart"). The
+presenting-now question treats plans, goals and decided future events stated as fact ("we're
+launching the new website in January") as presenting, while conditionals and previews of later
+parts of the talk ("by the end we'll have covered...", "we'll get to that later") stay blocked.
+Measured with the real Jev:
 
-The standard Cohere API receives completed speech and selected slide summaries/purposes;
-audio still goes only to the configured speech provider. The requester's acceptance of
-standard API retention and training-enabled development applies here. This is not EU-only
-or zero-retention processing. Agent requests/results are not persisted as speech history. Scheduler dedupe keys contain
-segment ids/revision numbers, not transcript text; completed/failed in-flight snapshots
-are released, and disabling/shutdown clears pending snapshots.
-The existing five-minute speech journal is unchanged, as are its backup limitations.
+- reset requests: 16/16 correct (was 1/16);
+- future-plan sentences: 13/14 (was 1/14);
+- the 1,020-sentence set: unchanged at 892, with 7 false actions before and after.
 
-The `presentation_agent_decision` operational log contains only decision_id, request_id, finite tool,
-finite reason, decision_source, elapsed_ms, operation phase, a whitelisted dependency
-failure code and fixed model id. No transcripts, summaries, prompts, raw
-provider responses, evidence text, secret keys, action coordinates or exception messages
-are logged. Evidence indexes/confidence live in the no-store response, not ordinary logs.
-Failures return safe finite status/reason codes; they do not cause slide movement.
+**The slide on screen (#259).** With live suggestions on, the desktop uploads the current
+slide once per slide change to `PUT /api/v1/sessions/{id}/slide-image?slide_id=...`:
+- **Source:** the rendered PDF page, or PowerPoint's exported preview.
+- **Format:** a JPEG of at most 1280 px.
+- **Limits:** the server accepts only a still PNG or JPEG between 280 and 1568 px per side, up
+  to 1.5 MB, for the session's own owner.
+- **Storage:** the server keeps only the latest image per session, in memory for up to four
+  hours, never on disk.
 
-## Verification
+Jev receives it as an image asset (`TypeSafe-Danger-Zone-Images: true`) with every decision
+on that slide. Diagnostics never contain the image. Each zoom or highlight option also says
+where its item is on the slide ("top left"), from the saved region and slide size.
 
-See [presentation replay evaluation](presentation-replay.md) for deterministic corpus
-replay, candidate allowlist gates, captured execution scoring and recording permission.
-Synthetic contract gates are separate from real service/policy release evidence.
+Measured with the real Jev:
+- Visual references ("the red one", "the box on the far left", "the biggest number") went
+  from 18–20 to 84 of 85 correct.
+- Ordinary sentences were unchanged, with no new false actions.
+- The p50 decision time rose by about 25–35 ms, at about $0.0002 per decision.
 
-Component tests use real PostgreSQL/session state and a substituted provider boundary.
-They cover owner denial, no action, valid selection, authoritative region geometry,
-malformed/extra/tool/truncated output, finite confidence/evidence, stale state after
-provider work, deadlines, shared atomic pacing, restart/monthly budgets, native response
-validation, partials, newest-only coalescing and manual invalidation before GUI delivery.
-Paid/live checks are explicit and excluded from CI. Natural-language evaluation and
-latency samples are evidence for those cases, not a general accuracy or P95 guarantee.
+If the image is missing (upload failed, another server replica, a new slide not yet rendered),
+Jev decides from text as before. Slide images are sent to TypeSafe in the US, and TypeSafe
+labels image input not yet production-ready.
 
+**How Jev is asked.** Jev returns probabilities rather than text. One request sends the latest
+sentence, the earlier sentences and the current slide summary, and asks two typed questions:
 
-Provider references: [Command A](https://docs.cohere.com/docs/command-a),
-[structured output subset](https://docs.cohere.com/docs/structured-outputs), and
-[rate limits](https://docs.cohere.com/docs/rate-limits). During live integration,
-Command A+ intermittently returned prose/truncation despite JSON mode and disabled
-thinking, so the shipped adapter uses the established non-reasoning Command A model.
-Buddy rejected those earlier results; they were not successful abstention decisions.
-This change does not replace either Embed 5 model or rebuild document indexes.
+1. `action`, a choice. Each option is described in plain language, for example "Highlight this
+   item on the current slide: ... It shows: ...", "Go to the next slide: ..." or "Do nothing".
+2. `presenting_now`, a yes/no question: is the sentence presenting or requesting something now,
+   rather than recalling, hypothetical, quoted, a question, negated or a preview?
+
+**Unfinished sentences (#248).** When the desktop sends the stable start of a sentence that is
+still being spoken (`provisional`), Jev's state is marked `latest_sentence_status: unfinished`.
+The instructions also add one rule: act only if the words so far already clearly name, describe,
+state a value from or ask for one option. On 528 partial sentences from the evaluation set,
+wrong early actions fell from 26 to 9. Finished sentences are unchanged at 286/300.
+
+**When Buddy acts.** Buddy acts only when `presenting_now` is at least
+`BUDDY_JEV_PRESENTING_FLOOR` (default 0.4) and the chosen option has a probability of at least
+`BUDDY_JEV_CONFIDENCE` (default 0.5). Otherwise it does nothing:
+reason `stay`, or `uncertain` when the chosen option is below the bar. Jev has a 2-second
+deadline.
+
+**Historical evaluation.** The earlier `0.6` action-confidence and `0.2` presenting-now gates
+were tuned on a 300-case labelled set across an 8-slide deck, tuning on one half and checking
+on the other:
+
+- Production code: 285/300 correct (95%), 139/150 on the held-out half, 7 false triggers.
+- About 250 ms average and 0.8 s worst case, with no errors.
+- For comparison: Jev with the Cohere prompt scored 85%. Cohere alone scored 64% on a 100-case
+  sample weighted towards hard cases, with 6 deadline misses.
+
+Those results do not validate the current defaults. A retrospective gate replay on captured
+provider responses for the 10-page sample PDF (synthetic transcript events; proposal-only)
+projected 140/206 intended actions and 7/39 false actions with the current `0.5`/`0.4` gates,
+compared with 139/206 and 16/39 using the earlier `0.6`/`0.2` gates. This is one deck and does
+not establish general accuracy or execution success; the revised current-slide candidate
+handoff still requires a fresh replay.
+
+**Data.** Jev is served from the US with zero data retention and no training. Enabling it sends
+recent speech and slide text to TypeSafe in the US.

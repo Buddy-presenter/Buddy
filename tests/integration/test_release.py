@@ -563,6 +563,78 @@ def test_healthy_deployment_is_auditable_and_explicit_rollback_works():
     assert ecs.waits.count("tasks_stopped") == 1  # rollback never downgrades the DB
 
 
+class Autoscaling:
+    """Registered idle scale-to-zero targets whose suspension the release toggles."""
+
+    def __init__(self, *resources, already_suspended=()):
+        self.state = {
+            resource: {
+                key: resource in already_suspended
+                for key in (
+                    "DynamicScalingInSuspended",
+                    "DynamicScalingOutSuspended",
+                    "ScheduledScalingSuspended",
+                )
+            }
+            for resource in resources
+        }
+        self.calls = []
+
+    def describe_scalable_targets(self, **kwargs):
+        assert kwargs["ServiceNamespace"] == "ecs"
+        return {
+            "ScalableTargets": [
+                {"ResourceId": resource, "SuspendedState": dict(self.state[resource])}
+                for resource in kwargs["ResourceIds"]
+                if resource in self.state
+            ]
+        }
+
+    def register_scalable_target(self, **kwargs):
+        self.calls.append((kwargs["ResourceId"], dict(kwargs["SuspendedState"])))
+        self.state[kwargs["ResourceId"]] = dict(kwargs["SuspendedState"])
+
+    def paused(self, resource):
+        return all(self.state[resource].values())
+
+
+def test_release_pauses_idle_scaling_during_promotion_and_restores_it():
+    ecs, s3 = Ecs(), S3()
+    scaling = Autoscaling("service/buddy-staging/api")
+    observed = []
+    update = ecs.update_service
+
+    def watched_update(**kwargs):
+        observed.append(scaling.paused("service/buddy-staging/api"))
+        return update(**kwargs)
+
+    ecs.update_service = watched_update
+    deployment = PreparedDeployment(CONFIG, ecs, s3, Sts(), lambda _: None, autoscaling=scaling)
+    assert deployment.deploy(SHA, IMAGE)["status"] == "healthy"
+    assert observed and all(observed)
+    assert not any(scaling.state["service/buddy-staging/api"].values())
+    assert [paused for _, paused in scaling.calls] == [
+        dict.fromkeys(scaling.state["service/buddy-staging/api"], True),
+        dict.fromkeys(scaling.state["service/buddy-staging/api"], False),
+    ]
+
+
+def test_failed_release_still_restores_idle_scaling_and_keeps_operator_pauses():
+    ecs, s3 = Ecs(migration_exit=1), S3()
+    scaling = Autoscaling(
+        "service/buddy-staging/api",
+        "service/buddy-staging/worker",
+        already_suspended=("service/buddy-staging/worker",),
+    )
+    deployment = PreparedDeployment(CONFIG, ecs, s3, Sts(), lambda _: None, autoscaling=scaling)
+    with pytest.raises(DeploymentError, match="Migration failed"):
+        deployment.deploy(SHA, IMAGE)
+    assert not any(scaling.state["service/buddy-staging/api"].values())
+    # A target an operator had already suspended is neither touched nor resumed.
+    assert scaling.paused("service/buddy-staging/worker")
+    assert all(resource.endswith("/api") for resource, _ in scaling.calls)
+
+
 def test_worker_promotion_updates_and_rolls_back_api_and_worker_together():
     ecs, s3 = Ecs(), S3()
     ecs.state["worker"] = {

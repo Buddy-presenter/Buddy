@@ -48,6 +48,136 @@
         "title": "AccountResponse",
         "type": "object"
       },
+      "ActionCorrectionOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "action_instance_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Action Instance Id",
+            "type": "string"
+          },
+          "action_state": {
+            "anyOf": [
+              {
+                "enum": [
+                  "candidate",
+                  "validated",
+                  "rejected",
+                  "needs-review"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action State"
+          },
+          "operation": {
+            "enum": [
+              "set_region",
+              "disable"
+            ],
+            "title": "Operation",
+            "type": "string"
+          },
+          "result_analysis_id": {
+            "format": "uuid",
+            "title": "Result Analysis Id",
+            "type": "string"
+          },
+          "result_version": {
+            "minimum": 2.0,
+            "title": "Result Version",
+            "type": "integer"
+          },
+          "source_analysis_id": {
+            "format": "uuid",
+            "title": "Source Analysis Id",
+            "type": "string"
+          },
+          "source_version": {
+            "minimum": 1.0,
+            "title": "Source Version",
+            "type": "integer"
+          },
+          "usable": {
+            "title": "Usable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "source_analysis_id",
+          "result_analysis_id",
+          "source_version",
+          "result_version",
+          "action_instance_id",
+          "operation",
+          "action_state",
+          "usable"
+        ],
+        "title": "ActionCorrectionOutcome",
+        "type": "object"
+      },
+      "ActionCorrectionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_action_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Expected Action Sha256",
+            "type": "string"
+          },
+          "expected_analysis_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Expected Analysis Sha256",
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "set_region",
+              "disable"
+            ],
+            "title": "Operation",
+            "type": "string"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Region"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "expected_analysis_sha256",
+          "expected_action_sha256",
+          "operation"
+        ],
+        "title": "ActionCorrectionRequest",
+        "type": "object"
+      },
+      "ActionCorrectionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ActionCorrectionOutcome"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "request_id"
+        ],
+        "title": "ActionCorrectionResponse",
+        "type": "object"
+      },
       "ActionGrounding": {
         "additionalProperties": false,
         "properties": {
@@ -176,6 +306,22 @@
             "title": "Input Sha256",
             "type": "string"
           },
+          "panel": {
+            "anyOf": [
+              {
+                "enum": [
+                  "close",
+                  "scroll_down",
+                  "scroll_up"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Panel"
+          },
           "protocol": {
             "const": "presentation-agent.v1",
             "default": "presentation-agent.v1",
@@ -197,6 +343,21 @@
               }
             ],
             "title": "Retry After Ms"
+          },
+          "search": {
+            "anyOf": [
+              {
+                "enum": [
+                  "web",
+                  "images"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Search"
           },
           "sequence": {
             "title": "Sequence",
@@ -1157,6 +1318,164 @@
         "pattern": "\\S",
         "type": "string"
       },
+      "InformationImage": {
+        "additionalProperties": false,
+        "description": "One web image: the panel downloads only the small thumbnail.",
+        "properties": {
+          "source": {
+            "maxLength": 120,
+            "title": "Source",
+            "type": "string"
+          },
+          "source_url": {
+            "maxLength": 2048,
+            "minLength": 9,
+            "title": "Source Url",
+            "type": "string"
+          },
+          "thumbnail": {
+            "maxLength": 2048,
+            "minLength": 9,
+            "title": "Thumbnail",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 180,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "thumbnail",
+          "source_url",
+          "source"
+        ],
+        "title": "InformationImage",
+        "type": "object"
+      },
+      "InformationSearchRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "context": {
+            "anyOf": [
+              {
+                "maxLength": 600,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context"
+          },
+          "mode": {
+            "default": "web",
+            "enum": [
+              "web",
+              "images"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "query": {
+            "maxLength": 300,
+            "minLength": 2,
+            "title": "Query",
+            "type": "string"
+          },
+          "spoken": {
+            "default": false,
+            "title": "Spoken",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "InformationSearchRequest",
+        "type": "object"
+      },
+      "InformationSearchResult": {
+        "additionalProperties": false,
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "maxLength": 1200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "images": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/InformationImage"
+            },
+            "maxItems": 9,
+            "title": "Images",
+            "type": "array"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query"
+          },
+          "sources": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/InformationSource"
+            },
+            "maxItems": 4,
+            "title": "Sources",
+            "type": "array"
+          }
+        },
+        "title": "InformationSearchResult",
+        "type": "object"
+      },
+      "InformationSource": {
+        "additionalProperties": false,
+        "properties": {
+          "snippet": {
+            "maxLength": 600,
+            "title": "Snippet",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 180,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "maxLength": 2048,
+            "minLength": 9,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "url",
+          "snippet"
+        ],
+        "title": "InformationSource",
+        "type": "object"
+      },
       "JobData": {
         "properties": {
           "analysis_ready": {
@@ -1296,6 +1615,52 @@
         "title": "LegacyHealthResponse",
         "type": "object"
       },
+      "LibraryChecks": {
+        "description": "Visual preflight progress for the current analysis (#53).",
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "checked": {
+            "minimum": 0.0,
+            "title": "Checked",
+            "type": "integer"
+          },
+          "mode": {
+            "default": "server",
+            "enum": [
+              "server",
+              "desktop"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "ready": {
+            "minimum": 0.0,
+            "title": "Ready",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "checked",
+          "ready",
+          "available",
+          "active"
+        ],
+        "title": "LibraryChecks",
+        "type": "object"
+      },
       "LibraryData": {
         "properties": {
           "items": {
@@ -1408,6 +1773,16 @@
             "default": false,
             "title": "Can Retry",
             "type": "boolean"
+          },
+          "checks": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LibraryChecks"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "error_code": {
             "anyOf": [
@@ -2764,6 +3139,320 @@
         "title": "PowerPointSlideResultV2",
         "type": "object"
       },
+      "PreflightCapture": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "maxLength": 5000000,
+            "minLength": 12,
+            "title": "After",
+            "type": "string"
+          },
+          "before": {
+            "maxLength": 5000000,
+            "minLength": 12,
+            "title": "Before",
+            "type": "string"
+          },
+          "sequence": {
+            "maximum": 3.0,
+            "minimum": 1.0,
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "target": {
+            "additionalProperties": true,
+            "title": "Target",
+            "type": "object"
+          }
+        },
+        "required": [
+          "sequence",
+          "target",
+          "before",
+          "after"
+        ],
+        "title": "PreflightCapture",
+        "type": "object"
+      },
+      "PreflightFailure": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z_]+$",
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "PreflightFailure",
+        "type": "object"
+      },
+      "PreflightReport": {
+        "additionalProperties": false,
+        "properties": {
+          "analysis_id": {
+            "format": "uuid",
+            "title": "Analysis Id",
+            "type": "string"
+          },
+          "attempt": {
+            "maximum": 3.0,
+            "minimum": 0.0,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "corrected": {
+            "default": false,
+            "title": "Corrected",
+            "type": "boolean"
+          },
+          "evidence": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "maxItems": 7,
+            "title": "Evidence",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "instance_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "phase": {
+            "enum": [
+              "queued",
+              "running",
+              "complete",
+              "failed",
+              "stale"
+            ],
+            "title": "Phase",
+            "type": "string"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Reasons",
+            "type": "array"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "validated",
+              "rejected",
+              "unavailable"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "analysis_id",
+          "instance_id",
+          "phase",
+          "attempt",
+          "state",
+          "reasons"
+        ],
+        "title": "PreflightReport",
+        "type": "object"
+      },
+      "PreflightRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "correct": {
+            "default": true,
+            "title": "Correct",
+            "type": "boolean"
+          },
+          "instance_id": {
+            "$ref": "#/components/schemas/Identifier"
+          },
+          "profile": {
+            "default": "wide-1x",
+            "enum": [
+              "wide-1x",
+              "wide-2x"
+            ],
+            "title": "Profile",
+            "type": "string"
+          },
+          "runtime_platform": {
+            "default": "win32",
+            "enum": [
+              "win32",
+              "darwin"
+            ],
+            "title": "Runtime Platform",
+            "type": "string"
+          },
+          "viewport": {
+            "default": [
+              1280,
+              720
+            ],
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "maximum": 4096.0,
+                "minimum": 320.0,
+                "type": "integer"
+              },
+              {
+                "maximum": 4096.0,
+                "minimum": 320.0,
+                "type": "integer"
+              }
+            ],
+            "title": "Viewport",
+            "type": "array"
+          }
+        },
+        "required": [
+          "instance_id"
+        ],
+        "title": "PreflightRequest",
+        "type": "object"
+      },
+      "PreflightResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/PreflightReport"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "request_id"
+        ],
+        "title": "PreflightResponse",
+        "type": "object"
+      },
+      "PreflightResult": {
+        "additionalProperties": false,
+        "properties": {
+          "images": {
+            "maxProperties": 6,
+            "patternProperties": {
+              "^attempt-[0-2]-(before|after)_image$": {
+                "maxLength": 5000000,
+                "minLength": 12,
+                "type": "string"
+              }
+            },
+            "title": "Images",
+            "type": "object"
+          },
+          "report": {
+            "additionalProperties": true,
+            "title": "Report",
+            "type": "object"
+          }
+        },
+        "required": [
+          "report",
+          "images"
+        ],
+        "title": "PreflightResult",
+        "type": "object"
+      },
+      "PreflightSnapshotResponse": {
+        "additionalProperties": false,
+        "description": "What the owner's desktop needs to run one PowerPoint check locally.",
+        "properties": {
+          "data": {
+            "additionalProperties": true,
+            "title": "Data",
+            "type": "object"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "request_id"
+        ],
+        "title": "PreflightSnapshotResponse",
+        "type": "object"
+      },
+      "PreflightVerdictResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "request_id"
+        ],
+        "title": "PreflightVerdictResponse",
+        "type": "object"
+      },
+      "PresentationRuntime": {
+        "additionalProperties": false,
+        "properties": {
+          "display_profile": {
+            "enum": [
+              "wide-1x",
+              "wide-2x"
+            ],
+            "title": "Display Profile",
+            "type": "string"
+          },
+          "platform": {
+            "enum": [
+              "win32",
+              "darwin"
+            ],
+            "title": "Platform",
+            "type": "string"
+          },
+          "renderer_version": {
+            "$ref": "#/components/schemas/Identifier"
+          }
+        },
+        "required": [
+          "platform",
+          "renderer_version",
+          "display_profile"
+        ],
+        "title": "PresentationRuntime",
+        "type": "object"
+      },
       "ProcessResult": {
         "additionalProperties": false,
         "properties": {
@@ -3469,6 +4158,16 @@
             "format": "uuid",
             "title": "Deck Id",
             "type": "string"
+          },
+          "runtime": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PresentationRuntime"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -3947,8 +4646,32 @@
             "title": "Evidence",
             "type": "array"
           },
+          "executed_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContentAction"
+              },
+              {
+                "$ref": "#/components/schemas/PowerPointContentActionV2"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executed Action"
+          },
           "instance_id": {
             "$ref": "#/components/schemas/Identifier"
+          },
+          "original_action_sha256": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Digest"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "reasons": {
             "default": [],
@@ -3964,6 +4687,22 @@
           },
           "renderer_version": {
             "$ref": "#/components/schemas/Identifier"
+          },
+          "runtime_platform": {
+            "anyOf": [
+              {
+                "enum": [
+                  "linux",
+                  "win32",
+                  "darwin"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime Platform"
           },
           "runtime_version": {
             "anyOf": [
@@ -4009,6 +4748,52 @@
           },
           "validator_version": {
             "$ref": "#/components/schemas/Identifier"
+          },
+          "visual_confidence": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visual Confidence"
+          },
+          "visual_model_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Identifier"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "visual_observation": {
+            "anyOf": [
+              {
+                "maxLength": 1200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visual Observation"
+          },
+          "visual_verifier_version": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Identifier"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -4120,6 +4905,35 @@
           "request_id"
         ],
         "title": "VersionResponse",
+        "type": "object"
+      },
+      "VisualQAResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnalysisResult"
+              },
+              {
+                "$ref": "#/components/schemas/PowerPointAnalysisResultV2"
+              },
+              {
+                "$ref": "#/components/schemas/PowerPointAnalysisResult"
+              }
+            ],
+            "title": "Data"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "request_id"
+        ],
+        "title": "VisualQAResponse",
         "type": "object"
       }
     }
@@ -4571,6 +5385,274 @@
         ]
       }
     },
+    "/api/v1/analyses/{analysis_id}/actions/{instance_id}/visual-qa": {
+      "post": {
+        "description": "Re-run the saved action and persist an independent visual verdict.",
+        "operationId": "verify_visual_target_api_v1_analyses__analysis_id__actions__instance_id__visual_qa_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "analysis_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Analysis Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "instance_id",
+            "required": true,
+            "schema": {
+              "title": "Instance Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisualQAResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Owned resource not found."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Source or retry state conflicts."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Input or storage limit exceeded."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation capacity exhausted."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation service is unavailable."
+          }
+        },
+        "summary": "Verify Visual Target",
+        "tags": [
+          "action-validation"
+        ]
+      }
+    },
+    "/api/v1/analyses/{analysis_id}/preflights": {
+      "post": {
+        "operationId": "create_api_v1_analyses__analysis_id__preflights_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "analysis_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Analysis Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "idempotency-key",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreflightRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreflightResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Create",
+        "tags": [
+          "preflight"
+        ]
+      }
+    },
     "/api/v1/analyses/{identifier}": {
       "get": {
         "operationId": "read_api_v1_analyses__identifier__get",
@@ -4665,6 +5747,135 @@
           }
         },
         "summary": "Read",
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/api/v1/analyses/{identifier}/actions/{instance_id}/correction": {
+      "post": {
+        "description": "Save an owner correction as a new immutable analysis revision.",
+        "operationId": "correct_api_v1_analyses__identifier__actions__instance_id__correction_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "instance_id",
+            "required": true,
+            "schema": {
+              "title": "Instance Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActionCorrectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionCorrectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Correct",
         "tags": [
           "analysis"
         ]
@@ -5976,6 +7187,695 @@
         ]
       }
     },
+    "/api/v1/preflights/{identifier}": {
+      "get": {
+        "operationId": "read_api_v1_preflights__identifier__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreflightResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Read",
+        "tags": [
+          "preflight"
+        ]
+      }
+    },
+    "/api/v1/preflights/{identifier}/claim": {
+      "post": {
+        "description": "The owner's desktop starts capturing a PowerPoint check.",
+        "operationId": "claim_api_v1_preflights__identifier__claim_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreflightSnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Claim",
+        "tags": [
+          "preflight"
+        ]
+      }
+    },
+    "/api/v1/preflights/{identifier}/evidence/{artifact}": {
+      "get": {
+        "operationId": "evidence_api_v1_preflights__identifier__evidence__artifact__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Artifact",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Evidence",
+        "tags": [
+          "preflight"
+        ]
+      }
+    },
+    "/api/v1/preflights/{identifier}/fail": {
+      "post": {
+        "operationId": "fail_api_v1_preflights__identifier__fail_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreflightFailure"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreflightResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Fail",
+        "tags": [
+          "preflight"
+        ]
+      }
+    },
+    "/api/v1/preflights/{identifier}/judge": {
+      "post": {
+        "description": "The server judges one captured attempt; the desktop never decides.",
+        "operationId": "judge_api_v1_preflights__identifier__judge_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreflightCapture"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreflightVerdictResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Judge",
+        "tags": [
+          "preflight"
+        ]
+      }
+    },
+    "/api/v1/preflights/{identifier}/result": {
+      "post": {
+        "operationId": "result_api_v1_preflights__identifier__result_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreflightResult"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreflightResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Result",
+        "tags": [
+          "preflight"
+        ]
+      }
+    },
     "/api/v1/ready": {
       "get": {
         "operationId": "ready_api_v1_ready_get",
@@ -6718,6 +8618,21 @@
                     "title": "Context Epoch",
                     "type": "integer"
                   },
+                  "decision_model": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "jev",
+                          "cohere"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Decision Model"
+                  },
                   "expected_state_version": {
                     "minimum": 0,
                     "title": "Expected State Version",
@@ -6764,6 +8679,11 @@
                   "provisional": {
                     "default": false,
                     "title": "Provisional",
+                    "type": "boolean"
+                  },
+                  "search_panel_open": {
+                    "default": false,
+                    "title": "Search Panel Open",
                     "type": "boolean"
                   },
                   "segments": {
@@ -6819,6 +8739,11 @@
                     "minLength": 1,
                     "title": "Text",
                     "type": "string"
+                  },
+                  "web_search": {
+                    "default": false,
+                    "title": "Web Search",
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -7417,6 +9342,120 @@
         "summary": "Resume",
         "tags": [
           "presentation sessions"
+        ]
+      }
+    },
+    "/api/v1/sessions/{identifier}/slide-image": {
+      "put": {
+        "operationId": "put_slide_image_api_v1_sessions__identifier__slide_image_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "identifier",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Identifier",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "slide_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^\\S+$",
+              "title": "Slide Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Sign-in required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not the session owner"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Session not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The session ended"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Slide image too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported slide image"
+          }
+        },
+        "summary": "Put Slide Image",
+        "tags": [
+          "presentation agent"
         ]
       }
     },
@@ -8644,6 +10683,105 @@
         "summary": "Version",
         "tags": [
           "operations"
+        ]
+      }
+    },
+    "/api/v1/web-search/answer": {
+      "post": {
+        "operationId": "answer_api_v1_web_search_answer_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InformationSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InformationSearchResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Answer",
+        "tags": [
+          "web search"
         ]
       }
     },

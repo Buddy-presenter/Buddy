@@ -185,7 +185,9 @@ def _configure_logging() -> None:
     # INFO output from unrelated application components.
     for name in (
         "buddy_desktop.agent_loop",
+        "buddy_desktop.preflight_service",
         "buddy_desktop.present_widget",
+        "buddy_desktop.review_widget",
         "buddy_desktop.slide_executor",
     ):
         logging.getLogger(name).setLevel(logging.INFO)

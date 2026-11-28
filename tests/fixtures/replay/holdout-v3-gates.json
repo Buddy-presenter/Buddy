@@ -1,0 +1,14 @@
+{
+  "protocol": "presentation-replay-gates.v1",
+  "corpus_sha256": "666da1413536f6412121219aaf866a8fd21e1293065fbd68482b75310834dc4a",
+  "target_accuracy_min": 1,
+  "no_action_recall_min": 1,
+  "no_action_precision_min": 1,
+  "false_transitions_per_minute_max": 0,
+  "latency_p95_ms_max": 200,
+  "unnecessary_animations_max": 0,
+  "cost_usd_max": 0.01,
+  "input_usd_per_million": 1,
+  "output_usd_per_million": 2,
+  "pricing_reference": "Synthetic accounting units only; replace with dated contracted rates for release evaluation."
+}

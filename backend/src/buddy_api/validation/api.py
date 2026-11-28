@@ -4,12 +4,17 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Request, Response
+from sqlalchemy.exc import SQLAlchemyError
 
+from buddy_api.analysis.contracts import AnalysisResult, Model, PowerPointAnalysisResult
+from buddy_api.analysis.powerpoint_v1 import PowerPointAnalysisResult as LegacyPowerPointResult
 from buddy_api.auth import Principal, authenticated
 from buddy_api.contracts import ErrorResponse
+from buddy_api.persistence.errors import PersistenceConflict, RecordNotFound
 from buddy_api.uploads.contracts import UploadError
 from buddy_api.validation.contracts import StoredResult, ValidationRequest, ValidationResponse
 from buddy_api.validation.service import ValidationService
+from buddy_api.validation.visual_qa import VisualQAService
 
 
 def service(request: Request, *, read_only: bool = False) -> ValidationService:
@@ -19,6 +24,20 @@ def service(request: Request, *, read_only: bool = False) -> ValidationService:
             return ValidationService(request.app.state.uploads)
         raise UploadError(503, "validator_unavailable", "Action validation is not configured.")
     return result
+
+
+def visual_service(request: Request) -> VisualQAService:
+    result: VisualQAService | None = request.app.state.visual_qa
+    if result is None:
+        raise UploadError(
+            503, "visual_qa_unavailable", "Visual action verification is not configured."
+        )
+    return result
+
+
+class VisualQAResponse(Model):
+    data: AnalysisResult | PowerPointAnalysisResult | LegacyPowerPointResult
+    request_id: str
 
 
 def validation_router() -> APIRouter:
@@ -100,5 +119,41 @@ def validation_router() -> APIRouter:
                 "Content-Disposition": "attachment",
             },
         )
+
+    @router.post(
+        "/analyses/{analysis_id}/actions/{instance_id}/visual-qa",
+        response_model=VisualQAResponse,
+    )
+    async def verify_visual_target(
+        analysis_id: UUID,
+        instance_id: str,
+        request: Request,
+        response: Response,
+        principal: Annotated[Principal, Depends(authenticated)],
+        idempotency_key: Annotated[UUID, Header()],
+    ) -> VisualQAResponse:
+        """Re-run the saved action and persist an independent visual verdict."""
+        if len(request.headers.getlist("idempotency-key")) != 1:
+            raise UploadError(422, "invalid_retry_key", "Send one Idempotency-Key header.")
+        if not instance_id.strip() or len(instance_id) > 128:
+            raise UploadError(422, "invalid_action_id", "Invalid action identifier.")
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            result = await visual_service(request).verify(
+                principal.id, analysis_id, instance_id, idempotency_key
+            )
+            return VisualQAResponse(data=result, request_id=request.state.request_id)
+        except PersistenceConflict as exc:
+            raise UploadError(409, "visual_qa_conflict", str(exc)) from None
+        except RecordNotFound:
+            raise UploadError(404, "not_found", "Saved action was not found.") from None
+        except ValueError:
+            raise UploadError(
+                409, "visual_qa_conflict", "The saved action cannot be verified in this runtime."
+            ) from None
+        except (SQLAlchemyError, OSError, TimeoutError):
+            raise UploadError(
+                503, "visual_qa_unavailable", "Visual verification could not complete."
+            ) from None
 
     return router

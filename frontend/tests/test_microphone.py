@@ -115,9 +115,13 @@ def test_microphone_stops_when_identity_or_deck_changes(desktop_window, monkeypa
 
 
 def test_audio_queue_is_bounded_and_cleared_on_stop(qapp, qtbot):
+    from buddy_desktop.microphone import QUEUED_PACKETS
+
+    # About two seconds of 50 ms packets may wait for a busy GUI thread (#255).
+    assert QUEUED_PACKETS == 40
     mic = MicrophoneController()
     try:
-        for index in range(8):
+        for index in range(QUEUED_PACKETS):
             mic.frames.put_nowait(bytes([index]))
         assert mic.frames.full()
         mic.stop()
@@ -221,7 +225,7 @@ def test_ending_a_session_stops_microphone_before_the_server_request(desktop_win
     page = window.present
     monkeypatch.setattr(page, "_microphone_session_available", lambda: True)
     page._session = SimpleNamespace(status="active")
-    page._session_access = "test-access"
+    page._session_access = lambda: "test-access"
     page._microphone_toggle()
     observed = []
     monkeypatch.setattr(
@@ -244,7 +248,33 @@ def test_hiding_presenter_stops_microphone(desktop_window, monkeypatch):
     assert not page.microphone.enabled
 
 
-@pytest.mark.parametrize("end", ["disconnect", "lost", "changed", "status_failure", "timeout"])
+def test_powerpoint_microphone_survives_a_transient_status_failure(desktop_window, monkeypatch):
+    monkeypatch.setattr(present_widget, "MicrophoneController", FakeMicrophone)
+    window = desktop_window()
+    window.navigation.setCurrentRow(3)
+    page = window.present
+    info = PresentationInfo("C:/slides/demo.pptx", "demo.pptx", 1, 2, 42, 256, 960, 540)
+    page._attach_powerpoint_info(info)
+    page._refresh()
+    page.microphone_button.click()
+    assert page.microphone.enabled
+    page._powerpoint_pending[123] = ("status", info.path)
+    page._powerpoint_failed(123, "PowerPoint busy")
+    # Office was briefly busy: capture continues, actions wait for verification.
+    assert page.microphone.enabled
+    assert not page._powerpoint_verified
+    assert page._powerpoint_verification.isActive()
+    page._attach_powerpoint_info(info)
+    assert page.microphone.enabled and page._powerpoint_verified
+    # A failure that persists past the verification window still stops capture.
+    page._powerpoint_pending[124] = ("status", info.path)
+    page._powerpoint_failed(124, "PowerPoint unavailable")
+    page._powerpoint_verification_expired()
+    assert not page.microphone.enabled
+    assert "could not be verified" in page.microphone_status.text()
+
+
+@pytest.mark.parametrize("end", ["disconnect", "lost", "changed", "timeout"])
 def test_powerpoint_microphone_stops_when_connection_is_lost(desktop_window, monkeypatch, end):
     monkeypatch.setattr(present_widget, "MicrophoneController", FakeMicrophone)
     window = desktop_window()
@@ -267,15 +297,12 @@ def test_powerpoint_microphone_stops_when_connection_is_lost(desktop_window, mon
             PresentationInfo("C:/slides/other.pptx", "other.pptx", 1, 2, 43, 257, 960, 540)
         )
         page._refresh()
-    elif end == "status_failure":
-        page._powerpoint_pending[123] = ("status", info.path)
-        page._powerpoint_failed(123, "PowerPoint unavailable")
     else:
         page._powerpoint_verification_expired()
     assert not page.microphone.enabled
-    if end in {"disconnect", "lost", "status_failure", "timeout"}:
+    if end in {"disconnect", "lost", "timeout"}:
         assert not page.microphone_button.isEnabled()
-    if end in {"status_failure", "timeout"}:
+    if end == "timeout":
         page._attach_powerpoint_info(info)
         page._refresh()
         assert page.microphone_button.isEnabled()
@@ -344,7 +371,7 @@ def test_present_controls_capture_and_stop_real_microphone(desktop_window, qtbot
     # Session/network boundaries are substituted; native input and widgets are real.
     page._session = SimpleNamespace(status="active", id=str(uuid4()))
     monkeypatch.setattr(page.speech, "start", lambda *_args: None)
-    page._session_access = "test-access"
+    page._session_access = lambda: "test-access"
     page._refresh()
     index = page.microphone_device.findText(
         os.environ["BUDDY_TEST_MICROPHONE"], Qt.MatchFlag.MatchContains
@@ -456,10 +483,34 @@ def test_pdf_verification_expired_session_stops_capture_and_clears_access(
     page = window.present
     monkeypatch.setattr(page, "_microphone_session_available", lambda: True)
     page._session = SimpleNamespace(status="active")
-    page._session_access = "expired"
+    page._session_access = lambda: "expired"
     page._microphone_toggle()
     page._microphone_pdf_request_generation = page._microphone_pdf_generation
     page._session_request = ("microphone_verify", page._session_generation, None)
     page._session_succeeded(1, ("expired", None, "Sign in again"))
     assert not page.microphone.enabled
     assert page._session is None and page._session_access is None
+
+
+def test_dropped_audio_is_counted_and_logged(qapp, caplog):
+    # A full queue drops the oldest packet, counts it and logs a content-free gap (#255).
+    import logging
+
+    from buddy_desktop import microphone
+
+    frames = Queue(maxsize=2)
+    worker = microphone._CaptureWorker(frames, Event(), Lock())
+    worker.accepting.set()
+    gaps = []
+    worker.gap.connect(gaps.append)
+    worker._queue_pcm(bytes(1) * 1600 * 3, worker.generation)
+    assert worker.dropped_packets == 1 and gaps == [worker.generation]
+    mic = MicrophoneController()
+    try:
+        mic.worker.dropped_packets = 7
+        mic.accepting.set()
+        with caplog.at_level(logging.WARNING, logger="buddy_desktop.microphone"):
+            mic._audio_gap(mic._generation)
+        assert "event=audio_gap dropped_packets_total=7" in caplog.text
+    finally:
+        mic.shutdown()

@@ -1,11 +1,18 @@
 """Authenticated proposal client. Returned suggestions are never executor commands."""
 
+import http.client
+import io
 import json
 import math
+import os
 import re
+import ssl
+import threading
 import time
 from collections.abc import Callable
+from email.message import Message
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, build_opener
 from uuid import UUID
 
@@ -14,6 +21,80 @@ from buddy_desktop.config import AppConfig
 from buddy_desktop.presentation_session_service import PresentationSession
 from buddy_desktop.services import NoRedirects, ServiceError
 from buddy_desktop.transcript_context import ContextSnapshot
+
+
+class KeptConnection:
+    """One reusable HTTPS connection per worker thread for live decisions (#237).
+
+    urllib opens a new TCP and TLS connection for every request, adding about 0.15 s to
+    each live suggestion. This keeps it open between requests. It never follows
+    redirects, verifies certificates with the default context, bounds the response,
+    and reports HTTP errors as urllib's HTTPError so callers keep their handling.
+    """
+
+    def __init__(self, base_url: str) -> None:
+        parts = urlsplit(base_url)
+        if parts.scheme not in {"https", "http"} or not parts.hostname:
+            raise ValueError("Unsupported API URL")
+        self.scheme, self.host, self.port = parts.scheme, parts.hostname, parts.port
+        self.base_path = parts.path.rstrip("/")
+        self._local = threading.local()
+        self._context = ssl.create_default_context()
+
+    def _connection(self, fresh: bool) -> http.client.HTTPConnection:
+        connection: http.client.HTTPConnection | None = getattr(self._local, "connection", None)
+        if connection is not None and not fresh:
+            return connection
+        if connection is not None:
+            connection.close()
+        connection = (
+            http.client.HTTPSConnection(self.host, self.port, context=self._context)
+            if self.scheme == "https"
+            else http.client.HTTPConnection(self.host, self.port)
+        )
+        self._local.connection = connection
+        return connection
+
+    def post(
+        self, path: str, body: bytes, headers: dict[str, str], *, timeout: float, limit: int
+    ) -> bytes:
+        url = f"{self.scheme}://{self.host}{self.base_path}{path}"
+        for attempt in range(2):
+            reused = getattr(self._local, "connection", None) is not None and attempt == 0
+            connection = self._connection(fresh=attempt > 0)
+            connection.timeout = timeout
+            if connection.sock is not None:
+                connection.sock.settimeout(timeout)
+            try:
+                connection.request("POST", self.base_path + path, body=body, headers=headers)
+                response = connection.getresponse()
+                raw = response.read(limit + 1)
+                if response.will_close:
+                    connection.close()
+                    self._local.connection = None
+            except (http.client.RemoteDisconnected, ConnectionResetError, BrokenPipeError):
+                # Only a connection kept from an earlier request may have been closed
+                # by the server meanwhile; retry that case once on a new connection.
+                self._local.connection = None
+                connection.close()
+                if reused:
+                    continue
+                raise
+            except BaseException:
+                self._local.connection = None
+                connection.close()
+                raise
+            if response.status >= 300:
+                header_message = Message()
+                for key, value in response.getheaders():
+                    header_message[key] = value
+                error_body = io.BytesIO(raw[:limit])
+                raise HTTPError(url, response.status, response.reason, header_message, error_body)
+            if len(raw) > limit:
+                raise ValueError
+            return raw
+        raise URLError("connection closed")
+
 
 TOOLS = {
     "no_action",
@@ -81,9 +162,36 @@ def conflict_error(exc: HTTPError) -> ServiceError:
     return ServiceError(message)
 
 
+def _agent_base(config: AppConfig) -> str:
+    """The API deciding live suggestions: the app's API, or a local developer server.
+
+    `BUDDY_AGENT_URL` lets a developer test decision changes against a local server while
+    everything else keeps using the configured Buddy API. Only HTTPS or a loopback HTTP
+    address is accepted.
+    """
+    override = os.environ.get("BUDDY_AGENT_URL", "").rstrip("/")
+    if override:
+        parts = urlsplit(override)
+        loopback = parts.scheme == "http" and parts.hostname in {"127.0.0.1", "localhost"}
+        if (parts.scheme == "https" or loopback) and parts.hostname and not parts.username:
+            return override
+    return config.api_url
+
+
 class AgentService:
     def __init__(self, config: AppConfig):
         self.config = config
+        # Set on the GUI thread while Buddy's search panel is on screen: Jev may then also
+        # close or scroll it.
+        self.search_panel_open = False
+        self._connection: KeptConnection | None = None
+        self._connection_url = ""
+
+    def _kept(self) -> KeptConnection:
+        url = _agent_base(self.config)
+        if self._connection is None or self._connection_url != url:
+            self._connection, self._connection_url = KeptConnection(url), url
+        return self._connection
 
     def prepare(self, access: str, session: PresentationSession) -> None:
         CandidateService(self.config).prepare(access, session)
@@ -149,19 +257,35 @@ class AgentService:
             {"sequence": s.sequence, "text": s.text, "final": s.final}
             for s in context.decision_segments
         ]
-        request = Request(
-            self.config.api_url + f"/api/v1/sessions/{UUID(session.id)}/agent",
-            method="POST",
-            data=json.dumps(payload, ensure_ascii=False).encode(),
-            headers={"Authorization": "Bearer " + access, "Content-Type": "application/json"},
-        )
+        # Let Jev also decide that the presenter asked Buddy to look something up.
+        payload["web_search"] = True
+        if self.search_panel_open:
+            payload["search_panel_open"] = True
         try:
-            with build_opener(NoRedirects()).open(request, timeout=6) as reply:
-                raw = reply.read(32769)
-                if len(raw) > 32768:
-                    raise ValueError
-                result = json.loads(raw)
-            if not isinstance(result, dict) or set(result) != {
+            raw = self._kept().post(
+                f"/api/v1/sessions/{UUID(session.id)}/agent",
+                json.dumps(payload, ensure_ascii=False).encode(),
+                {"Authorization": "Bearer " + access, "Content-Type": "application/json"},
+                timeout=6,
+                limit=65536,
+            )
+            result = json.loads(raw)
+            if not isinstance(result, dict):
+                raise ValueError
+            # Session-scoped server diagnostics are returned only for an explicit
+            # operator capture. Keep them out of the presenter/UI proposal contract.
+            if "diagnostics" in result and not isinstance(result.pop("diagnostics"), dict):
+                raise ValueError
+            search = result.pop("search", None)
+            panel = result.pop("panel", None)
+            if (
+                search not in {None, "web", "images"}
+                or panel not in {None, "close", "scroll_down", "scroll_up"}
+                or (search is not None and panel is not None)
+                or (panel is not None and not payload.get("search_panel_open"))
+            ):
+                raise ValueError
+            if set(result) != {
                 "protocol",
                 "decision_id",
                 "session_id",
@@ -281,6 +405,16 @@ class AgentService:
                 session.state is None or target["slide_id"] != session.state.active_slide_id
             ):
                 raise ValueError
+            if search is not None or panel is not None:
+                # A request to look something up, or to close or scroll the panel, stays
+                # valid while the presenter keeps talking: it changes no slide.
+                if target["tool"] != "no_action" or result["decision_source"] != "model":
+                    raise ValueError
+                if search is not None:
+                    result["search"] = search
+                else:
+                    result["panel"] = panel
+                return result
             if (
                 not context.matches_decision(current_context())
                 or time.monotonic_ns() - context.segments[-1].capture_end_ns > 5_000_000_000
@@ -299,6 +433,7 @@ class AgentService:
             URLError,
             OSError,
             TimeoutError,
+            http.client.HTTPException,
             ValueError,
             TypeError,
             KeyError,

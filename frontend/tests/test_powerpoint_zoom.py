@@ -100,6 +100,30 @@ def test_direct_zoom_applies_one_transform_without_keyboard_input(native_driver)
     assert state["plans"][0][1].scale > 1
 
 
+def test_focus_waits_for_activation_but_never_accepts_another_window(native_driver, monkeypatch):
+    driver, state = native_driver
+    state["foreground"] = 99
+    clock = [0.0]
+    driver.gui.SetForegroundWindow = lambda _: None
+    driver.uia = SimpleNamespace(ElementFromHandle=lambda _: SimpleNamespace(SetFocus=lambda: None))
+    monkeypatch.setattr("buddy_desktop.powerpoint_zoom.time.monotonic", lambda: clock[0])
+
+    def settle(seconds):
+        clock[0] += seconds
+        state["foreground"] = 42
+
+    monkeypatch.setattr("buddy_desktop.powerpoint_zoom.time.sleep", settle)
+    driver.focus(info())
+    assert clock[0] > 0
+    state["foreground"] = 99
+    monkeypatch.setattr(
+        "buddy_desktop.powerpoint_zoom.time.sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+    with pytest.raises(PowerPointError, match="lost focus"):
+        driver.focus(info())
+
+
 def test_direct_zoom_refuses_other_monitors_or_obscured_slide(native_driver):
     driver, state = native_driver
     state["monitors"] = 2

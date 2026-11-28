@@ -7,7 +7,7 @@ import time
 import unicodedata
 from collections import OrderedDict
 from datetime import UTC, datetime
-from typing import Annotated, Literal, cast
+from typing import Annotated, Any, Literal, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -30,8 +30,8 @@ from buddy_api.analysis.store import Analyses
 from buddy_api.auth import Principal, authenticated
 from buddy_api.embeddings import EmbeddingFailure
 from buddy_api.persistence.errors import PersistenceError
-from buddy_api.persistence.models import ActionValidation, AnalysisVersion, Deck
-from buddy_api.presentation_sessions import current_ready_analysis, owned_session
+from buddy_api.persistence.models import ActionValidation, AnalysisVersion, Deck, DeckExtraction
+from buddy_api.presentation_sessions import current_ready_analysis, owned_session, runtime_matches
 from buddy_api.semantic_candidates import SemanticCandidates
 
 STOP = frozenset(
@@ -75,6 +75,73 @@ def candidate_slides(
     analysis: AnalysisResult | PowerPointAnalysisResult,
 ) -> tuple[SlideResult | PowerPointSlideResult, ...]:
     return cast(tuple[SlideResult | PowerPointSlideResult, ...], analysis.slides)
+
+
+def shown_text(
+    analysis: AnalysisResult | PowerPointAnalysisResult,
+    action: ActionResult | PowerPointActionResult,
+) -> str | None:
+    """The slide text a region action shows, so speech naming it matches the action.
+
+    PowerPoint highlights quote their target; PowerPoint zooms frame a whole shape whose
+    text `CandidateAnalyses` restores from the saved extraction. PDF actions keep their
+    quoted text in the analysis grounding record, not in the action parameters.
+    """
+    params = getattr(action.action, "params", None)
+    for value in (getattr(params, "target_text", None), getattr(params, "text", None)):
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    for item in getattr(getattr(analysis, "inputs", None), "grounding", ()) or ():
+        if item.instance_id == action.action.instance_id and item.trace.target_text:
+            return str(item.trace.target_text).strip()
+    return None
+
+
+async def with_powerpoint_shape_text(
+    db: AsyncSession, record: AnalysisVersion, owner: UUID, analysis: PowerPointAnalysisResult
+) -> PowerPointAnalysisResult:
+    """Copy each zoomed shape's text from the saved extraction into this server-side read.
+
+    PowerPoint zooms select a complete shape and so carry no quoted target. The copy is
+    used only to describe candidates to retrieval and the agent; it is never persisted.
+    """
+    if record.extraction_id is None or not any(
+        a.action.type == "zoom_region" for slide in analysis.slides for a in slide.actions
+    ):
+        return analysis
+    document = await db.scalar(
+        select(DeckExtraction.document).where(
+            DeckExtraction.id == record.extraction_id, DeckExtraction.owner_id == owner
+        )
+    )
+    if not isinstance(document, dict):
+        return analysis
+    texts: dict[tuple[str, int], str] = {}
+    for extracted in document.get("slides") or ():
+        for obj in extracted.get("objects") or ():
+            text, source = obj.get("text"), obj.get("source_id")
+            if isinstance(text, str) and text.strip() and type(source) is int:
+                texts[(str(extracted.get("id")), source)] = " ".join(text.split())[:300]
+
+    def described(slide_id: str, item: PowerPointActionResult) -> PowerPointActionResult:
+        params = item.action.params
+        shape = params.source_shape_id
+        text = texts.get((slide_id, shape)) if shape is not None else None
+        if item.action.type != "zoom_region" or params.text.strip() or not text:
+            return item
+        action = item.action.model_copy(update={"params": params.model_copy(update={"text": text})})
+        return item.model_copy(update={"action": action})
+
+    return analysis.model_copy(
+        update={
+            "slides": tuple(
+                slide.model_copy(
+                    update={"actions": tuple(described(slide.slide_id, a) for a in slide.actions)}
+                )
+                for slide in analysis.slides
+            )
+        }
+    )
 
 
 def candidate_action_eligible(action: ActionResult | PowerPointActionResult) -> bool:
@@ -152,12 +219,10 @@ class CandidateAnalyses:
             tuple[UUID, UUID, str, int], tuple[float, AnalysisResult | PowerPointAnalysisResult]
         ] = OrderedDict()
 
-    async def read(
-        self, db: AsyncSession, record: AnalysisVersion, owner: UUID
-    ) -> AnalysisResult | PowerPointAnalysisResult:
-        # Both callers use REPEATABLE READ. Validation history is append-only:
-        # its count identifies the same eligibility snapshot as the canonical read.
-        revision = int(
+    @staticmethod
+    async def revision(db: AsyncSession, record: AnalysisVersion, owner: UUID) -> int:
+        """Validation history is append-only: its count identifies one eligibility snapshot."""
+        return int(
             await db.scalar(
                 select(func.count())
                 .select_from(ActionValidation)
@@ -168,6 +233,16 @@ class CandidateAnalyses:
             )
             or 0
         )
+
+    async def read(
+        self,
+        db: AsyncSession,
+        record: AnalysisVersion,
+        owner: UUID,
+        runtime_context: dict[str, Any] | None = None,
+    ) -> AnalysisResult | PowerPointAnalysisResult:
+        # Both callers use REPEATABLE READ.
+        revision = await self.revision(db, record, owner)
         key = (owner, record.id, record.content_sha256 or "", revision)
         now = time.monotonic()
         self._entries = OrderedDict(
@@ -184,13 +259,32 @@ class CandidateAnalyses:
         analysis = await Analyses(db).read(record.id, owner_id=owner)
         if not isinstance(analysis, (AnalysisResult, PowerPointAnalysisResult)):
             raise HTTPException(409, "Saved presentation analysis is required.")
+        if isinstance(analysis, PowerPointAnalysisResult):
+            analysis = await with_powerpoint_shape_text(db, record, owner, analysis)
         # A cached read can propose slides only. Any positively usable region always
         # takes the canonical path, including its current evidence and hash checks.
         if record.content_sha256 and not any(a.usable for s in analysis.slides for a in s.actions):
             self._entries[key] = (now, analysis)
             while len(self._entries) > 8:
                 self._entries.popitem(last=False)
-        return analysis
+        return analysis.model_copy(
+            update={
+                "slides": tuple(
+                    slide.model_copy(
+                        update={
+                            "actions": tuple(
+                                action
+                                if action.validation
+                                and runtime_matches(action.validation, runtime_context)
+                                else action.model_copy(update={"usable": False})
+                                for action in slide.actions
+                            )
+                        }
+                    )
+                    for slide in analysis.slides
+                )
+            }
+        )
 
 
 def tokens(text: str) -> frozenset[str]:
@@ -577,7 +671,9 @@ def resolve(
                         (slide.summary.text or "")
                         + " "
                         + " ".join(
-                            a.action.purpose for a in slide.actions if candidate_action_eligible(a)
+                            " ".join(sorted(action_words(a, analysis)))
+                            for a in slide.actions
+                            if candidate_action_eligible(a)
                         )
                     )
                 ),
@@ -605,7 +701,9 @@ def resolve(
                 continue
             if action.action.type not in {"zoom_region", "highlight_region"}:
                 continue
-            score = len(query & tokens(action.action.purpose))
+            # Match the spoken words against both the action's purpose and the slide
+            # text it targets ("the revenue chart"), not the purpose alone (#202).
+            score = len(query & action_words(action, analysis))
             if score:
                 actions.append(
                     Candidate(
@@ -616,8 +714,21 @@ def resolve(
                         score=score,
                     )
                 )
-    result.extend(sorted(actions, key=lambda c: (-c.score, c.slide_id, c.action_id or ""))[:2])
+    result.extend(
+        sorted(actions, key=lambda c: (-c.score, c.slide_id, c.action_id or ""))[:ACTION_SLOTS]
+    )
     return tuple(result)
+
+
+# Saved region actions offered per decision; the agent still chooses or abstains.
+ACTION_SLOTS = 3
+
+
+def action_words(
+    action: Any, analysis: AnalysisResult | PowerPointAnalysisResult | None = None
+) -> frozenset[str]:
+    target = shown_text(analysis, action) if analysis is not None else None
+    return tokens(action.action.purpose) | (tokens(target) if target else frozenset())
 
 
 def candidate_router() -> APIRouter:
@@ -675,7 +786,9 @@ def candidate_router() -> APIRouter:
                 record, _ = await current_ready_analysis(db, deck, principal.id)
                 if record.id != session.analysis_version_id:
                     raise HTTPException(409, "The analysis changed; reconnect the session.")
-                analysis = await request.app.state.candidate_analyses.read(db, record, principal.id)
+                analysis = await request.app.state.candidate_analyses.read(
+                    db, record, principal.id, session.runtime_context
+                )
                 semantic: SemanticCandidates | None = request.app.state.semantic_candidates
                 active_slide_id = values.active_slide_id or session.active_slide_id or ""
                 if active_slide_id not in {slide.slide_id for slide in analysis.slides}:
@@ -732,7 +845,9 @@ def candidate_router() -> APIRouter:
     ) -> dict[str, str | bool]:
         response.headers["Cache-Control"] = "no-store"
         semantic: SemanticCandidates | None = request.app.state.semantic_candidates
-        if semantic is None:
+        agent = request.app.state.presentation_agent
+        direct = agent is not None and agent.settings.candidate_mode == "direct_current"
+        if semantic is None and not direct:
             raise HTTPException(503, "Semantic retrieval is not configured.")
         try:
             async with request.app.state.database.sessions() as db, db.begin():
@@ -746,7 +861,12 @@ def candidate_router() -> APIRouter:
                 record, _ = await current_ready_analysis(db, deck, principal.id)
                 if record.id != session.analysis_version_id:
                     raise HTTPException(409, "The analysis changed.")
-                analysis = await request.app.state.candidate_analyses.read(db, record, principal.id)
+                analysis = await request.app.state.candidate_analyses.read(
+                    db, record, principal.id, session.runtime_context
+                )
+            if direct:
+                return {"ready": True, "created": False, "resolver_version": "direct-current-v1"}
+            assert semantic is not None
             created = await semantic.prepare(analysis, principal.id)
             return {"ready": True, "created": created, "resolver_version": "cohere-embed5-v4"}
         except EmbeddingFailure:

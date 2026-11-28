@@ -4,12 +4,14 @@ import hashlib
 import logging
 import re
 import time
+import weakref
 from collections.abc import Callable
 from dataclasses import replace
 
 from PySide6.QtCore import QObject, Signal
 
 from buddy_desktop.agent_service import AgentService
+from buddy_desktop.library_service import AccessProvider, access_provider
 from buddy_desktop.presentation_session_service import PresentationSession
 from buddy_desktop.tasks import TaskRunner
 from buddy_desktop.transcript_context import ContextSnapshot
@@ -43,10 +45,21 @@ class AgentLoop(QObject):
         service: AgentService,
         parent: QObject | None = None,
         current_context: Callable[[], ContextSnapshot] | None = None,
+        local_navigation: Callable[[PresentationSession, ContextSnapshot], dict[str, object] | None]
+        | None = None,
     ):
         super().__init__(parent)
         self.service = service
         self.current_context = current_context
+        self._local_navigation_method = (
+            weakref.WeakMethod(local_navigation)
+            if local_navigation is not None
+            and getattr(local_navigation, "__self__", None) is not None
+            else None
+        )
+        self.local_navigation = (
+            None if self._local_navigation_method is not None else local_navigation
+        )
         self.runner = TaskRunner(self)
         self.runner.succeeded.connect(self._succeeded)
         self.runner.failed.connect(self._failed)
@@ -65,7 +78,7 @@ class AgentLoop(QObject):
         self._prepare_failed_for: str | None = None
         self._partial_attempts: dict[tuple[int, str | None, str], tuple[int, int]] = {}
         self._pending_update = False
-        self._latest_access: str | None = None
+        self._latest_access: AccessProvider | None = None
         self._latest_session: PresentationSession | None = None
         self._submitted_at_ns: int | None = None
         self._submitted_capture_end_ns: int | None = None
@@ -86,9 +99,27 @@ class AgentLoop(QObject):
             self.proposed.emit(None)
             self.status.emit("Listening for a clear phrase…" if enabled else "Suggestions off")
 
+    def cancel_pending_decision(self) -> None:
+        """Invalidate in-flight model work without erasing prior presenter context."""
+        self._generation += 1
+        self._last_revision = None
+        self._deferred_revision = None
+        self._deferrals = 0
+        self._pending_update = False
+        self._submitted = None
+        self._submitted_at_ns = None
+        self._submitted_capture_end_ns = None
+        self.proposed.emit(None)
+        if self.enabled:
+            self.status.emit("Listening for a clear phrase…")
+
     def update(
-        self, access: str | None, session: PresentationSession | None, context: ContextSnapshot
+        self,
+        access: AccessProvider | str | None,
+        session: PresentationSession | None,
+        context: ContextSnapshot,
     ) -> None:
+        access = access_provider(access) if access else None
         # Publish immutable snapshots on the GUI thread. Worker reads only this reference.
         previous, self._current = self._current, context
         self._latest_access, self._latest_session = access, session
@@ -96,26 +127,8 @@ class AgentLoop(QObject):
             self.proposed.emit(None)
         if not self.enabled:
             return
-        if (
-            access
-            and session is not None
-            and session.status == "active"
-            and self._prepared_for != session.id
-        ):
-            if not self.runner.busy and self._prepare_failed_for != session.id:
-                self._preparing_for = session.id
-                self._request_generation = self._generation
-                self.status.emit("Preparing presentation suggestions…")
-                self.runner.submit(lambda: self.service.prepare(access, session))
-            return
         segments = context.decision_segments
-        if (
-            not access
-            or session is None
-            or not context.fresh
-            or not segments
-            or not context.segments
-        ):
+        if session is None or not context.fresh or not segments or not context.segments:
             self._pending_update = False
             self.proposed.emit(None)
             self.status.emit("Listening for a clear phrase…")
@@ -169,7 +182,48 @@ class AgentLoop(QObject):
             ):
                 self.status.emit("Waiting for the next stable word…")
                 return
-        if revision == self._last_revision or time.monotonic() < self._not_before:
+        if revision == self._last_revision:
+            return
+        # Explicit slide commands are cheap to resolve from the locally loaded
+        # presentation. They can also supersede an older remote decision in flight.
+        local_navigation = (
+            self._local_navigation_method()
+            if self._local_navigation_method is not None
+            else self.local_navigation
+        )
+        local = local_navigation(session, context) if local_navigation else None
+        if local is not None:
+            self._generation += 1
+            self._last_revision = revision
+            self._pending_update = False
+            self._deferred_revision = None
+            self._deferrals = 0
+            proposed_ns = time.monotonic_ns()
+            target = local.get("target")
+            tool = target.get("tool", "unknown") if isinstance(target, dict) else "unknown"
+            logger.info(
+                "presentation_latency event=local_navigation decision_id=%s tool=%s "
+                "capture_to_proposal_ms=%d",
+                local.get("decision_id", "unknown"),
+                tool,
+                max(0, (proposed_ns - segments[-1].capture_end_ns) // 1_000_000),
+            )
+            self.proposed.emit(local)
+            self.status.emit("Suggestion ready • slide controls remain manual")
+            return
+        if time.monotonic() < self._not_before:
+            return
+        if not access:
+            self._pending_update = False
+            self.proposed.emit(None)
+            self.status.emit("Sign in to request live suggestions…")
+            return
+        if session.status == "active" and self._prepared_for != session.id:
+            if not self.runner.busy and self._prepare_failed_for != session.id:
+                self._preparing_for = session.id
+                self._request_generation = self._generation
+                self.status.emit("Preparing presentation suggestions…")
+                self.runner.submit(lambda: self.service.prepare(access(), session))
             return
         if self.runner.busy:
             if self._extends_submitted_decision(context):
@@ -206,7 +260,7 @@ class AgentLoop(QObject):
             return self._current if self._current is not None else replace(context, fresh=False)
 
         self.runner.submit(
-            lambda: self.service.propose(access, session, context, current_context=current)
+            lambda: self.service.propose(access(), session, context, current_context=current)
         )
 
     def _extends_submitted_decision(self, context: ContextSnapshot) -> bool:
@@ -252,7 +306,11 @@ class AgentLoop(QObject):
             and self._request_generation == self._generation
             and submitted is not None
             and current is not None
-            and submitted.matches_decision(current)
+            # A request to look something up stays valid as the presenter talks on.
+            and (
+                (isinstance(result, dict) and bool(result.get("search") or result.get("panel")))
+                or submitted.matches_decision(current)
+            )
         )
         age_ms = (
             max(0, (time.monotonic_ns() - submitted_at_ns) // 1_000_000)
@@ -297,7 +355,12 @@ class AgentLoop(QObject):
             )
         if self._pending_update and isinstance(result, dict):
             target = result.get("target")
-            if isinstance(target, dict) and target.get("tool") == "no_action":
+            if (
+                isinstance(target, dict)
+                and target.get("tool") == "no_action"
+                # A search or panel request is never superseded.
+                and not (result.get("search") or result.get("panel"))
+            ):
                 logger.warning("presentation_speech event=decision_superseded_by_newer_speech")
                 return
             if (

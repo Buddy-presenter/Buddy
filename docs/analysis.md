@@ -36,6 +36,18 @@ reject changes to existing content and validation records; only derived publicat
 change on the parent. Deletion is also blocked until a separately reviewed retention
 workflow explicitly handles these immutable records. Sessions keep their original analysis foreign key.
 
+Review owners may adjust an action's source-bounded region or disable that action. The
+authenticated correction endpoint verifies ownership, the latest analysis and action
+hashes, and the uploaded source revision under a deck lock. It creates a new immutable
+analysis version and appends an `analysis_corrections` lineage row containing the owner,
+source/result versions, operation, hashes and idempotency key. A stale review receives a
+conflict and must be refreshed. Existing sessions stay pinned to their original version;
+new sessions use the corrected version. Validation history is carried forward only for
+unchanged action hashes and matching source/profile provenance. A changed action remains
+unavailable until separately validated. The slide map and manual slide navigation remain
+available while that validation is pending. Disabled actions are absent from the new
+analysis but their correction event is retained.
+
 Limits: 500 slides, 1,000 actions per slide and per PDF analysis, 8 MiB serialized analysis,
 and 16,000 characters per summary. Empty action lists are valid. For real PDF provider
 responses, Buddy builds a bounded source-text inventory from PDFium glyph geometry and adds a
@@ -195,8 +207,8 @@ Text matching requires whole words, including normalized Unicode matching, so a 
 such as `net results` cannot be grounded to the suffix of `internet results`. Grounding
 still locates the supplied quote; it does not prove the purpose agrees with that quote.
 The opt-in candidate experiment above addresses text-location selection. Its production
-integration, multi-line highlight contracts and independent visual QA/correction remain
-outstanding work in #135/#50/#51.
+integration and multi-line highlight contracts remain tracked separately in #135 and #50;
+owner-persisted geometry corrections are covered by #34.
 
 `ValidationInput` (`buddy.validation.v1`) binds a unique validation ID to analysis ID/hash,
 action instance ID/hash and validator/renderer/display-profile versions. Evidence carries

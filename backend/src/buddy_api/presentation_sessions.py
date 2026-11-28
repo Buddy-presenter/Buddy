@@ -2,7 +2,7 @@
 
 import logging
 from datetime import datetime
-from typing import Annotated, Literal, cast
+from typing import Annotated, Any, Literal, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
@@ -26,6 +26,7 @@ from buddy_api.persistence.models import (
     ProcessingJob,
     SlideAction,
 )
+from buddy_api.preflight.contracts import PresentationRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,7 @@ class SessionState(SessionContract):
 
 class StartSession(SessionContract):
     deck_id: UUID
+    runtime: PresentationRuntime | None = None
 
 
 class UpdateSessionState(SessionState):
@@ -179,13 +181,15 @@ async def current_ready_analysis(
     published = (
         job.status in {"analysis_ready", "succeeded"} and analysis.publication == "published"
     )
-    partial_pdf = (
-        deck.source_format == "pdf"
-        and job.status == "analysis_partial"
+    # Corrections and pending preflight create revisions whose actions are not yet
+    # usable. Keep the deck presentable in full-slide/manual mode while gated.
+    partial = (
+        deck.source_format in {"pdf", "pptx"}
+        and job.status in {"analysis_partial", "analysis_ready", "succeeded"}
         and analysis.publication in {"partial", "awaiting_validation"}
     )
     if (
-        not (published or partial_pdf)
+        not (published or partial)
         or job.source_revision != deck.source_revision
         or analysis.job_id != job.id
         or analysis.source_format != deck.source_format
@@ -231,6 +235,7 @@ async def validate_action(
     analysis: AnalysisVersion,
     owner_id: UUID,
     identifier: str | None,
+    runtime_context: dict[str, Any] | None = None,
 ) -> None:
     if identifier is None:
         return
@@ -259,10 +264,31 @@ async def validate_action(
         raise HTTPException(
             422, "Only current, usable actions can be accepted into a session."
         ) from None
-    if latest.state != evidence.state or not action_is_usable(
-        analysis.source_format, evidence.state, evidence.semantic_verified
+    if (
+        latest.state != evidence.state
+        or not action_is_usable(analysis.source_format, evidence.state, evidence.semantic_verified)
+        or not runtime_matches(evidence, runtime_context)
     ):
         raise HTTPException(422, "Only current, usable actions can be accepted into a session.")
+
+
+def runtime_matches(evidence: ValidationInput, context: dict[str, Any] | None) -> bool:
+    """Bind verified evidence to the presenter's runtime where it matters.
+
+    PDF: Buddy draws every PDF with the same pinned PDFium renderer in source
+    coordinates, so a server-verified result holds for any presenter display.
+    PowerPoint: Office renders natively per machine, so the check must come from
+    the same OS and display scale (1x/2x) that the presenter uses.
+    """
+    if evidence.source_format == "pdf":
+        # Evidence is already bound to the analysis renderer when it is stored.
+        return True
+    return bool(
+        context
+        and evidence.runtime_platform == context.get("platform")
+        and evidence.renderer_version == context.get("renderer_version")
+        and evidence.display_profile == context.get("display_profile")
+    )
 
 
 async def validate_focus_region(
@@ -340,7 +366,9 @@ async def update_session_state(
     await validate_focus_region(
         db, record.analysis_version_id, values.active_slide_id, values.focus_region
     )
-    await validate_action(db, analysis, principal.id, values.last_accepted_action_id)
+    await validate_action(
+        db, analysis, principal.id, values.last_accepted_action_id, record.runtime_context
+    )
     apply_state(record, values)
     record.state_version += 1
 
@@ -429,6 +457,12 @@ def session_router() -> APIRouter:
                         )
                         db.add(record)
                         await db.flush()
+                runtime = values.runtime.model_dump(mode="json") if values.runtime else None
+                if record.runtime_context != runtime:
+                    record.runtime_context = runtime
+                    record.focus_view, record.focus_region = "slide", None
+                    record.last_accepted_action_id = None
+                    record.state_version += 1
                 for changed in records:
                     if changed.state_version != previous_versions[changed.id]:
                         await record_state_event(db, changed)

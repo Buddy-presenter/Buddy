@@ -17,6 +17,11 @@ timings, player events and file-backed test states locally. No microphone is rec
 and no provider is called. Eligibility HTTP and session transport are explicit local test
 substitutes; this does not replace the PostgreSQL/API integration checks in CI.
 Office animation timing remains unknown and is not reported as zero.
+The current proposal contract includes the locally observed source slide. Automatic
+navigation is checked against the local player without a recovery-position write;
+undo separately verifies restored view/recovery state. See the
+[voice acceptance runbook](voice-navigation-acceptance.md) for the separate human
+microphone/provider matrix and current generated-input readiness results.
 
 Reports must retain `scope: scripted_live_players`, generated input provenance, substituted
 boundaries, and `independent_holdout: false`. Never mark them as consented human recordings

@@ -5,6 +5,7 @@ import json
 import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, build_opener
 from uuid import UUID, uuid4
@@ -231,9 +232,14 @@ class PresentationSessionService:
         except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
             raise ServiceError("The server returned an invalid session response.") from None
 
-    def start(self, access: str, deck_id: str) -> PresentationSession:
+    def start(
+        self, access: str, deck_id: str, *, runtime: dict[str, Any] | None = None
+    ) -> PresentationSession:
         session = self.request(
-            access, "/api/v1/sessions", method="POST", body={"deck_id": str(UUID(deck_id))}
+            access,
+            "/api/v1/sessions",
+            method="POST",
+            body={"deck_id": str(UUID(deck_id)), **({"runtime": runtime} if runtime else {})},
         )
         if (
             session.deck_id != str(UUID(deck_id))

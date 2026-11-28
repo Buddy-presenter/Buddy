@@ -84,7 +84,11 @@ class TutorialPage(Page):
                 "to the matching connected PowerPoint slideshow when Run action is enabled. "
                 "Inspect the actual slideshow after applying a suggestion. "
                 "Use Present to select and highlight or zoom a PDF region manually. "
-                "Automatic visual verification and correction are not available yet.",
+                "PDF actions are checked automatically by the service. For PowerPoint, use "
+                "Check on this PC in Review; Buddy runs actions in an isolated slideshow "
+                "and the service checks the screenshots. Follow the notice and avoid mouse "
+                "or keyboard input until checks finish. Bounded corrections may be tried "
+                "automatically.",
                 None,
                 None,
             ),

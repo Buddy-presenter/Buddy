@@ -93,9 +93,12 @@ module "environment" {
   start_services              = var.start_services
   enable_speech               = var.enable_speech
   enable_semantic_candidates  = var.enable_semantic_candidates
+  enable_jev_decisions        = var.enable_jev_decisions
   enable_presentation_agent   = var.enable_presentation_agent
   worker_start_services       = var.worker_start_services
   enable_terraform_monitoring = false
+  idle_scale_to_zero          = true
+  enable_lb_access_logs       = true
   alert_email_recipients      = var.alert_email_recipients
   github_oidc_provider_arn    = var.github_oidc_provider_arn
   github_oidc_subject_prefix  = var.github_oidc_subject_prefix
@@ -109,6 +112,11 @@ variable "enable_semantic_candidates" {
 }
 
 variable "enable_presentation_agent" {
+  type    = bool
+  default = false
+}
+
+variable "enable_jev_decisions" {
   type    = bool
   default = false
 }

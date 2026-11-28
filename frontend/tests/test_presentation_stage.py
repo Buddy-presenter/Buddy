@@ -5,7 +5,9 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
+from time import monotonic_ns, sleep
 from typing import cast
+from uuid import uuid4
 
 import pytest
 from PySide6.QtCore import QSettings
@@ -91,6 +93,68 @@ def test_remote_state_restores_absolute_position_without_republishing(qtbot, tmp
         widget.shutdown()
 
 
+def test_pdf_session_start_ignores_saved_position_and_unblocks_speech(qtbot, tmp_path, monkeypatch):
+    widget = PresentWidget(
+        AppConfig("http://127.0.0.1:8000"),
+        QSettings(str(tmp_path / "start-at-first.ini"), QSettings.Format.IniFormat),
+    )
+    qtbot.addWidget(widget)
+    manifest = replace(_manifest(), account_bound=True)
+    widget.executor.manifest = manifest
+    widget.executor.current_index = 0
+    widget.surface.commit(
+        manifest.slides[0], QImage(str(manifest.root / "wide.png")), manifest.slides[0].full
+    )
+    initial = _session(manifest.deck_id, SessionState(manifest.slides[0].slide_id))
+    saved = replace(
+        initial,
+        state_version=4,
+        state=SessionState(
+            manifest.slides[1].slide_id,
+            focus_view="zoom_region",
+            focus_region={"x": 100.0, "y": 100.0, "width": 200.0, "height": 100.0},
+            last_accepted_action_id=str(uuid4()),
+        ),
+    )
+    widget._session_request = ("start", widget._session_generation, None)
+    widget._context_connected = True
+    widget._pdf_warming = True
+    agent_updates: list[bool] = []
+    monkeypatch.setattr(widget, "_update_agent", lambda: agent_updates.append(True))
+
+    try:
+        widget._session_succeeded(0, ("success", saved, None))
+
+        assert widget.executor.current_index == 0
+        assert widget.surface.region == widget.surface.slide.full
+        assert widget._session_restore_state is None
+        assert widget._session_pending_state is None
+        assert widget._accepted_action_id == saved.state.last_accepted_action_id
+        assert widget.session_status.text() == (
+            "Presentation session connected; starting at the first slide."
+        )
+
+        capture_end_ns = monotonic_ns()
+        sleep(0.01)
+        widget._speech_transcript(
+            {
+                "session_id": saved.id,
+                "stream_id": "startup-stream",
+                "sequence": 1,
+                "segment_id": "startup-segment",
+                "text": "Let's go to the next slide",
+                "final": True,
+                "start_seconds": 1.0,
+                "end_seconds": 1.0,
+                "capture_end_ns": capture_end_ns,
+                "latency_ms": 10,
+            }
+        )
+        assert agent_updates == [True]
+    finally:
+        widget.shutdown()
+
+
 def test_unsent_manual_position_takes_priority_over_remote_state(qtbot, tmp_path):
     widget = PresentWidget(
         AppConfig("http://127.0.0.1:8000"),
@@ -161,7 +225,7 @@ def test_position_returned_to_acknowledged_state_is_saved_after_inflight_update(
         manifest.slides[0], QImage(str(manifest.root / "wide.png")), manifest.slides[0].full
     )
     widget._account_id = "owner"
-    widget._session_access = "test-access"
+    widget._session_access = lambda: "test-access"
     widget._session_deck_id = manifest.deck_id
     widget._session_attempt = ("owner", manifest.deck_id)
     widget._session = _session(manifest.deck_id, first_state)
@@ -226,7 +290,7 @@ def test_position_matching_inflight_update_remains_retryable_after_failure(
         manifest.slides[0], QImage(str(manifest.root / "wide.png")), manifest.slides[0].full
     )
     widget._account_id = "owner"
-    widget._session_access = "test-access"
+    widget._session_access = lambda: "test-access"
     widget._session_deck_id = manifest.deck_id
     widget._session_attempt = ("owner", manifest.deck_id)
     widget._session = _session(manifest.deck_id, first_state)
@@ -302,7 +366,7 @@ def test_new_deck_session_start_waits_for_previous_deck_request(
     updated_states: list[SessionState] = []
 
     class DelayedService:
-        def start(self, _access: str, deck_id: str) -> PresentationSession:
+        def start(self, _access: str, deck_id: str, *, runtime=None) -> PresentationSession:
             started_decks.append(deck_id)
             if deck_id == first_manifest.deck_id:
                 first_started.set()
@@ -326,7 +390,7 @@ def test_new_deck_session_start_waits_for_previous_deck_request(
 
     widget.session_service = cast(PresentationSessionService, DelayedService())
     widget._account_id = "owner"
-    widget._session_access = "test-access"
+    widget._session_access = lambda: "test-access"
     widget.executor.manifest = first_manifest
     widget.executor.current_index = 0
     widget.surface.commit(
@@ -417,3 +481,31 @@ def test_fullscreen_moves_audience_surface_without_changing_slide_state(qtbot: Q
 
     fullscreen.close()
     qtbot.waitUntil(lambda: owner_layout.indexOf(surface) >= 0)
+
+
+def test_fullscreen_voice_feedback_is_visible_over_the_slide(qtbot: QtBot) -> None:
+    owner = QWidget()
+    owner_layout = QVBoxLayout(owner)
+    surface = SlideSurface()
+    owner_layout.addWidget(surface)
+    fullscreen = FullscreenPresentation(
+        surface,
+        owner_layout,
+        lambda _kind: None,
+        lambda: None,
+        lambda: None,
+        lambda: None,
+        owner,
+        QGuiApplication.primaryScreen(),
+    )
+    qtbot.addWidget(owner)
+    qtbot.addWidget(fullscreen)
+    fullscreen.showFullScreen()
+    qtbot.waitUntil(fullscreen.isVisible)
+
+    fullscreen.show_voice_feedback("Returned to the presentation.", timeout_ms=0)
+
+    assert fullscreen.voice_feedback.isVisible()
+    assert fullscreen.voice_feedback.text() == "Returned to the presentation."
+
+    fullscreen.close()

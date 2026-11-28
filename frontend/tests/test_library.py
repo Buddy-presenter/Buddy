@@ -135,6 +135,72 @@ def signed_in(window):
     return window.library
 
 
+def _checking(checked, total, ready, *, available=True):
+    value = payload("Checked deck", "incomplete")
+    value["data"]["items"][0]["processing"] = {
+        "job_id": str(uuid4()),
+        "state": "review_ready",
+        "stage": None,
+        "progress": 100,
+        "attempts": 1,
+        "error_code": None,
+        "can_retry": False,
+        "can_cancel": False,
+        "checks": {
+            "total": total,
+            "checked": checked,
+            "ready": ready,
+            "available": available,
+            "active": available and checked < total,
+        },
+    }
+    return value
+
+
+def test_library_shows_automatic_check_progress_with_ring(desktop_window, backend, qtbot):
+    from buddy_desktop.library_widget import CHECK_PROGRESS_ROLE, CheckStatusDelegate
+
+    backend.body = json.dumps(_checking(3, 8, 2)).encode()
+    library = signed_in(desktop_window(f"http://127.0.0.1:{backend.server_port}"))
+    qtbot.waitUntil(lambda: not library.runner.busy and library.table.rowCount() == 1)
+    # One item carries the text; the column delegate paints the ring before it.
+    item = library.table.item(0, 1)
+    assert item.text() == "Checking · 3/8"
+    assert item.data(CHECK_PROGRESS_ROLE) == (3, 8)
+    assert isinstance(library.table.itemDelegateForColumn(1), CheckStatusDelegate)
+    library.table.grab()  # paints the ring without errors
+    # Checks finish every few seconds, so Library refreshes sooner than usual.
+    assert library.poll.isActive() and library.poll.interval() == 5000
+
+    backend.body = json.dumps(_checking(8, 8, 6)).encode()
+    library.reload(retain_rows=True)
+    qtbot.waitUntil(lambda: not library.runner.busy)
+    assert library.table.item(0, 1).text() == "Ready · 6/8 actions"
+    assert library.table.item(0, 1).data(CHECK_PROGRESS_ROLE) is None
+    assert not library.poll.isActive()
+
+    backend.body = json.dumps(_checking(0, 8, 0, available=False)).encode()
+    library.reload(retain_rows=True)
+    qtbot.waitUntil(lambda: not library.runner.busy)
+    assert library.table.item(0, 1).text() == "Ready · actions off"
+
+
+@pytest.mark.parametrize(
+    "checks",
+    [
+        {"total": 2, "checked": 3, "ready": 0, "available": True, "active": False},
+        {"total": 2, "checked": 1, "ready": 0, "available": "yes", "active": True},
+        {"total": -1, "checked": 0, "ready": 0, "available": True, "active": False},
+    ],
+)
+def test_invalid_check_progress_is_rejected(backend, checks):
+    value = _checking(1, 2, 0)
+    value["data"]["items"][0]["processing"]["checks"] = checks
+    backend.body = json.dumps(value).encode()
+    with pytest.raises(ServiceError):
+        service(backend).list("test-token", search="", sort="newest", page=1)
+
+
 def test_signed_out_never_lists_decks(desktop_window, backend):
     window = desktop_window(f"http://127.0.0.1:{backend.server_port}")
     window.navigation.setCurrentRow(1)
@@ -177,7 +243,10 @@ def test_real_library_loading_responsive_refresh_and_keyboard(desktop_window, ba
     assert library.sort.hasFocus()
 
 
-def test_failure_retry_empty_and_access_expiry(desktop_window, backend, qtbot):
+@pytest.mark.parametrize("identity_expired", [False, True])
+def test_failure_retry_empty_and_access_expiry(desktop_window, backend, qtbot, identity_expired):
+    from buddy_identity.config import SessionExpired
+
     backend.response_code = 503
     window = desktop_window(f"http://127.0.0.1:{backend.server_port}")
     library = signed_in(window)
@@ -195,11 +264,20 @@ def test_failure_retry_empty_and_access_expiry(desktop_window, backend, qtbot):
     library.reload()
     qtbot.waitUntil(lambda: not library.runner.busy)
     assert library.state.title.text() == "No matching decks"
+    window.account.account_id = "same-account"
+
+    def verify_account():
+        if identity_expired:
+            raise SessionExpired("Account session expired.")
+        return "same-account"
+
+    window.account.session.account = verify_account
     backend.response_code = 401
     library.reload()
-    qtbot.waitUntil(lambda: not library.runner.busy)
-    assert window.account.session.tokens is None
-    assert library.table.rowCount() == 0 and not library.refresh.isEnabled()
+    qtbot.waitUntil(lambda: not library.runner.busy and not window.account.runner.busy)
+    assert (window.account.session.tokens is None) == identity_expired
+    assert library.table.rowCount() == 0
+    assert library.refresh.isEnabled() != identity_expired
 
 
 def test_near_expiry_account_check_keeps_library_visible(desktop_window, backend, qtbot):
@@ -556,6 +634,35 @@ def test_busy_powerpoint_status_distinguishes_waiting_from_completed_checks():
     )
     label, guidance = LibraryWidget.deck_status_text(complete)
     assert label == "Results available" and "Only actions marked Ready" in guidance
+
+
+def test_pdf_with_pending_checks_reads_as_checking_not_partial():
+    from dataclasses import replace
+
+    from buddy_desktop.library_service import CheckProgress
+    from buddy_desktop.library_widget import LibraryWidget
+
+    deck = DeckSummary(
+        uuid4(),
+        "Slides",
+        datetime.now(UTC),
+        "ready",
+        3,
+        source_format="pdf",
+        processing=replace(
+            ProcessingDetail(uuid4(), "partial", "validation", 100, 1, None, False, True),
+            checks=CheckProgress(12, 5, 4, True, True, "server"),
+        ),
+    )
+    label, guidance = LibraryWidget.deck_status_text(deck)
+    assert label == "Checking · 5/12" and "5 of 12" in guidance
+    # Checks finished but part of the analysis is missing: say so plainly.
+    finished = replace(
+        deck,
+        processing=replace(deck.processing, checks=CheckProgress(12, 12, 9, True, False, "server")),
+    )
+    label, guidance = LibraryWidget.deck_status_text(finished)
+    assert label == "Some results missing" and "Review" in guidance
 
 
 def test_poll_keeps_rows_selectable_and_preserves_latest_selection(

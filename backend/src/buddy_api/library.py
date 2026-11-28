@@ -8,13 +8,22 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.exceptions import HTTPException
 from starlette.responses import Response
 
 from buddy_api.auth import Principal, authenticated
 from buddy_api.contracts import ErrorResponse
-from buddy_api.persistence.models import AnalysisVersion, Deck, DeckExtraction, ProcessingJob
+from buddy_api.persistence.models import (
+    ActionValidation,
+    AnalysisVersion,
+    Deck,
+    DeckExtraction,
+    ProcessingJob,
+    SlideAction,
+)
 from buddy_api.uploads.contracts import UploadError
 from buddy_api.uploads.router import service
 from buddy_api.uploads.service import blocking
@@ -41,8 +50,22 @@ class ProcessingState(StrEnum):
     CANCELLED = "cancelled"
 
 
+class LibraryChecks(BaseModel):
+    """Visual preflight progress for the current analysis (#53)."""
+
+    total: int = Field(ge=0)
+    checked: int = Field(ge=0)
+    ready: int = Field(ge=0)
+    # False when this server cannot check this format: actions stay unavailable.
+    available: bool
+    # server: checked automatically (PDF). desktop: the owner's Buddy captures (PPTX).
+    mode: Literal["server", "desktop"] = "server"
+    active: bool
+
+
 class LibraryProcessing(BaseModel):
     job_id: UUID | None = None
+    checks: LibraryChecks | None = None
     state: ProcessingState
     stage: str | None = None
     progress: int = Field(ge=0, le=100)
@@ -90,6 +113,63 @@ class DeckDeletionData(BaseModel):
 class DeckDeletionResponse(BaseModel):
     data: DeckDeletionData
     request_id: str
+
+
+def check_modes(request: Request) -> dict[str, bool]:
+    """Which formats this server can check: PDF on the server, PPTX via the desktop."""
+    preflight = getattr(request.app.state, "preflight", None)
+    return {
+        "pdf": bool(preflight is not None and preflight.server_capture_available()),
+        "pptx": bool(preflight is not None and preflight.desktop_capture_available()),
+    }
+
+
+async def check_progress(
+    session: AsyncSession, request: Request, analyses: list[tuple[UUID, str]]
+) -> dict[UUID, LibraryChecks]:
+    """Count saved actions, finished visual checks and live-usable actions."""
+    analysis_ids = [identifier for identifier, _format in analyses]
+    if not analysis_ids:
+        return {}
+    totals = dict(
+        (
+            await session.execute(
+                select(SlideAction.analysis_id, func.count())
+                .where(SlideAction.analysis_id.in_(analysis_ids))
+                .group_by(SlideAction.analysis_id)
+            )
+        ).all()
+    )
+    latest = await session.scalars(
+        select(ActionValidation)
+        .ext(distinct_on(ActionValidation.action_id))
+        .where(ActionValidation.analysis_id.in_(analysis_ids))
+        .order_by(ActionValidation.action_id, ActionValidation.sequence.desc())
+    )
+    checked: dict[UUID, int] = {}
+    ready: dict[UUID, int] = {}
+    for row in latest:
+        document = row.document or {}
+        # Any finished visual check counts, whichever path produced it.
+        if document.get("validation_kind") == "visual":
+            checked[row.analysis_id] = checked.get(row.analysis_id, 0) + 1
+            if row.state == "validated" and document.get("semantic_verified") is True:
+                ready[row.analysis_id] = ready.get(row.analysis_id, 0) + 1
+    modes = check_modes(request)
+    result = {}
+    for identifier, source_format in analyses:
+        total = int(totals.get(identifier, 0))
+        done = min(total, checked.get(identifier, 0))
+        available = modes.get(source_format, False)
+        result[identifier] = LibraryChecks(
+            total=total,
+            checked=done,
+            ready=min(total, ready.get(identifier, 0)),
+            available=available,
+            active=available and done < total,
+            mode="desktop" if source_format == "pptx" else "server",
+        )
+    return result
 
 
 def library_router() -> APIRouter:
@@ -182,6 +262,7 @@ def library_router() -> APIRouter:
                 analysis_source_revision,
                 analysis_source_sha256,
                 analysis_source_format,
+                AnalysisVersion.id,
             )
             .outerjoin(ProcessingJob, ProcessingJob.id == latest_job)
             .outerjoin(AnalysisVersion, AnalysisVersion.id == current_analysis)
@@ -198,6 +279,9 @@ def library_router() -> APIRouter:
                 records = (await session.execute(query)).all()
                 items = []
                 worker_settings = request.app.state.worker_settings
+                checks = await check_progress(
+                    session, request, [(r[-1], r[0].source_format) for r in records if r[-1]]
+                )
                 for (
                     deck,
                     job_id,
@@ -212,6 +296,7 @@ def library_router() -> APIRouter:
                     analysis_revision,
                     analysis_sha256,
                     analysis_format,
+                    analysis_id,
                 ) in records:
                     analysis_matches_source = bool(
                         analysis_revision == deck.source_revision
@@ -296,6 +381,10 @@ def library_router() -> APIRouter:
                             and bool(deck.source_version_id),
                             processing=LibraryProcessing(
                                 job_id=job_id,
+                                checks=checks.get(analysis_id)
+                                if processing_state
+                                in {ProcessingState.REVIEW_READY, ProcessingState.PARTIAL}
+                                else None,
                                 state=processing_state,
                                 stage=job_stage,
                                 progress=progress or 0,

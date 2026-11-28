@@ -9,7 +9,7 @@ from importlib.resources import files
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, build_opener
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 
@@ -20,6 +20,7 @@ from buddy_desktop.services import NoRedirects, ServiceError
 
 MAX_ANALYSIS_BYTES = 16 * 1024 * 1024 + 65536
 MAX_EVIDENCE_BYTES = 16 * 1024 * 1024
+VISUAL_QA_REQUEST_TIMEOUT = 180.0
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,11 @@ class ReviewAction:
     raw: dict[str, Any] | None = None
     runtime_version: str | None = None
     action_sha256: str | None = None
+    corrected: bool = False
+    runtime_platform: str | None = None
+    # Slide text the action shows: PDF grounding quote or PowerPoint target/shape text.
+    # Used only to match spoken commands on the device (#239); never logged.
+    shown_text: str | None = None
 
 
 @dataclass(frozen=True)
@@ -82,6 +88,7 @@ class ReviewAnalysis:
     source_format: str = "pdf"
     render_id: str = ""
     office_safe: bool = False
+    analysis_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -146,14 +153,26 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
     summary = ReviewSummary("unavailable", None, "This analysis predates the review format.")
     source_revision = source_sha256 = None
     widths: dict[str, tuple[float, float]] = {}
+    shown_texts: dict[str, str] = {}
     if inputs is not None:
         input_data = _dict(inputs)
+        grounding = input_data.get("grounding")
+        # Optional metadata: a malformed entry is skipped, never fatal to the review.
+        for entry in grounding[:1000] if isinstance(grounding, list) else ():
+            trace = entry.get("trace") if isinstance(entry, dict) else None
+            text = trace.get("target_text") if isinstance(trace, dict) else None
+            grounded_id = entry.get("instance_id") if isinstance(entry, dict) else None
+            if isinstance(grounded_id, str) and isinstance(text, str) and text.strip():
+                shown_texts[grounded_id] = " ".join(text.split())[:300]
         if input_data.get("source_format", "pdf") != source_format:
             raise ValueError
         if powerpoint:
             if (
                 input_data.get("schema_version") != "buddy.powerpoint.analysis.v2"
                 or input_data.get("catalog_version") != "powerpoint-2"
+                or input_data.get("renderer_version") != "desktop-powerpoint-2"
+                or input_data.get("display_profile") != "windows-powerpoint-2"
+                or input_data.get("validator_version") != "powerpoint-executor-2"
             ):
                 raise ValueError
             office_safe = input_data.get("office_safe") is True
@@ -283,6 +302,14 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                 ):
                     raise ValueError
                 validation_id = UUID(str(validation["validation_id"]))
+                if validation.get("validator_version") == "desktop-preflight-1" and (
+                    validation.get("display_profile") not in {"wide-1x", "wide-2x"}
+                    or (
+                        validation.get("state") == "validated"
+                        and validation.get("runtime_platform") not in {"win32", "darwin"}
+                    )
+                ):
+                    raise ValueError
                 if validation.get("source_format", "pdf") != source_format:
                     raise ValueError
                 runtime_version = _text(validation.get("runtime_version"), optional=True)
@@ -298,9 +325,15 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                             action, sort_keys=True, separators=(",", ":"), allow_nan=False
                         ).encode()
                     ).hexdigest()
-                    or validation.get("display_profile") != profile
+                    or (
+                        validation_kind != "visual" and validation.get("display_profile") != profile
+                    )
                     or (
                         validation.get("validator_version") != validator
+                        and not (
+                            validation_kind == "visual"
+                            and validation.get("validator_version") == "desktop-preflight-1"
+                        )
                         and not (
                             powerpoint
                             and action.get("type") == "zoom_region"
@@ -362,20 +395,19 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                 raise ValueError
             # A PowerPoint action can be execution validated today and may later
             # receive independent visual proof. Keep those two claims distinct.
-            usable = result["state"] == "validated" and (powerpoint or result_semantic_verified)
+            usable = result["state"] == "validated" and result_semantic_verified
             legacy_execution = (
                 "semantic_verified" not in result
                 and isinstance(validation, dict)
                 and "semantic_verified" not in validation
                 and "validation_kind" not in validation
             )
-            if result["usable"] != usable and not (
-                legacy_execution and result["state"] == "validated" and result["usable"]
-            ):
+            if result["usable"] != usable and not legacy_execution:
                 raise ValueError
             if (
                 powerpoint
                 and result["usable"]
+                and validation_kind != "visual"
                 and (
                     validation is None
                     or not evidence
@@ -387,15 +419,8 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                 )
             ):
                 raise ValueError
-            if (
-                powerpoint
-                and action.get("type") == "zoom_region"
-                and usable
-                and isinstance(validation, dict)
-                and validation.get("validator_version") != "powerpoint-executor-4"
-            ):
-                usable = False
-                reasons = (*reasons, "zoom_requires_fitted_view_revalidation")
+            if result["state"] == "validated" and not semantic_verified:
+                reasons = (*reasons, "visual_verification_required")
             actions.append(
                 ReviewAction(
                     _required_text(action.get("instance_id")),
@@ -409,21 +434,32 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
                     result_semantic_verified,
                     tuple(evidence),
                     tuple(r for r in reasons if r is not None),
-                    profile,
+                    validation.get("display_profile", profile)
+                    if isinstance(validation, dict)
+                    else profile,
                     validation.get("validator_version", validator)
                     if isinstance(validation, dict)
                     else validator,
                     renderer,
                     validation_id,
-                    action if powerpoint else None,
+                    action,
                     runtime_version,
                     hashlib.sha256(
                         json.dumps(
                             action, sort_keys=True, separators=(",", ":"), allow_nan=False
                         ).encode()
-                    ).hexdigest()
-                    if powerpoint
-                    else None,
+                    ).hexdigest(),
+                    bool(isinstance(validation, dict) and validation.get("executed_action")),
+                    validation.get("runtime_platform") if isinstance(validation, dict) else None,
+                    shown_texts.get(str(action.get("instance_id")))
+                    or next(
+                        (
+                            " ".join(value.split())[:300]
+                            for key in ("target_text", "text")
+                            if isinstance(value := params.get(key), str) and value.strip()
+                        ),
+                        None,
+                    ),
                 )
             )
         slides.append(
@@ -443,6 +479,12 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
         raise ValueError
     if inputs is None and (data["publication"] != "legacy" or slides):
         raise ValueError
+    analysis_sha256 = _text(data.get("analysis_sha256"), optional=True)
+    if analysis_sha256 is not None and (
+        len(analysis_sha256) != 64
+        or any(char not in "0123456789abcdef" for char in analysis_sha256)
+    ):
+        raise ValueError
     return ReviewAnalysis(
         identifier,
         deck_id,
@@ -456,6 +498,7 @@ def parse_analysis(payload: object, expected_deck: UUID) -> ReviewAnalysis:
         source_format,
         render_id,
         office_safe,
+        analysis_sha256,
     )
 
 
@@ -542,6 +585,153 @@ class ReviewService:
                 "The saved analysis is inconsistent. Refresh or contact support."
             ) from None
 
+    def correct_action(
+        self,
+        analysis: ReviewAnalysis,
+        action: ReviewAction,
+        *,
+        region: tuple[float, float, float, float] | None = None,
+        disable: bool = False,
+    ) -> ReviewAnalysis:
+        """Persist an owner correction, then fetch the new immutable revision."""
+        if (region is None) == (not disable) or action.raw is None or not action.action_sha256:
+            raise ServiceError("Select a supported action correction.")
+        if analysis.analysis_sha256 is None:
+            raise ServiceError("This analysis cannot be edited. Refresh the saved review.")
+        body: dict[str, Any] = {
+            "expected_analysis_sha256": analysis.analysis_sha256,
+            "expected_action_sha256": action.action_sha256,
+            "operation": "disable" if disable else "set_region",
+        }
+        if region is not None:
+            body["region"] = dict(zip(("x", "y", "width", "height"), region, strict=True))
+        path = f"/api/v1/analyses/{analysis.id}/actions/{action.instance_id}/correction"
+        request = Request(
+            self.config.api_url + path,
+            data=json.dumps(body, separators=(",", ":"), allow_nan=False).encode(),
+            headers={
+                "Authorization": "Bearer " + self.access,
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Idempotency-Key": str(uuid4()),
+            },
+            method="POST",
+        )
+        try:
+            with build_opener(NoRedirects()).open(
+                request, timeout=self.config.request_timeout
+            ) as response:
+                content = response.read(65537)
+                if (
+                    len(content) > 65536
+                    or response.headers.get_content_type() != "application/json"
+                ):
+                    raise ValueError
+            result = _dict(json.loads(content))
+            data = _dict(result.get("data"))
+            if (
+                data.get("source_analysis_id") != str(analysis.id)
+                or data.get("source_version") != analysis.version
+                or data.get("result_version") != analysis.version + 1
+                or data.get("operation") != body["operation"]
+            ):
+                raise ValueError
+            updated = self.analysis(analysis.deck_id, analysis.source_format)
+            if updated.version != data["result_version"]:
+                raise ValueError
+            return updated
+        except HTTPError as exc:
+            status = exc.code
+            message = "Correction could not be saved. Refresh the review and try again."
+            try:
+                error_body = json.loads(exc.read(65536))
+                detail = error_body.get("detail") if isinstance(error_body, dict) else None
+                if isinstance(detail, str) and detail:
+                    message = detail[:500]
+            except (ValueError, OSError):
+                pass
+            exc.close()
+            if status in {401, 403}:
+                raise LibraryAccessExpired("Sign in again to edit this saved review.") from None
+            if status == 409:
+                raise ServiceError(message) from None
+            if status == 404:
+                raise ServiceError("This action or presentation is no longer available.") from None
+            if status == 422:
+                raise ServiceError(message) from None
+            raise ServiceError(
+                "Correction could not be saved. Check the backend and retry."
+            ) from None
+        except (URLError, OSError, http.client.HTTPException):
+            raise ServiceError("Cannot reach saved Review. Retry the correction.") from None
+        except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
+            raise ServiceError("The backend returned an invalid correction result.") from None
+
+    def visual_qa(self, analysis: ReviewAnalysis, action: ReviewAction) -> ReviewAnalysis:
+        """Ask the backend to execute, inspect and persist a visual verdict."""
+        if analysis.source_format != "pdf":
+            raise ServiceError("Visual verification is currently available for PDF actions only.")
+        if action.raw is None or not action.instance_id:
+            raise ServiceError("Select a saved action to verify.")
+        path = f"/api/v1/analyses/{analysis.id}/actions/{action.instance_id}/visual-qa"
+        request = Request(
+            self.config.api_url + path,
+            data=b"{}",
+            headers={
+                "Authorization": "Bearer " + self.access,
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Idempotency-Key": str(uuid4()),
+            },
+            method="POST",
+        )
+        try:
+            with build_opener(NoRedirects()).open(
+                request, timeout=max(VISUAL_QA_REQUEST_TIMEOUT, self.config.request_timeout)
+            ) as response:
+                content = response.read(MAX_ANALYSIS_BYTES + 1)
+                if (
+                    len(content) > MAX_ANALYSIS_BYTES
+                    or response.headers.get_content_type() != "application/json"
+                ):
+                    raise ValueError
+            updated = parse_analysis(json.loads(content), analysis.deck_id)
+            if (
+                updated.id != analysis.id
+                or updated.source_revision != analysis.source_revision
+                or updated.source_sha256 != analysis.source_sha256
+            ):
+                raise ValueError
+            if not any(
+                candidate.instance_id == action.instance_id
+                for slide in updated.slides
+                for candidate in slide.actions
+            ):
+                raise ValueError
+            return updated
+        except HTTPError as exc:
+            status = exc.code
+            message = "Visual verification could not be completed. Retry from Review."
+            try:
+                body = json.loads(exc.read(65536))
+                detail = body.get("detail") if isinstance(body, dict) else None
+                if isinstance(detail, str) and detail:
+                    message = detail[:500]
+            except (ValueError, OSError):
+                pass
+            exc.close()
+            if status in {401, 403}:
+                raise LibraryAccessExpired("Sign in again to verify this saved action.") from None
+            if status == 409:
+                raise ServiceError(message) from None
+            if status == 404:
+                raise ServiceError("This saved action is no longer available.") from None
+            raise ServiceError(message) from None
+        except (URLError, OSError, http.client.HTTPException):
+            raise ServiceError("Cannot reach saved Review to verify this action.") from None
+        except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
+            raise ServiceError("The backend returned an invalid visual QA result.") from None
+
     def source(
         self, deck_id: UUID, source_format: str = "pdf"
     ) -> DownloadedPDF | DownloadedPowerPoint:
@@ -566,10 +756,16 @@ class ReviewService:
         return PresentationService(self.config, self.access).download(str(deck_id))
 
     def evidence(
-        self, validation_id: UUID, artifact_id: UUID, expected_sha256: str
+        self,
+        validation_id: UUID,
+        artifact_id: UUID,
+        expected_sha256: str,
+        *,
+        visual: bool = False,
     ) -> tuple[bytes, str]:
+        collection = "preflights" if visual else "action-validations"
         content, headers = self._get(
-            f"/api/v1/action-validations/{validation_id}/evidence/{artifact_id}",
+            f"/api/v1/{collection}/{validation_id}/evidence/{artifact_id}",
             accept="*/*",
             limit=MAX_EVIDENCE_BYTES,
             allowed_types={"image/png", "application/json"},
