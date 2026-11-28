@@ -33,6 +33,7 @@ complete setup, test commands, and macOS equivalents.
 
 ## Project guides
 
+- [Course report, evaluation evidence and reproducible demo package](docs/course-submission/README.md)
 - [Architecture and ownership](docs/architecture.md)
 - [Development and testing](docs/development.md)
 - [Deployment and release](docs/deployment.md)

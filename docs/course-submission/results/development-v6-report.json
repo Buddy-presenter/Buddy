@@ -1,0 +1,30 @@
+{
+  "protocol": "presentation-replay-report.v1",
+  "corpus_sha256": "c7dd8f99daaa18999e43b90cd65c4fb1f25a14e4133d8908222eae83a62927bf",
+  "gates_sha256": "00084b212934d359c6ca6263c386dc57fdbe01cafc0482c7c6a7929e51228036",
+  "provider_model": "command-a-03-2025",
+  "cost_scope": "decision_provider_billed_tokens",
+  "split": "development",
+  "scope": "agent_proposals",
+  "policy_version": null,
+  "latency_samples": 20,
+  "pricing_reference": "Synthetic accounting units only; replace with dated contracted rates for release evaluation.",
+  "provenance": "synthetic_contract",
+  "release_gate": false,
+  "sessions": 1,
+  "frames": 21,
+  "metrics": {
+    "target_accuracy": 1.0,
+    "no_action_recall": 1.0,
+    "no_action_precision": 1.0,
+    "false_transitions_per_minute": 0.0,
+    "latency_p95_ms": 139.0,
+    "unnecessary_animations": null,
+    "cost_usd": 0.00224,
+    "usage_incomplete_observations": 0,
+    "outside_candidate_set": 0,
+    "animation_unknown_actions": 0
+  },
+  "failures": [],
+  "passed": true
+}

@@ -2,3 +2,5 @@
 *.pdf binary
 # Replay manifests hash raw bytes; preserve them across Git/platform line endings.
 tests/fixtures/replay/*.json -text
+# Preserve the exported aggregate/report hashes in the course evidence manifest.
+docs/course-submission/results/*.json text eol=lf
