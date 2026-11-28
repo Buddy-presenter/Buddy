@@ -98,10 +98,16 @@ def balanced_shortlist(
     items: tuple[Document, ...], similarities: tuple[tuple[float, ...], ...], current: str
 ) -> tuple[list[tuple[float, Document]], set[str]]:
     """Share available slide slots between views within the eight-candidate budget."""
-    # Current slide and no change occupy two slots. Reserve two more only when
-    # the index actually contains usable region actions; otherwise use all six
-    # remaining slots for slide destinations, rather than discarding evidence.
-    other_slides = 4 if any(doc.action_id is not None for doc in items) else 6
+    # Current slide and no change occupy two slots. Reserve three action slots
+    # only when the current slide has usable region actions; actions on other
+    # slides cannot execute yet and should not reduce the navigation shortlist.
+    current_has_action_evidence = any(
+        doc.action_id is not None
+        and doc.slide_id == current
+        and any(scores[index] > 0 for scores in similarities)
+        for index, doc in enumerate(items)
+    )
+    other_slides = 3 if current_has_action_evidence else 6
     per_view = other_slides // len(similarities)
     rankings = [
         sorted(
@@ -131,6 +137,24 @@ def balanced_shortlist(
         if score > 0 and len(destinations) < other_slides + 1:
             destinations.add(doc.slide_id)
     return scored, destinations
+
+
+def current_slide_action_documents(
+    scored: list[tuple[float, Document]], current: str, limit: int
+) -> tuple[tuple[float, Document], ...]:
+    """Return ranked positive action matches that can be executed on this request.
+
+    Region actions on other slides are not executable until navigation has happened,
+    so presentation_agent.options drops them. Do not let those documents occupy the
+    bounded candidate slots intended for Jev.
+    """
+    if limit <= 0:
+        return ()
+    return tuple(
+        (score, doc)
+        for score, doc in scored
+        if score > 0 and doc.slide_id == current and doc.action_id is not None
+    )[:limit]
 
 
 class SemanticCandidates:
@@ -374,18 +398,15 @@ class SemanticCandidates:
                         score=round(score * 1000),
                     )
                 )
-        for score, doc in scored:
-            if len(result) >= 8:
-                break
-            if score > 0 and doc.slide_id in selected and doc.action_id:
-                kind = cast(Literal["zoom_region", "highlight_region"], doc.kind)
-                result.append(
-                    Candidate(
-                        kind=kind,
-                        slide_id=doc.slide_id,
-                        action_id=doc.action_id,
-                        reason="purpose",
-                        score=round(score * 1000),
-                    )
+        for score, doc in current_slide_action_documents(scored, current, 8 - len(result)):
+            kind = cast(Literal["zoom_region", "highlight_region"], doc.kind)
+            result.append(
+                Candidate(
+                    kind=kind,
+                    slide_id=doc.slide_id,
+                    action_id=doc.action_id,
+                    reason="purpose",
+                    score=round(score * 1000),
                 )
+            )
         return tuple(result)

@@ -292,18 +292,27 @@ The instructions also add one rule: act only if the words so far already clearly
 state a value from or ask for one option. On 528 partial sentences from the evaluation set,
 wrong early actions fell from 26 to 9. Finished sentences are unchanged at 286/300.
 
-**When Buddy acts.** Buddy acts only when `presenting_now` is at least 0.2 and the chosen option
-has a probability of at least `BUDDY_JEV_CONFIDENCE` (default 0.6). Otherwise it does nothing:
+**When Buddy acts.** Buddy acts only when `presenting_now` is at least
+`BUDDY_JEV_PRESENTING_FLOOR` (default 0.4) and the chosen option has a probability of at least
+`BUDDY_JEV_CONFIDENCE` (default 0.5). Otherwise it does nothing:
 reason `stay`, or `uncertain` when the chosen option is below the bar. Jev has a 2-second
 deadline.
 
-**Evaluation.** The wording and both thresholds were tuned on a 300-case labelled set across an
-8-slide deck, tuning on one half and checking on the other:
+**Historical evaluation.** The earlier `0.6` action-confidence and `0.2` presenting-now gates
+were tuned on a 300-case labelled set across an 8-slide deck, tuning on one half and checking
+on the other:
 
 - Production code: 285/300 correct (95%), 139/150 on the held-out half, 7 false triggers.
 - About 250 ms average and 0.8 s worst case, with no errors.
 - For comparison: Jev with the Cohere prompt scored 85%. Cohere alone scored 64% on a 100-case
   sample weighted towards hard cases, with 6 deadline misses.
+
+Those results do not validate the current defaults. A retrospective gate replay on captured
+provider responses for the 10-page sample PDF (synthetic transcript events; proposal-only)
+projected 140/206 intended actions and 7/39 false actions with the current `0.5`/`0.4` gates,
+compared with 139/206 and 16/39 using the earlier `0.6`/`0.2` gates. This is one deck and does
+not establish general accuracy or execution success; the revised current-slide candidate
+handoff still requires a fresh replay.
 
 **Data.** Jev is served from the US with zero data retention and no training. Enabling it sends
 recent speech and slide text to TypeSafe in the US.
